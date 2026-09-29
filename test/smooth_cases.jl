@@ -260,6 +260,44 @@ function wall_level_case(N; refined=true, viscous=false, slip=!viscous, opts...)
 end
 
 """
+    pulse_profile(u0, x0, sigma, amp; gamma=1.4)
+
+A right-running acoustic pulse on a uniform stream at `u0` with rho = p = 1:
+p = 1 + amp f, rho = 1 + amp f / c², u = u0 + amp f / c with
+f = exp(−((x − x0)/sigma)²) and c = √γ, the linear simple wave, which moves
+at u0 + c and carries no left-running part to first order in `amp`.
+"""
+pulse_profile(u0, x0, sigma, amp; gamma=1.4) = x -> begin
+    c = sqrt(gamma)
+    f = amp * exp(-((x - x0) / sigma)^2)
+    (1 + f / c^2, u0 + f / c, zero(x), 1 + f)
+end
+
+"""
+    outflow_level_case(N; refined=true, u0=0.3, x0=0.5, sigma=0.1, amp=0.01,
+                       opts...)
+
+The acoustic pulse of `pulse_profile` on [0, 1] with N nodes, entering
+nothing through an `NSCBCInflowBC` holding the stream at x = 0 and leaving
+through an `NSCBCOutflowBC` at x = 1, with a refined level over [5/6, 1]
+whose tile's face at x = 1 carries the outflow; under `refined = false` the
+uniform run at the level's spacing, 3(N − 1) + 1 nodes, which is its
+reference. Both are built to take equal steps (`fixed_step_run!`). The pulse
+reaches the outflow near t = 0.34. N − 1 must be a multiple of 6.
+"""
+function outflow_level_case(N; refined=true, u0=0.3, x0=0.5, sigma=0.1, amp=0.01,
+                            opts...)
+    (N - 1) % 6 == 0 || error("N = $N: the outflow level needs N − 1 divisible by 6")
+    m = (N - 1) ÷ 6 + 1
+    level = refined ? (refine=BlockRegion((N - m, 0, 0), (m, 1, 1)),) : (;)
+    inflow = NSCBCInflowBC(u=(u0, 0.0, 0.0), T_ion=1.0)
+    bcs = ((inflow, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3])
+    _smooth_solver((refined ? N : 3 * (N - 1) + 1, 1, 1), 1.0, bcs,
+                   pulse_profile(u0, x0, sigma, amp);
+                   merge(SMOOTH_DEFAULTS, (cfl=0.9,), level, values(opts))...)
+end
+
+"""
     annulus_level_case(N; refined=true, viscous=false, mu=0.005, opts...)
 
 A cylindrical acoustic pulse on the axisymmetric annulus r ∈ [1/2, 3/2]

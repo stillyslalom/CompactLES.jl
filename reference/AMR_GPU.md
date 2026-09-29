@@ -446,8 +446,9 @@ the deep regrid's moved tile and the migration audit's reference.
 ### Levels on the domain boundary
 
 A region may reach a non-periodic domain face whose root condition a tile
-can carry (`_level_boundary_condition`: `SlipWallBC` and `NoSlipWallBC`, and
-`SymmetryPlaneBC` on the first refined level, below).
+can carry (`_level_boundary_condition`: `SlipWallBC`, `NoSlipWallBC`, the
+two NSCBC conditions, and `SymmetryPlaneBC` on the first refined level,
+below).
 The tile's face there is not parent-fed: it carries the root's condition
 object itself (`_fine_bcs`), so the wall's `enforce!` and `correct_flux!`
 act on the fine wall plane and a switch of the root's face switches the
@@ -470,8 +471,7 @@ quadrature counts the wall node once. Setup accepts an explicit region, box
 or tiled `refine`, that reaches such a face; the regrid, the restart and
 the deep regrid carry the faces of whatever regions they are given
 (`_region_boundaries`), while the tag clamp, the lattice clip of a regrid
-and the AMR frontend's shapes still stop at the margin. An NSCBC face needs
-its characteristic correction at the fine spacing and is not accepted yet.
+and the AMR frontend's shapes still stop at the margin.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -512,6 +512,30 @@ the first refined level of a Cartesian run, on the host backend, under
 plane, whose node space would start at offset −1, a regridded tile there,
 stacked device tiles and the `:filter` restriction are refused by name; a
 run whose levels stay the margin off its planes is unrestricted.
+
+**A level at an NSCBC face.** An `NSCBCOutflowBC` or `NSCBCInflowBC`
+face is carried as a wall face is, and its characteristic correction runs
+on the tile at the fine spacing. Neither
+condition holds state beyond its constructor arguments (targets, relaxation
+rates, `Lref`, `beta_t`, the `target` closure), so the tile shares the
+root's object rather than a copy, and nothing is kept in step between the
+two. The quantities the correction reads from the solver resolve per patch
+through `PatchSolver`: the one-sided derivatives, the spacing and the
+velocity gradients are the tile's, while `L_domain`, from which `Lref ≤ 0`
+takes the relaxation length, is the solver's, so the relaxation rate is the
+uniform run's and not one set by the tile's extent. A pointwise inflow
+`target` is evaluated at the tile's node coordinates, at the level's stage
+time under subcycling, with the fine spacing as its `h`. The face keeps the
+scheme's one-sided closure rows, as the root's does, and no sensor wall
+rows. The correction's distributed solves run inside the tile's
+`compute_rhs!`, which only the tile's owners enter, over the tile's `Decomp`
+sub-communicators; the hoisting of those solves above the plane-ownership
+return that makes a root split along the face normal safe does the same for
+a tile split along it, so the collective scoping below gains no row. The
+root still corrects its own face nodes under the level, and the restriction
+replaces them. A `SwitchableBC` is refused at such a face, whichever
+conditions it wraps, as are `DirichletBC`, `ExtrapolationBC` and
+`CompositeBC`.
 
 ### Levels on the axisymmetric metric
 
@@ -1514,7 +1538,7 @@ Configurations rejected at setup, and the reason:
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above at every parent-fed face and span ≥ 4
-  parent nodes per active dimension; it may reach a slip or no-slip wall
+  parent nodes per active dimension; it may reach a slip, no-slip or NSCBC
   face of the domain instead, the first refined level a symmetry plane
   (host backend, `:inject`, no regrid), and no other domain face. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`

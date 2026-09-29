@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -232,7 +232,9 @@ levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
 6.33 (the fine wall window against the uniform run at the fine spacing), a
 level on an r-z annulus 5.83 / 5.40 (inviscid / viscous, the fine interface
-window against the uniform run at the fine spacing), temporal order 3.99 / 4.09
+window against the uniform run at the fine spacing), a level at an NSCBC
+outflow 6.45 (the fine face window against the uniform run at the fine
+spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
 additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is

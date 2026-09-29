@@ -2351,3 +2351,101 @@ const RZ_LEVEL_TOL = 1e-6
               r.pieces[(:covered_face_flux, 0)][1]) < 1e-5 * b0.total_mass
     @test abs(drift) < 2e-5
 end
+
+# The refined patch at an NSCBC face against the uniform run at its spacing in
+# equal steps, an acoustic pulse of amplitude 0.01 halfway out of the face,
+# N = 49, over the conserved components: measured 1.4e-6 at the outflow and
+# 2.7e-6 at the inflow under a moving target. The reflection is the largest
+# |p − 1| left in the domain after the pulse has gone: 1.6053e-4 refined
+# against 1.6056e-4 uniform at the fine spacing, the uniform coarse run
+# reflecting 1.6652e-4.
+const NSCBC_LEVEL_TOL = 5e-6
+const NSCBC_REFLECTION_TOL = 1e-6
+
+@testset "a level reaching an NSCBC face carries the characteristic correction" begin
+    per = (PeriodicBC(), PeriodicBC())
+    c = sqrt(1.4)
+    # A pulse running toward the refined face on a stream at 0.3 with
+    # ρ = p = 1: out through the outflow at x = 1, or, running left at
+    # c − 0.3, out through the inflow at x = 0, whose target moves in time.
+    function nscbc_level(N; refined=true, face=:outflow, uniform_coarse=false)
+        m = (N - 1) ÷ 6 + 1
+        region = BlockRegion((face === :outflow ? N - m : 0, 0, 0), (m, 1, 1))
+        n = refined || uniform_coarse ? N : 3 * (N - 1) + 1
+        target(x, y, z, t) = Prim(u=(0.3 * (1 + 0.05 * sinpi(5t)), 0.0, 0.0),
+                                  T_ion=1.0, p=1.0)
+        inflow = NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0,
+                               target=face === :inflow ? target : nothing)
+        solver = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per, per),
+                        filter_interval=0, cfl=0.9,
+                        art=ArtificialProperties(enabled=false),
+                        refine=refined ? region : nothing)
+        states = allocate_state(solver)
+        dir = face === :outflow ? 1.0 : -1.0
+        initialize!(solver, states, (x, y, z) -> begin
+            a = 0.01 * exp(-((x - 0.5) / 0.1)^2)
+            Prim(rho=1 + a / c^2, u=(0.3 + dir * a / c, 0.0, 0.0), p=1 + a)
+        end)
+        return solver, states
+    end
+    run_to!(s, q, t, steps) = for n in 1:steps
+        run!(s, q; tfinal=t * n / steps)
+    end
+    # The largest |p − 1| over the nodes no child covers.
+    function reflection(s, q)
+        r = 0.0
+        refresh_primitives!(s, q)
+        for (ps, Q) in CL.eachpatch(s, q), i in 1:ps.decomp.n_local[1]
+            I = padded_index(ps, i, 1, 1)
+            ps.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
+        end
+        r
+    end
+    solver, _ = nscbc_level(49)
+    fine = solver.patches[2]
+    lt = getfield(solver, :levels)[2].transfers[1]
+    # The outflow face carries the root's own condition object, with its
+    # relaxation length read from the domain, not from the tile.
+    @test fine.bcs[1][2] === solver.patches[1].bcs[1][2]
+    @test CL.parent_fed(fine.bcs[1][1])
+    @test lt.boundary[1] == (false, true) && lt.imposed[1] == (true, false)
+    @test PatchSolver(solver, fine).L_domain == solver.L_domain
+    # Against the uniform run at the level's spacing in the same equal steps,
+    # halfway through the pulse's exit (the outflow's pulse moves at 1.48,
+    # the inflow's at 0.88).
+    for (face, t) in ((:outflow, 0.35), (:inflow, 0.6))
+        s, q = nscbc_level(49; face=face)
+        f, fq = nscbc_level(49; face=face, refined=false)
+        steps = round(Int, 288 * t / 0.35)
+        run_to!(s, q, t, steps)
+        run_to!(f, fq, t, steps)
+        @test s.step == f.step == steps
+        pf = PatchSolver(f, f.patches[1])
+        ps = PatchSolver(s, s.patches[2])
+        off = ps.patch.region.offset[1]
+        e = maximum(abs(q[2][padded_index(ps, i, 1, 1), k] -
+                        fq[padded_index(pf, off + i, 1, 1), k])
+                    for i in 1:ps.decomp.n_local[1], k in 1:5)
+        @info "NSCBC level against the uniform run" face e
+        @test e < NSCBC_LEVEL_TOL
+    end
+    # The wave the outflow reflects, once the pulse has left, is the uniform
+    # fine run's: the refined run and the uniform coarse one differ from it
+    # by the refinement's error and by the coarse spacing's.
+    s, q = nscbc_level(49)
+    f, fq = nscbc_level(49; refined=false)
+    cs, cq = nscbc_level(49; refined=false, uniform_coarse=true)
+    run_to!(s, q, 0.8, 576)
+    run_to!(f, fq, 0.8, 576)
+    run_to!(cs, cq, 0.8, 192)
+    r_level, r_fine, r_coarse = reflection(s, q), reflection(f, fq), reflection(cs, cq)
+    @info "NSCBC reflection" r_level r_fine r_coarse
+    @test abs(r_level - r_fine) < NSCBC_REFLECTION_TOL
+    @test abs(r_coarse - r_fine) > 3 * NSCBC_REFLECTION_TOL
+    # A switchable face is refused by name.
+    sw = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
+    @test_throws "SwitchableBC" Solver(n_global=(49, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=((SlipWallBC(), sw), per, per),
+                                       refine=BlockRegion((40, 0, 0), (9, 1, 1)))
+end

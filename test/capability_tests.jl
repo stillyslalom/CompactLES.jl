@@ -122,6 +122,10 @@ include("capability_cases.jl")
         rejects("whose AxisBC a refined level cannot carry",
                 C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
                 Numerics(n_global=n1, amr=AMR(initial=BlockRegion((0, 0, 0), (10, 1, 1)))))
+        switched = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
+        rejects("a refined level cannot carry",
+                C.problem(bcs=((SlipWallBC(), switched), per, per)),
+                Numerics(n_global=n1, amr=AMR(initial=BlockRegion((38, 0, 0), (10, 1, 1)))))
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))

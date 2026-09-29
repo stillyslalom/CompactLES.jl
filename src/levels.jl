@@ -2143,7 +2143,8 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # symmetry plane; the setup, not the regrid, places such a level.
 
 "Whether a refined level may reach a domain face carrying `bc`."
-_level_boundary_condition(bc) = bc isa Union{SlipWallBC,NoSlipWallBC,SymmetryPlaneBC}
+_level_boundary_condition(bc) =
+    bc isa Union{SlipWallBC,NoSlipWallBC,SymmetryPlaneBC,NSCBCOutflowBC,NSCBCInflowBC}
 
 # Per dimension and side, whether a level may reach that domain face: a
 # non-periodic active dimension whose root condition there qualifies, a

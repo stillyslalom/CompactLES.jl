@@ -601,8 +601,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                   "$(side == 1 ? "low" : "high") domain face of " *
                                   "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
                                   "a refined level cannot carry; a level reaches " *
-                                  "SlipWallBC and NoSlipWallBC faces, and the first " *
-                                  "refined level SymmetryPlaneBC faces, only")
+                                  "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC and " *
+                                  "NSCBCInflowBC faces, and the first refined " *
+                                  "level SymmetryPlaneBC faces, only")
                     end
                 else
                     rg.offset[d] == 0 && rg.extent[d] == 1 ||

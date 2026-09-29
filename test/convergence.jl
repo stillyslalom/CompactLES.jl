@@ -91,6 +91,8 @@
 #   two levels at a symmetry plane C6 6.33
 #   a level on an r-z annulus (fine interface window against the uniform run
 #   at the fine spacing, equal steps, t = 0.2): C6 5.83 | viscous 5.40
+#   a level at an NSCBC outflow (fine face window against the uniform run at
+#   the fine spacing, equal steps, t = 0.35): C6 6.45
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
 #   subcycled, ghost fluxes 3.85 | additive pair, viscous periodic 4.02 |
@@ -106,7 +108,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those eighty numbers are also passed to each study as `recorded` and
+# Those eighty-one numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -1015,6 +1017,25 @@ for (name, viscous, steps, recorded) in
                     primary=:interface, tfinal=0.2, steps=steps, patches=(2,),
                     expect=5.5, tol=0.8, recorded=recorded)
 end
+
+# A level at an NSCBC outflow: an acoustic pulse leaves through the tile's
+# face at x = 1, which carries the outflow's characteristic correction at the
+# fine spacing, and the refined patch's window at that face is read against
+# the uniform run at its spacing in the same equal steps (cfl ≈ 0.26 at the
+# fine spacing), halfway through the pulse's exit. The coarse region is under
+# a node per pulse width at N = 25, hence the finer sequence.
+println("\n=== smooth evolution: a level at an NSCBC outflow, fine face window, " *
+        "t = 0.35 ===")
+const OUTFLOW_LEVEL_NS = (49, 97, 193)
+outflow_level_reference(s) = begin
+    fine, states = outflow_level_case(s.n_global[1]; refined=false)
+    fixed_step_run!(fine, states, 0.35, 6 * (s.n_global[1] - 1))
+    NodeReference(fine, states)
+end
+evolution_study("two levels at an NSCBC outflow, C6", OUTFLOW_LEVEL_NS,
+                N -> outflow_level_case(N), outflow_level_reference;
+                primary=:wall, tfinal=0.35, steps=N -> 6 * (N - 1), patches=(2,),
+                expect=6.0, tol=0.8, recorded=6.45)
 
 # ---------------------------------------------------------------------------
 # Temporal order. Each row integrates one case on one grid in a sequence of

@@ -118,8 +118,13 @@ over the same physical region.
 parent level's lattice over the whole domain, not relative to the parent
 patch; a nesting error prints the admissible offsets. A level's fine index corresponding to parent index `g` is
 `3(g-1)+1`. The solver enforces a coarse-node nesting margin around each
-fine region and a minimum fine patch extent. Explicit regions provide exact
-placement; sensor and predicate placement is clamped to that legal interior.
+fine region and a minimum fine patch extent. An explicit region may instead
+reach a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC`
+or `NSCBCInflowBC`, or, on the first refined level of a Cartesian run,
+`SymmetryPlaneBC`; its face there then carries that condition at the fine
+spacing, and the margin applies to its other faces. Explicit regions provide
+exact placement; sensor and predicate placement is clamped to that legal
+interior.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags
 move. A positive `regrid_interval` allows tiled regions to enter and leave;
 `rebalance` may then move ownership among ranks after persistent measured

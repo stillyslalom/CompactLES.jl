@@ -149,6 +149,7 @@ jobs:
                         "off-rank folds", "mode truncation", "freestream",
                         "no-slip wall flux",
                         "slip wall flux", "symmetry plane", "NSCBC inflow",
+                        "NSCBC level face",
                         "positivity floor", "slicing", "composite budgets",
                         "composite face", "deep regrid subsets"), ',')
           MPI.mpiexec() do mpiexec

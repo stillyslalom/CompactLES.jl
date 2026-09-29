@@ -6143,6 +6143,25 @@ converges on a single level as on the Cartesian line (1.5e-8 against 9.3e-9
 in the interior at 193), so the loss is set at the curved slip walls, not
 by the level; it is not diagnosed further.
 
+**NSCBC faces on a level.** The instrument is the convergence row's case
+(`outflow_level_case`: an acoustic pulse of amplitude 0.01 and width 0.1 on a
+stream at 0.3, leaving [0, 1] through an `NSCBCOutflowBC` whose face a level
+over [5/6, 1] carries), read against the uniform run at the level's spacing
+in equal steps. The density error over the fine face window at t = 0.35,
+halfway through the exit, is 2.40e-5, 3.52e-7, 4.24e-9 and 4.61e-11 at
+N = 25, 49, 97 and 193 (successive orders 6.09, 6.37, 6.52). The reflection,
+the largest |p − 1| left in the domain at t = 0.8 after the pulse has gone:
+
+| reflection at N | 25 | 49 | 97 |
+|---|---|---|---|
+| level at the face | 1.7364e-4 | 1.6053e-4 | 1.6051e-4 |
+| uniform at the level's spacing | 1.6107e-4 | 1.6056e-4 | 1.6054e-4 |
+| uniform at the root's spacing | 6.4315e-4 | 1.6652e-4 | 1.6067e-4 |
+
+At N = 25 the root holds under three nodes per pulse width, and the level's
+reflection carries that error; from N = 49 it is the fine run's to 2e-4 of
+its value.
+
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
 cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches

@@ -3240,6 +3240,97 @@ function test_nscbc_inflow()
 end
 
 # ---------------------------------------------------------------------------
+# 4c'. An NSCBC face carried by a refined level. The level's patch is
+#     decomposed along the face normal over its own communicator, so its
+#     ranks that own no piece of the face plane enter the characteristic
+#     correction's distributed solves on that communicator and return, while
+#     the root's correction runs on the root's. Every block the rank holds is
+#     measured against the serial rebuild on COMM_SELF after a few steps, in
+#     1-D with the level at the outflow and at the inflow, global step and
+#     subcycled, and in 2-D with the transverse terms, the plane then divided
+#     along y as well at np = 8.
+# ---------------------------------------------------------------------------
+function test_nscbc_level()
+    section("NSCBC level face: the correction on a level's communicator")
+    # Max |distributed − serial| over this rank's interior block of patch
+    # `p`, against the serial patch `rp`, which holds the whole block.
+    function blockdiff(p, Q, rp, Qref)
+        e = 0.0
+        for I in CL.interior(p.decomp), c in 1:size(Q, 4)
+            loc = Tuple(I) .- p.decomp.n_halo_d
+            J = CartesianIndex(loc .+ p.decomp.offset .+ rp.decomp.n_halo_d)
+            e = max(e, abs(Float64(Q[I, c] - Qref[J, c])))
+        end
+        e
+    end
+    # The root block and each level block the rank holds, the serial patch
+    # of a level block found by its tile index.
+    function leveldiff(s, qs, ref, qref)
+        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        lev, rlev = s.levels[2], ref.levels[2]
+        for (k, ti) in zip(lev.patches, lev.tiles)
+            rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
+            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+        end
+        e
+    end
+    # A right-running acoustic pulse on a stream at u0 = 0.3 (ρ = p = 1, so
+    # c = √1.4), centred on the refined face; in 2-D its amplitude and a
+    # transverse velocity vary along y.
+    function pulse(x0, y2d)
+        (x, y, z) -> begin
+            f = 0.01 * exp(-((x - x0) / 0.03)^2) *
+                (y2d ? 1 + 0.3 * sin(2π * y) : 1.0)
+            Prim(rho=1 + f / 1.4, u=(0.3 + f / sqrt(1.4),
+                                      y2d ? 0.05 * cos(2π * y) : 0.0, 0.0),
+                 p=1 + f)
+        end
+    end
+    bcs = ((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
+           per3[2], per3[3])
+    function build(comm_here, ng, region, ic, subcycle)
+        s = Solver(n_global=ng, L_domain=(1.0, 1.0, 1.0), bcs=bcs, comm=comm_here,
+                   art=ArtificialProperties(enabled=false), filter_interval=1,
+                   cfl=0.5, subcycle=subcycle, refine=region)
+        q = allocate_state(s)
+        initialize!(s, q, ic)
+        return s, q
+    end
+    function compare(label, ng, region, ic; subcycle=false, nmax=6)
+        s, q = build(comm, ng, region, ic, subcycle)
+        ref, qref = build(MPI.COMM_SELF, ng, region, ic, subcycle)
+        run!(s, q; tfinal=1e9, nmax=nmax)
+        run!(ref, qref; tfinal=1e9, nmax=nmax)
+        check("NSCBC level $label matches serial", gmax(leveldiff(s, q, ref, qref)),
+              1e-10)
+        return s
+    end
+    # 1-D: the level over the last or the first 25 of 97 root nodes, 73 fine
+    # nodes, which divide over every rank up to np = 8 along the normal.
+    ng1 = (97, 1, 1)
+    for (face, region, x0) in ((:outflow, BlockRegion((72, 0, 0), (25, 1, 1)), 0.97),
+                               (:inflow, BlockRegion((0, 0, 0), (25, 1, 1)), 0.03)),
+        subcycle in (false, true)
+        tag = "$face$(subcycle ? ", subcycled" : "")"
+        s = compare("1-D at the $tag", ng1, region,
+                    pulse(x0, false); subcycle=subcycle)
+        side = face === :outflow ? 2 : 1
+        held = [s.patches[k].decomp for k in s.levels[2].patches]
+        split = maximum((dc.sub_size[1] for dc in held); init=1)
+        without = count(dc -> CL.wallplane(dc, 1, side) === nothing, held)
+        check("NSCBC level 1-D $tag: split along the normal",
+              gmax(split) == np ? 0.0 : 1.0, 0.5)
+        check("NSCBC level 1-D $tag: ranks off the plane enter",
+              abs(gsum(without) - (np - 1)), 0.5)
+    end
+    # 2-D: a 25 × 12 root-node level at the outflow, inside the periodic y
+    # extent by the nesting margin, the fine patch 73 × 34, split along x at
+    # np = 2 and 4 and along both dimensions at np = 8.
+    compare("2-D at the outflow, transverse terms", (72, 24, 1),
+            BlockRegion((47, 6, 0), (25, 12, 1)), pulse(0.97, true); nmax=4)
+end
+
+# ---------------------------------------------------------------------------
 # Synthetic turbulent inflow as an NSCBC target on a face divided among the
 # ranks. The field is a function of position and time alone, so the decomposed
 # run matches the serial one to round-off and a restart continues bit for bit
@@ -3753,6 +3844,7 @@ const SUITE = (
     ("symmetry plane", test_symmetry_plane),
     ("level at a symmetry plane", test_plane_level),
     ("NSCBC inflow", test_nscbc_inflow),
+    ("NSCBC level face", test_nscbc_level),
     ("turbulent inflow", test_turbulent_inflow),
     ("composite face", test_composite_face),
     ("hydrostatic state", test_hydrostatic),

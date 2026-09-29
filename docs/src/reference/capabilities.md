@@ -129,6 +129,7 @@ text below.
 | `AMR` with `patch_grid` | `AMR: cannot be combined with a patch_grid` |
 | `AMR` on a spherical metric or a resolved-θ cylindrical one | `AMR: requires CartesianMetric or CylindricalMetric with θ collapsed` |
 | a refined region reaching the axis | `whose AxisBC a refined level cannot carry` |
+| a refined region reaching a face other than a slip, no-slip, NSCBC or symmetry-plane one, a `SwitchableBC` included | `a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | a level reaching a symmetry plane on the cylindrical metric | `a refined level reaching a SymmetryPlaneBC requires CartesianMetric` |
 | a level reaching a symmetry plane on a device | `a refined level reaching a SymmetryPlaneBC runs on the host backend only` |
