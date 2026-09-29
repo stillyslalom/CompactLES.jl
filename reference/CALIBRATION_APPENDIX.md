@@ -7783,6 +7783,8 @@ equilibrium predicts, but with the ringing and the undershoot above; it fails at
 and the gate does not separate a smooth plateau edge from an interface tail. The
 questions for the authors are the discretization of eq. 68 (whether the compressive term
 is differenced as here, with the same compact divergence as every other flux), how Miranda
-limits the step, and whether their runs localize the flux at all. The He/CO2 tube and the
-N20 budget with the flux were set up (`bench/he_co2_shock_tube.jl C_sharpen=`,
-`bench/tubebudget.jl sharpen=`, which attributes it to its own row) and not run.
+limits the step, and whether their runs localize the flux at all. The He/CO2 tube runs at
+192 × 12 to 0.3 ms under C_sharpen = 0.3 and 1 (157 and 332 steps against 93), but at
+768 × 48 under 0.3 it had not reached 2.5 ms after 16 minutes, against about 90 s without
+the flux, and was stopped; the N20 budget with the flux (`bench/tubebudget.jl sharpen=`,
+which attributes it to its own row) was not run.
