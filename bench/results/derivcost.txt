@@ -1,0 +1,216 @@
+=== repeated processes: 6 timed pairs, 1 warm-up run(s) per command
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, NT, Julia 1.11.4
+    A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+    B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+    pattern: ^row,([^,]+),[^,]+,(?:[^,]*,){5}([^,]+)
+    order: A B, B A, A B, ... (reversed in every second pair)
+
+--- warm-up 1 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.80490     3070.44    9926.8 KiB   229.3 MiB   1.2 s
+row,periodic,c6,1,16,64,30,8.048969e-01,3070.4381,10165009.6,229.3
+
+  peak resident set, largest rank: 1157.6 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  warm-up 1      A  exit 0         45.1 s  1 value(s)
+
+--- warm-up 1 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.71150     2714.17    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c8,1,16,64,30,7.115027e-01,2714.1675,10165009.6,229.3
+
+  peak resident set, largest rank: 1091.6 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  warm-up 1      B  exit 0         42.1 s  1 value(s)
+
+--- pair 1/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.75551     2882.04    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c6,1,16,64,30,7.555098e-01,2882.0413,10165009.6,229.3
+
+  peak resident set, largest rank: 1070.6 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 1/6       A  exit 0         43.3 s  1 value(s)
+
+--- pair 1/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.71859     2741.19    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c8,1,16,64,30,7.185856e-01,2741.1866,10165009.6,229.3
+
+  peak resident set, largest rank: 1089.7 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 1/6       B  exit 0         42.0 s  1 value(s)
+
+--- pair 2/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.74924     2858.13    9926.8 KiB   229.3 MiB   1.2 s
+row,periodic,c8,1,16,64,30,7.492405e-01,2858.1258,10165009.6,229.3
+
+  peak resident set, largest rank: 1151.5 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 2/6       B  exit 0         43.5 s  1 value(s)
+
+--- pair 2/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.79490     3032.32    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c6,1,16,64,30,7.949034e-01,3032.3157,10165009.6,229.3
+
+  peak resident set, largest rank: 1077.3 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 2/6       A  exit 0         44.0 s  1 value(s)
+
+--- pair 3/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.76069     2901.81    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c6,1,16,64,30,7.606910e-01,2901.8059,10165009.6,229.3
+
+  peak resident set, largest rank: 1082.7 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 3/6       A  exit 0         43.0 s  1 value(s)
+
+--- pair 3/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.76810     2930.08    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c8,1,16,64,30,7.681036e-01,2930.0826,10165009.6,229.3
+
+  peak resident set, largest rank: 1073.7 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 3/6       B  exit 0         43.4 s  1 value(s)
+
+--- pair 4/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.81170     3096.37    9926.8 KiB   229.3 MiB   1.4 s
+row,periodic,c8,1,16,64,30,8.116955e-01,3096.3726,10165009.6,229.3
+
+  peak resident set, largest rank: 1102.6 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 4/6       B  exit 0         46.6 s  1 value(s)
+
+--- pair 4/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.74081     2825.98    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c6,1,16,64,30,7.408131e-01,2825.9777,10165009.6,229.3
+
+  peak resident set, largest rank: 1073.2 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 4/6       A  exit 0         42.6 s  1 value(s)
+
+--- pair 5/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.77436     2953.93    9926.8 KiB   229.3 MiB   1.1 s
+row,periodic,c6,1,16,64,30,7.743560e-01,2953.9336,10165009.6,229.3
+
+  peak resident set, largest rank: 1081.1 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 5/6       A  exit 0         43.5 s  1 value(s)
+
+--- pair 5/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.70615     2693.75    9926.8 KiB   229.3 MiB   1.2 s
+row,periodic,c8,1,16,64,30,7.061510e-01,2693.7522,10165009.6,229.3
+
+  peak resident set, largest rank: 1076.4 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 5/6       B  exit 0         42.1 s  1 value(s)
+
+--- pair 6/6 B: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c8 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c8, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c8        30    0.76764     2928.33    9926.8 KiB   229.3 MiB   1.2 s
+row,periodic,c8,1,16,64,30,7.676447e-01,2928.3322,10165009.6,229.3
+
+  peak resident set, largest rank: 1084.8 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 6/6       B  exit 0         44.5 s  1 value(s)
+
+--- pair 6/6 A: C:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\bin\julia.exe -C native -JC:\Users\Alex\.julia\juliaup\julia-1.11.4+0.x64.w64.mingw32\lib\julia\sys.dll -g1 --project=C:\Users\Alex\.julia\dev\CompactLES -t 16 C:\Users\Alex\.julia\dev\CompactLES\bench\derivcost.jl 64 30 derivs=c6 cases=periodic
+=== derivative operator cost: 64^3, 30 steps, 3 warm-up, cfl 0.5
+    alderlake, 24 logical CPUs, 1 rank(s), 16 Julia thread(s), 1 BLAS thread(s)
+    process grid auto, order c6, cases periodic, 1 rep(s) in this process
+
+  case       deriv  steps   s/step     ns/pt/step  alloc/step  footprint  setup
+  periodic   c6        30    0.72588     2769.00    9926.8 KiB   229.3 MiB   1.2 s
+row,periodic,c6,1,16,64,30,7.258773e-01,2769.0021,10165009.6,229.3
+
+  peak resident set, largest rank: 1072.6 MiB
+--- stderr
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+  pair 6/6       A  exit 0         42.9 s  1 value(s)
+
+  label               n    A median    B median       B/A |    paired     min     max  above 1
+  periodic            6        2892        2893    1.0005 |    0.9804  0.9119  1.0957      3/6
+  process wall [s]    6       43.15       43.45    1.0068 |    0.9989  0.9673  1.0959      3/6
+
+  raw values in pair order (A, B, B/A)
+  periodic
+    A          2882        3032        2902        2826        2954        2769
+    B          2741        2858        2930        3096        2694        2928
+    B/A      0.9511      0.9426        1.01       1.096      0.9119       1.058
+  process wall [s]
+    A         43.28       43.98       43.03       42.56       43.47       42.88
+    B         41.98       43.48       43.42       46.65       42.05       44.45
+    B/A      0.9699      0.9887       1.009       1.096      0.9673       1.037
