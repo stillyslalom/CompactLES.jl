@@ -97,6 +97,7 @@ CompactLES.plan_transfer
 CompactLES.restrict!
 CompactLES.prolong!
 CompactLES.LevelTransfer
+CompactLES.LevelCoupling
 CompactLES.Level
 CompactLES.LevelComm
 CompactLES.TileGroup

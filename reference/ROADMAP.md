@@ -45,8 +45,8 @@ run at a time.
    stage. H5's table reader may start at any point.
 7. **N22** sharpens the species channel's interfaces, and becomes urgent when a
    case at density ratio 100 or more is in production.
-8. Cluster campaigns run as allocation allows: S12's rzhound probe, then S1
-   and S2 on rzadams.
+8. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+   later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
 laser- or burn-dominated case; H4a, H5a and H5b for cold DT and the ablator;
@@ -208,6 +208,38 @@ promotion.
   tutorials whose walls are true symmetry planes switched from `SlipWallBC`
   to `SymmetryPlaneBC`.
 
+- [ ] **S15 — Run a refined hierarchy across many nodes.**
+  The target is a mixing layer or a plane shock resolved by a tiled level, or
+  a nested pair of them, on thousands of ranks, with each rank's memory,
+  traffic and setup cost following the tiles it holds rather than the level's
+  tile count, which a weak-scaled run grows with the ranks. Stages, in order:
+  1. Done with `LevelCoupling`: the level coupling moves point to point
+     (`LevelCoupling`), a transfer's chains and boxes exist on its tile's ranks
+     only, interface tags number the messages of one rank pair, and owner
+     sizing starts at the count a tile admits; `bench/amr_scaling.jl` measures
+     the weak scaling ([table](CALIBRATION_APPENDIX.md#benchamr_scalingjl-weak-scaling-of-the-level-coupling)).
+  2. A nested hierarchy at scale, which needs S8's deep-regrid items
+     (point-to-point migration of a moved survivor in place of the replicated
+     gather over the run, rebalancing, the device backend).
+  3. Decide the one-box path at scale. A tile's chain runs over its whole box
+     on each of up to `n_cons` of its ranks, so a one-box level (`tile = 0`)
+     over many ranks holds a box-sized chain per rank. Either partition the
+     chain by fine block or have `AMR` choose a tile edge when the run spans
+     many ranks; the second changes a default and needs a maintainer decision.
+  4. Tagging at scale: `_tag_tiles` Allreduces a dense flag per lattice cell
+     at every check; replace it with a sparse reduction if a cluster profile
+     shows it.
+  5. Qualify on rzhound with the system MPI: `bench/amr_scaling.jl dim=3`
+     weak-scaled to at least a thousand ranks, then a production-shaped 3-D
+     case (a shock through a perturbed heavy-gas interface, tiles tagged by
+     the mass-fraction gradient and the sensor) against a uniform-fine
+     reference at a size both fit, with restart on another rank count and a
+     refined HDF5 dump (a spatial collection per patch with blanking, which
+     the HDF5 `FieldWriter` rejects today).
+  **Gate:** per-rank level memory and coupling wall flat in the weak-scaling
+  table at the largest count available, the MPI suite at 2, 4 and 8 ranks,
+  and bitwise agreement of every stage that only moves data.
+
 - [ ] **A10 — Let a refined level reach every domain boundary.**
   Every level now stays `max(n_halo, 4)` parent nodes inside its parent, so a
   feature at a wall, an inflow face, or across a periodic seam stays coarse
@@ -229,8 +261,8 @@ promotion.
 
 - [ ] **S8 — Extend deep regridding and multiblock geometry when a target needs them.**
   Tiled regridding below level 1 landed with A12; add rebalancing,
-  point-to-point migration and the device backend to it, which a nested
-  capsule under N23 needs. For geometric multiblock use, extend
+  point-to-point migration and the device backend to it, which S15 stage 2
+  and a nested capsule under N23 need. For geometric multiblock use, extend
   beyond the current slab layout with explicit adjacency and compatible
   geometry, and give a same-level patched run a checkpoint.
   **Depends on:** a concrete case.
@@ -587,7 +619,8 @@ H5's tables are related infrastructure, not this closure.
 
 Detailed mechanisms and measurements remain in [AMR_GPU.md](AMR_GPU.md) and
 [CLUSTER.md](CLUSTER.md). Patch AMR, device execution, stacked tile launches, and
-opt-in Float32 already exist; the tasks below extend or validate them.
+opt-in Float32 already exist; the tasks below extend or validate them. S15 is
+under [the refinement track](#refinement-for-the-production-geometry).
 
 - [ ] **S12 — Remove the O(P²) replicated interface solve for many-rank scaling.**
   The reduced interface matrix is dense of order 2qP and every rank applies
@@ -637,9 +670,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
 
 - [ ] **S2 — Measure and address compact-solve and transfer scaling limits.**
   Profile replicated dense interface solves, host/device fences and transfers,
-  parent-box gathers, and replicated AMR memory as line-rank count and region size
-  grow. Compare gather-solve-scatter, on-device reduced solves, GPU-aware MPI, and
-  partitioned transfers only where profiles justify them.
+  and the level coupling's point-to-point exchanges (S15) as line-rank count and
+  region size grow. Compare gather-solve-scatter, on-device reduced solves and
+  GPU-aware MPI only where profiles justify them.
   Measure stacked `max_rate` reductions before adding another launch optimization;
   revisit extra streams only if batching still leaves useful concurrency.
   The replicated interface solve has a cost model and a planned fix in S12.

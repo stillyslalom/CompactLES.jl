@@ -49,8 +49,10 @@ One solver runs on four axes of configuration, combinable except where
   a survivor keeping its range; a tiled level repartitions on the per-rank
   busy time the run measures when that stays imbalanced past a threshold
   for a set number of checks, and a tile whose range moves migrates block
-  to block. The level coupling gathers replicated region data and
-  distributes its interpolation chains by conserved component.
+  to block. The level coupling moves point to point between the parent
+  ranks holding a tile's box and covered nodes and the tile's own ranks,
+  which divide its interpolation chains by conserved component, so a rank's
+  coupling memory and traffic follow the tiles it holds.
 - **Checkpoint and output**: a checkpoint carries the hierarchy (the tile
   layout and stored ownership of every level, the tag history) and every
   tile's state, in the shared HDF5 file or in per-rank files, and a restart
@@ -403,27 +405,39 @@ every stage of the global step removes a coupling term first order in the step b
 measurable error, so the write-back stays once per step
 ([measurements](CALIBRATION_APPENDIX.md#benchrestrictcostjl-restriction-before-every-stage)).
 
-**Distribution of the coupling.** The coupling runs on a replicated-data,
-distributed-work split. Data replicates: `gather_region!` assembles a node
-region of a distributed field on every rank with one Allgatherv (the
-buffered coarse box per shell imposition, the coincident nodes for `:inject`
-restriction, the surviving fine state at a box regrid). Work distributes: a
+**Distribution of the coupling.** Data moves point to point and work
+divides over a tile's own ranks (`LevelCoupling`, `src/levels.jl`). A
+tile's buffered box goes from the parent ranks holding its nodes to the
+tile's owners, each receiving the components it interpolates, and the
+coincident samples of `:inject` restriction go from the tile's owners to
+the parent ranks owning the covered nodes; the pieces a rank sends one peer
+travel as one message per exchange, and both sides derive them from two
+block tables Allgathered once per level build. The chains, the boxes and the
+Hermite storage exist on the tile's owners only. A collective per tile over
+the parent's subset, with every tile's chain held on every rank, makes the
+per-rank level memory and the coupling wall grow with the rank count on a
+weak-scaled slab of tiles; point to point, both follow the tiles a rank
+holds
+([measurements](CALIBRATION_APPENDIX.md#benchamr_scalingjl-weak-scaling-of-the-level-coupling)).
+The data moved are copies applied in tile order, so the result does not
+depend on the rank count beyond the decomposition's own round-off. Work
+divides over a tile's ranks: a
 subcycled step imposes the shell ~20 times, each a K-stage tensor-product
-interpolation per component, and replicating that per rank cost most of the
-advantage the refinement exists to buy; under `_impose_shell!` rank r
-runs the chain only for components c ≡ r (mod np) and shares the thin shell
-ring through one Allgatherv, which moves the same values instead of
-recomputing them, serial results bit-identical, and brought the composite
-back to about half the uniform-fine wall
+interpolation per component; under `_impose_shell!` rank r of a tile runs
+the chain only for components c ≡ r (mod np) and shares the thin shell ring
+through one Allgatherv over the tile's ranks, which moves the same values
+instead of recomputing them, serial results bit-identical, and brought the
+composite back to about half the uniform-fine wall
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
 Every rank writes only the nodes it owns; tagging reduces its
 bounds globally; a fine patch picks its process grid through `_amr_dims`
 over the rank range it is assigned
 ([Ownership and load balance](#ownership-and-load-balance)). A patch's
 buffered box may cross the boundaries of several parent patches once a
-level holds more than one; the gathers and the restriction write-back run
-per parent, which the replicated gather over the parent level handles by
-construction.
+level holds more than one; its pieces are then per parent patch, and a
+receive applies them in parent order. `gather_region!`, the replicated
+gather, remains for the regrid carries: the box regrid's surviving state,
+the deep regrid's moved tile and the migration audit's reference.
 
 ### Subcycling
 
@@ -477,7 +491,10 @@ justify the clustering algorithm.
 
 Same-level coupling reuses the root machinery: `build_interface_records`
 over the level's tiles (each rank contributes a block of each tile it holds
-to one Allgatherv, and the tag bound is checked against `MPI.tag_ub`),
+to one Allgatherv, and a message's tag is its index among the messages
+between its two ranks, `_pair_tags`, since a tag computed from the pair of
+patches grows with the square of the tile count and passes the 32767 the
+MPI standard guarantees at 52 tiles),
 records held on the `Level`, addressed in the level's own communicator,
 point-to-point, and run by `sync_patches!` and, inside the subcycled
 driver, after every stage of a level. Each face's treatment follows the
@@ -502,8 +519,8 @@ ghosts of an interior tile,
 which no shell writes and no face strip covers, are reached by the later
 phases' strips through the earlier phases' ghosts, the argument `halo.jl`
 makes for rank halos. A tile's buffered box may span several parent
-patches (`coarse_indices`); the gathers and the restriction write-back run
-per parent, and a child's buffered box must lie in the parents' own nodes,
+patches (`coarse_indices`); the box and restriction pieces are per
+parent, and a child's buffered box must lie in the parents' own nodes,
 their parent-fed planes eroded (imposed data is the class `RESTRICT_MARGIN`
 exists to keep out of the closure rows). After a regrid a fresh tile takes
 the planes it shares with surviving tiles from the survivors one-way
@@ -783,9 +800,9 @@ case, about half of each tile's arrays being shared, and leaves the warm
 per-step wall inside the run-to-run spread; `bench/amr_tiles.jl` times
 steps after a warm-up and is the instrument. Under MPI each tile is
 decomposed over its own rank range, so a tile pays its owners' collective
-latency per imposition, and on a many-tile run that is one rank; the box
-gathers and restriction that feed it remain collective over the parent
-level.
+latency per imposition, and on a many-tile run that is one rank; the box and
+restriction exchanges that feed it are point to point, one message per
+pair of ranks exchanging data.
 
 **Workstation pathology.** Any 2-D case at np = 8 on the workstation runs an
 order of magnitude slower per step than at np = 4, one patch or four tiles
@@ -849,8 +866,9 @@ Each collective is scoped to the rank set that owns the data it moves:
 | line solves and halo exchange | the tile's `Decomp` | the tile's owners |
 | `_impose_shell!` ring Allgatherv | the tile's `Decomp` | the tile's owners |
 | `_sync_level_records!`, `_seed_planes!` | the level's own, point-to-point | the level's owners |
-| `_gather_box!`, `save_level_box!` | the parent level's own | the parent's owners |
-| `_restrict_patch!` gather | the parent level's own | the parent's owners |
+| `_exchange_boxes!` (the shells, `save_level_boxes!`, a fresh tile's fill) | the parent level's own, point-to-point | the parent's owners, posting only their own pieces |
+| `_exchange_restriction!` | the parent level's own, point-to-point | the parent's owners, posting only their own pieces |
+| `build_level_coupling`'s two block-table Allgathervs, at a level build | the parent level's own | the parent's owners |
 | `_tag_tiles`, the box regrid's carry-over | the root communicator | every rank |
 | `_rebalance_due!` busy-time Allgather | the root communicator | every rank, when `rebalance > 0` |
 | `_migrate_tile!` (point-to-point, no collective) | the root communicator | the moved tile's old and new owners |
@@ -862,16 +880,16 @@ scoping decision. The records are built on the level's communicator, over a
 block table each rank fills with the tiles it holds, and a record's partner
 is a rank number in it; the exchanges themselves are `Isend`/`Irecv`, so a
 rank holding one tile or none enters them with whatever records it has. The
-two cross-level rows run on the parent level's communicator with every
-block table in its rank order, and a rank contributes nothing for a parent
-or fine patch it holds no piece of: a child's owner need not hold the
-parent tiles under its box, and the covered nodes of the restriction lie on
-parent ranks outside the child's subset. Scoping those to the child's owners
-instead would require the child's ranks to hold the parent's covered blocks,
-which is a rank-partitioned transfer and a separate piece of work. The rank
-set of every collective follows from the level index and the tile geometry
-alone, never from rank-local data, so no participation decision can turn
-into a deadlock.
+cross-level exchanges run on the parent level's communicator, whose rank
+numbers the block tables use: a child's owner need not hold the parent tiles
+under its box, and the covered nodes of the restriction lie on parent ranks
+outside the child's subset. Every owner of the parent enters them, and each
+posts the messages of its own pieces, one per peer; a rank with none posts
+nothing. The message lists follow from the two Allgathered tables, which
+every rank of the parent holds whole, so a sender and its receiver always
+agree. The rank set of every collective follows from the level index and
+the tile geometry alone, never from rank-local data, so no participation
+decision can turn into a deadlock.
 
 The rate reduction stays one `Allreduce` over the whole run at the step
 boundary rather than one per level plus a combine: a rank reduces the maximum
@@ -884,8 +902,8 @@ global.
 `_advance_level!` is entered by exactly the ranks owning the level it
 advances. Its stages, shell impositions and halo exchanges run on the tile
 communicators, one tile after another in level order, and no group waits on
-another; its records, and its children's box gathers and restriction, run on
-the level's communicator. The recursion into a child is guarded on child
+another; its records, and its children's box and restriction exchanges, run
+on the level's communicator. The recursion into a child is guarded on child
 ownership, and the substep count is fixed, so the rank sets do not diverge.
 
 ### Stored ownership
@@ -901,8 +919,8 @@ count admits the tile (a tile clipped at the margin admits fewer), the level
 being partitioned afresh when none does. The level's rank count is
 one past the highest rank in use, so a departure can leave a rank inside
 the level holding no tile; such a rank enters the level's point-to-point
-records with none of its own and the cross-level gathers with nothing to
-contribute, which the block tables allow. A recomputed partition at every
+records with none of its own and the cross-level exchanges with no piece to
+post. A recomputed partition at every
 regrid would move a survivor whenever a tile entered ahead of it on the
 curve; stored ownership moves state only when a rebalance decides to.
 
@@ -912,16 +930,16 @@ and of the level communicator a resize replaces, so it survives both. The
 communicators a regrid discards are freed at the regrid, for the reason
 `free_communicators!` records (left to garbage collection they exhaust
 MPI's context-id budget at the regrid cadence). A transfer's refinement
-chains, eight decompositions per tile held on every rank of the parent's
-subset, are built on `COMM_SELF` and own no communicators, so the budget
-is spent on the tiles' own decompositions alone.
+chains, up to eight decompositions per tile held on the tile's own ranks,
+are built on `COMM_SELF` and own no communicators, so the budget is spent
+on the tiles' own decompositions alone.
 
 ### Rebalancing on measured load
 
 The partition is recomputed only by a rebalance. Every rank measures its own
 busy time per step, the step wall less the time it spent inside the
 collectives every rank enters (the rate and floor reductions, the level box
-and restriction gathers) and in the refined level's record exchange
+and restriction exchanges) and in the refined level's record exchange
 (`Solver.wall_wait`); the step wall alone is nearly uniform under any load,
 since a lightly loaded rank simply waits longer at the same reductions. At
 each regrid check the busy time over the interval, the check's own regrid
@@ -952,9 +970,9 @@ check, which is what the threshold and `persist` exist to damp.
 
 A surviving tile whose range a rebalance moved is rebuilt on its new owners
 and takes its solution from its old owners' blocks directly
-(`_migrate_tile!`). Both block tables are already Allgathered in the root
-communicator's rank order, the old one on the live transfer and the new one
-on the transfer the rebuilt tile receives, so every rank derives the
+(`_migrate_tile!`). Both block tables are already held by every rank, the
+old one on the old level's `LevelCoupling` and the new one on the new
+level's, naming ranks of the root communicator, so every rank derives the
 identical message list, one message per rank pair whose old and new blocks
 meet inside the tile's interior, and posts `Isend`/`Irecv` on the root
 communicator for its own entries only; a rank with nothing to send or
@@ -963,10 +981,10 @@ between its own two blocks copies it locally. The interior is one node off
 both boundary planes along every active dimension, the same rule as the box
 regrid's carry-over, since the old planes were imposed data and the new
 ones are re-imposed at the next shell fill. The tiles migrate one at a
-time, each after the collective interpolation that initializes its shell,
-so one tag suffices and the `Waitall` of each precedes the next tile's
-posts; the old decompositions are freed after the last, in the same order
-on every rank. Transient memory per rank is the rank's received blocks
+time, after the one exchange that initializes every fresh tile by
+interpolation, so one tag suffices and the `Waitall` of each precedes the
+next tile's posts; the old decompositions are freed after the last, in the
+same order on every rank. Transient memory per rank is the rank's received blocks
 rather than a replica of the tile's whole state per moved tile.
 
 The replicated gather of the box regrid doubles as the migration's
@@ -1132,10 +1150,10 @@ evaluate on the device and only the tag bytes download.
 
 A refined patch builds its shell on the device (`LevelScratch`, held on the
 fine `Patch` and typed by its array type, so `LevelTransfer`, `Level` and
-`Solver` keep their types; empty on the host backend). The gathered coarse
+`Solver` keep their types; empty on the host backend). The received coarse
 box uploads once per imposition, this rank's components of it under the
 component-distributed chain; under subcycling the four Hermite boxes upload
-once per parent step in `save_level_box!` and the blend runs as a kernel
+once per parent step in `save_level_boxes!` and the blend runs as a kernel
 per fine stage; each stage of the tensor-product Lagrange chain is one
 kernel over the rank's components, the same arithmetic as the host chain
 per fine node; and the shell ring packs on the device before its
@@ -1155,7 +1173,8 @@ kernel, one contiguous device↔host copy per message, then the unchanged MPI
 path over the host halo buffers; the fold-pair Sendrecv, the interface
 records of a patch layout and of a tiled level (ghost strips and
 shared-plane means, a local pairing being a broadcast between the two
-patches' views), and the regrid gathers and migration stage the same way.
+patches' views), the level coupling's box and restriction pieces, and the
+regrid gathers and migration stage the same way.
 `device_mpi_direct(backend)` is
 the hook for direct device-pointer MPI and defaults to host staging. Staging
 buffers allocate per exchange through `similar` (device allocators pool); a
@@ -1186,7 +1205,7 @@ of one tile (`StackedArray`, `src/pointwise.jl`; `TileStack` on the
 communicator, a stacked `RHSWorkspace`, and batched device plans; each
 tile's `Patch` holds plain views of the same arrays, workspace included,
 and its own unbatched plans, so every per-tile path (the shell
-impositions, the interface records, the box and restriction gathers,
+impositions, the interface records, the box and restriction exchanges,
 `max_rate`, the diagnostics) sees ordinary storage and is unchanged. The
 step drivers evaluate the right-hand side, the stage update and the state
 filter once per stack, on the spanning patch and the stacked state the
@@ -1296,7 +1315,7 @@ tiles ran two orders slower than the CPU, a per-launch floor paid once per
 tiny patch per phase; with the tiles stacked a three-dimensional level of
 twelve tiles is the first tiled configuration on which the device leads.
 The residual floor is the work that stays per tile: the shell impositions
-(the gathers, the chain and the ring per tile), the interface records, and
+(the box upload, the chain and the ring per tile), the interface records, and
 `max_rate`'s two reductions per tile
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
@@ -1374,6 +1393,17 @@ guarded somewhere; none should be re-derived.
     information a launch needs rides on the array (`StackedArray`), never
     on a global or a per-call argument, so a tile's view launches flat and
     the spanning patch's arrays launch batched with no site knowing which.
+16. **Anything held or moved per tile on every rank grows with the tile
+    count, and a weak-scaled run grows the tile count with the ranks.** A
+    collective per tile over the parent's subset, a transfer's chain on
+    every rank, a tag computed from the pair of patches and a scan from the
+    rank count each passed every workstation test and would each have
+    stopped a many-node run. A rank's coupling state and traffic must follow
+    the tiles it holds; the MPI suite's partitioned-coupling phase pins the
+    pieces, and `bench/amr_scaling.jl` measures the growth. Both sides of a
+    point-to-point exchange must drop the same empty pieces: a tile over more
+    ranks than conserved components leaves some of them no share, and a
+    receive posted for a message its sender skips waits forever.
 
 ## Scope boundaries today
 
@@ -1415,11 +1445,11 @@ Configurations rejected at setup, and the reason:
 
 The open items are in [ROADMAP.md](ROADMAP.md): N23 for refinement of an
 r-z run onto its axis and symmetry plane, A10 for a level reaching every
-domain boundary, A13 for the remaining metrics and layouts, S8 for
-rebalancing, migration and the device backend below level 1 and for
-multiblock geometry beyond the slab layout, and S1–S4 for the
-target-machine device campaign, the compact-solve and transfer scaling
-limits, the production tile and ownership cost studies and the
+domain boundary, A13 for the remaining metrics and layouts, S15 for a refined
+run across many nodes, S8 for rebalancing, migration and the device backend
+below level 1 and for multiblock geometry beyond the slab layout, and S1–S4
+for the target-machine device campaign, the compact-solve and transfer
+scaling limits, the production tile and ownership cost studies and the
 mixed-precision policy.
 
 Additional open items and long-term targets are recorded here.
@@ -1434,13 +1464,19 @@ regridded hierarchy moves a survivor through a replicated carry rather than
 point-to-point migration, and cannot rebalance. The box regrid's replicated
 carry (`tile = 0`) is not on that list: the tiled level is the production
 path, and the box path serves the one-patch configurations that need no
-rank-partitioned carry.
+rank-partitioned carry. A tile's chain runs over its whole buffered box on
+each of up to `n_cons` of its ranks, and its shell ring is replicated over
+all of them, so one tile's coupling does not divide beyond `n_cons` ranks: a
+large one-box level (`tile = 0`) over many ranks carries a box-sized chain
+per rank. A level that must spread over many nodes is tiled, at an edge that
+leaves each tile on a few ranks.
 
 **Dense output.** Retain cubic Hermite reconstruction: the measured parent
 endpoint RHS share does not justify replacing it on the tested three- and
 four-level nests ([substep study](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)).
-The estimate excludes box gathers and does not qualify distributed or device
-layouts, whose endpoint costs should be measured if they become limiting.
+The estimate excludes the box exchanges and does not qualify distributed or
+device layouts, whose endpoint costs should be measured if they become
+limiting.
 
 ### Long-term target: dendritic meshes
 

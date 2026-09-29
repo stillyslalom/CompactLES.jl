@@ -6195,6 +6195,39 @@ and move with rank placement. A moved tile here is one kilobyte.
 `MIGRATION_AUDIT` holds the migrated state bitwise against the replicated
 carry it replaced, at zero differing slots, in the MPI suite.
 
+### bench/amr_scaling.jl: weak scaling of the level coupling
+
+`mpiexec -n <np> julia --project=. -t 1 bench/amr_scaling.jl [N=96] [tile=8]
+[dim=2] [steps=3] [reps=20]`; before is `235d557`, after is `d54f019`.
+
+A 2-D planar slab of tiles of edge 8 spanning a root of 64 × 96·np nodes,
+global stepping, so each rank holds about the same root block and 20–24
+tiles at every np. Each figure is the largest over ranks: the level's memory
+(`Base.summarysize` of the `Level`, which excludes the tiles' patches), the
+median of twenty `sync_levels!` calls, and one step, beside one step of the
+same root unrefined.
+
+| np | tiles | level memory, before / after | `sync_levels!`, before / after | step, before / after | root alone |
+|---|---|---|---|---|---|
+| 1 | 20 | 6.23 / 4.73 MB | 1.25 / 1.08 ms | 30.8 / 33.5 ms | 4.9 ms |
+| 2 | 44 | 13.14 / 5.34 MB | 5.20 / 1.26 ms | 64.5 / 42.7 ms | 5.8 ms |
+| 4 | 92 | 26.79 / 5.68 MB | 7.25 / 1.40 ms | 151.9 / 54.0 ms | 11.5 ms |
+| 8 | 188 | 54.22 / 6.21 MB | 23.00 / 2.84 ms | 360.9 / 80.3 ms | 15.3 ms |
+
+Before, every rank of the parent held every tile's chain, box and Hermite
+storage and gathered every tile's box with one Allgatherv per tile per stage,
+so the level memory was 0.29 MB per tile of the whole level on every rank and
+the step grew 12× from one rank to eight. After, the memory follows the
+rank's own tiles, the growth from 4.73 to 6.21 MB being the four more tiles
+and the per-tile metadata every parent rank keeps, and the refined step
+grows 2.4× where the unrefined root grows 3.1×, the workstation's own
+weak-scaling loss (hybrid cores, and the 2-D np = 8 pathology above).
+Single runs; read the growth, not the third digit. The two couplings agree
+bitwise: 3-D tiled runs at np = 4 and 8, subcycled and global-step,
+regridding and static, viscous with ghost fluxes and with tiles over one
+rank and over four, reproduce every patch interior bit for bit after five
+steps.
+
 ### bench/device_solver.jl: the device battery
 
 `julia --project=<env-with-AMDGPU> -t 8 bench/device_solver.jl backend=amdgpu`.

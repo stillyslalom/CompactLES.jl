@@ -46,7 +46,10 @@ region between checks. `tile = 0`, the default, covers the tags with one box,
 the cheaper cover of a single compact feature. A positive edge covers them with
 lattice tiles so that separated features refine separately rather than as one
 bounding box; each tile carries its own halo and transfer, so a small edge in
-three dimensions costs more than the cells it saves.
+three dimensions costs more than the cells it saves. A run over many ranks
+should give an edge: each tile's coupling to its parent runs on the few
+ranks that hold the tile, while the interpolation over a single box does not
+divide beyond one rank per conserved variable.
 [`BlockRegion`](@ref)s remain available for an exact layout; a single region
 may move when regridding is enabled, and a multi-level vector moves only with
 a positive `tile`. A vector of shapes stays fixed.

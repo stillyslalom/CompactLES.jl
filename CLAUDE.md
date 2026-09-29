@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -450,10 +450,18 @@ Names are spelled out in full. Current vocabulary:
   shell ring), `default_interpolation_order` (the order a solver given none
   takes, from `deriv` and `interface_flux`)
 - `subcycle` (the Berger–Oliger mode flag), `subcycled_step!` and the
-  recursive `_advance_level!` beneath it, `save_level_box!`/
+  recursive `_advance_level!` beneath it, `save_level_boxes!`/
   `hermite_level_shell!` (the Hermite box, `box_Q0` .. `box_dQ1`),
   `regrid` (a `RegridSpec`), `regrid_interval`, `tag_threshold`/
   `tag_buffer`, `tagged_region`, `regrid!`
+- `coupling` (a `Level`'s `LevelCoupling`: its rank's pieces of the
+  point-to-point traffic with the parent, built by `build_level_coupling`
+  from two Allgathered tables of `OwnedBlock`s, one `CouplingPiece` per
+  block of one message), `_exchange_boxes!` (parent state to the tiles'
+  owners: the shells, `save_level_boxes!`, `_fill_tiles_from_parent!`),
+  `_exchange_restriction!` (coincident samples to the parent, through
+  `_restrict_tiles!`), `_pair_tags` (a record's tag, its index among the
+  messages between its two ranks)
 - The tag criteria, a union evaluated by `_tag_sweep!` over the parent
   level's state, each a `pointwise!` body writing into `RegridSpec.tags`:
   `_tag_delta4_point!` (always on, `tag_threshold`), `_tag_sensor_point!`
