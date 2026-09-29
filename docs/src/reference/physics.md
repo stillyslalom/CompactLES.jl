@@ -104,6 +104,27 @@ CompactLES.mixture_temperature
 CompactLES.mixture_temperature_status
 ```
 
+## Tabulated plasma equation of state and opacities
+
+An IONMIX4 or IONMIX6 file, the format FLASH reads, tabulates a
+one-temperature plasma equation of state and group opacities on a grid of
+temperature and ion number density. The reader converts it to SI, and the
+evaluators interpolate it bilinearly in the logarithms of temperature and mass
+density and invert it for temperature along a density column. The table is
+not an [`EOS`](@ref), so a solver does not evaluate it.
+
+```@docs
+CompactLES.IonmixTable
+CompactLES.read_ionmix
+CompactLES.write_ionmix
+CompactLES.table_value
+CompactLES.table_opacity
+CompactLES.table_state
+CompactLES.table_temperature_status
+CompactLES.table_temperature
+CompactLES.TABLE_OK
+```
+
 ## Condensed-material approximation
 
 ```@docs

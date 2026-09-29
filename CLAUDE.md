@@ -548,6 +548,11 @@ Names are spelled out in full. Current vocabulary:
 - `outer_indices` (the flattened outer iteration space of a pointwise nest; see
   Threading), `prepared`/`primitives_current` (the trailing flag by which `run!`
   tells `step!` that the state has been exchanged and its primitives are current)
+- `IonmixTable` (an IONMIX4/6 table in SI, not an `EOS`), `read_ionmix` /
+  `write_ionmix`, `table_value` / `table_opacity` / `table_state` (the
+  bilinear interpolant in `(ln T, ln ρ)` and its own derivatives),
+  `table_temperature_status` and the `TABLE_` flags, `monotone` (per density
+  node, whether the energies increase with temperature)
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare
