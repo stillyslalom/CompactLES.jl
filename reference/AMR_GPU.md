@@ -497,7 +497,8 @@ node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
-alike.
+alike. The same keyword lets them cross a periodic seam ("Levels across a
+periodic seam").
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -591,6 +592,61 @@ root still corrects its own face nodes under the level, and the restriction
 replaces them. A `SwitchableBC` is refused at such a face, whichever
 conditions it wraps, as are `DirichletBC`, `ExtrapolationBC` and
 `CompositeBC`.
+
+### Levels across a periodic seam
+
+Along a periodic dimension of N root nodes, node N + 1 is node 1, and level
+ℓ's node space repeats every P = 3^ℓ N nodes (`_level_period`). A region
+there may start anywhere in the period and run past its end: the level
+stores it with its offset in [0, P) (`_canonical`), so a region across the
+seam is one contiguous block whose nodes past P are the nodes a period
+lower. The patch keeps that contiguous node space, its coordinates running
+on past the domain's face, and the seam is nothing but where its parent's
+data come from. Every relation between a level and its parent is taken over
+the parent's periodic images, the parent region shifted by −P, 0 and +P
+(`_images`): the pieces of the box exchange and of the covered samples
+(`build_level_coupling`, where `CouplingPiece.image` orders a message's
+pieces identically on both sides), the parents under a box (`_parents_of`),
+the nesting test (`_covered_by`), the covered mask (`_fill_covered!`), the
+`:filter` write-back and the ledger's covered faces. A region clear of the
+seam meets only the unshifted image, so nothing moves for it; the MPI suite's
+seam phase and a translated run in the serial suite, the same problem shifted
+by a whole number of root nodes so that one level lies across the seam and
+the other clear of it, hold the mechanism to the translation-invariant
+answer to round-off.
+
+The alternative considered was to cut a region at the seam into two patches
+joined by a same-level interface. That adds an interface where the physics
+has none, with its closure rows and its shared-plane averaging, and splits a
+line solve the region would otherwise hold whole (constraint 1); the image
+relations leave both the patch and the solve intact. A lattice anchored at
+node 0 is periodic only if its last cell ends on the seam, so the lattice
+over a periodic dimension runs over [1, P + 1] and its last cell is clipped
+there (`_wrapped_parts`, `_level_tiles`): the seam is always a lattice
+plane, no tile straddles it, and the two tiles on either side of it abut as
+same-level neighbours through the ordinary records, their planes compared
+modulo the period (`_tile_faces`). A last cell below four nodes is dropped,
+which leaves a gap of under three cells between the two tiles, each face
+then parent-fed. One box may not close on itself: along a periodic
+dimension its extent is at most P less the margin at either end, while a
+tiled level may close the ring.
+
+An explicit region across the seam, which setup refused before, needs no
+keyword. The regrid and the frontend's shapes cross the seam under
+`level_boundaries` only, since without it they clamped a tag in the margin
+band of a periodic face, which runs relied on: the box regrid bounds the
+tagged set by the shortest arc of the period holding it (`_seam_arc`, one
+more Allreduce of the tag occupancy along the dimension) and caps the
+buffered arc at the period less the margins; the tiled and the deep regrid
+open the lattice clip there (`_wrap_feasible`, `_wrapped_cells`); and a
+static shape's first level takes the arc of its sampled nodes. A box that
+moves across the seam carries its surviving nodes against the image of its
+old region nearest the new one (`_nearest_image`); a tile keeps its
+canonical region, so survival, migration and the restart need nothing more.
+A user function of position, an initial condition, an AMR predicate, an
+NSCBC inflow target or a shape, is evaluated at a node past the domain's
+face a period back (`_domain_coordinate`), where it is defined; a node
+inside the domain keeps its coordinate bit for bit.
 
 ### Levels on the axisymmetric metric
 
@@ -690,7 +746,9 @@ as root slabs do, and every tile face is either fully shared with one
 neighbor or fully parent-fed. A static `refine` box expands to the lattice
 cells that reach past its planes; cells at the domain edge are clipped to
 the nesting margin, or to the face under `level_boundaries`, and dropped
-below four nodes. The lattice is global so
+below four nodes. Along a periodic dimension a region reaching the seam's
+margin band wraps the lattice instead, its last cell ending on the seam
+("Levels across a periodic seam"). The lattice is global so
 that a regrid never changes a surviving tile's region.
 
 Fixed tiles were chosen over Berger–Rigoutsos clustering for three reasons:
@@ -800,7 +858,7 @@ the parent level's state run through `pointwise!` on the host
 Every criterion but the first is off by default. The tagged set is buffered
 by `tag_buffer` (default 4, the pollution-decay figure of constraint 7) and
 clamped to the nesting margin ([placement on a face](#levels-on-the-domain-boundary)
-lifts the clamp at a wall, an NSCBC face or a fold), and its bounds (or its lattice flags) are
+lifts the clamp at a wall, an NSCBC face or a fold, and across a periodic seam), and its bounds (or its lattice flags) are
 reduced globally so every rank derives the same region; a rank-local
 decision here would be a deadlock, since the ranks would then split
 different communicators.
@@ -1635,7 +1693,8 @@ Configurations rejected at setup, and the reason:
   the patches of the level above at every parent-fed face and span ≥ 4
   parent nodes per active dimension; it may reach a slip, no-slip or NSCBC
   face of the domain instead, or a symmetry plane or the r-z axis (host
-  backend, `:inject`), and no other domain face. A tiled
+  backend, `:inject`), and no other domain face, and it may cross a periodic
+  seam, one box spanning at most the period less the margin at either end. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`
   reaches that wall or `level_boundaries` places them there, and must still
   lie inside the parent tiles. Regridding more

@@ -1841,11 +1841,14 @@ _patch_piece_name(prefix, level::Int, tile::Int, rank::Int) =
 
 # `slice = (d, g)` on the root's node lattice, in the node space of the patch
 # `ps` holds: root node g is level-ℓ node 3^ℓ (g − 1) + 1, less the patch's
-# offset on that level. `nothing` stays `nothing`.
+# offset on that level. A tile across a periodic seam holds a plane near the
+# seam's low side a period on (`_level_period`). `nothing` stays `nothing`.
 function _patch_slice(ps::PatchSolver, slice)
     slice === nothing && return nothing
     d, g = Int(slice[1]), Int(slice[2])
-    return (d, 3^ps.patch.level * (g - 1) + 1 - ps.patch.region.offset[d])
+    m = 3^ps.patch.level * (g - 1) + 1 - ps.patch.region.offset[d]
+    P = _level_period(ps.solver, ps.patch.level)[d]
+    return (d, P > 0 && m < 1 ? m + P : m)
 end
 
 """

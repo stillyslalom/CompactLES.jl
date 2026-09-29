@@ -216,22 +216,37 @@ function _initialize!(solver::SolverLike, eos, Q, ic)
     return Q
 end
 
+# The coordinate a user's function of position sees at interior index `i` (an
+# initial condition, an AMR predicate): `xcoord`, except on a refined tile
+# across a periodic seam, whose nodes past the domain's face (its coordinates
+# run on there, `_level_period`) are read a period back, where the function
+# is defined. A node inside the domain keeps its coordinate bit for bit.
+@inline _domain_coordinate(solver::Solver, d::Int, i::Int) = xcoord(solver, d, i)
+function _domain_coordinate(ps::PatchSolver, d::Int, i::Int)
+    patch = ps.patch
+    patch.level == 0 && return xcoord(ps, d, i)
+    P = _level_period(ps.solver, patch.level)[d]
+    g = patch.region.offset[d] + ps.decomp.offset[d] + i
+    return P > 0 && g > P ? global_xcoord(ps, d, g - P) :
+           P > 0 && g < 1 ? global_xcoord(ps, d, g + P) : xcoord(ps, d, i)
+end
+
 function _initialize_interior!(solver::SolverLike, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    x1_0 = xcoord(solver, 1, 1)
-    x2_0 = xcoord(solver, 2, 1)
-    x3_0 = xcoord(solver, 3, 1)
+    x1_0 = _domain_coordinate(solver, 1, 1)
+    x2_0 = _domain_coordinate(solver, 2, 1)
+    x3_0 = _domain_coordinate(solver, 3, 1)
     cb = initial_callback(ic, x1_0, x2_0, x3_0,
                           point_spacing(solver, CartesianIndex(o1 + 1, o2 + 1,
                                                                  o3 + 1)))
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
-        x2 = xcoord(solver, 2, j)
-        x3 = xcoord(solver, 3, k)
+        x2 = _domain_coordinate(solver, 2, j)
+        x3 = _domain_coordinate(solver, 3, k)
         for i in 1:nx
-            x1 = xcoord(solver, 1, i)
+            x1 = _domain_coordinate(solver, 1, i)
             I = CartesianIndex(i + o1, j + o2, k + o3)
             write_conserved!(Q, I, solver,
                              pointwise_initial(cb, x1, x2, x3,

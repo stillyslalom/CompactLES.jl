@@ -35,10 +35,13 @@ released_communicators(decomp) =
     @test_throws "refinement requires CartesianMetric" mk(metric=SphericalMetric(),
                                                           origin=(0.5, 1.0, 0.0))
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
-    # Nesting margin: a region reaching the boundary is refused.
-    @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(2π, 1, 1),
-                                       bcs=per3l,
-                                       refine=BlockRegion((0, 0, 0), (16, 1, 1)))
+    # A region reaching the seam of a periodic dimension runs across it, but
+    # one refined box does not close on itself around the period.
+    @test npatches(Solver(n_global=(96, 1, 1), L_domain=(2π, 1, 1), bcs=per3l,
+                          refine=BlockRegion((0, 0, 0), (16, 1, 1)))) == 2
+    @test_throws "periodic dimension 1" Solver(n_global=(96, 1, 1),
+                                               L_domain=(2π, 1, 1), bcs=per3l,
+                                               refine=BlockRegion((0, 0, 0), (90, 1, 1)))
     # A refined solver reports two patches, level 1 second, at h/3.
     solver = mk()
     @test npatches(solver) == 2
@@ -3143,4 +3146,289 @@ end
     @test_throws "offset -1 reaches the SymmetryPlaneBC" Solver(
         n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=((plane, plane), per, per),
         refine=[BlockRegion((0, 0, 0), (9, 1, 1)), BlockRegion((0, 0, 0), (12, 1, 1))])
+end
+
+# A level across a periodic seam against the same level placed away from the
+# seam, with the problem translated by the same number of root nodes: a
+# periodic run is invariant under the translation, so the two differ by the
+# round-off of the root's cyclic line solves alone. The largest difference
+# over the conserved components and every patch: measured 1.1e-14 for a box
+# in 1-D, either stepping mode, and on a corner box in 2-D, 8.4e-15 for tiles,
+# and 2.2e-14 (box) and 1.9e-14 (tiles) for a level at the r-z axis across the
+# seam in z, static or regridded.
+const SEAM_SHIFT_TOL = 1e-12
+# A box and tiles regridded across the seam, against the uniform run at the
+# fine spacing in equal steps, the largest difference over the run: measured
+# 4.8e-10 (box) and 4.3e-10 (tiles).
+const SEAM_REGRID_TOL = 5e-9
+
+@testset "a level across a periodic seam" begin
+    per = (PeriodicBC(), PeriodicBC())
+    N = 48
+    # The entropy wave on the periodic unit line or square, translated by `s`
+    # root nodes along each resolved dimension.
+    wave(s, dims) = (x, y, z) -> begin
+        phase = 2pi * (x - s / N) + (dims == 2 ? 2pi * (y - s / N) : 0.0)
+        Prim(rho=1 + 0.2 * sin(phase + 0.37), u=(0.5, dims == 2 ? 0.25 : 0.0, 0.0),
+             p=1.0)
+    end
+    function seam(; dims=1, s=0, region=nothing, kw...)
+        local sv = Solver(; n_global=dims == 2 ? (N, N, 1) : (N, 1, 1),
+                          L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+                          filter_interval=0, cfl=0.9,
+                          art=ArtificialProperties(enabled=false), refine=region, kw...)
+        local q = allocate_state(sv)
+        initialize!(sv, q, wave(s, dims))
+        return sv, q
+    end
+    steps!(s, q, k0, k1, n, T) = for k in k0:k1
+        run!(s, q; tfinal=T * k / n)
+    end
+    # The largest difference between run `a` and run `b`, its translation by
+    # `s` root nodes along every resolved dimension (or by `s[d]` along each):
+    # root node g of `a` is node g + s of `b`, and each refined patch of `a`
+    # is the patch of `b` whose region is its own shifted by 3^ℓ s, modulo the
+    # level's period.
+    function shifted_difference(a, qa, b, qb, s)
+        local e = 0.0
+        local S = s isa Int ? (s, s, s) : s
+        for (k, p) in enumerate(a.patches)
+            local act = p.decomp.active
+            local P = ntuple(d -> act[d] ? 3^p.level * N : 1, 3)
+            local sh = ntuple(d -> act[d] ? 3^p.level * S[d] : 0, 3)
+            local pad = p.decomp.n_halo_d
+            if p.level == 0
+                for I in CL.interior(p.decomp), c in axes(qa[1], 4)
+                    local g = Tuple(I) .- pad
+                    local J = CartesianIndex(mod1.(g .+ sh, P) .+ pad)
+                    e = max(e, abs(qa[1][I, c] - qb[1][J, c]))
+                end
+                continue
+            end
+            local kb = findfirst(b.patches) do pb
+                pb.level == p.level && pb.region.extent == p.region.extent &&
+                    all(mod.(pb.region.offset .- p.region.offset .- sh, P) .== 0)
+            end
+            local ia = CL.interior(p.decomp)
+            e = max(e, maximum(abs.(parent(qa[k])[ia, :] .- parent(qb[kb])[ia, :])))
+        end
+        return e
+    end
+    margin = CL.LEVEL_BUFFER
+
+    # --- One box across the seam, 1-D, both stepping modes -------------------
+    for subcycle in (false, true)
+        a, qa = seam(region=BlockRegion((10, 0, 0), (9, 1, 1)); subcycle)
+        # A region may start before the seam; it is stored from its first
+        # node's place in the period.
+        b, qb = seam(s=36, region=BlockRegion((-2, 0, 0), (9, 1, 1)); subcycle)
+        lt = getfield(b, :levels)[2].transfers[1]
+        @test level_regions(b, 1) == [BlockRegion((46, 0, 0), (9, 1, 1))]
+        @test lt.imposed[1] == (true, true) && lt.boundary[1] == (false, false)
+        @test lt.period == (N, 0, 0) && lt.coarse_regions == [b.patches[1].region]
+        # The root's covered mask is the translated one, the covered nodes on
+        # both sides of the seam, and the composite quadrature is exact.
+        ca, cb = a.patches[1].covered[:, 1, 1], b.patches[1].covered[:, 1, 1]
+        pad = a.patches[1].decomp.n_halo_d[1]
+        @test all(cb[mod1(g + 36, N) + pad] == ca[g + pad] for g in 1:N)
+        @test domain_volume(b) ≈ 1.0 atol = 1e-14
+        steps!(a, qa, 1, 40, 40, 0.2)
+        steps!(b, qb, 1, 40, 40, 0.2)
+        @test a.step == b.step
+        e = shifted_difference(a, qa, b, qb, 36)
+        @info "box across the seam against its translation" subcycle e
+        @test e < SEAM_SHIFT_TOL
+    end
+    # One box does not wrap around onto itself.
+    @test_throws "periodic dimension 1" seam(region=BlockRegion((0, 0, 0), (N - 7, 1, 1)))
+
+    # --- A corner box across both seams, and a tiled level, 2-D -----------------
+    a, qa = seam(dims=2, region=BlockRegion((10, 10, 0), (9, 9, 1)))
+    b, qb = seam(dims=2, s=36, region=BlockRegion((46, 46, 0), (9, 9, 1)))
+    @test domain_volume(b) ≈ 1.0 atol = 1e-14
+    # The conservation ledger takes the parent's flux into the covered region
+    # across the region's faces on both sides of the seam: its pieces
+    # telescope and the two coarse-fine columns cancel as they do away from
+    # the seam.
+    ledgers = map(((a, qa), (b, qb))) do (s, q)
+        local b0 = CL._conserved_budget(s, q)
+        CL._ledger_begin!(s, q)
+        steps!(s, q, 1, 12, 12, 0.1)
+        local r = CL._ledger_end!(s, q)
+        local b1 = CL._conserved_budget(s, q)
+        (drift=(b1.total_mass - b0.total_mass) / b0.total_mass, r=r,
+         mass=b0.total_mass)
+    end
+    for l in ledgers
+        @test maximum(abs, l.r.residual) < 1e-13
+    end
+    cf(l) = l.r.pieces[(:coarse_fine_flux, 1)][1] + l.r.pieces[(:covered_face_flux, 0)][1]
+    @info "corner box across both seams" ledgers[1].drift ledgers[2].drift cf.(ledgers)
+    @test abs(ledgers[2].drift - ledgers[1].drift) < 1e-13
+    @test abs(cf(ledgers[2]) - cf(ledgers[1])) < 1e-13
+    e = shifted_difference(a, qa, b, qb, 36)
+    @info "corner box across both seams against its translation" e
+    @test e < SEAM_SHIFT_TOL
+    # Tiles on a lattice of edge 6, which divides N: the region's cells on
+    # either side of the seam abut there as same-level neighbors, and the
+    # tile whose last cell ends on the seam along y takes a parent-fed face.
+    a, qa = seam(dims=2, tile=6, region=BlockRegion((12, 12, 0), (13, 7, 1)))
+    b, qb = seam(dims=2, tile=6, s=30, region=BlockRegion((42, 42, 0), (13, 7, 1)))
+    regs = level_regions(b, 1)
+    @test regs == [BlockRegion((0, 42, 0), (7, 7, 1)), BlockRegion((42, 42, 0), (7, 7, 1))]
+    @test [p.faces[1] for p in b.patches[2:end]] == [(2, 0), (0, 1)]
+    @test [lt.imposed[2] for lt in getfield(b, :levels)[2].transfers] ==
+          [(true, true), (true, true)]
+    steps!(a, qa, 1, 12, 12, 0.1)
+    steps!(b, qb, 1, 12, 12, 0.1)
+    e = shifted_difference(a, qa, b, qb, 30)
+    @info "tiles across the seam against their translation" e
+    @test e < SEAM_SHIFT_TOL
+
+    # A fold on one dimension and the seam on another: a level at the axis of
+    # an r-z run across the periodic seam in z, static and regridded onto the
+    # axis under level_boundaries, box and tiles, against its translation in z.
+    function rz(; s=0, region=nothing, kw...)
+        local sv = Solver(; n_global=(24, 1, N), L_domain=(1.0, 1.0, 1.0),
+                          bcs=((AxisBC(), SlipWallBC()), per, per),
+                          metric=CylindricalMetric(), filter_interval=1, cfl=0.9,
+                          art=ArtificialProperties(enabled=false), refine=region, kw...)
+        local q = allocate_state(sv)
+        initialize!(sv, q, (r, θ, z) ->
+            Prim(rho=1 + 0.1 * exp(-10r^2) * sin(2pi * (z - s / N) + 0.37),
+                 u=(0.0, 0.0, 0.3), p=1.0))
+        return sv, q
+    end
+    near_axis(s) = (p, I) -> begin
+        local i, _, k = interior_index(p, I)
+        CL._domain_coordinate(p, 1, i) < 0.2 &&
+            abs(mod(CL._domain_coordinate(p, 3, k) - 0.97 - s / N + 0.5, 1) - 0.5) < 0.06
+    end
+    for (tile, ra, rb, s) in ((0, BlockRegion((0, 0, 10), (9, 1, 9)),
+                               BlockRegion((0, 0, 46), (9, 1, 9)), 36),
+                              (6, BlockRegion((0, 0, 12), (7, 1, 13)),
+                               BlockRegion((0, 0, 42), (7, 1, 13)), 30))
+        a, qa = rz(region=ra, tile=tile)
+        b, qb = rz(s=s, region=rb, tile=tile)
+        @test getfield(b, :levels)[2].transfers[1].folded[1] == (true, false)
+        steps!(a, qa, 1, 8, 8, 0.05)
+        steps!(b, qb, 1, 8, 8, 0.05)
+        e = shifted_difference(a, qa, b, qb, (0, 0, s))
+        @info "a level at the axis across the seam in z against its translation" tile e
+        @test e < SEAM_SHIFT_TOL
+        # Regridded: the window at the axis lies across the seam in `b` and
+        # clear of it in `a`.
+        a, qa = rz(region=ra, tile=tile, regrid_interval=2, tag_threshold=Inf,
+                   tag_predicate=near_axis(-s), tag_buffer=2, level_boundaries=true)
+        b, qb = rz(s=s, region=rb, tile=tile, regrid_interval=2, tag_threshold=Inf,
+                   tag_predicate=near_axis(0), tag_buffer=2, level_boundaries=true)
+        steps!(a, qa, 1, 8, 8, 0.05)
+        steps!(b, qb, 1, 8, 8, 0.05)
+        ta, tb = level_regions(a, 1), level_regions(b, 1)
+        @test length(ta) == length(tb) && all(r -> r.offset[1] == 0, tb) &&
+              any(r -> r.offset[3] + r.extent[3] > N, tb)
+        # The box moves with the window; the tiles already cover it.
+        tile == 0 && @test tb != [rb]
+        e = shifted_difference(a, qa, b, qb, (0, 0, s))
+        @info "a level regridded onto the axis across the seam" tile e
+        @test e < SEAM_SHIFT_TOL
+    end
+
+    # --- Regridded across the seam under level_boundaries ---------------------
+    # A window moving right at unit speed, from x = 0.75 across the seam.
+    xc(t) = 0.75 + t
+    window(p, I) = abs(mod(xcoord(p, 1, interior_index(p, I)[1]) - xc(p.t) + 0.5, 1) -
+                       0.5) < 0.08
+    function moving(; refined=true, tile=0, lb=true)
+        local n = refined ? N : 3N
+        local s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(per, per, per), filter_interval=0, cfl=0.9,
+                   art=ArtificialProperties(enabled=false),
+                   refine=refined ? BlockRegion((32, 0, 0), (9, 1, 1)) : nothing,
+                   regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
+                   tag_predicate=refined ? window : nothing, tag_buffer=2, tile=tile,
+                   level_boundaries=refined && lb)
+        local q = allocate_state(s)
+        initialize!(s, q, wave(0, 1))
+        return s, q
+    end
+    # The level's patches against the uniform run at their spacing: fine node
+    # m of the level's node space is node m of the uniform run, modulo 3N.
+    function against_uniform(s, q, f, fq)
+        local pf = PatchSolver(f, f.patches[1])
+        local e = 0.0
+        for k in 2:length(s.patches)
+            local ps = PatchSolver(s, s.patches[k])
+            local off = ps.patch.region.offset[1]
+            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+                                   fq[padded_index(pf, mod1(off + i, 3N), 1, 1), c])
+                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+        end
+        return e
+    end
+    crosses(r) = r.offset[1] + r.extent[1] > N
+    # Off, the level stays the margin clear of the seam and says so.
+    s, q = moving(lb=false)
+    @test_logs (:warn, r"does not reach") match_mode=:any steps!(s, q, 1, 48, 96, 0.4)
+    @test !any(crosses, level_regions(s, 1))
+    for tile in (0, 6)
+        s, q = moving(; tile)
+        f, fq = moving(refined=false)
+        crossed = false
+        e = 0.0
+        dir = mktempdir()
+        for k in 1:96
+            run!(s, q; tfinal=0.4k / 96)
+            run!(f, fq; tfinal=0.4k / 96)
+            crossed |= any(crosses, level_regions(s, 1))
+            e = max(e, against_uniform(s, q, f, fq))
+            k == 48 && save_checkpoint(s, q, joinpath(dir, "seam"))
+        end
+        @info "level regridded across the seam against the uniform run" tile e
+        @test crossed
+        @test e < SEAM_REGRID_TOL
+        # A restart past the crossing continues bit for bit.
+        r, rq = moving(; tile)
+        load_checkpoint!(r, rq, joinpath(dir, "seam"))
+        for k in 49:96
+            run!(r, rq; tfinal=0.4k / 96)
+        end
+        @test level_regions(r, 1) == level_regions(s, 1)
+        @test r.t == s.t && length(rq) == length(q) &&
+              all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
+                  parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+        rm(dir; recursive=true)
+    end
+    # Three regridded levels: the second is tagged on the first's tiles, on
+    # the lattice of the first level's node space, which wraps at its own
+    # period, 3N.
+    s3 = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+                filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
+                regrid_interval=4, tag_threshold=Inf, tag_predicate=window,
+                tag_buffer=2, tile=6, max_levels=3, level_boundaries=true)
+    q3 = allocate_state(s3)
+    initialize!(s3, q3, wave(0, 1))
+    crossed = false
+    for k in 1:48
+        run!(s3, q3; tfinal=0.4k / 96)
+        crossed |= any(r -> r.offset[1] + r.extent[1] > 3N, level_regions(s3, 2))
+    end
+    @test crossed && all(all(isfinite, parent(Q)) for Q in q3)
+
+    # --- The frontend's shapes ---------------------------------------------------
+    # A shape at the seam, given in the domain's coordinates as its two
+    # parts: without level_boundaries its first level stays the margin clear
+    # and says so, with it the level crosses the seam.
+    at_seam = CL.Regions.Box((0.0, 0.0, 0.0), (0.05, 1.0, 1.0)) ∪
+              CL.Regions.Box((0.95, 0.0, 0.0), (1.0, 1.0, 1.0))
+    shape_run(lb) = setup(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                  bcs=(per, per, per), ic=wave(0, 1)),
+                          Numerics(n_global=(N, 1, 1),
+                                   art=ArtificialProperties(enabled=false),
+                                   amr=AMR(initial=at_seam, level_boundaries=lb)))
+    s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any shape_run(false)
+    @test refined_region(s).offset[1] == margin
+    s, _ = @test_logs min_level=Base.CoreLogging.Warn shape_run(true)
+    r = refined_region(s)
+    @test r.offset[1] + r.extent[1] > N && r.offset[1] + r.extent[1] - N >= 3
 end

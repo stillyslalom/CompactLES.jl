@@ -386,13 +386,17 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     tnow = solver.tstage
     I0 = first(plane)
     i0, j0, k0 = interior_index(solver, I0)
-    cb = boundary_callback(bc.target, xcoord(solver, 1, i0),
-                           xcoord(solver, 2, j0), xcoord(solver, 3, k0), tnow,
+    # A tile across a periodic seam evaluates the target a period back past
+    # the domain's face, where it is given (`_domain_coordinate`).
+    cb = boundary_callback(bc.target, _domain_coordinate(solver, 1, i0),
+                           _domain_coordinate(solver, 2, j0),
+                           _domain_coordinate(solver, 3, k0), tnow,
                            point_spacing(solver, I0))
     @inbounds for I in plane
         i1, i2, i3 = interior_index(solver, I)
-        x1, x2, x3 = xcoord(solver, 1, i1), xcoord(solver, 2, i2),
-                     xcoord(solver, 3, i3)
+        x1, x2, x3 = _domain_coordinate(solver, 1, i1),
+                     _domain_coordinate(solver, 2, i2),
+                     _domain_coordinate(solver, 3, i3)
         pr = pointwise_boundary(cb, x1, x2, x3, tnow, point_spacing(solver, I))
         isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
         targets = (map(T, pr.u), T(pr.T_ion))

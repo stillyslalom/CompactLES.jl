@@ -684,6 +684,11 @@ struct LevelTransfer{T}
                                      # takes one fine node beyond the
                                      # coincident lattice and the box its
                                      # mirror image (`_fold_lead`)
+    period::NTuple{3,Int}            # the parent level's node-space period
+                                     # along a periodic dimension, 0 along
+                                     # the others (`_level_period`): a box
+                                     # or a covered window across the seam
+                                     # meets the parent in a periodic image
     restriction::Symbol             # :inject (coincident-node copy, default)
                                      # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
@@ -769,16 +774,18 @@ end
 
 One block of one message of a level's coupling exchange: the peer rank in the
 parent level's communicator, the tile, the position among the tile's
-`coarse_regions` of the parent patch the piece lies in, the padded index
-ranges this rank reads (a send) or writes (a receive), and the components
-`first:step:n_cons` it carries. A restriction piece's ranges on the fine
-side step by three along the refined dimensions, selecting the coincident
-nodes.
+`coarse_regions` of the parent patch the piece lies in, the periodic image
+of that patch it lies in (`image`, an index into `_images` of the transfer's
+`period`; 1 is the patch itself), the padded index ranges this rank reads (a
+send) or writes (a receive), and the components `first:step:n_cons` it
+carries. A restriction piece's ranges on the fine side step by three along
+the refined dimensions, selecting the coincident nodes.
 """
 struct CouplingPiece
     peer::Int
     tile::Int
     part::Int
+    image::Int
     ranges::NTuple{3,StepRange{Int,Int}}
     first::Int
     step::Int
@@ -957,20 +964,27 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
         # The box array: parent-level node n at n − box offset + pad.
         boxoff = ntuple(d -> first(box[d]) - 1, 3)
         padb = fdc === nothing ? (0, 0, 0) : lt.pdecomps[1].n_halo_d
-        for (k, creg) in enumerate(lt.coarse_regions)
+        # Along a periodic dimension a box or a window across the seam meets a
+        # parent patch in one of its images, the patch shifted by a period;
+        # each image a range meets is a piece of its own. Only the patch
+        # itself (image 1) is met by a region clear of the seam.
+        images = _images(lt.period)
+        for (k, creg) in enumerate(lt.coarse_regions), (v, σ) in enumerate(images)
             p = pid[creg]
             pdc = parent_decomps[p]
-            # Region-local coarse node m ↔ parent patch node m + roff − creg.offset.
-            to_patch = ntuple(d -> roff[d] - creg.offset[d], 3)
+            # The image's origin in the parent level's node space.
+            coff = creg.offset .+ σ
+            # Region-local coarse node m ↔ parent patch node m + roff − coff.
+            to_patch = ntuple(d -> roff[d] - coff[d], 3)
             if pdc !== nothing
                 pad = pdc.n_halo_d
-                mine = _block_nodes(BlockRegion(pdc.offset, pdc.n_local), creg.offset)
+                mine = _block_nodes(BlockRegion(pdc.offset, pdc.n_local), coff)
                 # Box: the part of the box this rank holds, to every owner of the tile.
                 nodes = _isect3(box, mine)
                 if !any(isempty, nodes)
-                    lr = _padded_steps(nodes, creg.offset .+ pdc.offset, pad)
+                    lr = _padded_steps(nodes, coff .+ pdc.offset, pad)
                     for fb in fine_blocks[t]
-                        push!(box_sends, CouplingPiece(fb.rank, t, k, lr, fb.share + 1,
+                        push!(box_sends, CouplingPiece(fb.rank, t, k, v, lr, fb.share + 1,
                                                        fb.shares))
                     end
                 end
@@ -982,7 +996,7 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
                     m = _isect3(mreg, _coincident(fb.block, active, lead))
                     any(isempty, m) && continue
                     lr = _padded_steps(m, pdc.offset .- to_patch, pad)
-                    push!(restrict_recvs, CouplingPiece(fb.rank, t, k, lr, 1, 1))
+                    push!(restrict_recvs, CouplingPiece(fb.rank, t, k, v, lr, 1, 1))
                 end
             end
             fdc === nothing && continue
@@ -992,10 +1006,11 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
             coin = _isect3(win, _coincident(BlockRegion(fdc.offset, fdc.n_local), active,
                                             lead))
             for pb in parent_blocks[p]
-                nodes = _isect3(box, _block_nodes(pb.block, creg.offset))
+                nodes = _isect3(box, _block_nodes(pb.block, coff))
                 if !any(isempty, nodes)
                     lr = _padded_steps(nodes, boxoff, padb)
-                    push!(box_recvs, CouplingPiece(pb.rank, t, k, lr, share + 1, shares))
+                    push!(box_recvs, CouplingPiece(pb.rank, t, k, v, lr, share + 1,
+                                                   shares))
                 end
                 m = _isect3(coin, _block_nodes(pb.block, (.-to_patch)))
                 any(isempty, m) && continue
@@ -1006,16 +1021,16 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
                     hi = s * (last(m[d]) - 1) + 1 + lead[d] - fdc.offset[d] + padf[d]
                     lo:s:hi
                 end
-                push!(restrict_sends, CouplingPiece(pb.rank, t, k, lr, 1, 1))
+                push!(restrict_sends, CouplingPiece(pb.rank, t, k, v, lr, 1, 1))
             end
         end
     end
     # A sender packs its pieces for one peer in tile order and the receiver
     # reads them in the same order; the receives apply in tile order.
-    sort!(box_sends; by=q -> (q.peer, q.tile, q.part))
-    sort!(restrict_sends; by=q -> (q.peer, q.tile, q.part))
-    sort!(box_recvs; by=q -> (q.tile, q.part, q.peer))
-    sort!(restrict_recvs; by=q -> (q.tile, q.part, q.peer))
+    sort!(box_sends; by=q -> (q.peer, q.tile, q.part, q.image))
+    sort!(restrict_sends; by=q -> (q.peer, q.tile, q.part, q.image))
+    sort!(box_recvs; by=q -> (q.tile, q.part, q.image, q.peer))
+    sort!(restrict_recvs; by=q -> (q.tile, q.part, q.image, q.peer))
     return LevelCoupling{T}(comm, parent_blocks, fine_blocks, box_sends, box_recvs,
                             restrict_sends, restrict_recvs,
                             Dict{Int,Vector{T}}(), Dict{Int,Vector{T}}())
@@ -1369,12 +1384,20 @@ function _lattice_tile(k::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
     return BlockRegion(ntuple(d -> offext[d][1], 3), ntuple(d -> offext[d][2], 3))
 end
 
-# Tiles covering `box` (parent-level node space), in lattice order.
+# Tiles covering `box` (parent-level node space), in lattice order. Along a
+# dimension of nonzero `wrap`, the period of a periodic dimension whose seam
+# the lattice crosses, the box may run past the seam and the cells it meets
+# are those of its pieces on either side (`_wrapped_parts`), on the lattice
+# over [1, P + 1] whose last cell ends on the seam.
 function _level_tiles(box::BlockRegion, active::NTuple{3,Bool}, tile::Int,
-                      lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi)
-    spans = ntuple(d -> active[d] ?
-                   _tile_span(box.offset[d] + 1, box.offset[d] + box.extent[d], tile) :
-                   (0:0), 3)
+                      lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi,
+                      wrap::NTuple{3,Int}=(0, 0, 0))
+    spans = ntuple(3) do d
+        active[d] || return [0]
+        parts = _wrapped_parts(box.offset[d] + 1, box.offset[d] + box.extent[d],
+                               wrap[d])
+        sort!(unique!(reduce(vcat, [collect(_tile_span(a, b, tile)) for (a, b) in parts])))
+    end
     tiles = BlockRegion[]
     for k3 in spans[3], k2 in spans[2], k1 in spans[1]
         t = _lattice_tile((k1, k2, k3), active, tile, lo, hi, last)
@@ -1386,9 +1409,12 @@ end
 # Face table of a tile set: neighbor patch index (1-based within the set)
 # per face, 0 where none. Two tiles abut along `d` when one's high plane is
 # the other's low plane and their transverse extents coincide, which the
-# lattice guarantees whenever they touch at all.
-function _tile_faces(regions::Vector{BlockRegion})
+# lattice guarantees whenever they touch at all. Along a periodic dimension
+# of `period` the planes are compared modulo the period, so the tiles on
+# either side of the seam abut there.
+function _tile_faces(regions::Vector{BlockRegion}, period::NTuple{3,Int}=(0, 0, 0))
     n = length(regions)
+    same_node(a, b, d) = period[d] == 0 ? a == b : mod(a - b, period[d]) == 0
     faces = Vector{NTuple{3,NTuple{2,Int}}}(undef, n)
     for p in 1:n
         rp = regions[p]
@@ -1398,11 +1424,11 @@ function _tile_faces(regions::Vector{BlockRegion})
             for q in 1:n
                 q == p && continue
                 rq = regions[q]
-                same = all(e -> e == d || (rq.offset[e] == rp.offset[e] &&
+                same = all(e -> e == d || (same_node(rq.offset[e], rp.offset[e], e) &&
                                            rq.extent[e] == rp.extent[e]), 1:3)
                 same || continue
-                rq.offset[d] + rq.extent[d] - 1 == rp.offset[d] && (lo = q)
-                rp.offset[d] + rp.extent[d] - 1 == rq.offset[d] && (hi = q)
+                same_node(rq.offset[d] + rq.extent[d] - 1, rp.offset[d], d) && (lo = q)
+                same_node(rp.offset[d] + rp.extent[d] - 1, rq.offset[d], d) && (hi = q)
             end
             (lo, hi)
         end
@@ -1414,12 +1440,16 @@ end
 # box of `region`, from the parent level's transfers (the root's patches
 # from `patch_regions`).
 function _parents_of(region::BlockRegion, active::NTuple{3,Bool},
-                     parent_indices::Vector{Int}, parent_regions::Vector{BlockRegion})
+                     parent_indices::Vector{Int}, parent_regions::Vector{BlockRegion},
+                     period::NTuple{3,Int}=(0, 0, 0))
     box = _buffered(region, active, LEVEL_BUFFER)
     hits = Int[]
-    for (i, r) in zip(parent_indices, parent_regions)
-        any(d -> box.offset[d] + box.extent[d] <= r.offset[d] ||
-                 r.offset[d] + r.extent[d] <= box.offset[d], 1:3) && continue
+    for (i, r0) in zip(parent_indices, parent_regions)
+        any(_images(period)) do σ
+            r = _shifted(r0, σ)
+            !any(d -> box.offset[d] + box.extent[d] <= r.offset[d] ||
+                      r.offset[d] + r.extent[d] <= box.offset[d], 1:3)
+        end || continue
         push!(hits, i)
     end
     return hits
@@ -1435,15 +1465,17 @@ end
 # subset must not call). Each record's `partner` is therefore a rank number
 # in that communicator, the one `_sync_level_records!` exchanges over, and a
 # plane record's `partner_pid` stays the partner's tile id, which
-# `_seed_planes!` reads. Returns the tuple the `Level{T}` constructor takes.
+# `_seed_planes!` reads. `period` is the level's own node-space period
+# (`_level_period`), across whose seam two tiles abut. Returns the tuple the
+# `Level{T}` constructor takes.
 function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
                         tiles::Vector{Int}, patch_indices::Vector{Int}, decomps,
-                        n_cons::Int) where {T}
+                        n_cons::Int, period::NTuple{3,Int}=(0, 0, 0)) where {T}
     sends = ntuple(_ -> GhostRecord{T}[], 3)
     recvs = ntuple(_ -> GhostRecord{T}[], 3)
     planes = ntuple(_ -> PlaneRecord{T}[], 3)
     length(regions) > 1 || return sends, recvs, planes, (false, false, false)
-    faces = _tile_faces(regions)
+    faces = _tile_faces(regions, period)
     phases = ntuple(d -> any(f -> f[d] != (0, 0), faces), 3)
     shift(r::GhostRecord{T}) =
         GhostRecord{T}(patch_indices[r.patch], r.partner,
@@ -1916,7 +1948,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                               gradient_deriv=nothing,
                               parent_h=nothing,
                               boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                              folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                              folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                              period::NTuple{3,Int}=(0, 0, 0)) where {T}
     imposed = ntuple(d -> (faces[d][1] == 0 && !boundary[d][1],
                            faces[d][2] == 0 && !boundary[d][2]), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
@@ -1968,7 +2001,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     end
     return LevelTransfer{T}(region, active, coarse_regions, coarse_local,
                             fine_index, parent_comm, imposed, boundary, folded,
-                            restriction, dims_to_refine,
+                            period, restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
                             zeros(T, hermite), zeros(T, hermite),
@@ -2260,6 +2293,69 @@ function _level_span(n_global::NTuple{3,Int}, active::NTuple{3,Bool}, ℓ::Int, 
     end
 end
 
+# --- Levels across a periodic seam ---------------------------------------------
+#
+# Along a periodic dimension of N root nodes, root node N + 1 is node 1, and
+# level ℓ's node space repeats every 3^ℓ N nodes (parent node g is fine node
+# 3(g − 1) + 1, so g + N is fine node 3(g − 1) + 1 + 3N). A region there may
+# extend past the last node and wrap: its offset lies in [0, P) and its
+# nodes past P are the nodes a period lower. Every relation between a level
+# and its parent (the box pieces and the covered samples of the coupling,
+# the parents under a box, the covered mask, the nesting test) and between
+# two tiles of a level (the shared plane of a same-level interface) is taken
+# over the periodic images of the parent's or the partner's region, the
+# region shifted by −P, 0 and +P, so the patches themselves keep contiguous
+# node spaces: a tile across the seam is one block whose coordinates run on
+# past the domain's face, and the seam is nothing but where its parent's
+# data come from. A region clear of the seam meets only the unshifted image,
+# so nothing moves for it.
+
+# The period of level ℓ's node space along each dimension: 3^ℓ N along an
+# active periodic dimension of the root, 0 along the others. `periodic` is
+# the root decomposition's, which marks collapsed dimensions periodic too.
+_level_period(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool}, ℓ::Int) =
+    ntuple(d -> n_global[d] > 1 && periodic[d] ? 3^ℓ * n_global[d] : 0, 3)
+_level_period(solver, ℓ::Int) =
+    _level_period(solver.n_global, getfield(solver, :patches)[1].decomp.periodic, ℓ)
+
+# The shifts of a region's periodic images under `period`: the region itself
+# first, then ∓P along each periodic dimension, their combinations included.
+# Built from vectors of one type whatever the period, so the result infers
+# concretely (the ledger reads it inside the step).
+function _images(period::NTuple{3,Int})
+    shifts(P) = P == 0 ? [0] : [0, -P, P]
+    out = NTuple{3,Int}[]
+    for s3 in shifts(period[3]), s2 in shifts(period[2]), s1 in shifts(period[1])
+        push!(out, (s1, s2, s3))
+    end
+    return out
+end
+
+# `region` shifted by `σ`.
+_shifted(region::BlockRegion, σ::NTuple{3,Int}) =
+    BlockRegion(region.offset .+ σ, region.extent)
+
+# `region` with its offset along each periodic dimension brought into
+# [0, P), the form every level stores.
+_canonical(region::BlockRegion, period::NTuple{3,Int}) =
+    BlockRegion(ntuple(d -> period[d] == 0 ? region.offset[d] :
+                            mod(region.offset[d], period[d]), 3), region.extent)
+
+# The node intervals of [lo, hi] inside [1, P + 1] along a periodic
+# dimension of period P, for an interval that may run past either end of it
+# but spans less than a period: the interval itself, or its two pieces on
+# either side of the seam, one ending on node P + 1 and one starting on node 1
+# (the same node, the plane both share). A piece that would hold that node
+# alone is dropped: an interval ending on a lattice plane meets the cell on
+# its inner side only (`_tile_span`).
+function _wrapped_parts(lo::Int, hi::Int, P::Int)
+    P == 0 && return [(lo, hi)]
+    lo < 1 && return hi > 1 ? [(lo + P, P + 1), (1, hi)] :
+                     hi == 1 ? [(lo + P, P + 1)] : [(lo + P, hi + P)]
+    hi > P + 1 && return lo < P + 1 ? [(lo, P + 1), (1, hi - P)] :
+                         lo == P + 1 ? [(1, hi - P)] : [(lo - P, hi - P)]
+    return [(lo, hi)]
+end
 # The faces of `region` (in a level's node space of `extent` nodes, or over
 # the node ranges `span`) that lie on a domain face a level may reach
 # (`eligible`).
@@ -2294,12 +2390,15 @@ _tile_fine_extent(solver, region::BlockRegion, ℓ::Int) =
                 only(_region_folds(solver, _region_boundaries(solver, [region], ℓ))))
 
 # Whether every node of `region` lies in some member of `regions` (a union
-# of boxes, not one box: the test is by node, and regions are small).
-function _covered_by(region::BlockRegion, regions::Vector{BlockRegion})
+# of boxes, not one box: the test is by node, and regions are small), or in
+# a periodic image of one under `period`.
+function _covered_by(region::BlockRegion, regions::Vector{BlockRegion},
+                     period::NTuple{3,Int}=(0, 0, 0))
+    images = [_shifted(r, σ) for r in regions for σ in _images(period)]
     inside(g, r) = all(d -> r.offset[d] < g[d] <= r.offset[d] + r.extent[d], 1:3)
     for k in 1:region.extent[3], j in 1:region.extent[2], i in 1:region.extent[1]
         g = region.offset .+ (i, j, k)
-        any(r -> inside(g, r), regions) || return false
+        any(r -> inside(g, r), images) || return false
     end
     return true
 end
@@ -2947,11 +3046,11 @@ end
 # inside the covered region, holding `RESTRICT_MARGIN` region nodes back from
 # a parent-fed face (`_restrict_window`), one parent patch at a time.
 function _write_covered_region!(src4, lt::LevelTransfer, states, patches)
-    off = lt.region.offset
     win = _restrict_window(lt)
-    for li in lt.coarse_local
+    for li in lt.coarse_local, σ in _images(lt.period)
         li == 0 && continue
-        _write_covered_patch!(states[li], src4, win, off, patches[li])
+        # A window across a periodic seam lands partly on the parent's image.
+        _write_covered_patch!(states[li], src4, win, lt.region.offset .- σ, patches[li])
     end
     return src4
 end
@@ -3179,8 +3278,9 @@ so that every rank holds the same record, and state that survives a regrid.
 
 `boundaries` (the `level_boundaries` keyword) lets the tag clamp and the
 lattice clip place a level on a domain face whose condition a level carries,
-a symmetry plane excepted; off, every level stays the nesting margin inside
-the domain (`_placement_faces`).
+a symmetry plane excepted, and across a periodic seam; off, every level
+stays the nesting margin inside the domain (`_placement_faces`,
+`_placement_period`).
 
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean

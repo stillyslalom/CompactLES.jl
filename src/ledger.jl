@@ -253,8 +253,10 @@ end
     end
     levels = getfield(solver, :levels)
     if patch.level + 2 <= length(levels)
-        for lt in levels[patch.level + 2].transfers
-            _ledger_covered_faces!(J, ps, patch, lt.region::BlockRegion,
+        # A region across a periodic seam meets this patch in its images.
+        images = _images(_level_period(solver, patch.level))
+        for lt in levels[patch.level + 2].transfers, σ in images
+            _ledger_covered_faces!(J, ps, patch, _shifted(lt.region::BlockRegion, σ),
                                    lt.imposed::NTuple{3,NTuple{2,Bool}}, comps)
         end
     end

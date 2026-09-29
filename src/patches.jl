@@ -388,14 +388,18 @@ _covered_mask(decomp::Decomp) =
     zeros(UInt8, ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3))
 
 """
-    _fill_covered!(patch, regions)
+    _fill_covered!(patch, regions, period=(0, 0, 0))
 
 Rewrite `patch.covered` from the child regions `regions`, given in this
-patch's level node space (a `LevelTransfer.region` of the level below).
-Rank-local: it reads the regions and the patch's own block placement, both
-of which every rank of the patch's level holds.
+patch's level node space (a `LevelTransfer.region` of the level below), a
+region across a periodic seam covering through its images under `period`
+(that node space's period, `_level_period`). Rank-local: it reads the regions
+and the patch's own block placement, both of which every rank of the patch's
+level holds.
 """
-function _fill_covered!(patch::Patch, regions::Vector{BlockRegion})
+function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
+                        period::NTuple{3,Int}=(0, 0, 0))
+    regions = [_shifted(r, σ) for r in regions for σ in _images(period)]
     covered = patch.covered
     fill!(covered, zero(UInt8))
     decomp = patch.decomp

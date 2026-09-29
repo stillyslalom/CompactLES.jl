@@ -570,16 +570,17 @@ function _initialize_interior!(solver::SolverLike, Q, ic::BoundHydrostatic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    cb = initial_callback(ic.ic, xcoord(solver, 1, 1), xcoord(solver, 2, 1),
-                          xcoord(solver, 3, 1),
+    cb = initial_callback(ic.ic, _domain_coordinate(solver, 1, 1),
+                          _domain_coordinate(solver, 2, 1),
+                          _domain_coordinate(solver, 3, 1),
                           point_spacing(solver, CartesianIndex(o1 + 1, o2 + 1,
                                                                  o3 + 1)))
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
-        x2 = xcoord(solver, 2, j)
-        x3 = xcoord(solver, 3, k)
+        x2 = _domain_coordinate(solver, 2, j)
+        x3 = _domain_coordinate(solver, 3, k)
         for i in 1:nx
-            x1 = xcoord(solver, 1, i)
+            x1 = _domain_coordinate(solver, 1, i)
             I = CartesianIndex(i + o1, j + o2, k + o3)
             pr = pointwise_initial(cb, x1, x2, x3, point_spacing(solver, I))
             ρ, _ = _density_pressure(solver.eos, pr)

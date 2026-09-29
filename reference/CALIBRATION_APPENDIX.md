@@ -6222,6 +6222,29 @@ held inside, so the order below the six of the two-level plane row is the
 nest's, at its coarse-fine face; the plane window reads 4.21. Not diagnosed
 further.
 
+**Levels across a periodic seam.** The convergence row's case
+(`seam_level_case`: the entropy wave on the periodic [0, 2π), a level over
+[11L/12, 13L/12]) against the uniform run at the level's spacing in 2N equal
+steps to t = 0.5: the density error over the fine interface window is
+1.370e-7, 1.727e-9 and 2.414e-11 at N = 48, 96 and 192 (successive orders
+6.31, 6.16), the interior window 4.44e-8, 8.18e-10 and 1.54e-11. The seam
+testset of `test/level_tests.jl` translates a periodic run by 36 root nodes,
+so that the level lies across the seam in one run and clear of it in the
+other: the two differ by 1.1e-14 over every patch after 40 steps for a box in
+1-D under either stepping mode and for a corner box across both seams in 2-D,
+and by 8.4e-15 for two tiles abutting across the seam (a shift of 30, the
+lattice edge 6 dividing N = 48); a level at the axis of an r-z run across
+the seam in z, static or regridded onto the axis, differs by 2.2e-14 as a box
+and 1.9e-14 as tiles after 8 steps. The composite mass drift of the 2-D corner
+box over 12 steps is 4.7485312626e-6 on both sides of the seam, and the
+ledger's coarse-fine and covered-face columns sum to 2.3761251418e-6 on both.
+A box and tiles regridded across the seam under `level_boundaries`, following
+a window at unit speed, stay within 4.8e-10 (box) and 4.3e-10 (tiles) of the
+uniform fine run over 96 steps. The same entropy wave with a level clear of
+the seam, and with one across it, drifts in composite mass by 1.78e-4 over
+t = 0.5 at N = 48, the node quadrature of a moving field on a nonuniform
+grid, of opposite sign in the two placements.
+
 **A converging shock on the axis level.** The instrument is
 `noh_axis_level` (`test/cases.jl`): cylindrical Noh from the cold start at
 N = 256, CFL 0.15 and the default filter, a static tile over the first m root

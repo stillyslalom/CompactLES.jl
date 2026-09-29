@@ -327,6 +327,23 @@ function annulus_level_case(N; refined=true, viscous=false, mu=0.002, Pr=0.7, op
 end
 
 """
+    seam_level_case(N; refined=true, opts...)
+
+The entropy wave of `entropy_profile` on the periodic [0, 2π) with N root
+nodes and a refined level across the periodic seam, over [11L/12, 13L/12]
+(root nodes 11N/12 + 1 through N, then 1 through N/12 + 1); under
+`refined = false` the uniform run at the level's spacing, 3N nodes, which is
+its reference. Both are built to
+take equal steps (`fixed_step_run!`). N must be a multiple of 12.
+"""
+function seam_level_case(N; refined=true, opts...)
+    N % 12 == 0 || error("N = $N: the seam level needs N divisible by 12")
+    level = refined ? (refine=BlockRegion((11N ÷ 12, 0, 0), (N ÷ 6 + 1, 1, 1)),) : (;)
+    _smooth_solver((refined ? N : 3N, 1, 1), 2pi, per3, entropy_profile(3, 0.37);
+                   merge(SMOOTH_DEFAULTS, (cfl=0.9,), level, values(opts))...)
+end
+
+"""
     plane_level_case(N; refined=true, opts...)
 
 `wall_case(N; folded = true)` with a refined level over the first N ÷ 6 + 1

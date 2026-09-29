@@ -160,6 +160,24 @@ include("capability_cases.jl")
                                   amr=AMR(initial=(r, θ, z, t) -> r^2 + z^2 < 0.04,
                                           regrid_interval=1, tile=4, max_levels=3,
                                           level_boundaries=true)))
+        # A level across a periodic seam: an explicit box, and tags placing a
+        # box and tiles there, on either backend.
+        near_seam = (x, y, z, t) -> x < 0.06 || x > 0.94
+        for (backend, precision) in C.PAIRS
+            execution = Execution(; backend, precision)
+            ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), execution,
+                                                  amr=AMR(initial=BlockRegion((44, 0, 0),
+                                                                              (9, 1, 1)))))
+            for tile in (0, 8)
+                ok &= C.advances(C.problem(),
+                                 Numerics(; n_global=(48, 1, 1), execution,
+                                          amr=AMR(initial=near_seam, regrid_interval=1,
+                                                  tile=tile, level_boundaries=true)))
+            end
+            ok || @warn "capability matrix: a level across the seam on $backend at " *
+                        "$precision did not advance"
+            @test ok
+        end
         # Every EOS on a patched and on a refined layout.
         for (name, eos, ic) in C.EOSES[2:end],
             kw in ((; execution=Execution(patch_grid=(2, 1, 1))),

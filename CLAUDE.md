@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels,folded regrid"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels,folded regrid,seam levels"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -237,7 +237,8 @@ axis window) and at the corner of the axis and a plane at z = 0 6.97 (the
 fold window), a level on an r-z annulus 5.83 / 5.40 (inviscid / viscous, the
 fine interface window against the uniform run at the fine spacing), a level
 at an NSCBC outflow 6.45 (the fine face window against the uniform run at
-the fine spacing), temporal order 3.99 / 4.09
+the fine spacing), a level across a periodic seam 6.24 (the fine interface
+window against the uniform run at the fine spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
 additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is
@@ -593,13 +594,22 @@ Names are spelled out in full. Current vocabulary:
   folded faces of the regions a regrid or a restart builds),
   `_tile_fine_extent` (a tile's node count with its folded faces)
 - `level_boundaries` (keyword; `RegridSpec.boundaries`: tags and shapes may
-  place a level on a domain face it can carry), `_placement_faces` /
+  place a level on a domain face it can carry, and across a periodic seam),
+  `_placement_faces` /
   `_lattice_reach` / `_feasible_nodes` / `_placement_extent` (the faces and
   node interval placement reaches), `_placed_reach` (a level's lattice
   reach under the solver's rules), `_unbuffered_faces` (the placed faces
   whose box takes no buffer, every one but a fold), `_warn_margin_band`,
   `_shared_boundary`
   (the domain-face planes a carry or a migration keeps)
+- `_level_period` (level ℓ's node-space period along a periodic dimension,
+  3^ℓ N, 0 elsewhere; `LevelTransfer.period` is its parent's), `_images` /
+  `_shifted` / `_canonical` (a region's periodic images and its stored form,
+  offset in [0, P)), `CouplingPiece.image`, `_wrapped_parts` /
+  `_wrapped_cells` / `_wrap_feasible` (the lattice over [1, P + 1], its last
+  cell ending on the seam), `_placement_period`, `_seam_arc`,
+  `_nearest_image`, `_domain_coordinate` (a node past the domain's face read a
+  period back, for a user function of position)
 - `SesameTable` (one material of a SESAME ASCII 2 library in SI, not an
   `EOS`), its `SesameComponent`s `total` / `ion` / `electron` / `nuclear`
   (the 301 / 303 / 304 / 305 records, each on its own grid) and

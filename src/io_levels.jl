@@ -298,8 +298,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
               "1 and this solver refines one box (tile = 0)")
     boundaries = _region_boundaries(solver, regions, 1)
     folds = _region_folds(solver, boundaries)
+    period = _level_period(solver, 0)
     for (r, bnd) in zip(regions, boundaries)
-        _covered_by(_buffered(r, active, spec.margin, bnd), [root.region]) ||
+        _covered_by(_buffered(r, active, spec.margin, bnd), [root.region], period) ||
             error("restart: the recorded region $r is not nested $(spec.margin) " *
                   "root nodes inside the domain")
     end
@@ -324,7 +325,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     new_lc = resized ? split_level_comm(root_lc, np_new) : old_lc
     group = new_lc.owned ? split_tile_comm(new_lc, owners) : absent_tile_group()
     held = [ti for ti in eachindex(regions) if owners[ti] == group.ranks]
-    faces = _tile_faces(regions)
+    faces = _tile_faces(regions, period)
     ws_pool = [p.rhs_workspace for p in patches]
     local_of = zeros(Int, length(regions))
     indices = [k + 1 for k in eachindex(held)]
@@ -356,7 +357,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-        parent_h=root.h, boundary=boundaries[ti], folded=folds[ti])
+        parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
                                     [root.decomp], map(fine_decomp, eachindex(regions)))
@@ -373,14 +374,15 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     if new_lc.owned
         fine_regions = [_fine_region(tr, active, fo) for (tr, fo) in zip(regions, folds)]
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
-                                 [p.decomp for p in new_patches], n_cons)
+                                 [p.decomp for p in new_patches], n_cons,
+                                 _level_period(solver, 1))
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
                              records; stacks, coupling)
     else
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
                              stacks, coupling)
     end
-    _fill_covered!(root, regions)
+    _fill_covered!(root, regions, period)
     for li in indices
         init_geometry!(PatchSolver(solver, patches[li]))
     end

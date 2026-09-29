@@ -429,6 +429,12 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # `refines[ℓ]` is level ℓ's region in level ℓ−1's node space.
     refines = refine === nothing ? BlockRegion[] :
               refine isa BlockRegion ? [refine] : refine
+    # Along a periodic dimension a region may start anywhere and run past the
+    # seam; it is stored with its offset in [0, P), P the period of its
+    # parent's node space (`_level_period`), which leaves any other region as
+    # it was given.
+    refines = [_canonical(rg, _level_period(n_global, periodic, ℓ - 1))
+               for (ℓ, rg) in enumerate(refines)]
     # The hierarchy's depth, the root included. Levels beyond those `refine`
     # gives start with no tiles and are created by the regrid.
     nlev = something(max_levels, length(refines) + 1)
@@ -579,7 +585,24 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         parent_regions = [BlockRegion((0, 0, 0), n_global)]
         for (ℓ, rg) in enumerate(refines)
             span = _level_span(n_global, active_g, ℓ - 1, bcs)
+            period = _level_period(n_global, periodic, ℓ - 1)
             eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
+            # Along a periodic dimension a region may run across the seam but
+            # not around it: one patch keeps the margin clear of its own other
+            # end, so its box and its covered window each meet a parent node
+            # once, and a tiled region spans the lattice's ring at most.
+            for d in 1:3
+                period[d] > 0 || continue
+                most = tile == 0 ? period[d] - 2 * margin : period[d] + 1
+                rg.extent[d] <= most ||
+                    error("level $ℓ region $rg spans $(rg.extent[d]) level-$(ℓ - 1) " *
+                          "nodes along periodic dimension $d, whose period is " *
+                          "$(period[d]) nodes; " *
+                          (tile == 0 ? "one refined patch spans at most $most, " *
+                                       "keeping $margin nodes clear at either end, " *
+                                       "and a tiled level (tile > 0) may close the ring" :
+                                       "a tiled region spans at most the ring, $most"))
+            end
             for d in 1:3
                 if active_g[d]
                     rg.extent[d] >= 4 ||
@@ -628,7 +651,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                           "level interpolation order $level_interpolation_order; " *
                           "widen the region")
             end
-            if !_covered_by(_buffered(rg, active_g, margin, bnd), parent_regions)
+            if !_covered_by(_buffered(rg, active_g, margin, bnd), parent_regions, period)
                 p = only(parent_regions)
                 ranges = join(("offset $(p.offset[d] + margin):" *
                                "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
@@ -973,29 +996,41 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     for (ℓ, rg) in enumerate(refines)
         extent = _level_extent(n_global, active_g, ℓ - 1)
         span = _level_span(n_global, active_g, ℓ - 1, bcs)
+        period = _level_period(n_global, periodic, ℓ - 1)
         eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
         if tile == 0
             tregions = [rg]
         else
             # Clip the lattice to the parent patches' bounding box less the
             # margin, or to the box itself at a domain face `rg` reaches; a
-            # tile that then still leaves the union is refused.
+            # tile that then still leaves the union is refused. Along a
+            # periodic dimension where `rg` reaches past that clip, into the
+            # margin band of the seam or across it, the lattice wraps instead:
+            # its last cell ends on the seam, and the cells on either side of
+            # the seam are neighbors.
             rb = _boundary_faces(rg, span, eligible)
-            lo = ntuple(d -> minimum(r.offset[d] for r in parent_regions) +
-                             1 + (rb[d][1] ? 0 : margin), 3)
-            hi = ntuple(d -> maximum(r.offset[d] + r.extent[d]
-                                     for r in parent_regions) - (rb[d][2] ? 0 : margin), 3)
-            tregions = _level_tiles(rg, active_g, tile, lo, hi, extent)
+            plo = ntuple(d -> minimum(r.offset[d] for r in parent_regions), 3)
+            phi = ntuple(d -> maximum(r.offset[d] + r.extent[d] for r in parent_regions), 3)
+            wrap = ntuple(d -> period[d] > 0 &&
+                               (rg.offset[d] - margin < plo[d] ||
+                                rg.offset[d] + rg.extent[d] + margin > phi[d]) ?
+                               period[d] : 0, 3)
+            lo = ntuple(d -> wrap[d] > 0 ? 1 : plo[d] + 1 + (rb[d][1] ? 0 : margin), 3)
+            hi = ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 :
+                             phi[d] - (rb[d][2] ? 0 : margin), 3)
+            tregions = _level_tiles(rg, active_g, tile, lo, hi,
+                                    ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : extent[d], 3),
+                                    wrap)
             isempty(tregions) &&
                 error("level $ℓ region admits no tile of edge $tile inside " *
                       "the nesting margin")
         end
         push!(level_tiles, tregions)
-        faces = _tile_faces(tregions)
+        faces = _tile_faces(tregions, period)
         boundaries = [_boundary_faces(tr, span, eligible) for tr in tregions]
         folded_all = [_level_fold_faces(b, bcs) for b in boundaries]
         for (tr, bnd) in zip(tregions, boundaries)
-            _covered_by(_buffered(tr, active_g, margin, bnd), parent_valid) ||
+            _covered_by(_buffered(tr, active_g, margin, bnd), parent_valid, period) ||
                 error("level $ℓ tile $tr must be nested at least $margin " *
                       "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
                       "own (not imposed) nodes")
@@ -1045,7 +1080,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             transfers = LevelTransfer{T}[]
             for (ti, tr) in enumerate(tregions)
                 pids = _parents_of(tr, active_g, collect(eachindex(parent_regions)),
-                                   parent_regions)
+                                   parent_regions, period)
                 push!(transfers, build_level_transfer(
                     T, tr, active_g, n_halo, parent_regions[pids],
                     parent_local[pids], local_of[ti], level_restriction, n_cons,
@@ -1055,7 +1090,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                     gradient_deriv=_ghost_viscous(interface_flux, transport) ?
                                    deriv : nothing,
                     parent_h=parent_h, boundary=boundaries[ti],
-                    folded=folded_all[ti]))
+                    folded=folded_all[ti], period))
             end
             coupling = build_level_coupling(T, parent_lc.comm, transfers,
                                             parent_regions,
@@ -1067,7 +1102,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 # may differ from a tile's Cartesian communicator's.
                 records = _level_records(T, lc.comm, fine_regions, held, indices,
                                          [fines[li - 1].decomp for li in indices],
-                                         n_cons)
+                                         n_cons,
+                                         _level_period(n_global, periodic, ℓ))
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,
                                        transfers, records; stacks, coupling))
             else
@@ -1144,7 +1180,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     for ℓ in 1:length(levels)-1
         child_regions = [lt.region for lt in levels[ℓ + 1].transfers]
         for li in levels[ℓ].patches
-            _fill_covered!(patches[li], child_regions)
+            _fill_covered!(patches[li], child_regions,
+                           _level_period(n_global, periodic, ℓ - 1))
         end
     end
     return solver

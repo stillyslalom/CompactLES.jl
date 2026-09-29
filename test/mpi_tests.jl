@@ -1706,6 +1706,88 @@ function test_placed_levels()
 end
 
 # ---------------------------------------------------------------------------
+# A level across a periodic seam, decomposed: the box of a tile across the
+# seam draws parent nodes from the ranks on both sides of it and its
+# restriction writes to both, so one message between a pair of ranks may
+# carry pieces of both images of the parent, in the order both sides derive
+# from the block tables. A static box and tiles across the seam, and a box
+# and tiles regridded across it under level_boundaries, each against the
+# serial rebuild on COMM_SELF, block by block.
+# ---------------------------------------------------------------------------
+function test_seam_levels()
+    section("seam levels: a level across a periodic seam")
+    function blockdiff(p, Q, rp, Qref)
+        e = 0.0
+        for I in CL.interior(p.decomp), c in 1:size(Q, 4)
+            loc = Tuple(I) .- p.decomp.n_halo_d
+            J = CartesianIndex(loc .+ p.decomp.offset .+ rp.decomp.n_halo_d)
+            e = max(e, abs(Float64(Q[I, c] - Qref[J, c])))
+        end
+        e
+    end
+    function leveldiff(s, qs, ref, qref)
+        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        lev, rlev = s.levels[2], ref.levels[2]
+        for (k, ti) in zip(lev.patches, lev.tiles)
+            rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
+            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+        end
+        e
+    end
+    # A window of half-width 0.08 moving right at 2 from x = 0.95, across the
+    # seam, over the entropy wave.
+    window(p, I) = abs(mod(CL.xcoord(p, 1, CL.interior_index(p, I)[1]) -
+                           (0.95 + 2 * p.t) + 0.5, 1) - 0.5) < 0.08
+    wave = (x, y, z) -> Prim(rho=1 + 0.2 * sin(2pi * x + 0.37), u=(0.5, 0.0, 0.0),
+                             p=1.0)
+    function build(comm_here, tile, regrid; kw...)
+        local s = Solver(; n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                   comm=comm_here, art=ArtificialProperties(enabled=false),
+                   filter_interval=1, cfl=0.5, refine=BlockRegion((84, 0, 0), (25, 1, 1)),
+                   regrid_interval=regrid ? 3 : 0, tag_threshold=Inf,
+                   tag_predicate=regrid ? window : nothing, tag_buffer=2, tile=tile,
+                   level_boundaries=regrid, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    crosses(r) = r.offset[1] + r.extent[1] > 96
+    for (label, tile, regrid) in (("static box", 0, false), ("static tiles", 8, false),
+                                  ("regridded box", 0, true), ("regridded tiles", 8, true))
+        s, q = build(comm, tile, regrid)
+        ref, qref = build(MPI.COMM_SELF, tile, regrid)
+        differ = 0
+        crossed = false
+        e = 0.0
+        for n in 3:3:30
+            run!(s, q; tfinal=1e9, nmax=n)
+            run!(ref, qref; tfinal=1e9, nmax=n)
+            differ += level_regions(s, 1) != level_regions(ref, 1)
+            crossed |= any(crosses, level_regions(s, 1))
+            differ == 0 && (e = max(e, leveldiff(s, q, ref, qref)))
+        end
+        check("seam levels, $label: the regions match serial", gmax(differ), 0.5)
+        check("seam levels, $label: a region crosses the seam", gmax(!crossed), 0.5)
+        check("seam levels, $label: every block matches serial", gmax(e), 1e-10)
+        check("seam levels, $label: composite volume exact",
+              abs(domain_volume(s) - 1), 1e-13)
+    end
+    # Repartitioned at every check, the tiles across the seam migrate block to
+    # block, a tile's blocks being in its own node space; the audit holds the
+    # migrated state to the replicated carry.
+    CL.MIGRATION_AUDIT[] = true
+    CL.MIGRATION_AUDIT_RESULT[] = (tiles=0, mismatches=0)
+    s, q = build(comm, 8, true; rebalance=1.0, rebalance_persist=1)
+    run!(s, q; tfinal=1e9, nmax=30)
+    CL.MIGRATION_AUDIT[] = false
+    audit = CL.MIGRATION_AUDIT_RESULT[]
+    check("seam levels, rebalanced tiles: migrated state equals the carry bitwise",
+          gsum(audit.mismatches), 0.5)
+    check("seam levels, rebalanced tiles: the state stays finite",
+          gmax(any(Q -> !all(isfinite, parent(Q)), q)), 0.5)
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -4107,6 +4189,7 @@ const SUITE = (
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),
     ("placed levels", test_placed_levels),
+    ("seam levels", test_seam_levels),
     ("two-patch layout", test_two_patch_layout),
     ("bulk patched layout", test_bulk_patched),
 )

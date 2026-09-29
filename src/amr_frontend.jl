@@ -21,8 +21,10 @@ its parent, which is the room the coarse–fine transfer needs. By default this
 holds at the root's boundaries too, periodic or not, and a region asked for
 closer to a boundary is reduced to fit, with a warning naming the level. With
 `level_boundaries = true`, a shape or a tagged feature is refined up to a wall
-or NSCBC face instead, which the level then carries at its own spacing (see
-the keyword below).
+or NSCBC face instead, which the level then carries at its own spacing, and
+across a periodic seam (see the keyword below). An explicit `BlockRegion`
+may cross a periodic seam without the keyword: its offset may lie anywhere
+and its nodes past the last node of the period are the first nodes again.
 
 `regrid_interval` defaults to 0 (a fixed region) for a shape, a region or a
 predicate of position alone, and for `:sensor` or a time-dependent predicate
@@ -114,10 +116,11 @@ copies `base` with the given keywords replaced.
   `NSCBCOutflowBC` or `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the
   `AxisBC` of an r-z run on the host backend under `:inject` restriction.
   The level carries the face's condition at its own spacing, so a feature at
-  a wall, an open face or a fold is refined up to the face. Periodic seams
-  and other faces keep the margin. With `tile`, a face keeps it also
-  when the tile next to the face's tile would come within the margin of
-  the domain: an edge below `max(n_halo, 4)`, or a partial last lattice
+  a wall, an open face or a fold is refined up to the face. A level also
+  crosses a periodic seam, one box spanning at most the period less the
+  margin at either end. Other faces keep the margin. With `tile`, a face
+  keeps it also when the tile next to the face's tile would come within the
+  margin of the domain: an edge below `max(n_halo, 4)`, or a partial last lattice
   cell at the high face spanning fewer parent cells than that. At `false`
   every face keeps the margin.
 - `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
@@ -166,8 +169,9 @@ _amr_tag_threshold(amr::AMR) =
 function _amr_physical_tag(predicate::F) where {F}
     return function (patch, I)
         i, j, k = interior_index(patch, I)
-        result = predicate(xcoord(patch, 1, i), xcoord(patch, 2, j),
-                           xcoord(patch, 3, k), patch.t)
+        result = predicate(_domain_coordinate(patch, 1, i),
+                           _domain_coordinate(patch, 2, j),
+                           _domain_coordinate(patch, 3, k), patch.t)
         result isa Bool || throw(ArgumentError("AMR initial predicate must return Bool"))
         return result
     end
@@ -253,7 +257,11 @@ _root_first_node(prob, h) =
 # shape counts, so the region brackets the shape rather than falling inside
 # it, and a shape thinner than the spacing is still covered. A region stays
 # the nesting margin inside its parent's own nodes, except at a domain face
-# `_shape_faces` lets it reach.
+# `_shape_faces` lets it reach. Under `level_boundaries` the first level
+# crosses a periodic seam: along a periodic dimension its bounds are the
+# shortest arc of the period holding the shape's nodes (`_seam_arc`), and a
+# node of a level past the seam is sampled a period back, where the shape is
+# given, as an initial condition is (`_domain_coordinate`).
 function _shape_regions(shapes, prob, num, amr::AMR)
     n_global = num.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
@@ -272,6 +280,10 @@ function _shape_regions(shapes, prob, num, amr::AMR)
     # beyond the lattice of its parent's nodes, and keeps its box buffer,
     # the parity mirror of the parent.
     fold = ntuple(d -> ntuple(side -> _level_fold_condition(prob.bcs[d][side]), 2), 3)
+    # The period of the parent level's node space along a periodic dimension
+    # a level may cross, 0 along the others.
+    period = ntuple(d -> amr.level_boundaries && active[d] &&
+                         isperiodic(prob.bcs[d][1]) ? n_global[d] : 0, 3)
     regions = BlockRegion[]
     for (ℓ, shape) in enumerate(shapes)
         shape isa Shape ||
@@ -285,12 +297,18 @@ function _shape_regions(shapes, prob, num, amr::AMR)
         span = sqrt(sum(h[d]^2 for d in 1:3 if active[d]))
         lo = [typemax(Int), typemax(Int), typemax(Int)]
         hi = [typemin(Int), typemin(Int), typemin(Int)]
+        # The first level's occupancy of each periodic dimension it may cross.
+        ring = ntuple(d -> ℓ == 1 && period[d] > 0, 3)
+        occupied = ntuple(d -> falses(ring[d] ? period[d] : 0), 3)
         for k in plo[3]:phi[3], j in plo[2]:phi[2], i in plo[1]:phi[1]
-            x = (origin[1] + i * h[1], origin[2] + j * h[2], origin[3] + k * h[3])
+            n3 = (i, j, k)
+            x = ntuple(d -> origin[d] + (period[d] > 0 ? mod(n3[d], period[d]) : n3[d]) *
+                            h[d], 3)
             signed_distance(shape, x, active) <= span || continue
-            for (d, n) in enumerate((i, j, k))
+            for (d, n) in enumerate(n3)
                 lo[d] = min(lo[d], n)
                 hi[d] = max(hi[d], n)
+                ring[d] && (occupied[d][n + 1] = true)
             end
         end
         lo[1] == typemax(Int) &&
@@ -302,6 +320,16 @@ function _shape_regions(shapes, prob, num, amr::AMR)
         extent = ones(Int, 3)
         for d in 1:3
             active[d] || continue
+            if ring[d]
+                # The arc, capped at the period less the margin at either end
+                # about its centre, widened to the four-node minimum.
+                a, b = _seam_arc(occupied[d])
+                n = clamp(b - a + 1, 4, period[d] - 2 * margin)
+                clipped |= n < b - a + 1
+                l = fld(a + b - n + 1, 2) - 1
+                offset[d], extent[d] = mod(l, period[d]), n
+                continue
+            end
             a = plo[d] + (reach_lo[d] ? 0 : margin)
             b = phi[d] - (reach_hi[d] ? 0 : margin)
             b - a + 1 >= 4 ||
@@ -344,6 +372,7 @@ function _shape_regions(shapes, prob, num, amr::AMR)
                           3 * (offset[d] + extent[d] - 1) +
                           (at_hi[d] ? (fold[d][2] ? 1 : 0) : -1), 3)
         top = ntuple(d -> 3 * top[d] + (active[d] && fold[d][2] ? 1 : 0), 3)
+        period = ntuple(d -> 3 * period[d], 3)
         reach = ntuple(d -> (at_lo[d], at_hi[d]), 3)
         h = ntuple(d -> active[d] ? h[d] / 3 : h[d], 3)
     end

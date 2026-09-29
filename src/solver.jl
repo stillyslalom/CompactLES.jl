@@ -167,7 +167,9 @@ Physical coordinate of rank-local, one-based interior index `i` in direction
 `d`. The index does not include halo padding. This is equivalent to
 `global_xcoord(solver, d, solver.region.offset[d] + solver.decomp.offset[d] + i)`,
 the patch region offset placing a patch's block in the whole grid (zero for a
-single-patch solver).
+single-patch solver). On a refined patch across a periodic seam the
+coordinate runs on past the domain's face, one period above the point it
+names.
 """
 xcoord(solver::SolverLike, d::Int, i::Int) =
     global_xcoord(solver, d,

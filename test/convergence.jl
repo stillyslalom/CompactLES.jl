@@ -97,6 +97,8 @@
 #   at the fine spacing, equal steps, t = 0.2): C6 5.83 | viscous 5.40
 #   a level at an NSCBC outflow (fine face window against the uniform run at
 #   the fine spacing, equal steps, t = 0.35): C6 6.45
+#   a level across a periodic seam (fine interface window against the uniform
+#   run at the fine spacing, equal steps, t = 0.5): C6 6.24
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
 #   subcycled, ghost fluxes 3.85 | additive pair, viscous periodic 4.02 |
@@ -112,7 +114,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those eighty-five numbers are also passed to each study as `recorded` and
+# Those eighty-six numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -1104,6 +1106,24 @@ evolution_study("two levels at an NSCBC outflow, C6", OUTFLOW_LEVEL_NS,
                 N -> outflow_level_case(N), outflow_level_reference;
                 primary=:wall, tfinal=0.35, steps=N -> 6 * (N - 1), patches=(2,),
                 expect=6.0, tol=0.8, recorded=6.45)
+
+# A level across the periodic seam: the entropy wave carried through a level
+# over [11L/12, 13L/12], whose box draws the parent's nodes from both sides
+# of the seam and whose restriction writes to both, the refined patch's
+# interface window against the uniform run at its spacing in the same equal
+# steps (cfl ≈ 0.22 at the fine spacing).
+println("\n=== smooth evolution: a level across a periodic seam, fine window, " *
+        "t = 0.5 ===")
+const SEAM_LEVEL_NS = (48, 96, 192)
+seam_level_reference(s) = begin
+    fine, states = seam_level_case(s.n_global[1]; refined=false)
+    fixed_step_run!(fine, states, 0.5, 2 * s.n_global[1])
+    NodeReference(fine, states)
+end
+evolution_study("two levels across a periodic seam, C6", SEAM_LEVEL_NS,
+                N -> seam_level_case(N), seam_level_reference;
+                primary=:interface, tfinal=0.5, steps=N -> 2N, patches=(2,),
+                expect=6.0, tol=0.8, recorded=6.24)
 
 # ---------------------------------------------------------------------------
 # Temporal order. Each row integrates one case on one grid in a sequence of

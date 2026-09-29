@@ -123,6 +123,8 @@ include("capability_cases.jl")
         rejects("a refined level cannot carry",
                 C.problem(bcs=((SlipWallBC(), switched), per, per)),
                 Numerics(n_global=n1, amr=AMR(initial=BlockRegion((38, 0, 0), (10, 1, 1)))))
+        rejects("along periodic dimension 1", gas,
+                Numerics(n_global=n1, amr=AMR(initial=BlockRegion((0, 0, 0), (42, 1, 1)))))
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))

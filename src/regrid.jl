@@ -311,12 +311,64 @@ function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
 end
 
 # Is global node `g` inside one of the current refined regions (parent
-# node space)? The hold level of the hysteresis counts there only.
-function _in_regions(regions::Vector{BlockRegion}, g::NTuple{3,Int})
-    for r in regions
+# node space), or one of their periodic images under `period`? The hold level
+# of the hysteresis counts there only.
+function _in_regions(regions::Vector{BlockRegion}, g::NTuple{3,Int},
+                     period::NTuple{3,Int}=(0, 0, 0))
+    for r0 in regions, σ in _images(period)
+        r = _shifted(r0, σ)
         all(d -> r.offset[d] < g[d] <= r.offset[d] + r.extent[d], 1:3) && return true
     end
     return false
+end
+
+# The periods along which automatic placement crosses a periodic seam of
+# level ℓ's node space: `_level_period` under `level_boundaries`, none
+# otherwise, every periodic face then keeping the nesting margin as before.
+_placement_period(solver, spec::RegridSpec, ℓ::Int) =
+    spec.boundaries ? _level_period(solver, ℓ) : (0, 0, 0)
+
+# The feasible interval `[lo, hi]` of a lattice clip, opened along a
+# dimension of nonzero `wrap` to the whole lattice over [1, P + 1].
+_wrap_feasible(lo::NTuple{3,Int}, hi::NTuple{3,Int}, wrap::NTuple{3,Int}) =
+    (ntuple(d -> wrap[d] > 0 ? 1 : lo[d], 3),
+     ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : hi[d], 3))
+
+# The lattice cells, among 0 .. K − 1, that the node interval [lo, hi]
+# meets: `_tile_span` of the interval, or of its pieces on either side of the
+# seam along a dimension of nonzero `wrap` (`_wrapped_parts`).
+function _wrapped_cells(lo::Int, hi::Int, tile::Int, K::Int, wrap::Int)
+    wrap == 0 && return intersect(_tile_span(lo, hi, tile), 0:K-1)
+    cells = Int[]
+    for (a, b) in _wrapped_parts(lo, hi, wrap)
+        append!(cells, intersect(_tile_span(a, b, tile), 0:K-1))
+    end
+    return sort!(unique!(cells))
+end
+
+# The shortest arc of a period of `P` nodes holding every flagged node of
+# `occupied` (one flag per node 1 .. P): the complement of the longest run of
+# unflagged nodes, the run through the seam counted whole, the first such
+# run taken on a tie. Returns `(lo, hi)` with lo in 1 .. P and hi possibly
+# past P, the arc crossing the seam; `nothing` when no node is flagged.
+function _seam_arc(occupied::AbstractVector)
+    P = length(occupied)
+    any(!iszero, occupied) || return nothing
+    all(!iszero, occupied) && return (1, P)
+    best_start, best_len = 0, -1
+    for s in 1:P
+        # A run starts at an unflagged node whose predecessor is flagged.
+        (iszero(occupied[s]) && !iszero(occupied[mod1(s - 1, P)])) || continue
+        len = 0
+        while iszero(occupied[mod1(s + len, P)])
+            len += 1
+        end
+        len > best_len && ((best_start, best_len) = (s, len))
+    end
+    lo = mod1(best_start + best_len, P)
+    hi = best_start - 1
+    hi < lo && (hi += P)
+    return (lo, hi)
 end
 
 # Global bounding box of the tagged set, or `nothing`. The globally reduced
@@ -326,17 +378,28 @@ end
 # function returns `nothing` and retains the current box. Otherwise, held nodes
 # may enlarge the box initiated by marked nodes, but cannot define or shrink a
 # box by themselves. Every rank derives the same result.
-function _tag_bounds(solver::Solver, Qc)
+#
+# Along a dimension of nonzero `wrap` (`_placement_period`) the bounds are the
+# shortest arc of the period holding the counted nodes instead (`_seam_arc`),
+# from their occupancy of that dimension's nodes, reduced in a second
+# Allreduce, so a feature across the seam is bounded across it; `ghi` then
+# lies past the period where the arc crosses the seam.
+function _tag_bounds(solver::Solver, Qc, wrap::NTuple{3,Int}=(0, 0, 0))
     dcp = getfield(solver, :patches)[1].decomp
     current = [lt.region for lt in getfield(solver, :levels)[2].transfers]
     lo = Ref((typemax(Int), typemax(Int), typemax(Int)))
     hi = Ref((0, 0, 0))
     marked = Ref(0)
+    seams = [d for d in 1:3 if wrap[d] > 0]
+    occupied = [zeros(Int8, wrap[d]) for d in seams]
     _tag_sweep!(solver, Qc) do g1, g2, g3, level
         level == TAG_MARK && (marked[] = 1)
-        level == TAG_MARK || _in_regions(current, (g1, g2, g3)) || return nothing
+        level == TAG_MARK || _in_regions(current, (g1, g2, g3), wrap) || return nothing
         lo[] = min.(lo[], (g1, g2, g3))
         hi[] = max.(hi[], (g1, g2, g3))
+        for (m, d) in enumerate(seams)
+            occupied[m][(g1, g2, g3)[d]] = one(Int8)
+        end
         return nothing
     end
     # A rank with no tagged cell contributes typemax/0 sentinels that lose
@@ -347,6 +410,15 @@ function _tag_bounds(solver::Solver, Qc)
     red[7] == 0 && return nothing
     glo = ntuple(d -> Int(red[d]), 3)
     ghi = ntuple(d -> -Int(red[3 + d]), 3)
+    isempty(seams) && return (glo, ghi)
+    occ = MPI.Allreduce(reduce(vcat, occupied), max, dcp.comm)
+    at = 0
+    for (m, d) in enumerate(seams)
+        a, b = _seam_arc(view(occ, at .+ (1:wrap[d])))
+        glo = Base.setindex(glo, a, d)
+        ghi = Base.setindex(ghi, b, d)
+        at += wrap[d]
+    end
     return (glo, ghi)
 end
 
@@ -360,14 +432,19 @@ buffered by `RegridSpec.buffer` coarse cells per side, clamped to the
 nesting margin, and widened where necessary to the four-node minimum
 extent. Under `level_boundaries` the clamp stops at a domain face whose
 condition a level carries instead, and a region on such a face is widened
-until its box spans the interpolation order. Returns `nothing` when no
-cell qualifies. Collapsed dimensions keep offset 0 and extent 1. Collective
-over the coarse communicator (one Allreduce of the tag bounds), so every
-rank returns the identical region.
+until its box spans the interpolation order; along a periodic dimension the
+bounds are the shortest arc of the period holding the tagged cells, and the
+region may cross the seam, spanning at most the period less the margin at
+either end. Returns `nothing` when no cell qualifies. Collapsed dimensions
+keep offset 0 and extent 1. Collective over the coarse communicator (one
+Allreduce of the tag bounds, and one of their occupancy along a periodic
+dimension under `level_boundaries`), so every rank returns the identical
+region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
-    bounds = _tag_bounds(solver, Qc)
+    wrap = _placement_period(solver, spec, 0)
+    bounds = _tag_bounds(solver, Qc, wrap)
     bounds === nothing && return nothing
     tlo, thi = bounds
     margin = spec.margin
@@ -379,10 +456,22 @@ function tagged_region(solver::Solver, Qc)
     # Tagged nodes in the margin band of a face the level does not reach
     # cannot be refined; say so once rather than leave a feature at a
     # boundary silently coarse. The bounds are reduced, so every rank agrees.
-    any(d -> active[d] && (tlo[d] < lo_feasible[d] || thi[d] > hi_feasible[d]), 1:3) &&
+    any(d -> active[d] && wrap[d] == 0 &&
+             (tlo[d] < lo_feasible[d] || thi[d] > hi_feasible[d]), 1:3) &&
         _warn_margin_band(solver, margin, 1)
     offext = ntuple(3) do d
         active[d] || return (0, 1)
+        if wrap[d] > 0
+            # The arc, buffered, widened to the four-node minimum and capped
+            # at the period less the margin at either end, about its centre;
+            # the offset is brought into [0, P).
+            P = wrap[d]
+            lo = tlo[d] - spec.buffer
+            hi = thi[d] + spec.buffer
+            n = clamp(hi - lo + 1, 4, P - 2 * margin)
+            lo = fld(lo + hi - n + 1, 2)
+            return (mod(lo - 1, P), n)
+        end
         a, b = lo_feasible[d], hi_feasible[d]
         # Both ends clamp into the feasible interval, so a tagged set inside
         # the margin band collapses onto its inner edge rather than keeping
@@ -490,7 +579,7 @@ function _warn_margin_band(solver, margin::Int, ℓ::Int)
           "that a refined level does not reach; they stay at the parent " *
           "resolution. Under level_boundaries = true a level reaches a wall or " *
           "NSCBC face, and a symmetry plane or the r-z axis on the host backend " *
-          "under :inject restriction, but not a periodic seam." maxlog = 1
+          "under :inject restriction, and crosses a periodic seam." maxlog = 1
     return nothing
 end
 
@@ -661,7 +750,9 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     # interpolate zeros into the fine state without any other symptom.
     bnd = only(_region_boundaries(solver, [newregion], 1))
     folded = only(_region_folds(solver, [bnd]))
-    _covered_by(_buffered(newregion, active_g, spec.margin, bnd), [patches[1].region]) ||
+    period = _level_period(solver, 0)
+    _covered_by(_buffered(newregion, active_g, spec.margin, bnd), [patches[1].region],
+                period) ||
         error("regrid: the tagged region $newregion is not nested $(spec.margin) " *
               "root nodes inside the domain")
     # getfield: `h` is also a patch property name, and the property forwarding
@@ -712,7 +803,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  interpolation_order=spec.interpolation_order,
                                  gradient_deriv=_ghost_viscous(solver) ?
                                                 spec.deriv : nothing,
-                                 parent_h=getfield(solver, :h), boundary=bnd, folded)
+                                 parent_h=getfield(solver, :h), boundary=bnd, folded,
+                                 period)
     coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],
                                     [patches[1].decomp],
                                     [newfine === nothing ? nothing : newfine.decomp])
@@ -726,12 +818,13 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     levels[2] = Level{T}(1, new_lc, owners, group, held ? [1] : Int[],
                          held ? [fi] : Int[], [newlt]; coupling)
-    _fill_covered!(patches[1], [newregion])
+    _fill_covered!(patches[1], [newregion], period)
     held && init_geometry!(PatchSolver(solver, newfine))
     _fill_tiles_from_parent!(solver, states, levels[2])
     held && _carry_over!(states[fi], newfine.decomp, newregion, old_gather,
-                         Nf_old, oldregion, active_g, n_cons,
-                         _shared_boundary(lt.boundary, bnd), lt.folded, folded)
+                         Nf_old, _nearest_image(oldregion, newregion, period),
+                         active_g, n_cons, _shared_boundary(lt.boundary, bnd), lt.folded,
+                         folded)
     # The old transfer's chains are on COMM_SELF, so this free is rank-local
     # and every holder of the transfer makes it.
     free_transfer_decomps!(lt)
@@ -836,9 +929,12 @@ end
 # Levels over the lattice cells (the maximum over the buffered nodes meeting
 # each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so every rank derives the
 # same set, and whether a node at the tag level lies outside the feasible
-# interval `[lo, hi]`, reduced with them.
+# interval `[lo, hi]`, reduced with them. Along a dimension of nonzero `wrap`
+# the lattice runs over [1, P + 1], its last cell ending on the seam, and a
+# buffered node near the seam meets the cells on both sides of it
+# (`_wrapped_parts`); the same number of cells covers it, (N − 1) ÷ tile + 1.
 function _tag_tiles(solver::Solver, Qc, spec::RegridSpec, lo::NTuple{3,Int},
-                    hi::NTuple{3,Int})
+                    hi::NTuple{3,Int}, wrap::NTuple{3,Int}=(0, 0, 0))
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     a = spec.tile
@@ -851,8 +947,7 @@ function _tag_tiles(solver::Solver, Qc, spec::RegridSpec, lo::NTuple{3,Int},
         g = (g1, g2, g3)
         level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
             (buf[end] = one(Int8))
-        spans = ntuple(d -> active[d] ?
-                       intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
+        spans = ntuple(d -> active[d] ? _wrapped_cells(g[d] - b, g[d] + b, a, K[d], wrap[d]) :
                        (0:0), 3)
         for k3 in spans[3], k2 in spans[2], k1 in spans[1]
             flags[k1 + 1, k2 + 1, k3 + 1] = max(flags[k1 + 1, k2 + 1, k3 + 1], level)
@@ -876,6 +971,20 @@ function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
                               held ? (states[lt.fine_index],
                                       getfield(solver, :patches)[lt.fine_index].decomp) :
                                      nothing, lt.parent_comm, lt.folded)
+end
+
+# The periodic image of `old` (under `period`) that overlaps `new` the most,
+# `old` itself when none does: the placement of a box that moved across a
+# periodic seam, against which its surviving nodes are carried.
+function _nearest_image(old::BlockRegion, new::BlockRegion, period::NTuple{3,Int})
+    overlap(r) = prod(max(0, min(r.offset[d] + r.extent[d], new.offset[d] + new.extent[d]) -
+                          max(r.offset[d], new.offset[d])) for d in 1:3)
+    best = old
+    for σ in _images(period)
+        r = _shifted(old, σ)
+        overlap(r) > overlap(best) && (best = r)
+    end
+    return best
 end
 
 # The faces on the domain boundary for both of two regions, whose planes a
@@ -1048,10 +1157,12 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     # The lattice clip: the nesting margin inside every face but those the
-    # lattice reaches under `level_boundaries` (`_lattice_reach`).
+    # lattice reaches under `level_boundaries` (`_lattice_reach`), and none
+    # across a periodic seam, where the lattice wraps (`_placement_period`).
     reach = _placed_reach(solver, spec, n_global, active)
-    lo, hi = _feasible_nodes(n_global, active, spec.margin, reach)
-    flags, K, banded = _tag_tiles(solver, states[1], spec, lo, hi)
+    wrap = _placement_period(solver, spec, 0)
+    lo, hi = _wrap_feasible(_feasible_nodes(n_global, active, spec.margin, reach)..., wrap)
+    flags, K, banded = _tag_tiles(solver, states[1], spec, lo, hi, wrap)
     banded && _warn_margin_band(solver, spec.margin, 1)
     busy = _rebalance_due!(solver, spec)
     old_regions = [lt.region for lt in lev.transfers]
@@ -1158,7 +1269,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     group = new_lc.owned ? split_tile_comm(new_lc, owners) : absent_tile_group()
     held = [ti for ti in eachindex(wanted) if owners[ti] == group.ranks]
     root = patches[1]
-    faces = _tile_faces(wanted)
+    period = _level_period(solver, 0)
+    faces = _tile_faces(wanted, period)
     boundaries = _region_boundaries(solver, wanted, 1)
     folds = _region_folds(solver, boundaries)
     # The rank's scratch sets before the swap, departing tiles included: a
@@ -1251,7 +1363,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-        parent_h=root.h, boundary=boundaries[ti], folded=folds[ti])
+        parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(wanted)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
                                     [root.decomp], map(fine_decomp, eachindex(wanted)))
@@ -1267,14 +1379,15 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         # not on the lattice cells `wanted` holds, which are the parent's.
         fine_regions = [_fine_region(tr, active, fo) for (tr, fo) in zip(wanted, folds)]
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
-                                 [p.decomp for p in new_patches], n_cons)
+                                 [p.decomp for p in new_patches], n_cons,
+                                 _level_period(solver, 1))
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
                              records; stacks, coupling)
     else
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
                              stacks, coupling)
     end
-    _fill_covered!(root, wanted)
+    _fill_covered!(root, wanted, period)
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
     is_fresh = falses(length(wanted))
     is_fresh[fresh] .= true
@@ -1403,20 +1516,24 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     parent_np = parent.level_comm.size
     reach = _placed_reach(solver, spec, N, active)
     span = _level_span(solver.n_global, active, ℓ - 1, getfield(solver, :patches)[1].bcs)
-    lo, hi = _feasible_nodes(N, active, margin, reach, span)
+    wrap = _placement_period(solver, spec, ℓ - 1)
+    period = _level_period(solver, ℓ - 1)
+    lo, hi = _wrap_feasible(_feasible_nodes(N, active, margin, reach, span)..., wrap)
     wanted = BlockRegion[]
     if !isempty(parent_valid)
         cells = Set(keys(flags))
         foreach(r -> push!(cells, _cell_of(r, a, active)), old_regions)
         for k in sort!(collect(cells); by=k -> (k[3], k[2], k[1]))
-            t = _lattice_tile(k, active, a, lo, hi, N)
+            # The lattice's last node: across a seam the period's P + 1.
+            t = _lattice_tile(k, active, a, lo, hi,
+                              ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : N[d], 3))
             t === nothing && continue
             f = get(flags, k, zero(Int8))
             exists = t in old_regions
             young = exists && spec.checks - get(created, t, 0) < spec.lifetime
             (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) || continue
             _covered_by(_buffered(t, active, margin, _boundary_faces(t, span, reach)),
-                        parent_valid) || continue
+                        parent_valid, period) || continue
             push!(wanted, t)
         end
     end
@@ -1456,20 +1573,22 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
     b = ℓ < length(levels) - 1 ? _nest_buffer(spec.buffer, a, spec.margin) :
         spec.buffer
     N = ntuple(d -> active[d] ? 3^(ℓ - 1) * (n_global[d] - 1) + 1 : 1, 3)
-    K = ntuple(d -> active[d] ? (N[d] - 1) ÷ a + 1 : 1, 3)
+    # Across a periodic seam the lattice runs over the period's P + 1 nodes.
+    wrap = _placement_period(solver, spec, ℓ - 1)
+    K = ntuple(d -> active[d] ? ((wrap[d] > 0 ? wrap[d] + 1 : N[d]) - 1) ÷ a + 1 : 1, 3)
     cells = Dict{NTuple{3,Int},Int8}()
     # A node at the tag level outside the feasible interval of the lattice
     # clip `_decide_level` applies: the margin band of a face no level reaches.
     reach = _placed_reach(solver, spec, N, active)
-    lo, hi = _feasible_nodes(N, active, spec.margin, reach,
-                             _level_span(n_global, active, ℓ - 1, patches[1].bcs))
+    lo, hi = _wrap_feasible(_feasible_nodes(N, active, spec.margin, reach,
+                                            _level_span(n_global, active, ℓ - 1,
+                                                        patches[1].bcs))..., wrap)
     banded = Ref(false)
     function mark!(g1, g2, g3, level)
         g = (g1, g2, g3)
         level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
             (banded[] = true)
-        spans = ntuple(d -> active[d] ?
-                       intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
+        spans = ntuple(d -> active[d] ? _wrapped_cells(g[d] - b, g[d] + b, a, K[d], wrap[d]) :
                        (0:0), 3)
         for k3 in spans[3], k2 in spans[2], k1 in spans[1]
             k = (k1, k2, k3)
@@ -1606,7 +1725,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
              resized ? split_level_comm(parent_lc, decision.np_new) : old_lc
     group = new_lc.owned ? split_tile_comm(new_lc, owners) : absent_tile_group()
     held = [ti for ti in eachindex(wanted) if owners[ti] == group.ranks]
-    faces = _tile_faces(wanted)
+    period = _level_period(solver, ℓ - 1)
+    faces = _tile_faces(wanted, period)
     rbcs = patches[1].bcs
     ws_pool = [p.rhs_workspace for p in patches]
     ph = patches[1].h
@@ -1664,14 +1784,15 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         pdecomp(li) = li == 0 ? nothing : patches[li].decomp
         fdecomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - base].decomp
         for (ti, tr) in enumerate(wanted)
-            pids = _parents_of(tr, active, collect(eachindex(pregions)), pregions)
+            pids = _parents_of(tr, active, collect(eachindex(pregions)), pregions,
+                               period)
             push!(transfers, build_level_transfer(
                 T, tr, active, spec.n_halo, pregions[pids], plocal[pids], local_of[ti],
                 spec.restriction, n_cons, getfield(solver, :subcycle), fdecomp(ti),
                 parent_lc.comm, length(owners[ti]), faces[ti];
                 interpolation_order=spec.interpolation_order,
                 gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-                parent_h=ph, boundary=boundaries[ti], folded=folds[ti]))
+                parent_h=ph, boundary=boundaries[ti], folded=folds[ti], period))
         end
         coupling = build_level_coupling(T, parent_lc.comm, transfers, pregions,
                                         map(pdecomp, plocal),
@@ -1693,7 +1814,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm,
                                  [_fine_region(tr, active, fo)
                                   for (tr, fo) in zip(wanted, folds)], held,
-                                 indices, [p.decomp for p in new_patches], n_cons)
+                                 indices, [p.decomp for p in new_patches], n_cons,
+                                 _level_period(solver, ℓ))
         levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers,
                                  records; coupling)
     elseif parent_lc.owned
@@ -1705,7 +1827,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  LevelTransfer{T}[])
     end
     for li in parent.patches
-        _fill_covered!(patches[li], wanted)
+        _fill_covered!(patches[li], wanted, period)
     end
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
     for ti in fresh
