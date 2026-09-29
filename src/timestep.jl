@@ -573,15 +573,13 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
     # patch of this level has its RHS before the gathers, since a child's box
     # may span several of them.
-    # The box gathers are collective over this level's communicator, so a
-    # rank holding no tile of the child waits here for the ranks that do;
-    # the rebalance measure counts them as waiting, not work.
+    # The box exchanges are entered by every owner of this level, so a rank
+    # waits here for the parent ranks holding its tiles' boxes; the rebalance
+    # measure counts that as waiting, not work.
     function save_boxes!(at_end)
         child === nothing && return nothing
         wall_gather = time_ns()
-        for lt in child.transfers
-            save_level_box!(lt, patches, states, dQs, at_end)
-        end
+        save_level_boxes!(solver, child, states, dQs, at_end)
         _wait!(solver, wall_gather)
         return nothing
     end
@@ -653,9 +651,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # level restricts here so its parent's next substep sees the composite.
     if ℓ > 1
         _ledger_open!(solver, states, lev)
-        for lt in child.transfers
-            _restrict_patch!(solver, states, lt, lev.level_comm)
-        end
+        _restrict_tiles!(solver, states, child)
         _ledger!(solver, states, :restrict, lev)
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.

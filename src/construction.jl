@@ -945,17 +945,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                    parent_regions)
                 push!(transfers, build_level_transfer(
                     T, tr, active_g, n_halo, parent_regions[pids],
-                    parent_local[pids],
-                    Union{Nothing,Decomp{T}}[decomp_at(parent_local[p])
-                                             for p in pids],
-                    local_of[ti], level_restriction, n_cons, subcycle,
-                    decomp_at(local_of[ti]), parent_lc.comm,
+                    parent_local[pids], local_of[ti], level_restriction, n_cons,
+                    subcycle, decomp_at(local_of[ti]), parent_lc.comm,
                     length(owners[ti]), faces[ti];
                     interpolation_order=level_interpolation_order,
                     gradient_deriv=_ghost_viscous(interface_flux, transport) ?
                                    deriv : nothing,
                     parent_h=parent_h))
             end
+            coupling = build_level_coupling(T, parent_lc.comm, transfers,
+                                            parent_regions,
+                                            map(decomp_at, parent_local),
+                                            map(decomp_at, local_of))
             if lc.owned
                 # A record's partner is a rank number in the communicator the
                 # exchange runs over, here the level's own; that numbering
@@ -964,12 +965,13 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                          [fines[li - 1].decomp for li in indices],
                                          n_cons)
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,
-                                       transfers, records; stacks))
+                                       transfers, records; stacks, coupling))
             else
-                # The level's transfers are still held: their box gathers and
-                # restriction write-back run on the parent's communicator.
+                # The level's transfers and coupling are still held: the
+                # parent's side of the box and restriction exchanges runs on
+                # every rank of the parent's communicator.
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,
-                                       transfers; stacks))
+                                       transfers; stacks, coupling))
             end
             parent_lc = lc
         else

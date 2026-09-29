@@ -363,6 +363,30 @@ end
     # the set binds.
     @test CL._level_ranks([r(64)], act, 4) == 4
     @test CL._level_ranks([r(64), r(4)], act, 4) == 1
+    # The scan starts at the count the regions admit rather than at the rank
+    # count, and agrees with a scan from the rank count down, in 1-D, 2-D and
+    # 3-D, with a region clipped narrower than nine fine nodes along one
+    # dimension among them.
+    function scanned(regions, a, n)
+        for p in n:-1:1
+            all(regions) do reg
+                ext = CL.fine_extent(reg, a)
+                CL._amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3), p) !== nothing
+            end && return p
+        end
+        return 1
+    end
+    act3 = (true, true, true)
+    cases = [([r(24)], act), ([r(64), r(8)], act),
+             ([BlockRegion((8, 8, 0), (12, 20, 1))], (true, true, false)),
+             ([BlockRegion((8, 8, 8), (12, 9, 16))], act3),
+             ([BlockRegion((8, 8, 8), (12, 3, 16))], act3)]
+    @test all(CL._level_ranks(regs, a, n) == scanned(regs, a, n)
+              for (regs, a) in cases, n in 1:48)
+    # At a cluster's rank count the sizing costs what it does at a
+    # workstation's: a 3-D tile of 25³ fine nodes admits eight ranks.
+    cube = BlockRegion((8, 8, 8), (9, 9, 9))
+    @test CL._level_ranks([cube], act3, 1_000_000) == 8
     # Per-tile owners: four 9-node tiles (25 fine, two ranks each at most).
     t(k) = BlockRegion((80 + 8k, 0, 0), (9, 1, 1))
     four = [t(0), t(1), t(2), t(3)]
@@ -506,8 +530,9 @@ end
     Q_old = states[li]
     Q_new = ConservedState(fill(-1.0, size(parent(Q_old))))
     Nf = CL.fine_extent(lt.region, lt.active)
-    CL._migrate_tile!(Float64, Q_new, dp, Q_old, dp, Nf, lt.active,
-                      lt.fine_blocks, lt.fine_blocks, dp.comm)
+    blocks = lev.coupling.fine_blocks[lev.tiles[1]]
+    CL._migrate_tile!(Float64, Q_new, dp, Q_old, dp, Nf, lt.active, blocks, blocks,
+                      dp.comm)
     pad = dp.n_halo_d
     inner = ntuple(d -> lt.active[d] ? ((2 + pad[d]):(Nf[d] - 1 + pad[d])) : (1:1), 3)
     @test view(parent(Q_new), inner..., :) == view(parent(Q_old), inner..., :)

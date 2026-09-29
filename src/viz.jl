@@ -551,6 +551,11 @@ offset; each carries its level, its offset in that level's index space, and
 the nodes a finer level covers. Abutting root patches share their interface
 plane, which appears in both.
 
+Where the partial densities of the state do not sum to a positive density,
+`:rho` holds that sum as it is and every other field is `NaN`. The recovered
+primitives hold placeholders there (ρ = 1, unit pressure, zero velocity), which
+would show a failed state as a quiet one.
+
 Every rank of `solver.comm` must call this function with the same `fields`,
 since the derived fields run distributed solves in the order given.
 """
@@ -588,7 +593,7 @@ function _snapshot(solver::Solver, states, fields)
         map(eachindex(patches)) do li
             ps = PatchSolver(solver, patches[li])
             _prepare_fields!(ps, states[li], names)
-            _snapshot_block(ps, names)
+            _snapshot_block(ps, states[li], names)
         end
     end
     gathered = MPI.gather(blocks, solver.comm; root=0)
@@ -597,7 +602,7 @@ function _snapshot(solver::Solver, states, fields)
 end
 
 # This rank's interior block of one patch, with its placement in the patch.
-function _snapshot_block(ps::PatchSolver, names)
+function _snapshot_block(ps::PatchSolver, Q, names)
     decomp = ps.decomp
     n = decomp.n_local
     interior = ntuple(d -> decomp.n_halo_d[d] .+ (1:n[d]), 3)
@@ -612,6 +617,24 @@ function _snapshot_block(ps::PatchSolver, names)
                                              ps.equations.n_species))
         name === :D_art && return stacked(ps.D_art)
         return grab(scalar_field(ps, name))
+    end
+    # The density the state holds, summed from the partial densities in the
+    # order `mixture_density` sums them; where it is not positive the
+    # primitives are placeholders, so `:rho` takes the sum and the rest NaN.
+    Qa = parent(Q) isa Array ? parent(Q) : Array(parent(Q))
+    Qh = Qa[interior..., 1:ps.equations.n_species]
+    ρ = Qh[:, :, :, 1]
+    for sp in 2:ps.equations.n_species
+        ρ .+= view(Qh, :, :, :, sp)
+    end
+    bad = .!(ρ .> 0)
+    if any(bad)
+        for (name, a) in zip(names, data)
+            for c in axes(a, 4)
+                v = view(a, :, :, :, c)
+                v[bad] .= name === :rho ? ρ[bad] : eltype(a)(NaN)
+            end
+        end
     end
     T = eltype(ps.rho)
     coords = ntuple(d -> T[xcoord(ps, d, i) for i in 1:n[d]], 3)

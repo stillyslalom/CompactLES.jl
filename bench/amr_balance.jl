@@ -77,11 +77,13 @@ function track(args, rebalance; quiet=false)
         # against the block this rank received, at most over ranks.
         replica = 0
         migrated = 0
-        for (lt, o) in zip(lev.transfers, lev.owners)
+        for (t, (lt, o)) in enumerate(zip(lev.transfers, lev.owners))
             (haskey(prev, lt.region) && prev[lt.region] != o) || continue
             Nf = CL.fine_extent(lt.region, lt.active)
             replica += prod(Nf) * n_cons * sizeof(Float64)
-            b = lt.fine_blocks[rank + 1]
+            i = findfirst(e -> e.rank == rank, lev.coupling.fine_blocks[t])
+            i === nothing && continue
+            b = lev.coupling.fine_blocks[t][i].block
             got = ntuple(d -> lt.active[d] ?
                          length(intersect(b.offset[d]+1:b.offset[d]+b.extent[d],
                                           2:Nf[d]-1)) : 1, 3)

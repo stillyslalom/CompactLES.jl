@@ -345,16 +345,17 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                ghost_viscous=_ghost_viscous(solver),
                                                ring=_ring_detector(solver))
     restriction = spec.restriction
+    fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
-        T, tr, active, spec.n_halo, [root.region], [1],
-        Union{Nothing,Decomp{T}}[root.decomp], local_of[ti], restriction,
-        n_cons, getfield(solver, :subcycle),
-        local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
+        T, tr, active, spec.n_halo, [root.region], [1], local_of[ti], restriction,
+        n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
         parent_h=root.h)
         for (ti, tr) in enumerate(regions)]
+    coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
+                                    [root.decomp], map(fine_decomp, eachindex(regions)))
     resize!(patches, 1 + length(held))
     resize!(states, 1 + length(held))
     stacked = Set(li for st in stacks for li in st.members)
@@ -371,10 +372,10 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
                                  [p.decomp for p in new_patches], n_cons)
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
-                             records; stacks)
+                             records; stacks, coupling)
     else
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
-                             stacks)
+                             stacks, coupling)
     end
     _fill_covered!(root, regions)
     for li in indices

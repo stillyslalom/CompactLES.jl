@@ -138,8 +138,7 @@ function values_study()
             CL.prolong_level_ghosts!(solver, states)
             e = fine_errors(solver, states, 1, f)
             push!(row, max(e[:ghost], e[:plane]) / scale)
-            CL._fill_fine_from_coarse!(solver, states,
-                                       getfield(solver, :levels)[2].transfers[1])
+            CL._fill_tiles_from_parent!(solver, states, getfield(solver, :levels)[2])
             push!(row, maximum(values(fine_errors(solver, states, 1, f))) / scale)
         end
         @printf("  %4d    %.2e    %.2e    %.2e / %.2e\n", p, row[1], row[2], row[3], row[4])
@@ -154,8 +153,7 @@ function values_study()
             set_all!(solver, states, 1, smooth)
             CL.prolong_level_ghosts!(solver, states)
             e = fine_errors(solver, states, 1, smooth)
-            CL._fill_fine_from_coarse!(solver, states,
-                                       getfield(solver, :levels)[2].transfers[1])
+            CL._fill_tiles_from_parent!(solver, states, getfield(solver, :levels)[2])
             f = fine_errors(solver, states, 1, smooth)
             push!(hs, 2pi / N); push!(eg, e[:ghost]); push!(ep, e[:plane])
             push!(ef, maximum(values(f)))
@@ -242,8 +240,7 @@ function derivatives_study()
             e2i = field_errors(solver, S_imp, S_ex)
             e2t = field_errors(solver, S_imp, smooth_xx)
             exi = field_errors(solver, X_imp, X_ex; dim=2)
-            CL._fill_fine_from_coarse!(solver, states,
-                                       getfield(solver, :levels)[2].transfers[1])
+            CL._fill_tiles_from_parent!(solver, states, getfield(solver, :levels)[2])
             fine_derivative!(D_fill, solver, states, 1, 1)
             ef = field_errors(solver, D_fill, D_ex)
             vals = (e1i[:window], e1i[:plane], e1t[:window],
@@ -372,7 +369,7 @@ function positivity_study()
         x0 = 0.5 + 0.37 * h
         rho(x) = 0.5625 + 0.4375 * tanh((x0 - x) / (wcells * h))
         initialize!(solver, states, (x, y, z) -> Prim(rho=rho(x), u=(0, 0, 0), p=1.0))
-        CL._fill_fine_from_coarse!(solver, states, getfield(solver, :levels)[2].transfers[1])
+        CL._fill_tiles_from_parent!(solver, states, getfield(solver, :levels)[2])
         ps = patch_solver(solver, 2)
         pad = ps.decomp.n_halo_d[1]
         vals = [states[2][i + pad, 1, 1, 1] for i in 1:ps.decomp.n_local[1]]

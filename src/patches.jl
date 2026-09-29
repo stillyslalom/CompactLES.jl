@@ -604,8 +604,6 @@ function patch_slabs(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool},
     nsplit <= 1 || error("patch_grid may split one dimension only " *
                          "(slab layout); got $patch_grid")
     npatch = prod(patch_grid)
-    npatch <= 30 || error("patch_grid gives $npatch patches; the interface " *
-                          "message tagging supports at most 30")
     npatch == 1 && return [BlockRegion((0, 0, 0), n_global)]
     ds = findfirst(>(1), patch_grid)
     P = patch_grid[ds]
@@ -668,7 +666,7 @@ end
 # Built once at setup from a world-Allgathered table of every rank's
 # (patch id, block offset, block extent). Every record carries PADDED local
 # index ranges into this rank's own patch arrays, plus the partner world rank
-# and a deterministic tag both sides compute identically. `partner == myrank`
+# and a tag both sides compute identically (`_pair_tags`). `partner == myrank`
 # marks the serial case, executed as a direct copy between two local patches.
 
 struct GhostRecord{T}
@@ -694,15 +692,38 @@ struct PlaneRecord{T}
     sbuf::Vector{T}                   # send buffer
 end
 
-# tag spaces: ghosts and plane averages must not collide, and a periodic
-# two-slab layout pairs the same two patches across both faces, so the tag
-# carries (source patch, dest patch, dimension, dest face side).
-function _iface_tag(base::Int, npatch::Int, src::Int, dst::Int, ds::Int, side::Int)
-    return base + (((src * (npatch + 1) + dst) * 3 + (ds - 1)) * 2 + (side - 1))
-end
-
+# Tags. A message is named by (source patch, destination patch, dimension,
+# destination face side): a periodic two-slab layout pairs the same two
+# patches across both faces, so the side is part of the name. Between two
+# ranks each name occurs once per record kind, and both ranks hold the names
+# of every message between them, so each numbers them in sorted order and
+# the index is the tag, offset by the kind's base so ghosts and plane
+# averages do not collide. The tag is then bounded by the messages between
+# one pair of ranks, a few per tile face they share, rather than by the
+# patch count: a tag computed from the patch pair grows with its square,
+# passing the 32767 the MPI standard guarantees at 52 patches and 2^31 − 1 at
+# 18918.
 const _GHOST_TAG_BASE = 2000
 const _PLANE_TAG_BASE = 16000
+const _TAG_SPAN = 14000
+
+# One tag per message from the base of its kind: `partners[i]` is the other
+# rank of message `i` and `names[i]` its name; messages to or from the calling
+# rank itself (`partners[i] == me`) move without MPI and take no tag.
+function _pair_tags(partners::Vector{Int}, names::Vector{NTuple{4,Int}}, base::Int,
+                    me::Int)
+    tags = zeros(Int, length(names))
+    count = Dict{Int,Int}()
+    for i in sortperm(collect(zip(partners, names)))
+        partners[i] == me && continue
+        k = get(count, partners[i], 0)
+        k < _TAG_SPAN || error("more than $_TAG_SPAN interface messages between " *
+                               "rank $me and rank $(partners[i])")
+        tags[i] = base + k
+        count[partners[i]] = k + 1
+    end
+    return tags
+end
 
 # Intersection of 1-based node ranges, empty allowed.
 _isect(a::UnitRange{Int}, b::UnitRange{Int}) =
@@ -904,13 +925,11 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
     ghost_recvs = GhostRecord{T}[]
     plane_pairs = PlaneRecord{T}[]
     npatch == 1 && return ghost_sends, ghost_recvs, plane_pairs
-    # The tag space grows with the square of the patch count; the MPI
-    # implementation's bound is checked once here rather than discovered
-    # as a truncated tag mid-run.
-    maxtag = _iface_tag(_PLANE_TAG_BASE, npatch, npatch, npatch, 3, 2)
-    (MPI.Comm_size(comm) == 1 || maxtag <= MPI.tag_ub()) ||
-        error("$npatch patches need interface tags up to $maxtag, above " *
-              "this MPI implementation's bound $(MPI.tag_ub())")
+    # The name of each record's message, received and sent, for `_pair_tags`.
+    recv_names = NTuple{4,Int}[]
+    send_names = NTuple{4,Int}[]
+    plane_rnames = NTuple{4,Int}[]
+    plane_snames = NTuple{4,Int}[]
     table = _block_table(comm, my_pids, my_decomps)
     me = MPI.Comm_rank(comm)
     local_of = Dict(p => i for (i, p) in enumerate(my_pids))
@@ -950,10 +969,8 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
             totheirs(m) = side == 2 ? m - n_ext + 1 : m + nq_ext - 1
             plane_p = side == 2 ? n_ext : 1
             plane_q = side == 2 ? 1 : nq_ext
-            rtag = _iface_tag(_GHOST_TAG_BASE, npatch, q, p, ds, side)
-            stag = _iface_tag(_GHOST_TAG_BASE, npatch, p, q, ds, otherside)
-            prtag = _iface_tag(_PLANE_TAG_BASE, npatch, q, p, ds, side)
-            pstag = _iface_tag(_PLANE_TAG_BASE, npatch, p, q, ds, otherside)
+            rname = (q, p, ds, side)
+            sname = (p, q, ds, otherside)
             for e in table
                 e.pid == q || continue
                 eint = ntuple(d -> e.offset[d]+1:e.offset[d]+e.n_local[d], 3)
@@ -975,12 +992,14 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
                         (tomine(first(dsq)):tomine(last(dsq))) : tover[d], 3)
                     minep = padded3(mine_r, dp.offset, pad)
                     buf = Vector{T}(undef, n_cons * prod(length.(minep)))
-                    push!(ghost_recvs, GhostRecord{T}(li, e.rank, 0, rtag,
+                    push!(ghost_recvs, GhostRecord{T}(li, e.rank, 0, 0,
                           minep, minep, buf))
+                    push!(recv_names, rname)
                 end
                 # --- ghost send: my nodes src_p ∩ my block, needed by e
                 dsp = owns_e ? _isect(src_p, myint[ds]) : (1:0)
                 if !isempty(dsp)
+                    push!(send_names, sname)
                     src = ntuple(d -> d == ds ? dsp : tover[d], 3)
                     srcp = padded3(src, dp.offset, pad)
                     if e.rank == me
@@ -989,16 +1008,18 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
                         theirs_ds = totheirs(first(dsp)):totheirs(last(dsp))
                         dst = ntuple(d -> d == ds ? theirs_ds : tover[d], 3)
                         dstp = padded3(dst, dq.offset, dq.n_halo_d)
-                        push!(ghost_sends, GhostRecord{T}(li, me, lq, stag,
+                        push!(ghost_sends, GhostRecord{T}(li, me, lq, 0,
                               srcp, dstp, Vector{T}()))
                     else
                         buf = Vector{T}(undef, n_cons * prod(length.(srcp)))
-                        push!(ghost_sends, GhostRecord{T}(li, e.rank, 0, stag,
+                        push!(ghost_sends, GhostRecord{T}(li, e.rank, 0, 0,
                               srcp, srcp, buf))
                     end
                 end
                 # --- shared plane: my node plane_p ↔ partner node plane_q
                 if plane_q in eint[ds]
+                    push!(plane_rnames, rname)
+                    push!(plane_snames, sname)
                     mine_r = ntuple(d -> d == ds ? (plane_p:plane_p) : tover[d], 3)
                     minep = padded3(mine_r, dp.offset, pad)
                     if e.rank == me
@@ -1006,19 +1027,34 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
                         dq = my_decomps[lq]
                         theirs_r = ntuple(d -> d == ds ? (plane_q:plane_q) : tover[d], 3)
                         theirsp = padded3(theirs_r, dq.offset, dq.n_halo_d)
-                        push!(plane_pairs, PlaneRecord{T}(li, me, lq, q, prtag, pstag,
+                        push!(plane_pairs, PlaneRecord{T}(li, me, lq, q, 0, 0,
                               minep, theirsp, Vector{T}(), Vector{T}()))
                     else
                         nvals = n_cons * prod(length.(minep))
-                        push!(plane_pairs, PlaneRecord{T}(li, e.rank, 0, q, prtag,
-                              pstag, minep, minep, Vector{T}(undef, nvals),
+                        push!(plane_pairs, PlaneRecord{T}(li, e.rank, 0, q, 0,
+                              0, minep, minep, Vector{T}(undef, nvals),
                               Vector{T}(undef, nvals)))
                     end
                 end
             end
         end
     end
-    return ghost_sends, ghost_recvs, plane_pairs
+    rtags = _pair_tags([r.partner for r in ghost_recvs], recv_names,
+                       _GHOST_TAG_BASE, me)
+    stags = _pair_tags([r.partner for r in ghost_sends], send_names,
+                       _GHOST_TAG_BASE, me)
+    prtags = _pair_tags([r.partner for r in plane_pairs], plane_rnames,
+                        _PLANE_TAG_BASE, me)
+    pstags = _pair_tags([r.partner for r in plane_pairs], plane_snames,
+                        _PLANE_TAG_BASE, me)
+    retag(r::GhostRecord{T}, tag) =
+        GhostRecord{T}(r.patch, r.partner, r.partner_patch, tag, r.mine, r.theirs, r.buf)
+    retag(r::PlaneRecord{T}, tag, sendtag) =
+        PlaneRecord{T}(r.patch, r.partner, r.partner_patch, r.partner_pid, tag, sendtag,
+                       r.mine, r.theirs, r.buf, r.sbuf)
+    return GhostRecord{T}[retag(r, t) for (r, t) in zip(ghost_sends, stags)],
+           GhostRecord{T}[retag(r, t) for (r, t) in zip(ghost_recvs, rtags)],
+           PlaneRecord{T}[retag(r, t, u) for (r, t, u) in zip(plane_pairs, prtags, pstags)]
 end
 
 # --- Runtime exchange -------------------------------------------------------

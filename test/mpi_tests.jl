@@ -2355,9 +2355,10 @@ end
 
 # ---------------------------------------------------------------------------
 # Distributed level transfer (reference/AMR_GPU.md). Both levels
-# decompose over the whole rank set and the coupling runs replicated:
-# region-sized Allgathers, identical serial chains per rank, owned-slot
-# writes. The references are the np = 1 values of the identical cases; a
+# decompose over the whole rank set; the box and the covered samples move
+# point to point between the root's and the fine patch's blocks, the fine
+# patch's ranks divide the chains by component, and each rank writes its
+# owned slots. The references are the np = 1 values of the identical cases; a
 # decomposed run differs only where closed lines take the spike solve in
 # place of the serial sweep, so the error metrics agree to round-off
 # (the two-patch testset's tier), and the regridder must track to the same
@@ -2525,6 +2526,88 @@ end
 # rank, and at np = 8 each takes two, through _amr_dims (2x1); the CI job
 # runs this phase at np = 8 for that last shape.
 # ---------------------------------------------------------------------------
+function test_partitioned_coupling()
+    section("partitioned coupling: each rank moves its own tiles' data")
+    # A planar slab of tiles, more tiles than ranks at np <= 8, the shape a
+    # mixing layer takes. The coupling between the level and the root runs
+    # point to point: a rank holds the chains and boxes of its own tiles only,
+    # receives box data for those tiles only, and sends from its own root
+    # block only; every box node arrives exactly once and every covered node
+    # is written exactly once over the run. The interface tags number the
+    # messages between one pair of ranks, so they stay small however many
+    # tiles the level holds.
+    solver = Solver(n_global=(48, 96, 1), L_domain=(1.0, 2.0, 1.0), bcs=per3,
+                    subcycle=true, tile=6, refine=BlockRegion((18, 8, 0), (12, 80, 1)))
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) ->
+        Prim(u=(0.2, 0, 0), p=1.0, rho=1.0 + 0.3 * tanh((x - 0.5) / 0.05)))
+    lev = solver.levels[2]
+    cp = lev.coupling
+    tr = lev.transfers
+    check("partitioned coupling: the level holds more tiles than ranks",
+          length(tr) > 8 ? 0.0 : 1.0, 0.5)
+    bare(lt) = isempty(lt.pstage) && isempty(lt.pplans) && isempty(lt.box_gather) &&
+               isempty(lt.box_Q0) && isempty(lt.shell.slabs)
+    check("partitioned coupling: chains and boxes on the tile's own ranks only",
+          gmax(count(lt -> lt.fine_index == 0 && !bare(lt), tr)), 0.5)
+    check("partitioned coupling: box and samples move for held tiles only",
+          gmax(count(q -> tr[q.tile].fine_index == 0,
+                     vcat(cp.box_recvs, cp.restrict_sends))), 0.5)
+    check("partitioned coupling: sent from held parent blocks only",
+          gmax(count(q -> tr[q.tile].coarse_local[q.part] == 0,
+                     vcat(cp.box_sends, cp.restrict_recvs))), 0.5)
+    # Every node of a held tile's box arrives once, from the pieces' union.
+    miss = 0
+    for (t, lt) in enumerate(tr)
+        lt.fine_index == 0 && continue
+        got = sum(prod(length.(q.ranges)) for q in cp.box_recvs if q.tile == t)
+        miss += abs(got - prod(length.(CL._box_nodes(lt))))
+    end
+    check("partitioned coupling: each held box arrives whole", gmax(miss), 0.5)
+    # Every covered node is written once, over all ranks together.
+    written = zeros(Int, length(tr))
+    for q in cp.restrict_recvs
+        written[q.tile] += prod(length.(q.ranges))
+    end
+    written = MPI.Allreduce(written, +, comm)
+    window = [prod(length.(CL._restrict_window(lt))) for lt in tr]
+    check("partitioned coupling: each covered node written once",
+          maximum(abs.(written .- window)), 0.5)
+    tags = Int[]
+    for d in 1:3
+        append!(tags, (r.tag for r in lev.ghost_recvs[d]))
+        append!(tags, (r.tag for r in lev.ghost_sends[d] if r.partner != MPI.Comm_rank(
+                           lev.level_comm.comm)))
+        append!(tags, (r.tag - CL._PLANE_TAG_BASE + CL._GHOST_TAG_BASE
+                       for r in lev.plane_pairs[d] if r.partner != MPI.Comm_rank(
+                           lev.level_comm.comm)))
+    end
+    check("partitioned coupling: interface tags number the messages of a rank pair",
+          gmax(isempty(tags) ? 0 : maximum(tags) - CL._GHOST_TAG_BASE), 64.0)
+    # The same run advanced, two regrid-free subcycled steps, reproduces
+    # the serial composite mass to round-off.
+    run!(solver, states; tfinal=1.0, nmax=2)
+    mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
+    check("partitioned coupling: composite mass after two steps as serial",
+          abs(mass - 1.9874973678759937) / 2, 1e-14)
+
+    # One tile over every rank, up to eight: past five ranks some hold no
+    # share of the chains' five components, so they receive no box and must
+    # post no receive for one, while the subcycled Hermite endpoints move
+    # through the same exchange.
+    wave = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                  subcycle=true, refine=BlockRegion((80, 0, 0), (32, 1, 1)))
+    Qw = allocate_state(wave)
+    initialize!(wave, Qw, (x, y, z) ->
+        Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+    check("partitioned coupling: one tile over every rank up to eight",
+          abs(length(wave.levels[2].owners[1]) - min(np, 8)), 0.5)
+    run!(wave, Qw; tfinal=1.0, nmax=3)
+    sq = volume_integral(wave, [view(parent(Q), :, :, :, 1) .^ 2 for Q in Qw])
+    check("partitioned coupling: a tile over more ranks than components as serial",
+          abs(sq - 6.408844552644804) / 6.4, 1e-14)
+end
+
 function test_tiled_level()
     section("tiled level: decomposed tiles and corner consensus")
     # Four 37×37 tiles meeting at a corner, coupled by the level's own
@@ -3595,6 +3678,7 @@ const SUITE = (
     ("distributed refinement", test_refined_decomposed),
     ("level rank subsets", test_level_subset),
     ("tiled refinement", test_tiled_level),
+    ("partitioned coupling", test_partitioned_coupling),
     ("covered masks", test_covered_masks),
     ("AMR transfer pair", test_transfer_pair),
     ("staggered operators", test_staggered),

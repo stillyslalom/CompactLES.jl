@@ -392,15 +392,22 @@ function tagged_region(solver::Solver, Qc)
                        ntuple(d -> offext[d][2], 3))
 end
 
-# Whole-patch initialization of a fresh fine state: interpolate the parent
-# state over the buffered box and write every slot, interior and shell alike.
-# The gather runs on the parent's communicator, so every rank owning the
-# parent calls this; `owned` says whether this one also holds the fine patch
-# and therefore has anything to write.
-function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer)
+# Whole-patch initialization of fresh fine states: interpolate the parent
+# state over each selected tile's buffered box and write every slot, interior
+# and shell alike. `tiles` selects tiles of `lev` (all of them for
+# `nothing`). The box exchange is entered by every rank owning the parent,
+# and each owner of a selected tile then fills its block, every component.
+function _fill_tiles_from_parent!(solver::Solver, states, lev::Level, tiles=nothing)
+    _exchange_boxes!(solver, states, lev, lt -> lt.box_gather, true, tiles)
+    for (t, lt) in enumerate(lev.transfers)
+        (tiles === nothing || tiles[t]) && lt.fine_index != 0 &&
+            _fill_tile_from_box!(solver, states, lt)
+    end
+    return states
+end
+
+function _fill_tile_from_box!(solver::Solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    _gather_box!(lt.box_gather, lt, states, patches)
-    lt.fine_index == 0 && return states
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
@@ -577,7 +584,6 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           ring=_ring_detector(solver)) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
-                                 Union{Nothing,Decomp{T}}[patches[1].decomp],
                                  fi, lt.restriction, n_cons,
                                  getfield(solver, :subcycle),
                                  newfine === nothing ? nothing : newfine.decomp,
@@ -586,6 +592,9 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  gradient_deriv=_ghost_viscous(solver) ?
                                                 spec.deriv : nothing,
                                  parent_h=getfield(solver, :h))
+    coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],
+                                    [patches[1].decomp],
+                                    [newfine === nothing ? nothing : newfine.decomp])
     _resize_level_patches!(solver, states, workspace, held ? 2 : 1)
     if held
         Qf_new = _state_like(newfine.rho, n_cons)
@@ -595,10 +604,10 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
         workspace.du[fi] = zero(Qf_new)
     end
     levels[2] = Level{T}(1, new_lc, owners, group, held ? [1] : Int[],
-                         held ? [fi] : Int[], [newlt])
+                         held ? [fi] : Int[], [newlt]; coupling)
     _fill_covered!(patches[1], [newregion])
     held && init_geometry!(PatchSolver(solver, newfine))
-    _fill_fine_from_coarse!(solver, states, newlt)
+    _fill_tiles_from_parent!(solver, states, levels[2])
     held && _carry_over!(states[fi], newfine.decomp, newregion, old_gather,
                          Nf_old, oldregion, active_g, n_cons)
     # The old transfer's chains are on COMM_SELF, so this free is rank-local
@@ -733,15 +742,11 @@ end
 # of the tile contributes nothing.
 function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
                       n_cons::Int, lt::LevelTransfer, solver, states) where {T}
-    Nf = fine_extent(region, active)
-    dst = zeros(T, Nf..., n_cons)
     held = lt.fine_index != 0
-    dp = held ? getfield(solver, :patches)[lt.fine_index].decomp : nothing
-    gather_region!(dst, ntuple(d -> 1:Nf[d], 3), (0, 0, 0), (0, 0, 0),
-                   held ? states[lt.fine_index] : nothing, lt.parent_comm,
-                   lt.fine_blocks, dp === nothing ? (0, 0, 0) : dp.offset,
-                   dp === nothing ? (0, 0, 0) : dp.n_halo_d)
-    return dst
+    return _gather_replicated(T, region, active, n_cons,
+                              held ? (states[lt.fine_index],
+                                      getfield(solver, :patches)[lt.fine_index].decomp) :
+                                     nothing, lt.parent_comm)
 end
 
 # Tag of the migration messages. They run on the root communicator, on
@@ -788,10 +793,10 @@ end
 
 # Point-to-point migration of one surviving tile's solution from its old
 # owners' blocks to its new owners'. `old_blocks` and `new_blocks` are the
-# tile's block tables in the rank order of `comm` (the old and the new
-# transfer's `fine_blocks`), so every rank derives the identical message
-# list, old block ∩ new block ∩ interior per rank pair, and posts only the
-# sends and receives of its own; a rank with neither posts nothing, and no
+# tile's block tables (the old and the new level's `LevelCoupling`), each
+# rank named in `comm`, so every rank derives the identical message list,
+# old block ∩ new block ∩ interior per rank pair, and posts only the sends
+# and receives of its own; a rank with neither posts nothing, and no
 # collective runs. The interior holds one node off both boundary planes
 # along every active dimension, the rule `_carry_over!` applies: the old
 # planes were imposed data and the new ones are re-imposed by the next
@@ -800,31 +805,33 @@ end
 # complete before this returns, so the caller may free the old
 # decomposition afterwards.
 function _migrate_tile!(::Type{T}, Q_new, d_new, Q_old, d_old, Nf::NTuple{3,Int},
-                        active::NTuple{3,Bool}, old_blocks::Vector{BlockRegion},
-                        new_blocks::Vector{BlockRegion}, comm::MPI.Comm) where {T}
+                        active::NTuple{3,Bool}, old_blocks::Vector{OwnedBlock},
+                        new_blocks::Vector{OwnedBlock}, comm::MPI.Comm) where {T}
     me = MPI.Comm_rank(comm)
-    np = MPI.Comm_size(comm)
     interior = ntuple(d -> active[d] ? (2:Nf[d]-1) : (1:1), 3)
     nodes(b::BlockRegion) = ntuple(d -> (b.offset[d] + 1):(b.offset[d] + b.extent[d]), 3)
     piece(a::BlockRegion, b::BlockRegion) =
         ntuple(d -> _isect(_isect(nodes(a)[d], nodes(b)[d]), interior[d]), 3)
     wanted(r) = !any(isempty, r)
+    mine(blocks) = (i = findfirst(e -> e.rank == me, blocks);
+                    i === nothing ? nothing : blocks[i].block)
     reqs = MPI.Request[]
     recvs = Tuple{NTuple{3,UnitRange{Int}},Vector{T}}[]
     if d_new !== nothing
-        for a in 0:np-1
-            a == me && continue
-            r = piece(old_blocks[a+1], new_blocks[me+1])
+        for a in old_blocks
+            a.rank == me && continue
+            r = piece(a.block, mine(new_blocks))
             wanted(r) || continue
             buf = Vector{T}(undef, size(Q_new, 4) * prod(length.(r)))
-            push!(reqs, MPI.Irecv!(buf, comm; source=a, tag=_MIGRATE_TAG))
+            push!(reqs, MPI.Irecv!(buf, comm; source=a.rank, tag=_MIGRATE_TAG))
             push!(recvs, (r, buf))
         end
     end
     sends = Vector{T}[]
     if d_old !== nothing
-        for b in 0:np-1
-            r = piece(old_blocks[me+1], new_blocks[b+1])
+        for nb in new_blocks
+            b = nb.rank
+            r = piece(mine(old_blocks), nb.block)
             wanted(r) || continue
             if b == me
                 # A node this rank keeps moves between its own two blocks.
@@ -967,9 +974,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     wanted == old_regions && all(kept) && return false
     # A tile about to leave restricts once more: the post-step restriction
     # preceded the positivity repair, and nothing else writes it back.
-    for (i, r) in enumerate(old_regions)
-        haskey(new_of, r) || _restrict_patch!(solver, states, lev.transfers[i], root_lc)
-    end
+    departing = [!haskey(new_of, r) for r in old_regions]
+    any(departing) && _restrict_tiles!(solver, states, lev, departing)
     # The audit reference for each moved tile, gathered replicated over the
     # root communicator while the old decompositions are still live; empty
     # unless the test hook is on.
@@ -1092,16 +1098,17 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
             push!(new_patches, p)
         end
     end
+    fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
-        T, tr, active, spec.n_halo, [root.region], [1],
-        Union{Nothing,Decomp{T}}[root.decomp], local_of[ti],
-        spec.restriction, n_cons, getfield(solver, :subcycle),
-        local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
+        T, tr, active, spec.n_halo, [root.region], [1], local_of[ti],
+        spec.restriction, n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
         parent_h=root.h)
         for (ti, tr) in enumerate(wanted)]
+    coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
+                                    [root.decomp], map(fine_decomp, eachindex(wanted)))
     _resize_level_patches!(solver, states, workspace, 1 + length(held))
     for (k, p) in enumerate(new_patches)
         patches[k + 1] = p
@@ -1117,24 +1124,30 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
                                  [p.decomp for p in new_patches], n_cons)
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
-                             records; stacks)
+                             records; stacks, coupling)
     else
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
-                             stacks)
+                             stacks, coupling)
     end
     _fill_covered!(root, wanted)
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
+    is_fresh = falses(length(wanted))
+    is_fresh[fresh] .= true
     for ti in fresh
         li = local_of[ti]
         li == 0 || init_geometry!(PatchSolver(solver, patches[li]))
-        _fill_fine_from_coarse!(solver, states, transfers[ti])
+    end
+    # The fresh tiles' boxes move in one exchange, entered by every rank.
+    isempty(fresh) || _fill_tiles_from_parent!(solver, states, levels[2], is_fresh)
+    for ti in fresh
+        li = local_of[ti]
         r = wanted[ti]
         haskey(old_of, r) || continue
         # A rebuilt tile whose region survived takes its evolved interior
         # back over the interpolated initialization, block to block from
-        # its old owners. Both block tables are in the root communicator's
-        # rank order, so every rank posts from the same message list; the
-        # gather above is collective, so every rank reaches this together.
+        # its old owners. Both block tables name ranks of the root
+        # communicator and every rank holds both, so every rank posts from
+        # the same message list.
         Nf = fine_extent(r, active)
         Q_old, d_old = get(old_piece, ti, (nothing, nothing))
         Q_new = li == 0 ? nothing : states[li]
@@ -1142,8 +1155,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         audit = li != 0 && haskey(carried, r)
         Qref = audit ? ConservedState(copy(parent(states[li]))) : nothing
         _migrate_tile!(T, Q_new, d_new, Q_old, d_old, Nf, active,
-                       lev.transfers[old_of[r]].fine_blocks,
-                       transfers[ti].fine_blocks, root_lc.comm)
+                       lev.coupling.fine_blocks[old_of[r]], coupling.fine_blocks[ti],
+                       root_lc.comm)
         if audit
             _carry_over!(Qref, d_new, r, carried[r], Nf, r, active, n_cons)
             differ = count(Array(parent(Qref)) .!= Array(parent(states[li])))
@@ -1154,11 +1167,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     # A fresh tile's plane shared with a survivor takes the survivor's
     # evolved values rather than averaging its interpolation into them.
-    if !isempty(fresh) && new_lc.owned
-        is_fresh = falses(length(wanted))
-        is_fresh[fresh] .= true
-        _seed_planes!(solver, states, levels[2], is_fresh)
-    end
+    !isempty(fresh) && new_lc.owned && _seed_planes!(solver, states, levels[2], is_fresh)
     # Every old transfer was replaced above, surviving tiles included, and a
     # departing or rebuilt tile's decomposition has no further reader, the
     # migration's sends having completed inside `_migrate_tile!`. Free
@@ -1227,9 +1236,7 @@ function _fill_levels_from_parents!(solver::Solver, states)
     levels = getfield(solver, :levels)
     for ℓ in 2:length(levels)
         levels[ℓ - 1].level_comm.owned || continue
-        for lt in levels[ℓ].transfers
-            _fill_fine_from_coarse!(solver, states, lt)
-        end
+        _fill_tiles_from_parent!(solver, states, levels[ℓ])
     end
     return states
 end
@@ -1370,7 +1377,7 @@ end
 _shifted_level(lev::Level{T}, delta::Int) where {T} = delta == 0 ? lev :
     Level{T}(lev.index, lev.level_comm, lev.owners, lev.group, lev.tiles,
              lev.patches .+ delta, lev.transfers, lev.ghost_sends, lev.ghost_recvs,
-             lev.plane_pairs, lev.phases, lev.stacks)
+             lev.plane_pairs, lev.phases, lev.stacks, lev.coupling)
 
 """
 Internal: rebuild refined level `ℓ` of a hierarchy to the tiles of
@@ -1483,24 +1490,26 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     # parent's current tiles (whose patch indices precede this level's and
     # are untouched by the splice below).
     transfers = LevelTransfer{T}[]
+    coupling = LevelCoupling{T}()
     if parent_lc.owned
         pregions = ℓ == 1 ? [patches[1].region] :
                    [_fine_region(lt.region, active) for lt in parent.transfers]
         plocal = ℓ == 1 ? [1] : [lt.fine_index for lt in parent.transfers]
         pdecomp(li) = li == 0 ? nothing : patches[li].decomp
+        fdecomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - base].decomp
         for (ti, tr) in enumerate(wanted)
             pids = _parents_of(tr, active, collect(eachindex(pregions)), pregions)
-            fi = local_of[ti]
             push!(transfers, build_level_transfer(
-                T, tr, active, spec.n_halo, pregions[pids], plocal[pids],
-                Union{Nothing,Decomp{T}}[pdecomp(plocal[p]) for p in pids], fi,
-                spec.restriction, n_cons, getfield(solver, :subcycle),
-                fi == 0 ? nothing : new_patches[fi - base].decomp,
+                T, tr, active, spec.n_halo, pregions[pids], plocal[pids], local_of[ti],
+                spec.restriction, n_cons, getfield(solver, :subcycle), fdecomp(ti),
                 parent_lc.comm, length(owners[ti]), faces[ti];
                 interpolation_order=spec.interpolation_order,
                 gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
                 parent_h=ph))
         end
+        coupling = build_level_coupling(T, parent_lc.comm, transfers, pregions,
+                                        map(pdecomp, plocal),
+                                        map(fdecomp, eachindex(wanted)))
     end
     rng = (base + 1):(base + nold)
     splice!(patches, rng, new_patches)
@@ -1519,9 +1528,10 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  [_fine_region(tr, active) for tr in wanted], held,
                                  indices, [p.decomp for p in new_patches], n_cons)
         levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers,
-                                 records)
+                                 records; coupling)
     elseif parent_lc.owned
-        levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers)
+        levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers;
+                                 coupling)
     else
         levels[ℓ + 1] = Level{T}(ℓ, absent_level_comm(), UnitRange{Int}[],
                                  absent_tile_group(), Int[], Int[],
@@ -1535,19 +1545,18 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         local_of[ti] == 0 || init_geometry!(PatchSolver(solver, patches[local_of[ti]]))
     end
     if init && parent_lc.owned
+        is_fresh = falses(length(wanted))
+        is_fresh[fresh] .= true
+        isempty(fresh) || _fill_tiles_from_parent!(solver, states, levels[ℓ + 1], is_fresh)
         for ti in fresh
-            _fill_fine_from_coarse!(solver, states, transfers[ti])
             li = local_of[ti]
             (li != 0 && haskey(carried, ti)) || continue
             r = wanted[ti]
             _carry_over!(states[li], patches[li].decomp, r, carried[ti],
                          fine_extent(r, active), r, active, n_cons)
         end
-        if !isempty(fresh) && new_lc.owned
-            is_fresh = falses(length(wanted))
-            is_fresh[fresh] .= true
+        !isempty(fresh) && new_lc.owned &&
             _seed_planes!(solver, states, levels[ℓ + 1], is_fresh)
-        end
     end
     # The old transfers' chains are on COMM_SELF; the dropped tiles'
     # decompositions are freed by their old owners in the order they held
