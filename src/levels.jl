@@ -3130,6 +3130,11 @@ created (0 at setup): the tag history, derived from the reduced tag flags
 so that every rank holds the same record, and state that survives a regrid.
 `created` is level 1's record and `deep_created[ℓ - 1]` that of level ℓ ≥ 2.
 
+`boundaries` (the `level_boundaries` keyword) lets the tag clamp and the
+lattice clip place a level on a domain face whose condition a level carries,
+a symmetry plane excepted; off, every level stays the nesting margin inside
+the domain (`_placement_faces`).
+
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean
 per-rank busy time over the last interval (0 leaves ownership stored as it
@@ -3174,6 +3179,7 @@ mutable struct RegridSpec{T}
     interpolation_order::Int         # Lagrange order of a rebuilt transfer
     restriction::Symbol              # level_restriction of a rebuilt transfer
     deep_created::Vector{Dict{BlockRegion,Int}} # `created` of levels 2, 3, ...
+    boundaries::Bool                 # tags may place a level on a domain face
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -3184,7 +3190,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[])
+                  Dict{BlockRegion,Int}[], false)
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]

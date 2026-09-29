@@ -6186,6 +6186,19 @@ while on 6908 nodes under αf = 0.47 the axis node runs away from t ≈ 0.2 and
 reads 0.380 (0.116 under 0.45). Not diagnosed further; it bounds the radial
 spacing at which an axis run, refined or not, keeps the default filter.
 
+**Levels placed on a face by tags.** The instrument is the `level_boundaries`
+testset of `test/level_tests.jl`, at N = 49 in equal steps against the uniform
+run at the level's spacing. A level placed on the high slip wall of the 1-D
+standing wave by a regrid at step 0 differs from it by 4.0e-8 as one box and
+1.5e-7 as two tiles at t = 0.2 (a level the setup places there: 9.0e-9); the
+regrid's interpolated start and the tile face between the two tiles carry the
+difference. Tiles following the acoustic pulse of the NSCBC case out through
+the outflow differ by 5.8e-7 at t = 0.35, and the reflection at t = 0.8 is
+1.6064e-4 against 1.6056e-4 uniform at the fine spacing and 1.6652e-4 at the
+coarse one. On a uniform state the tag sweep of a wall tile marks no node
+with its taps clamped at the wall and two with the face read as open, whose
+ghost layers hold zeros.
+
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
 cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches

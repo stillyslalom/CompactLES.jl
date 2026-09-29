@@ -1638,6 +1638,74 @@ function test_deep_regrid_subsets()
 end
 
 # ---------------------------------------------------------------------------
+# 7b'''. Levels placed on a wall by tags (`level_boundaries`), decomposed: a
+#     tagged window moving onto the high wall of a 1-D tube, followed by one
+#     box and by lattice tiles whose last cell reaches the wall, against the
+#     serial rebuild on COMM_SELF every three steps through the regrids: the
+#     same regions, a wall face on the last one, and every block this rank
+#     holds equal to the serial patch's.
+# ---------------------------------------------------------------------------
+function test_placed_levels()
+    section("placed levels: tags place a level on a wall")
+    walls = (SlipWallBC(), SlipWallBC())
+    function blockdiff(p, Q, rp, Qref)
+        e = 0.0
+        for I in CL.interior(p.decomp), c in 1:size(Q, 4)
+            loc = Tuple(I) .- p.decomp.n_halo_d
+            J = CartesianIndex(loc .+ p.decomp.offset .+ rp.decomp.n_halo_d)
+            e = max(e, abs(Float64(Q[I, c] - Qref[J, c])))
+        end
+        e
+    end
+    function leveldiff(s, qs, ref, qref)
+        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        lev, rlev = s.levels[2], ref.levels[2]
+        for (k, ti) in zip(lev.patches, lev.tiles)
+            rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
+            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+        end
+        e
+    end
+    # A window of half-width 0.08 moving right at 2, which reaches the wall
+    # at x = 1 after a few checks, over a standing acoustic wave.
+    window(p, I) = abs(CL.xcoord(p, 1, CL.interior_index(p, I)[1]) - (0.85 + 2 * p.t)) <
+                   0.08
+    wave = (x, y, z) -> (rho = 1 + 0.05 * cos(pi * x);
+                         Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    function build(comm_here, tile)
+        local s = Solver(n_global=(97, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(walls, per3[2], per3[3]), comm=comm_here,
+                   art=ArtificialProperties(enabled=false), filter_interval=1,
+                   cfl=0.5, refine=BlockRegion((64, 0, 0), (17, 1, 1)),
+                   regrid_interval=3, tag_threshold=Inf, tag_predicate=window,
+                   tag_buffer=2, tile=tile, level_boundaries=true)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    for (label, tile) in (("box", 0), ("tiles", 8))
+        s, q = build(comm, tile)
+        ref, qref = build(MPI.COMM_SELF, tile)
+        differ = 0
+        walled = false
+        e = 0.0
+        for n in 3:3:30
+            run!(s, q; tfinal=1e9, nmax=n)
+            run!(ref, qref; tfinal=1e9, nmax=n)
+            differ += level_regions(s, 1) != level_regions(ref, 1)
+            regs = level_regions(s, 1)
+            walled |= !isempty(regs) && regs[end].offset[1] + regs[end].extent[1] == 97 &&
+                      s.levels[2].transfers[end].boundary[1][2]
+            differ == 0 && (e = max(e, leveldiff(s, q, ref, qref)))
+        end
+        check("placed levels, $label: the regions regrid as serial", gmax(differ), 0.5)
+        check("placed levels, $label: the level reaches the wall",
+              gmax(!walled), 0.5)
+        check("placed levels, $label: every block matches serial", gmax(e), 1e-10)
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -3939,6 +4007,7 @@ const SUITE = (
     ("unrefined start", test_unrefined_start),
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),
+    ("placed levels", test_placed_levels),
     ("two-patch layout", test_two_patch_layout),
     ("bulk patched layout", test_bulk_patched),
 )

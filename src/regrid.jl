@@ -226,8 +226,9 @@ _tag_sweep!(mark!::F, solver::Solver, Qc) where {F} =
 # the scratch `tags` (the patch's padded extent), calling `mark!` in the
 # parent level's global node indices. `closed` clamps the taps at the
 # patch's own edges, the root's closed-edge rule; a refined tile is swept
-# with its edges open, since its ghost layers hold the imposed shell or the
-# same-level neighbor's nodes at the head of a step.
+# with its parent-fed and shared edges open, since its ghost layers there
+# hold the imposed shell or the same-level neighbor's nodes at the head of a
+# step, and its edges on the domain boundary closed.
 function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
                      closed::Bool) where {F}
     dcp = coarse.decomp
@@ -261,8 +262,11 @@ function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
     ext = ntuple(d -> active[d] ? (-1:n[d]+2) : (1:1), 3)
     pointwise!(_tag_rho_point!, rho, length(ext[1]), length(ext[2]), length(ext[3]),
                rho, Qc, n_species, ntuple(d -> first(ext[d]) - 1 + o[d], 3))
-    lomin = ntuple(d -> closed && at_lo_edge(dcp, d) ? 1 : -1, 3)
-    himax = ntuple(d -> closed && at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
+    # A tile's face on the domain boundary carries the root's condition and
+    # clamps as the root's edge does: nothing beyond it holds the tile's data.
+    shut(d, side) = closed || _level_boundary_condition(coarse.bcs[d][side])
+    lomin = ntuple(d -> shut(d, 1) && at_lo_edge(dcp, d) ? 1 : -1, 3)
+    himax = ntuple(d -> shut(d, 2) && at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
     tags = on_device ? similar(parent(Qc), Int8, size(tags_scratch)) : tags_scratch
     fill!(tags, zero(Int8))
     ratio = spec.untag_ratio
@@ -354,9 +358,12 @@ the tagged cells (those at a criterion's threshold, and those inside the
 current refined regions at the hold threshold, `untag_ratio` below it),
 buffered by `RegridSpec.buffer` coarse cells per side, clamped to the
 nesting margin, and widened where necessary to the four-node minimum
-extent. Returns `nothing` when no cell qualifies. Collapsed dimensions keep
-offset 0 and extent 1. Collective over the coarse communicator (one
-Allreduce of the tag bounds), so every rank returns the identical region.
+extent. Under `level_boundaries` the clamp stops at a domain face whose
+condition a level carries instead, and a region on such a face is widened
+until its box spans the interpolation order. Returns `nothing` when no
+cell qualifies. Collapsed dimensions keep offset 0 and extent 1. Collective
+over the coarse communicator (one Allreduce of the tag bounds), so every
+rank returns the identical region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
@@ -365,31 +372,97 @@ function tagged_region(solver::Solver, Qc)
     tlo, thi = bounds
     margin = spec.margin
     n_global = solver.n_global
-    # Tagged nodes in the margin band cannot be refined; say so once rather
-    # than leave a feature at a boundary silently coarse. The bounds are
-    # reduced, so every rank agrees and only rank 0 speaks.
-    if MPI.Comm_rank(solver.comm) == 0 &&
-       any(d -> n_global[d] > 1 && (tlo[d] <= margin || thi[d] > n_global[d] - margin), 1:3)
-        @warn "AMR: tagged cells lie within $margin root nodes of the domain " *
-              "boundary, where a refined level cannot reach; they stay at the root " *
-              "resolution." maxlog = 1
-    end
+    active = ntuple(d -> n_global[d] > 1, 3)
+    reach = _placement_faces(solver, spec)
+    lo_feasible, hi_feasible = _feasible_nodes(n_global, active, margin, reach)
+    # Tagged nodes in the margin band of a face the level does not reach
+    # cannot be refined; say so once rather than leave a feature at a
+    # boundary silently coarse. The bounds are reduced, so every rank agrees.
+    any(d -> active[d] && (tlo[d] < lo_feasible[d] || thi[d] > hi_feasible[d]), 1:3) &&
+        _warn_margin_band(solver, margin, 1)
     offext = ntuple(3) do d
-        n_global[d] > 1 || return (0, 1)
+        active[d] || return (0, 1)
+        a, b = lo_feasible[d], hi_feasible[d]
         # Both ends clamp into the feasible interval, so a tagged set inside
         # the margin band collapses onto its inner edge rather than keeping
-        # an end past it, and the widening below to the four-node minimum
-        # then reopens the interval inward. Setup guarantees the feasible
-        # interval holds at least four nodes.
-        lo = clamp(tlo[d] - spec.buffer, margin + 1, n_global[d] - margin)
-        hi = clamp(thi[d] + spec.buffer, margin + 1, n_global[d] - margin)
-        while hi - lo + 1 < 4
-            hi < n_global[d] - margin ? (hi += 1) : (lo -= 1)
+        # an end past it, and the widening below to the minimum extent then
+        # reopens the interval inward. Setup guarantees the feasible
+        # interval holds at least four nodes; a region on a domain face also
+        # widens until its box spans the interpolation order.
+        lo = clamp(tlo[d] - spec.buffer, a, b)
+        hi = clamp(thi[d] + spec.buffer, a, b)
+        # An end inside the margin band of a face the region may reach
+        # moves onto the face, since a parent-fed face there would have no
+        # room for its box; the widening repeats the move.
+        while true
+            reach[d][1] && lo <= margin && (lo = 1)
+            reach[d][2] && hi > n_global[d] - margin && (hi = n_global[d])
+            need = _placement_extent(spec.interpolation_order,
+                                     reach[d][1] && lo == 1,
+                                     reach[d][2] && hi == n_global[d])
+            (hi - lo + 1 >= need || hi - lo + 1 >= b - a + 1) && break
+            hi < b ? (hi += 1) : (lo -= 1)
         end
         (lo - 1, hi - lo + 1)
     end
     return BlockRegion(ntuple(d -> offext[d][1], 3),
                        ntuple(d -> offext[d][2], 3))
+end
+
+# The domain faces automatic placement may reach, per dimension and side:
+# under `level_boundaries` those whose root condition a level carries but a
+# fold (a symmetry plane, the axis), the faces `_region_boundaries` gives;
+# none otherwise, every face then keeping the nesting margin.
+function _placement_faces(solver, spec::RegridSpec)
+    spec.boundaries || return _NO_BOUNDARY
+    root = getfield(solver, :patches)[1]
+    active = ntuple(d -> solver.n_global[d] > 1, 3)
+    return _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
+end
+
+# The feasible node interval of a level's placement along each dimension of
+# a node space of `N` nodes: the margin inside every face but those `reach`
+# marks, which a region may touch.
+_feasible_nodes(N::NTuple{3,Int}, active::NTuple{3,Bool}, margin::Int, reach) =
+    (ntuple(d -> active[d] && !reach[d][1] ? 1 + margin : 1, 3),
+     ntuple(d -> active[d] && !reach[d][2] ? N[d] - margin : N[d], 3))
+
+# The least extent, in parent nodes, of a placed region along one dimension:
+# four nodes, and with a face on the domain boundary (`lo`, `hi`), where its
+# box takes no buffer beyond the region, enough nodes for the box to span the
+# interpolation order `order`.
+_placement_extent(order::Int, lo::Bool, hi::Bool) =
+    max(4, order - (lo ? 0 : LEVEL_BUFFER) - (hi ? 0 : LEVEL_BUFFER))
+
+# The faces among `reach` that the tiles of a lattice of edge `tile` over a
+# node space of `N` nodes can reach. The cell at a face must span the
+# placement extent, and its neighbor, whose face toward the boundary is
+# parent-fed, must stay the margin inside it: at the low face the neighbor's
+# face lies `tile` nodes in, and at the high face the last cell holds the
+# remainder `r` of the lattice, `tile` nodes when the lattice ends on the
+# face. A face the lattice cannot reach keeps the margin.
+function _lattice_reach(reach, N::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
+                        margin::Int, order::Int)
+    return ntuple(3) do d
+        active[d] || return (false, false)
+        r = (N[d] - 1) % tile
+        whole = tile >= margin && tile + 1 >= _placement_extent(order, true, false)
+        last = r == 0 ? whole : r >= margin && r + 1 >= _placement_extent(order, false, true)
+        (reach[d][1] && whole, reach[d][2] && last)
+    end
+end
+
+# The warning of a tagged node in the margin band of a face no level reaches,
+# once per session, from rank 0; the callers' decisions are reduced, so the
+# ranks agree.
+function _warn_margin_band(solver, margin::Int, ℓ::Int)
+    MPI.Comm_rank(getfield(solver, :comm)) == 0 || return nothing
+    nodes = ℓ == 1 ? "root" : "level-$(ℓ - 1)"
+    @warn "AMR: tagged cells lie within $margin $nodes nodes of a domain boundary " *
+          "that a refined level does not reach; they stay at the parent " *
+          "resolution. Under level_boundaries = true a level reaches a wall or " *
+          "NSCBC face, but not a periodic seam, a symmetry plane or an axis." maxlog = 1
+    return nothing
 end
 
 # Whole-patch initialization of fresh fine states: interpolate the parent
@@ -445,13 +518,16 @@ end
 
 # Copy surviving fine data from the old patch onto the new one over the
 # coincident fine lattice of the region overlap, holding one node off both
-# patches' boundary planes. Distributed: the old fine state gathers
+# patches' boundary planes, except at a face `keep` marks, one on the domain
+# boundary for both regions: there the plane is either patch's own solution
+# and is copied. Distributed: the old fine state gathers
 # replicated over the old region (one transient region-sized array per rank,
 # at the regrid cadence only), and each rank writes the overlap slots of its
 # own new block. `old_gather` is that replica, indexed by old patch node.
 function _carry_over!(Qf_new, dnew::Decomp, rnew::BlockRegion,
                       old_gather, Nf_old::NTuple{3,Int}, rold::BlockRegion,
-                      active::NTuple{3,Bool}, n_cons::Int)
+                      active::NTuple{3,Bool}, n_cons::Int,
+                      keep::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
     # Root node g maps to fine-global 3(g − offset) − 2 on either patch, so
     # the old-to-new fine index shift is 3(offset_old − offset_new).
     shift = ntuple(d -> active[d] ? 3 * (rold.offset[d] - rnew.offset[d]) : 0, 3)
@@ -460,10 +536,12 @@ function _carry_over!(Qf_new, dnew::Decomp, rnew::BlockRegion,
         active[d] || return 1:1
         glo = max(rold.offset[d], rnew.offset[d]) + 1
         ghi = min(rold.offset[d] + rold.extent[d], rnew.offset[d] + rnew.extent[d])
-        f_lo = max(3 * (glo - rold.offset[d]) - 2, 2)
-        f_hi = min(3 * (ghi - rold.offset[d]) - 2, Nf_old[d] - 1)
+        first_node = keep[d][1] ? 1 : 2
+        last_off = keep[d][2] ? 0 : 1
+        f_lo = max(3 * (glo - rold.offset[d]) - 2, first_node)
+        f_hi = min(3 * (ghi - rold.offset[d]) - 2, Nf_old[d] - last_off)
         # Window in NEW patch global nodes, then this rank's slice of it.
-        w = max(f_lo + shift[d], 2):min(f_hi + shift[d], Nf_new[d] - 1)
+        w = max(f_lo + shift[d], first_node):min(f_hi + shift[d], Nf_new[d] - last_off)
         max(first(w), dnew.offset[d] + 1):min(last(w),
                                               dnew.offset[d] + dnew.n_local[d])
     end
@@ -611,7 +689,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     held && init_geometry!(PatchSolver(solver, newfine))
     _fill_tiles_from_parent!(solver, states, levels[2])
     held && _carry_over!(states[fi], newfine.decomp, newregion, old_gather,
-                         Nf_old, oldregion, active_g, n_cons)
+                         Nf_old, oldregion, active_g, n_cons,
+                         _shared_boundary(lt.boundary, bnd))
     # The old transfer's chains are on COMM_SELF, so this free is rank-local
     # and every holder of the transfer makes it.
     free_transfer_decomps!(lt)
@@ -715,16 +794,22 @@ end
 
 # Levels over the lattice cells (the maximum over the buffered nodes meeting
 # each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so every rank derives the
-# same set.
-function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
+# same set, and whether a node at the tag level lies outside the feasible
+# interval `[lo, hi]`, reduced with them.
+function _tag_tiles(solver::Solver, Qc, spec::RegridSpec, lo::NTuple{3,Int},
+                    hi::NTuple{3,Int})
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     a = spec.tile
     K = ntuple(d -> active[d] ? (n_global[d] - 1) ÷ a + 1 : 1, 3)
-    flags = zeros(Int8, K)
+    # The flags and the band flag share one buffer and one reduction.
+    buf = zeros(Int8, prod(K) + 1)
+    flags = reshape(view(buf, 1:prod(K)), K)
     b = spec.buffer
     _tag_sweep!(solver, Qc) do g1, g2, g3, level
         g = (g1, g2, g3)
+        level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
+            (buf[end] = one(Int8))
         spans = ntuple(d -> active[d] ?
                        intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
                        (0:0), 3)
@@ -732,7 +817,8 @@ function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
             flags[k1 + 1, k2 + 1, k3 + 1] = max(flags[k1 + 1, k2 + 1, k3 + 1], level)
         end
     end
-    return MPI.Allreduce(flags, max, getfield(solver, :comm)), K
+    red = MPI.Allreduce(buf, max, getfield(solver, :comm))
+    return reshape(red[1:end-1], K), K, red[end] > 0
 end
 
 # One tile's whole state, replicated on every rank of the parent level's
@@ -750,6 +836,11 @@ function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
                                       getfield(solver, :patches)[lt.fine_index].decomp) :
                                      nothing, lt.parent_comm)
 end
+
+# The faces on the domain boundary for both of two regions, whose planes a
+# carry or a migration copies (`_carry_over!`, `_migrate_tile!`).
+_shared_boundary(a::NTuple{3,NTuple{2,Bool}}, b::NTuple{3,NTuple{2,Bool}}) =
+    ntuple(d -> (a[d][1] && b[d][1], a[d][2] && b[d][2]), 3)
 
 # Tag of the migration messages. They run on the root communicator, on
 # which nothing else is in flight during a regrid, and one tile's messages
@@ -802,15 +893,18 @@ end
 # collective runs. The interior holds one node off both boundary planes
 # along every active dimension, the rule `_carry_over!` applies: the old
 # planes were imposed data and the new ones are re-imposed by the next
-# shell fill. `Q_old`/`d_old` are this rank's old block of the tile and
-# `Q_new`/`d_new` its new one, `nothing` where it holds none. The sends
-# complete before this returns, so the caller may free the old
-# decomposition afterwards.
+# shell fill. A plane on the domain boundary (`keep`) is the tile's own
+# solution and moves with the rest. `Q_old`/`d_old` are this rank's old
+# block of the tile and `Q_new`/`d_new` its new one, `nothing` where it
+# holds none. The sends complete before this returns, so the caller may
+# free the old decomposition afterwards.
 function _migrate_tile!(::Type{T}, Q_new, d_new, Q_old, d_old, Nf::NTuple{3,Int},
                         active::NTuple{3,Bool}, old_blocks::Vector{OwnedBlock},
-                        new_blocks::Vector{OwnedBlock}, comm::MPI.Comm) where {T}
+                        new_blocks::Vector{OwnedBlock}, comm::MPI.Comm,
+                        keep::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     me = MPI.Comm_rank(comm)
-    interior = ntuple(d -> active[d] ? (2:Nf[d]-1) : (1:1), 3)
+    interior = ntuple(d -> active[d] ?
+                      ((keep[d][1] ? 1 : 2):(Nf[d] - (keep[d][2] ? 0 : 1))) : (1:1), 3)
     nodes(b::BlockRegion) = ntuple(d -> (b.offset[d] + 1):(b.offset[d] + b.extent[d]), 3)
     piece(a::BlockRegion, b::BlockRegion) =
         ntuple(d -> _isect(_isect(nodes(a)[d], nodes(b)[d]), interior[d]), 3)
@@ -912,15 +1006,19 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     lev = levels[2]
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    flags, K = _tag_tiles(solver, states[1], spec)
+    # The lattice clip: the nesting margin inside every face but those the
+    # lattice reaches under `level_boundaries` (`_lattice_reach`).
+    reach = _lattice_reach(_placement_faces(solver, spec), n_global, active, spec.tile,
+                           spec.margin, spec.interpolation_order)
+    lo, hi = _feasible_nodes(n_global, active, spec.margin, reach)
+    flags, K, banded = _tag_tiles(solver, states[1], spec, lo, hi)
+    banded && _warn_margin_band(solver, spec.margin, 1)
     busy = _rebalance_due!(solver, spec)
     old_regions = [lt.region for lt in lev.transfers]
     # With no tile and no tag there is nothing to build or move; the flags
     # are reduced and the tile set is held by every rank, so this return is
     # uniform.
     isempty(old_regions) && all(==(0), flags) && return false
-    lo = ntuple(d -> 1 + spec.margin, 3)
-    hi = ntuple(d -> n_global[d] - spec.margin, 3)
     # A cell at the tag level is wanted; one at the hold level, or younger
     # than the lifetime, is wanted where its tile exists (the hysteresis).
     # `created` is derived from the reduced flags, so every rank holds it.
@@ -1161,9 +1259,10 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         Qref = audit ? ConservedState(copy(parent(states[li]))) : nothing
         _migrate_tile!(T, Q_new, d_new, Q_old, d_old, Nf, active,
                        lev.coupling.fine_blocks[old_of[r]], coupling.fine_blocks[ti],
-                       root_lc.comm)
+                       root_lc.comm, boundaries[ti])
         if audit
-            _carry_over!(Qref, d_new, r, carried[r], Nf, r, active, n_cons)
+            _carry_over!(Qref, d_new, r, carried[r], Nf, r, active, n_cons,
+                         boundaries[ti])
             differ = count(Array(parent(Qref)) .!= Array(parent(states[li])))
             res = MIGRATION_AUDIT_RESULT[]
             MIGRATION_AUDIT_RESULT[] = (tiles=res.tiles + 1,
@@ -1259,8 +1358,9 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
                    [_erode(_fine_region(lt), lt.imposed, active)
                     for lt in parent.transfers]
     parent_np = parent.level_comm.size
-    lo = ntuple(d -> 1 + margin, 3)
-    hi = ntuple(d -> N[d] - margin, 3)
+    reach = _lattice_reach(_placement_faces(solver, spec), N, active, a, margin,
+                           spec.interpolation_order)
+    lo, hi = _feasible_nodes(N, active, margin, reach)
     wanted = BlockRegion[]
     if !isempty(parent_valid)
         cells = Set(keys(flags))
@@ -1272,7 +1372,8 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
             exists = t in old_regions
             young = exists && spec.checks - get(created, t, 0) < spec.lifetime
             (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) || continue
-            _covered_by(_buffered(t, active, margin), parent_valid) || continue
+            _covered_by(_buffered(t, active, margin, _boundary_faces(t, N, reach)),
+                        parent_valid) || continue
             push!(wanted, t)
         end
     end
@@ -1314,8 +1415,16 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
     N = ntuple(d -> active[d] ? 3^(ℓ - 1) * (n_global[d] - 1) + 1 : 1, 3)
     K = ntuple(d -> active[d] ? (N[d] - 1) ÷ a + 1 : 1, 3)
     cells = Dict{NTuple{3,Int},Int8}()
+    # A node at the tag level outside the feasible interval of the lattice
+    # clip `_decide_level` applies: the margin band of a face no level reaches.
+    reach = _lattice_reach(_placement_faces(solver, spec), N, active, a, spec.margin,
+                           spec.interpolation_order)
+    lo, hi = _feasible_nodes(N, active, spec.margin, reach)
+    banded = Ref(false)
     function mark!(g1, g2, g3, level)
         g = (g1, g2, g3)
+        level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
+            (banded[] = true)
         spans = ntuple(d -> active[d] ?
                        intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
                        (0:0), 3)
@@ -1334,18 +1443,23 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
                         false)
         end
     end
+    # The band flag travels as a record of its own, cell (−1, −1, −1).
     packed = Int64[]
     for (k, v) in cells
         append!(packed, (k[1], k[2], k[3], v))
     end
+    banded[] && append!(packed, (-1, -1, -1, 1))
     gathered = MPI.gather(packed, comm; root=0)
     decision = nothing
     if MPI.Comm_rank(comm) == 0
         flags = Dict{NTuple{3,Int},Int8}()
+        band = false
         for buf in gathered, i in 1:4:length(buf)
             k = (Int(buf[i]), Int(buf[i + 1]), Int(buf[i + 2]))
+            k[1] < 0 && (band = true; continue)
             flags[k] = max(get(flags, k, zero(Int8)), Int8(buf[i + 3]))
         end
+        band && _warn_margin_band(solver, spec.margin, ℓ)
         decision = _decide_level(solver, ℓ, spec, flags, active, N, parent_changed)
     end
     decision = MPI.bcast(decision, comm; root=0)
@@ -1558,7 +1672,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
             (li != 0 && haskey(carried, ti)) || continue
             r = wanted[ti]
             _carry_over!(states[li], patches[li].decomp, r, carried[ti],
-                         fine_extent(r, active), r, active, n_cons)
+                         fine_extent(r, active), r, active, n_cons, boundaries[ti])
         end
         !isempty(fresh) && new_lc.owned &&
             _seed_planes!(solver, states, levels[ℓ + 1], is_fresh)

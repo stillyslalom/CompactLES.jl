@@ -2630,3 +2630,257 @@ const CORNER_LEVEL_TOL = 5e-5
     @test maximum(abs, r.residual) < 1e-13
     @test abs(drift) < 5e-6
 end
+
+# A level placed on the high wall of the 1-D standing wave by a regrid at
+# step 0, against the uniform run at its spacing in equal steps at N = 49,
+# t = 0.2, over the conserved components: measured 4.0e-8 for one box and
+# 1.5e-7 for two tiles (the tile face between them adds its error). A pulse
+# followed by tiles out through an NSCBC outflow, against the uniform run at
+# t = 0.35, halfway through the exit: 5.8e-7.
+const PLACED_WALL_TOL = 5e-7
+const PLACED_NSCBC_TOL = 5e-6
+
+@testset "level_boundaries places a regridded level on a wall or NSCBC face" begin
+    per = (PeriodicBC(), PeriodicBC())
+    walls = (SlipWallBC(), SlipWallBC())
+    N = 49
+    wave(x, y, z) = (rho = 1 + 0.05 * cos(pi * x);
+                     Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    # The window the predicate tags, moved between regrid checks.
+    cut = Ref(0.85)
+    upper = Ref(2.0)
+    near(p, I) = cut[] < xcoord(p, 1, interior_index(p, I)[1]) < upper[]
+    function placed(; refined=true, tile=0, lb=true, bcs=(walls, per, per),
+                    region=BlockRegion((16, 0, 0), (9, 1, 1)), ic=wave, kw...)
+        local n = refined ? N : 3 * (N - 1) + 1
+        local s = Solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
+                   filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
+                   refine=refined ? region : nothing,
+                   regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
+                   tag_predicate=refined ? near : nothing, tag_buffer=2, tile=tile,
+                   level_boundaries=refined && lb, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, ic)
+        return s, q
+    end
+    function regrid_now!(s, q)
+        getfield(s, :regrid).checks += 1
+        return CL.regrid!(s, q, CL.Workspace(q), nothing)
+    end
+    # The largest difference of the level's patches from the uniform run at
+    # their spacing, over the conserved components.
+    function against_uniform(s, q, f, fq)
+        local pf = PatchSolver(f, f.patches[1])
+        local e = 0.0
+        for k in 2:length(s.patches)
+            local ps = PatchSolver(s, s.patches[k])
+            local off = ps.patch.region.offset[1]
+            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+                                   fq[padded_index(pf, off + i, 1, 1), c])
+                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+        end
+        return e
+    end
+    steps!(s, q, k0, k1) = for k in k0:k1
+        run!(s, q; tfinal=0.2k / 96)
+    end
+    margin = CL.LEVEL_BUFFER
+    reaches(r) = r.offset[1] + r.extent[1] == N
+    # The keyword places regridded levels; an explicit region needs none.
+    @test_throws "level_boundaries" Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                           bcs=(walls, per, per), level_boundaries=true,
+                                           refine=BlockRegion((16, 0, 0), (9, 1, 1)))
+
+    # --- The tag clamp of a box, off and on ----------------------------------
+    cut[] = 0.85
+    s, q = placed(lb=false)
+    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+    @test r.offset[1] + r.extent[1] == N - margin
+    s, q = placed()
+    r = @test_logs CL.tagged_region(s, q[1])
+    @test r == BlockRegion((39, 0, 0), (10, 1, 1))
+    # A narrow tag at the face widens until the box, which takes no buffer
+    # beyond the face, spans the interpolation order.
+    cut[] = 0.99
+    s10, q10 = placed(level_interpolation_order=10)
+    @test CL.tagged_region(s10, q10[1]) == BlockRegion((N - 6, 0, 0), (6, 1, 1))
+    # A buffered end inside the margin band moves onto the face, where a
+    # parent-fed face would have no room for its box.
+    cut[], upper[] = 0.8, 0.93
+    @test CL.tagged_region(s, q[1]) == BlockRegion((37, 0, 0), (12, 1, 1))
+    upper[] = 2.0
+
+    # --- A box regridded onto the wall, against the uniform fine run ---------
+    cut[] = 0.85
+    s, q = placed()
+    @test regrid_now!(s, q)
+    lt = getfield(s, :levels)[2].transfers[1]
+    @test reaches(lt.region) && lt.boundary[1] == (false, true)
+    @test s.patches[2].bcs[1][2] === s.patches[1].bcs[1][2]
+    f, fq = placed(refined=false)
+    steps!(s, q, 1, 96)
+    steps!(f, fq, 1, 96)
+    @test s.step == f.step == 96
+    e = against_uniform(s, q, f, fq)
+    @info "box regridded onto the wall against the uniform run" e
+    @test e < PLACED_WALL_TOL
+    # The box grows along the wall: the carry keeps the wall plane, the
+    # level's own solution, bit for bit with the rest of the overlap.
+    old = copy(parent(q[2]))
+    pold = PatchSolver(s, s.patches[2])
+    nold = pold.decomp.n_local[1]
+    cut[] = 0.7
+    @test regrid_now!(s, q)
+    pnew = PatchSolver(s, s.patches[2])
+    shift = pnew.decomp.n_local[1] - nold
+    @test shift > 0 && reaches(level_regions(s, 1)[1])
+    @test all(q[2][padded_index(pnew, i + shift, 1, 1), c] ==
+              old[padded_index(pold, i, 1, 1), c] for i in 2:nold, c in axes(old, 4))
+
+    # --- Tiles, off and on, and a restart --------------------------------------
+    cut[] = 0.85
+    s, q = placed(tile=8, lb=false)
+    @test_logs (:warn, r"does not reach") match_mode=:any regrid_now!(s, q)
+    @test level_regions(s, 1)[end].offset[1] + level_regions(s, 1)[end].extent[1] ==
+          N - margin
+    s, q = placed(tile=8)
+    @test regrid_now!(s, q)
+    regs = level_regions(s, 1)
+    @test regs == [BlockRegion((32, 0, 0), (9, 1, 1)), BlockRegion((40, 0, 0), (9, 1, 1))]
+    @test [lt.boundary[1] for lt in getfield(s, :levels)[2].transfers] ==
+          [(false, false), (false, true)]
+    f, fq = placed(refined=false)
+    steps!(s, q, 1, 48)
+    dir = mktempdir()
+    save_checkpoint(s, q, joinpath(dir, "walltiles"))
+    steps!(s, q, 49, 96)
+    steps!(f, fq, 1, 96)
+    e = against_uniform(s, q, f, fq)
+    @info "tiles regridded onto the wall against the uniform run" e
+    @test e < PLACED_WALL_TOL
+    r, rq = placed(tile=8)
+    load_checkpoint!(r, rq, joinpath(dir, "walltiles"))
+    @test level_regions(r, 1) == regs
+    steps!(r, rq, 49, 96)
+    @test r.t == s.t && length(rq) == length(q) &&
+          all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
+              parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+    rm(dir; recursive=true)
+
+    # --- Three regridded levels reach the wall, and the tag sweep of a tile
+    # clamps at its wall face -------------------------------------------------
+    for lb in (false, true)
+        cut[] = 0.85
+        s, q = placed(tile=8, lb=lb, max_levels=3, region=nothing)
+        regrid_now!(s, q)
+        N2 = 3 * (N - 1) + 1
+        r2 = level_regions(s, 2)
+        @test any(r -> r.offset[1] + r.extent[1] == N2, r2) == lb
+        lb && @test all(lt.boundary[1] == (false, lt.region.offset[1] +
+                                                   lt.region.extent[1] == N2)
+                        for lt in getfield(s, :levels)[3].transfers)
+        steps!(s, q, 1, 4)
+        @test all(all(isfinite, parent(Q)) for Q in q)
+    end
+    # A uniform state tags nothing on a wall tile: the δ⁴ taps stop at the
+    # wall, where the tile's ghost layers hold no data of its own.
+    cut[] = 0.85
+    s, q = placed(tile=8, ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
+    regrid_now!(s, q)
+    getfield(s, :regrid).threshold = 0.02
+    cut[] = 2.0
+    k = only(k for (k, lt) in zip(getfield(s, :levels)[2].patches,
+                                  getfield(s, :levels)[2].transfers) if lt.boundary[1][2])
+    p = s.patches[k]
+    marks = Ref(0)
+    CL._tag_sweep!((g1, g2, g3, level) -> (marks[] += 1), s, p, q[k],
+                   zeros(Int8, size(p.covered)), false)
+    @test marks[] == 0
+
+    # --- A pulse leaving through an NSCBC outflow ---------------------------------
+    c = sqrt(1.4)
+    xc(t) = 0.5 + (0.3 + c) * t
+    follow(p, I) = abs(xcoord(p, 1, interior_index(p, I)[1]) - xc(p.t)) < 0.12
+    open_bcs = ((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
+                per, per)
+    pulse(x, y, z) = (a = 0.01 * exp(-((x - 0.5) / 0.1)^2);
+                      Prim(rho=1 + a / c^2, u=(0.3 + a / c, 0.0, 0.0), p=1 + a))
+    function pulse_run(; refined=true, lb=true, coarse=false)
+        local n = refined || coarse ? N : 3 * (N - 1) + 1
+        local s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=open_bcs,
+                   filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
+                   refine=refined ? BlockRegion((16, 0, 0), (17, 1, 1)) : nothing,
+                   regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
+                   tag_predicate=refined ? follow : nothing, tag_buffer=2, tile=8,
+                   level_boundaries=refined && lb)
+        local q = allocate_state(s)
+        initialize!(s, q, pulse)
+        return s, q
+    end
+    function reflection(s, q)
+        local r = 0.0
+        refresh_primitives!(s, q)
+        for (ps, Q) in CL.eachpatch(s, q), i in 1:ps.decomp.n_local[1]
+            local I = padded_index(ps, i, 1, 1)
+            ps.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
+        end
+        return r
+    end
+    run_to!(s, q, t, steps) = for n in 1:steps
+        run!(s, q; tfinal=t * n / steps)
+    end
+    # Off, the tiles following the pulse stop at the margin as it nears the
+    # face (t = 0.25, the pulse centred at 0.87).
+    s, q = pulse_run(lb=false)
+    @test_logs (:warn, r"does not reach") match_mode=:any run_to!(s, q, 0.25, 180)
+    @test all(!reaches(r) for r in level_regions(s, 1))
+    # On, a tile reaches the face and carries the outflow. Against the
+    # uniform run at the fine spacing in equal steps, halfway through the
+    # exit (t = 0.35, step 252), and in the reflection once the pulse has
+    # gone (t = 0.8), which the uniform coarse run misses.
+    s, q = pulse_run()
+    f, fq = pulse_run(refined=false)
+    cs, cq = pulse_run(refined=false, coarse=true)
+    e = Inf
+    for n in 1:576
+        run!(s, q; tfinal=0.8n / 576)
+        run!(f, fq; tfinal=0.8n / 576)
+        n == 252 || continue
+        @test any(reaches, level_regions(s, 1))
+        @test s.patches[end].bcs[1][2] === s.patches[1].bcs[1][2]
+        e = against_uniform(s, q, f, fq)
+    end
+    run_to!(cs, cq, 0.8, 192)
+    r_level, r_fine, r_coarse = reflection(s, q), reflection(f, fq), reflection(cs, cq)
+    @info "pulse through a placed outflow level" e r_level r_fine r_coarse
+    @test e < PLACED_NSCBC_TOL
+    @test abs(r_level - r_fine) < NSCBC_REFLECTION_TOL
+    @test abs(r_coarse - r_fine) > 3 * NSCBC_REFLECTION_TOL
+
+    # --- The frontend's shapes -------------------------------------------------
+    domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
+    shape_run(bcs, shape; metric=CartesianMetric(), kw...) =
+        setup(Problem(domain=domain, bcs=bcs, metric=metric,
+                      ic=(x, y, z) -> wave(x, y, z)),
+              Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                       amr=AMR(; initial=shape, kw...)))
+    toward_wall = CL.Regions.Box((0.8, 0.0, 0.0), (1.0, 1.0, 1.0))
+    s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any shape_run(
+        (walls, per, per), toward_wall)
+    @test refined_region(s).offset[1] + refined_region(s).extent[1] == N - margin
+    s, _ = @test_logs min_level=Base.CoreLogging.Warn shape_run(
+        (walls, per, per), toward_wall; level_boundaries=true)
+    @test reaches(refined_region(s))
+    # A static shape's first level reaches a symmetry plane or the r-z axis,
+    # which it folds; a regridded one keeps the margin there and says so.
+    toward_fold = CL.Regions.Box((0.0, 0.0, 0.0), (0.2, 1.0, 1.0))
+    for (bcs, metric) in ((((SymmetryPlaneBC(), SlipWallBC()), per, per), CartesianMetric()),
+                          (((AxisBC(), SlipWallBC()), per, per), CylindricalMetric()))
+        s, _ = shape_run(bcs, toward_fold; metric, level_boundaries=true)
+        @test refined_region(s).offset[1] == 0 &&
+              getfield(s, :levels)[2].transfers[1].folded[1] == (true, false)
+        s, _ = @test_logs (:warn, r"does not reach") match_mode=:any shape_run(
+            bcs, toward_fold; metric, level_boundaries=true, regrid_interval=5)
+        @test refined_region(s).offset[1] == margin
+    end
+end

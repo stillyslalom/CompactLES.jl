@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -587,6 +587,11 @@ Names are spelled out in full. Current vocabulary:
   `_mirror_folded_box!` (the box across the plane), `FoldSpec.div_plans`
   and `FoldRingPlans` (a refined patch's fold, whose far end is an
   interface)
+- `level_boundaries` (keyword; `RegridSpec.boundaries`: tags and shapes may
+  place a level on a domain face it can carry), `_placement_faces` /
+  `_lattice_reach` / `_feasible_nodes` / `_placement_extent` (the faces and
+  node interval placement reaches), `_warn_margin_band`, `_shared_boundary`
+  (the domain-face planes a carry or a migration keeps)
 - `SesameTable` (one material of a SESAME ASCII 2 library in SI, not an
   `EOS`), its `SesameComponent`s `total` / `ion` / `electron` / `nuclear`
   (the 301 / 303 / 304 / 305 records, each on its own grid) and

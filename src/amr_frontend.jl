@@ -16,10 +16,13 @@ refined at setup:
 - a [`BlockRegion`](@ref) or a vector of nested ones, in the node lattice of
   each level's parent, for a layout given exactly.
 
-A refined level always lies at least `max(n_halo, 4)` of its parent's nodes
-inside its parent (the root's boundaries included, periodic or not), which is
-the room the coarse–fine transfer needs. A region asked for closer to a
-boundary is reduced to fit, with a warning naming the level.
+A refined level lies at least `max(n_halo, 4)` of its parent's nodes inside
+its parent, which is the room the coarse–fine transfer needs. By default this
+holds at the root's boundaries too, periodic or not, and a region asked for
+closer to a boundary is reduced to fit, with a warning naming the level. With
+`level_boundaries = true`, a shape or a tagged feature is refined up to a wall
+or NSCBC face instead, which the level then carries at its own spacing (see
+the keyword below).
 
 `regrid_interval` defaults to 0 (a fixed region) for a shape, a region or a
 predicate of position alone, and for `:sensor` or a time-dependent predicate
@@ -106,6 +109,18 @@ copies `base` with the given keywords replaced.
   interface plane and coupled as root slabs are. Regridding then moves
   tiles in and out of the set, a surviving tile never changing its region,
   and the set may become empty.
+- `level_boundaries` (default `false`): at `true`, shapes and tags may place
+  a level on a domain face carrying `SlipWallBC`, `NoSlipWallBC`,
+  `NSCBCOutflowBC` or `NSCBCInflowBC`, and a static shape's first level on
+  a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host backend
+  under `:inject` restriction. The level carries the face's condition at its
+  own spacing, so a feature at a wall or an open face is refined up to the
+  face. Periodic seams and other faces keep the margin, and so do a symmetry
+  plane and the axis under regridding. With `tile`, a face keeps it also
+  when the tile next to the face's tile would come within the margin of
+  the domain: an edge below `max(n_halo, 4)`, or a partial last lattice
+  cell at the high face spanning fewer parent cells than that. At `false`
+  every face keeps the margin.
 - `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
   threshold on the ratio of the largest to the mean per-rank busy time over
   a regrid interval, above which a tiled level is repartitioned on those
@@ -130,6 +145,7 @@ Base.@kwdef struct AMR
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
     max_levels::Union{Nothing,Int} = nothing
+    level_boundaries::Bool = false
 end
 
 AMR(base::AMR; kw...) = _with(base, kw)
@@ -172,7 +188,8 @@ function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
             tag_predicate=predicate, untag_ratio=amr.untag_ratio,
             tile_lifetime=amr.tile_lifetime, tile=amr.tile,
             rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist,
-            max_levels=amr.max_levels)
+            max_levels=amr.max_levels,
+            level_boundaries=amr.level_boundaries && interval > 0)
 end
 
 _amr_callable(initial) = !(initial isa Symbol || initial isa BlockRegion ||
@@ -235,26 +252,41 @@ _root_first_node(prob, h) =
 # Nested regions covering nested shapes. Each shape is sampled on its parent's
 # lattice, over the parent's own nodes; a node within one cell diagonal of the
 # shape counts, so the region brackets the shape rather than falling inside
-# it, and a shape thinner than the spacing is still covered.
-function _shape_regions(shapes, prob, num)
+# it, and a shape thinner than the spacing is still covered. A region stays
+# the nesting margin inside its parent's own nodes, except at a domain face
+# `_shape_faces` lets it reach.
+function _shape_regions(shapes, prob, num, amr::AMR)
     n_global = num.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     margin = max(num.n_halo, LEVEL_BUFFER)
+    order = something(amr.level_interpolation_order,
+                      default_interpolation_order(num.deriv, num.patch_interfaces.flux))
     h = _root_spacing(prob, num)
     origin = _root_first_node(prob, h)
     plo = (0, 0, 0)
     phi = ntuple(d -> n_global[d] - 1, 3)
+    # The last node of the parent level's node space along each dimension.
+    top = phi
+    reach = _shape_faces(prob, num, amr)
     regions = BlockRegion[]
     for (ℓ, shape) in enumerate(shapes)
         shape isa Shape ||
             throw(ArgumentError("AMR: nested initial regions are all shapes or all " *
                                 "BlockRegions"))
-        reach = sqrt(sum(h[d]^2 for d in 1:3 if active[d]))
+        # A fold (a symmetry plane, the axis) is reached by the first
+        # refined level only.
+        ℓ == 1 || (reach = ntuple(d -> ntuple(side ->
+            reach[d][side] && !_level_fold_condition(prob.bcs[d][side]), 2), 3))
+        amr.tile > 0 && (reach = _lattice_reach(reach, top .+ 1, active, amr.tile,
+                                                margin, order))
+        reach_lo = ntuple(d -> active[d] && reach[d][1], 3)
+        reach_hi = ntuple(d -> active[d] && reach[d][2], 3)
+        span = sqrt(sum(h[d]^2 for d in 1:3 if active[d]))
         lo = [typemax(Int), typemax(Int), typemax(Int)]
         hi = [typemin(Int), typemin(Int), typemin(Int)]
         for k in plo[3]:phi[3], j in plo[2]:phi[2], i in plo[1]:phi[1]
             x = (origin[1] + i * h[1], origin[2] + j * h[2], origin[3] + k * h[3])
-            signed_distance(shape, x, active) <= reach || continue
+            signed_distance(shape, x, active) <= span || continue
             for (d, n) in enumerate((i, j, k))
                 lo[d] = min(lo[d], n)
                 hi[d] = max(hi[d], n)
@@ -269,14 +301,28 @@ function _shape_regions(shapes, prob, num)
         extent = ones(Int, 3)
         for d in 1:3
             active[d] || continue
-            a, b = plo[d] + margin, phi[d] - margin
+            a = plo[d] + (reach_lo[d] ? 0 : margin)
+            b = phi[d] - (reach_hi[d] ? 0 : margin)
             b - a + 1 >= 4 ||
                 throw(ArgumentError("AMR: level $(ℓ - 1) is too small along " *
                                     "dimension $d to hold a refined level"))
             l, u = max(lo[d], a), min(hi[d], b)
             clipped |= l > lo[d] || u < hi[d]
             l > u && ((l, u) = lo[d] > b ? (b, b) : (a, a))
-            while u - l + 1 < 4
+            # An end inside the margin band of a face the region may reach
+            # moves onto the face, where it needs no room for a box; at a
+            # face without a box buffer beyond it the region spans the
+            # interpolation order (a fold keeps its buffer). The
+            # widening repeats the move.
+            while true
+                reach_lo[d] && l < plo[d] + margin && (l = plo[d])
+                reach_hi[d] && u > phi[d] - margin && (u = phi[d])
+                need = _placement_extent(order,
+                                         l == 0 && reach_lo[d] &&
+                                         !_level_fold_condition(prob.bcs[d][1]),
+                                         u == top[d] && reach_hi[d] &&
+                                         !_level_fold_condition(prob.bcs[d][2]))
+                (u - l + 1 >= need || u - l + 1 >= b - a + 1) && break
                 u < b ? (u += 1) : (l -= 1)
             end
             offset[d], extent[d] = l, u - l + 1
@@ -289,12 +335,34 @@ function _shape_regions(shapes, prob, num)
         push!(regions, region)
         # The next level nests inside this one's own nodes: the refined
         # lattice triples the spacing count and its boundary planes are
-        # imposed from the parent.
-        plo = ntuple(d -> active[d] ? 3 * offset[d] + 1 : 0, 3)
-        phi = ntuple(d -> active[d] ? 3 * (offset[d] + extent[d] - 1) - 1 : 0, 3)
+        # imposed from the parent, except on a domain face, where the plane
+        # is the level's own and the next level may reach it too.
+        at_lo = ntuple(d -> reach_lo[d] && offset[d] == 0, 3)
+        at_hi = ntuple(d -> reach_hi[d] && offset[d] + extent[d] - 1 == top[d], 3)
+        plo = ntuple(d -> active[d] ? 3 * offset[d] + (at_lo[d] ? 0 : 1) : 0, 3)
+        phi = ntuple(d -> active[d] ?
+                          3 * (offset[d] + extent[d] - 1) - (at_hi[d] ? 0 : 1) : 0, 3)
+        top = ntuple(d -> 3 * top[d], 3)
+        reach = ntuple(d -> (at_lo[d], at_hi[d]), 3)
         h = ntuple(d -> active[d] ? h[d] / 3 : h[d], 3)
     end
     return regions
+end
+
+# The domain faces a shape's level may reach: none, unless `level_boundaries`
+# is set, and then the faces whose condition a refined level carries
+# (`_level_boundary_condition`), a fold (a symmetry plane, the r-z axis) only
+# where setup admits a level on one (the host backend with `:inject`
+# restriction; the shapes are static here).
+function _shape_faces(prob, num, amr::AMR)
+    amr.level_boundaries || return _NO_BOUNDARY
+    active = ntuple(d -> num.n_global[d] > 1, 3)
+    folds = !(num.execution.backend isa DeviceBackend) && amr.level_restriction === :inject
+    return ntuple(d -> ntuple(side -> begin
+        bc = prob.bcs[d][side]
+        active[d] && !isperiodic(bc) && _level_boundary_condition(bc) &&
+            (folds || !_level_fold_condition(bc))
+    end, 2), 3)
 end
 
 # A legal, four-node coarse box solely for constructing the tagging machinery.
@@ -332,7 +400,7 @@ function _setup_amr(prob, num, amr::AMR)
             inside = (x, y, z) -> signed_distance(shape, (x, y, z), active) <= 0
             amr = AMR(amr; initial=inside)
         else
-            amr = AMR(amr; initial=_shape_regions(shapes, prob, num))
+            amr = AMR(amr; initial=_shape_regions(shapes, prob, num, amr))
         end
     end
     amr.initial === :sensor ||

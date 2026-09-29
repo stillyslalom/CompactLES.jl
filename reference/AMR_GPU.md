@@ -472,8 +472,29 @@ face of its patch, which has no cell beyond the face, so the composite
 quadrature counts the wall node once. Setup accepts an explicit region, box
 or tiled `refine`, that reaches such a face; the regrid, the restart and
 the deep regrid carry the faces of whatever regions they are given
-(`_region_boundaries`), while the tag clamp, the lattice clip of a regrid
-and the AMR frontend's shapes still stop at the margin.
+(`_region_boundaries`).
+
+**Placement on a face.** Under the opt-in `level_boundaries` (the
+`RegridSpec.boundaries` flag, and `AMR`'s keyword for the shapes) the tag
+clamp of the box regrid, the lattice clip of the tiled and the deep regrid
+and the frontend's shapes stop at a face `_placement_faces` names (the
+eligible faces of `_region_boundaries`, folds excepted) instead of
+the margin. A box on such a face widens until its box, which takes no
+buffer there, spans the interpolation order (`_placement_extent`). A lattice
+reaches a face only where the tile next to the face's tile stays the margin
+inside the domain: an edge of at least the margin, and at the high face a
+last cell that ends on it or holds at least the margin's nodes
+(`_lattice_reach`); elsewhere the face keeps the margin. A region on the
+same face before and after a regrid carries its plane there, the level's
+own solution, through `_carry_over!` and `_migrate_tile!`. A tile's tag
+sweep clamps its taps at its faces on the domain boundary, where its ghost
+layers hold nothing of its own. A tag in the margin band of a face no level
+reaches is reported by one warning, on the box, the tiled and the deep path
+alike.
+The frontend places a static shape's first level on a symmetry plane or the
+r-z axis where setup admits one; a regridded level stays the margin off a
+fold, since the regrid, the migration and the restart do not carry the
+fold's extra node.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -629,7 +650,8 @@ k·tile + 1 .. (k+1)·tile + 1, so abutting tiles share their interface plane
 as root slabs do, and every tile face is either fully shared with one
 neighbor or fully parent-fed. A static `refine` box expands to the lattice
 cells that reach past its planes; cells at the domain edge are clipped to
-the nesting margin and dropped below four nodes. The lattice is global so
+the nesting margin, or to the face under `level_boundaries`, and dropped
+below four nodes. The lattice is global so
 that a regrid never changes a surviving tile's region.
 
 Fixed tiles were chosen over Berger–Rigoutsos clustering for three reasons:
@@ -738,7 +760,8 @@ the parent level's state run through `pointwise!` on the host
 
 Every criterion but the first is off by default. The tagged set is buffered
 by `tag_buffer` (default 4, the pollution-decay figure of constraint 7) and
-clamped to the nesting margin, and its bounds (or its lattice flags) are
+clamped to the nesting margin ([placement on a face](#levels-on-the-domain-boundary)
+lifts the clamp at a wall or NSCBC face), and its bounds (or its lattice flags) are
 reduced globally so every rank derives the same region; a rank-local
 decision here would be a deadlock, since the ranks would then split
 different communicators.
@@ -824,7 +847,8 @@ to leave, taken while every old communicator is live. The levels are then
 regridded top-down: level ℓ is tagged on level ℓ − 1 after that level has
 taken its new tiles, by the same criteria swept over each held tile with its
 ghost layers read rather than clamped (the imposed shell at a parent-fed
-face, the neighbor's nodes at a shared one), on the lattice of level ℓ − 1's
+face, the neighbor's nodes at a shared one; a face on the domain boundary
+clamps as the root's edge does), on the lattice of level ℓ − 1's
 global node space. The level-1 rules of the tiled regrid apply, and a cell
 is also wanted only if its buffered extent lies in level ℓ − 1's own nodes
 by the nesting margin; a cell that does not is left out, not clipped. A
@@ -1575,7 +1599,8 @@ Configurations rejected at setup, and the reason:
   the r-z axis (host backend, `:inject`, no regrid), and no other domain
   face. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`
-  reaches that wall, and must still lie inside the parent tiles. Regridding more
+  reaches that wall or `level_boundaries` places them there, and must still
+  lie inside the parent tiles. Regridding more
   than one refined level requires tiles and the host backend and excludes
   rebalancing. Rebalancing requires a tiled, regridding level. Converging-shock
   problems on folded grids use a globally fine level 0 in r near the fold;

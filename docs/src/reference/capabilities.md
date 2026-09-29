@@ -77,6 +77,7 @@ such as `(0, π)` places it on the pole.
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
 | subcycled levels | `AMR(subcycle = true)` | yes | any refined layout |
+| levels placed on a domain face | `AMR(level_boundaries = true)` with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face; a static shape's first level also a symmetry plane or the r-z axis, on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain |
 
 `level_restriction = :filter` is accepted on the host backend of a serial
 run only, and not with a level reaching a symmetry plane or the axis; the default

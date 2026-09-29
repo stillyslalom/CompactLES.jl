@@ -119,6 +119,26 @@ include("capability_cases.jl")
         end
         @test C.advances(plane, Numerics(n_global=(48, 1, 1),
                                          amr=AMR(initial=feature, regrid_interval=1)))
+        # Levels placed on a wall by tags, a box and tiles, on either backend,
+        # and a static shape's level on a symmetry plane and on the axis.
+        walled = C.problem(bcs=(wall, per, per))
+        at_wall = (x, y, z, t) -> x > 0.85
+        for tile in (0, 8), (backend, precision) in C.PAIRS
+            ok = C.advances(walled, Numerics(n_global=(49, 1, 1),
+                                             execution=Execution(; backend, precision),
+                                             amr=AMR(initial=at_wall, regrid_interval=1,
+                                                     tile=tile, level_boundaries=true)))
+            ok || @warn "capability matrix: placed level (tile $tile) on $backend at " *
+                        "$precision did not advance"
+            @test ok
+        end
+        @test C.advances(plane, Numerics(n_global=(48, 1, 1),
+                                         amr=AMR(initial=Box((0.0, 0, 0), (0.2, 1, 1)),
+                                                 level_boundaries=true)))
+        @test C.advances(C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
+                         Numerics(n_global=(48, 1, 1),
+                                  amr=AMR(initial=Box((0.0, 0, 0), (0.2, 1, 1)),
+                                          level_boundaries=true)))
         # Every EOS on a patched and on a refined layout.
         for (name, eos, ic) in C.EOSES[2:end],
             kw in ((; execution=Execution(patch_grid=(2, 1, 1))),
