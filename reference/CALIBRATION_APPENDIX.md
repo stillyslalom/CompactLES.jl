@@ -59,6 +59,8 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/falseactivation.jl`)
 29. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
     (`bench/interfaceacoustics.jl`, `test/validation.jl`)
+30. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/sharpening.jl`,
+    `test/sharpening_tests.jl`)
 
 ## The shock battery
 
@@ -7699,3 +7701,88 @@ them on. The artificial properties move R by 8e-3 at N = 400, under 3e-3 from N 
 with two-cell interfaces, and by 4e-4 with four, a smaller effect than the width itself. The max-norm error falls at first order, consistent with a phase lag of the
 pulses proportional to the interface width. `test/validation.jl` guards the N = 1600 rows: |R err| < 0.02,
 |T err| < 2e-3, |energy − 1| < 0.012 and err < 0.15.
+
+## The interface sharpening flux
+
+```text
+julia --project=. -t 1 bench/sharpening.jl interface ratios=100,1000 gammas=0.3,1,3 widths=1 ungated=1
+julia --project=. -t 1 bench/sharpening.jl slab gammas=0.3,1
+```
+
+`ArtificialProperties.C_sharpen` (`reference/DESIGN.md`, "The species channel"): the flux of
+Brill, Olson & Bokman (arXiv:2503.12680v2, eqs. 68–71) on the partial-density channel, with
+Γ = C_sharpen · c, ε = `sharpen_width` times the largest local spacing, the pair normals
+from smoothed gradients and the gate on ε_g = ε + D_b/Γ. The paper fixes the form, ε = Δ
+by default (1.2Δ and 1.5Δ in two of its cases), Γ = max|u| by default (0.5 max|u| in one)
+and the Gaussian-filtered normal of eq. 69; it gives no step restriction, no treatment of
+a vanishing normal and no localization. Everything else here is this code's choice.
+
+**The shocked interface** (`shock_interface`, N = 400, t = 0.25, production defaults
+otherwise; columns as in "Interface width against Brill, Olson and Bokman"; `ungated` holds
+the gate open, which is the paper's unlocalized form):
+
+```
+config                  ratio | count | Y 5-95 V 5-95 V10-90 V grad |   TV−1    min Y steps
+unsharpened               100 |    10 |  10.65   5.12   3.61   3.03 |  0.0021  -0.0093   701
+C 0.3 w 1                 100 |     7 |   7.52   5.20   3.83   3.37 |  0.0603  -0.0312  1081
+C 1 w 1                   100 |     7 |   6.47   5.15   4.09   3.60 |  0.0423  -0.0402  1927
+C 3 w 1                   100 |    10 |   5.96   5.44   4.29   3.82 |  0.2732  -0.1137  4127
+C 0.3 w 1 ungated         100 |     7 |   7.53   5.20   3.83   3.37 |  0.0628  -0.0293  1081
+C 1 w 1 ungated           100 |     7 |   6.48   5.15   4.09   3.61 |  0.0195  -0.0404  1976
+C 3 w 1 ungated           100 |     6 |   6.01   5.44   4.29   3.82 |  0.0539  -0.1156  4642
+unsharpened              1000 |    12 |  11.08   7.01   6.63   1.30 |  0.0796  -0.0135   729
+C 0.3 w 1                1000 |    25 |  24.94   6.84   6.43   1.73 |  2.3233  -0.2036  1706
+C 1 w 1                  1000 | lost positivity
+C 3 w 1                  1000 | lost positivity
+C 0.3 w 1 ungated        1000 |    19 |  17.81   6.91   6.49   1.80 |  2.4579  -0.1784  1747
+C 1 w 1 ungated          1000 | lost positivity
+C 3 w 1 ungated          1000 | lost positivity
+```
+
+At R = 100 the flux does what the width study asked of it: the mass-fraction width falls
+from 10.65 cells to 6.5 at C_sharpen = 1 and 6.0 at 3, against 5.9 for the ε = Δ
+equilibrium, while the volume-fraction width stays at 5.2 to 5.4. It costs ringing and
+undershoot the channel alone does not have (TV − 1 from 0.002 to 0.02–0.27, worst Y from
+−0.009 to −0.03 to −0.11) and 1.5 to 6.6 times the steps. The gate is open on the shocked
+interface, so the gated and ungated rows differ only through the ringing it lets pass or
+cuts. At R = 1000 no setting improves on the unsharpened channel: C_sharpen = 0.3 completes
+with TV − 1 of 2.3 and every larger value loses positivity. The run before the normals
+were smoothed and the fractions clipped (raw gradients, the sensor's clamped mole
+fraction, gate on ε alone) left the count at 10 for C_sharpen ≤ 0.3 and reached TV − 1 of
+1.5 at 1.
+
+**The smooth slab** (the composition slab of `bench/falseactivation.jl`, molecular-weight
+ratio 5, one period at u = 1; its edges are logistic profiles N·W/2 cells thick; `frac on`
+is the largest fraction of points at which the flux was nonzero, `deposit` the L1
+difference in Y_heavy from the unsharpened run):
+
+```
+   N  N·W/2   C |  |S|/rho c  frac on |  E sharp   E plain  deposit | steps sharp plain
+  64   2.0   0.3 |   1.34e-02    1.000 | 6.04e-02 5.10e-05 6.04e-02 |   416   280
+  64   2.0     1 |   4.43e-02    1.000 | 6.36e-02 5.10e-05 6.36e-02 |   734   280
+ 128   4.0   0.3 |   1.45e-04    0.234 | 1.88e-04 5.85e-07 1.88e-04 |   832   559
+ 128   4.0     1 |   4.82e-04    0.266 | 3.42e-04 5.85e-07 3.42e-04 |  1468   559
+ 256   8.0   0.3 |   3.30e-05    0.121 | 2.84e-05 9.55e-09 2.84e-05 |  1664  1118
+ 256   8.0     1 |   1.14e-04    0.137 | 5.41e-05 9.55e-09 5.41e-05 |  2936  1118
+```
+
+At N·W/2 = 2 cells the edges are interfaces by the gate's criterion and the flux sharpens
+them, a deposit of 6e-2. At 4 and 8 cells the edges themselves are gated off, but the flux
+still acts on 12 to 27% of the points: where the minority fraction approaches zero with
+zero slope, at the middle of each plateau, the logistic thickness V(1 − V)/|∇V| is the
+distance to the extremum and falls below 2ε_g within a few cells of it. The flux there is
+of the size of the minority fraction, and the deposit falls about six times per doubling,
+but it is 300 to 6000 times the unsharpened channel's error. The step count rises with the
+rate term, 1.5 times at C_sharpen = 0.3 and 2.6 at 1, on every row whether the gate opens
+or not. A composition profile that stays away from 0 and 1 (V between 0.2 and 0.8 on 64
+points, `test/sharpening_tests.jl`) keeps the gate closed everywhere and the right-hand side
+bitwise equal to the unsharpened one.
+
+**Open.** The flux thins the R = 100 interface in mass fraction as the paper's
+equilibrium predicts, but with the ringing and the undershoot above; it fails at R = 1000;
+and the gate does not separate a smooth plateau edge from an interface tail. The
+questions for the authors are the discretization of eq. 68 (whether the compressive term
+is differenced as here, with the same compact divergence as every other flux), how Miranda
+limits the step, and whether their runs localize the flux at all. The He/CO2 tube and the
+N20 budget with the flux were set up (`bench/he_co2_shock_tube.jl C_sharpen=`,
+`bench/tubebudget.jl sharpen=`, which attributes it to its own row) and not run.

@@ -888,6 +888,50 @@ Fickian flux, so the three channels agree to round-off on
 `species_advection`, and the single-species cases are untouched by the
 option.
 
+`ArtificialProperties.C_sharpen` adds the conservative diffuse-interface flux
+of Brill, Olson & Bokman (eq. 68) to the partial-density channel,
+S_k = −ρ_k Γ g [ε∇V_k − Σ_{j≠k} V_k V_j n̂_kj], in `_sharpening_fluxes!`,
+before the consistency terms. Those terms are linear in the species fluxes,
+so the momentum and energy terms of the total flux −D_b∇ρ_k + S_k are the
+channel's (ΣJ)u and (ΣJ)|u|²/2 + Σ e_k J_k with no derivation of their own,
+and the invariance argument of property 2 carries over once the added
+species fluxes are shown to leave p/T alone. The fraction sharpened is the
+volume fraction V_k, the mole fraction of an ideal-gas mixture at one p and
+T, formed from the mass fractions clipped at zero so that it lies in [0, 1]
+with a positive denominator (the clamped `mole_fraction` of the sensor jumps
+where a light-gas undershoot zeroes Σ_j Y_j R_j, and the compressive term
+would carry that jump at the speed Γ), and ρ_k is the density species k has
+alone there, ρ Σ_j Y_j R_j / R_k. Then
+ρ_k R_k = p/T for every k and Σ_k R_k S_k = −(p/T) Γ g [ε ∇Σ_k V_k −
+Σ_k Σ_{j≠k} V_k V_j n̂_kj] = 0, since the fractions sum to one and the pair
+normals are antisymmetric, so ∂_t(p/T) gains nothing and property 2 holds
+with the flux on. The sum is zero pointwise in the discrete form as well:
+the last species takes V_N = 1 − Σ_{k<N} V_k and ∇V_N = −Σ_{k<N} ∇V_k, and
+the regularized normal n̂_kj = m_kj/√(|m_kj|² + δ²), m_kj = V_j∇V_k − V_k∇V_j
+(the direction of ∇(V_k/(V_k + V_j))) and δ = (10⁻³|V_k V_j| + ϵ²)/ε, is odd
+in the pair. The normal takes the gradients after the artificial
+properties' smoother, as the paper's eq. 69 filters them: in a ringing tail
+the raw gradient changes sign from cell to cell, and a normal that follows it
+turns the compressive term into an alternating one that feeds the ringing. A flux on the mass fraction with prefactor ρ would carry a net
+Σ_k R_k J_k at unequal R_k and move the pressure as the Fickian flux does;
+on the volume fraction the logistic equilibrium V = 1/(1 + e^(−x/ε)) also
+makes Y a logistic of the same ε, so the heavy-gas tail in Y goes with the
+width in V. Γ = `C_sharpen`·c scales as D_b does, and the two fluxes settle
+to a logistic of thickness ε + D_b/Γ, ε = `sharpen_width` times the largest
+local spacing. The gate g localizes the flux: with θ = ε_g Σ_pairs|m_kj| /
+Σ_pairs|V_k V_j| and ε_g = ε + D_b/Γ, which is ε_g/ℓ on a two-gas logistic of
+thickness ℓ, g rises linearly from 0 at θ = 1/3 to 1 at θ = 1/2, so a
+composition gradient spread over more than three ε_g is not sharpened. On a
+smooth profile D_b is small and ε_g is ε; at a shocked interface a gate
+measured against ε alone closes on the profile the two fluxes settle to. The flux is anti-diffusive by
+design and the entropy inequality of the channel does not extend to it. Its
+rate, C_sharpen·c (Σ_d 1/Δ_d + 2ε Σ_d 1/Δ_d²), enters `max_rate` at every
+point, since the gate is not known there. The raw and the smoothed
+gradients of N − 1 fractions, and then the flux, are held in the four
+columns of `grad_Q` past the partial densities, which caps it at three
+species. Measurements are in
+[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux).
+
 ## Curvilinear metrics and the discrete GCL
 
 `metric.jl` supports Cartesian, cylindrical (r, θ, z), and spherical (r, θ, φ)

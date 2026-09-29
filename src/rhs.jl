@@ -314,7 +314,7 @@ assemble_fluxes!(solver::SolverLike, Q) =
     (_assemble_fluxes!(patch_fields(solver), solver.eos, solver.transport,
                        equation_layout(solver.equations),
                        _shared_species_diffusivity(solver), solver.art.species_flux,
-                       Q); solver)
+                       _sharpening(solver), Q); solver)
 
 # No `::Type` argument here: a `Type` inside `pointwise!`'s Vararg defeats
 # Julia's specialization heuristics and the body call turns into a per-point
@@ -391,7 +391,8 @@ end
 # Keyed on the field storage, EOS, transport and `Q` only (see `PatchFields`),
 # so every scheme, detector, dimensionality and patch wrapper shares one
 # compiled body per (T, array type, EOS, transport).
-function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol, Q)
+function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol,
+                           sharpen::Bool, Q)
     n_species, n_cons, i_energy, (m1, m2, m3) = eqi
     decomp = f.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -419,7 +420,7 @@ function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol, 
         pointwise!(_partial_density_flux_point!, f.rho, nx, ny, nz,
                    ft.flux, eos, f.D_art[1], FieldMatrix(f.grad_Q),
                    f.u, f.v, f.w, f.T_ion, n_species,
-                   m1, m2, m3, i_energy, decomp.active, o1, o2, o3)
+                   m1, m2, m3, i_energy, decomp.active, sharpen, o1, o2, o3)
     end
     return nothing
 end
@@ -430,10 +431,12 @@ end
 # species internal energy e_k and not the enthalpy. At uniform (u, p, T) every
 # added term is a fixed linear combination of the species fluxes, so the state
 # is an exact discrete invariant, and no stress or conduction is added beyond
-# what the mass flux carries.
+# what the mass flux carries. Under `sharpen` each J_k first takes the
+# sharpening flux S_k that `_sharpening_fluxes!` left in `gQ[d, n_species + k]`,
+# so the consistency terms are those of the total species flux.
 @inline function _partial_density_flux_point!(flux, eos, D_b, gQ, u, v, w, T_ion,
                                               n_species, m1, m2, m3, i_energy,
-                                              act, o1, o2, o3, i, j, k)
+                                              act, sharpen, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         Db = D_b[I]
@@ -446,6 +449,7 @@ end
             eJ = zero(Db)
             for sp in 1:n_species
                 Jkd = -Db * gQ[d, sp][I]
+                sharpen && (Jkd += gQ[d, n_species + sp][I])
                 flux[d, sp][I] += Jkd
                 Jsum += Jkd
                 eJ += _species_internal_energy(eos, sp, point) * Jkd
@@ -1038,7 +1042,171 @@ function _bulk_gradients!(solver::SolverLike, Q)
             deriv_scaled_along!(solver.grad_Q[d, c], solver.tmp_a, solver, d, 1)
         end
     end
+    # A setup constant identical on every rank, so every rank enters the
+    # sharpening flux's line solves or none does.
+    _sharpening(solver) && _sharpening_fluxes!(solver)
     return solver
+end
+
+# The interface sharpening flux of `ArtificialProperties.C_sharpen` (Brill,
+# Olson & Bokman 2025, eq. 68), S_k = −ρ_k Γ g [ε ∇V_k − Σ_{j≠k} V_k V_j n̂_kj],
+# written into the columns of `grad_Q` past the partial densities, which the
+# partial-density channel leaves unused (`n_cons − n_species` = 4 of them per
+# direction, which hold the 2(N − 1) gradients below for N ≤
+# `SHARPEN_MAX_SPECIES`). The volume-fraction gradients of
+# the first n_species − 1 species go there first, one line solve per species
+# and direction, each followed by a copy that the artificial properties'
+# smoother filters: the pair normals are built from the filtered gradients, as
+# Brill, Olson & Bokman build theirs (eq. 69), so that a ringing tail, whose
+# gradient changes sign from cell to cell, does not turn the compressive term
+# into an alternating one. The diffusive term takes the unfiltered gradient.
+# The pass then replaces the gradients point by point with S_k for every
+# species, having read all of a point's values before writing any. The last
+# species takes V_N = 1 − Σ_{k<N} V_k and ∇V_N = −Σ_{k<N} ∇V_k, so
+# Σ_k ∇V_k = 0 holds pointwise and not only to the truncation error of the
+# derivative. `tmp_a` is free once the partial densities are differenced, and
+# `smooth!` exchanges halos, so every rank enters this or none does.
+function _sharpening_fluxes!(solver::SolverLike)
+    decomp = solver.decomp
+    N = solver.equations.n_species
+    n1f, n2f, n3f = padded_extent(decomp)
+    for sp in 1:(N - 1)
+        pointwise!(_volume_fraction_point!, solver.tmp_a, n1f, n2f, n3f,
+                   solver.tmp_a, solver.eos, solver.field_tuples.Y, sp, N)
+        for d in 1:3
+            decomp.active[d] || continue
+            deriv_scaled_along!(solver.grad_Q[d, N + sp], solver.tmp_a, solver, d, 1)
+            filtered = solver.grad_Q[d, 2N - 1 + sp]
+            copy_interior!(filtered, solver.grad_Q[d, N + sp], decomp)
+            smooth!(filtered, solver)
+        end
+    end
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    pointwise!(_sharpen_flux_point!, solver.rho, nx, ny, nz,
+               FieldMatrix(solver.grad_Q), solver.eos, solver.field_tuples.Y,
+               solver.rho, solver.c, solver.D_art[1], solver.inv_h[1],
+               solver.inv_h[2], solver.inv_h[3], solver.h, decomp.active, N,
+               _sharpening_constants(solver), o1, o2, o3)
+    return solver
+end
+
+# The gate of the sharpening flux as a function of θ = ε_g/ℓ, ℓ the local
+# logistic thickness of the pair fractions and ε_g = ε + D_b/Γ the thickness
+# the flux and the channel's D_b hold together: 0 below the first value (ℓ
+# above 3ε_g, a composition gradient resolved over more cells than an
+# interface), 1 above the second (ℓ below 2ε_g), linear between. On a smooth
+# profile D_b is small and ε_g is ε; at a shocked interface D_b is not, and
+# measuring ℓ against ε alone closes the gate on the profile the two fluxes
+# settle to. `SHARPEN_NORMAL` is the relative floor under the length of each
+# pair normal.
+const SHARPEN_GATE = (1 / 3, 1 / 2)
+const SHARPEN_NORMAL = 1e-3
+@inline function _sharpen_gate(θ::T) where {T}
+    θ0, θ1 = T(SHARPEN_GATE[1]), T(SHARPEN_GATE[2])
+    return clamp((θ - θ0) / (θ1 - θ0), zero(T), one(T))
+end
+
+@inline function _volume_fraction_point!(V, eos, Y, sp, n_species, i, j, k)
+    @inbounds V[i, j, k] = _clipped_volume_fraction(eos, sp, Y, CartesianIndex(i, j, k),
+                                                    n_species)
+    return nothing
+end
+
+# The volume fractions, and the gradients along one direction from the
+# `grad_Q` columns past `base`, as four-tuples, zero past the species count.
+# The reads are conditional on the count, which is uniform over the launch.
+@inline function _sharpen_fractions(eos, Y, I, N)
+    T = eltype(Y[1])
+    z = zero(T)
+    x1 = _clipped_volume_fraction(eos, 1, Y, I, N)
+    x2 = N > 2 ? _clipped_volume_fraction(eos, 2, Y, I, N) : z
+    last = one(T) - (x1 + x2)
+    return (x1, ifelse(N == 2, last, x2), ifelse(N == 3, last, z), z)
+end
+
+@inline function _sharpen_gradients(gQ, d, act, I, N, base)
+    @inbounds begin
+        T = eltype(gQ[1, 1])
+        z = zero(T)
+        g1 = act ? gQ[d, base + 1][I] : z
+        g2 = act & (N > 2) ? gQ[d, base + 2][I] : z
+        last = -(g1 + g2)
+        return (g1, ifelse(N == 2, last, g2), ifelse(N == 3, last, z), z)
+    end
+end
+
+@inline function _sharpen_flux_point!(gQ, eos, Y, rho, c, D_b, ih1, ih2, ih3, hh,
+                                      act, n_species, sharp, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        T = eltype(rho)
+        N = n_species
+        C, width = sharp
+        ih = (ih1, ih2, ih3)
+        Δ = zero(T)
+        for d in 1:3
+            act[d] && (Δ = max(Δ, hh[d] / ih[d][I]))
+        end
+        ε = width * Δ
+        Γ = C * c[I]
+        tiny = eps(T)^2
+        V = _sharpen_fractions(eos, Y, I, N)
+        # Unfiltered gradients for the diffusive term, filtered ones for the
+        # normals and the gate.
+        G = (_sharpen_gradients(gQ, 1, act[1], I, N, N),
+             _sharpen_gradients(gQ, 2, act[2], I, N, N),
+             _sharpen_gradients(gQ, 3, act[3], I, N, N))
+        F = (_sharpen_gradients(gQ, 1, act[1], I, N, 2N - 1),
+             _sharpen_gradients(gQ, 2, act[2], I, N, 2N - 1),
+             _sharpen_gradients(gQ, 3, act[3], I, N, 2N - 1))
+        # The gate: ε_g times the pair-summed length of V_j ∇V_k − V_k ∇V_j,
+        # which is V_k V_j ∇ln(V_k/V_j), over the summed |V_k V_j|. With two
+        # species this is ε_g|∇V|/(V(1 − V)), the ratio ε_g/ℓ exactly on a
+        # logistic of thickness ℓ.
+        num = zero(T)
+        den = zero(T)
+        for a in 1:(N - 1), b in (a + 1):N
+            num += sqrt(_pair_normal2(V, F, a, b))
+            den += abs(V[a] * V[b])
+        end
+        ε_g = ε + D_b[I] / (Γ + tiny)
+        θ = ε_g * num / (den + tiny)
+        gate = _sharpen_gate(θ)
+        Γg = Γ * gate
+        ρ = rho[I]
+        for d in 1:3
+            act[d] || continue
+            for a in 1:N
+                # Σ_{b≠a} V_a V_b n̂_ab along d, with n̂_ab = m_ab/|m_ab|
+                # regularized where the pair gradient vanishes. The floor is
+                # symmetric in the pair, so n̂_ba = −n̂_ab exactly and the
+                # compressive terms cancel in the sum over species.
+                comp = zero(T)
+                for b in 1:N
+                    b == a && continue
+                    vv = V[a] * V[b]
+                    m = V[b] * F[d][a] - V[a] * F[d][b]
+                    δ = (T(SHARPEN_NORMAL) * abs(vv) + tiny) / ε
+                    comp += vv * m / sqrt(_pair_normal2(V, F, a, b) + δ^2)
+                end
+                ρa = ρ * _material_density_ratio(eos, a, Y, I, N)
+                S = -ρa * Γg * (ε * G[d][a] - comp)
+                gQ[d, N + a][I] = ifelse(Γg > zero(T), S, zero(T))
+            end
+        end
+    end
+    return nothing
+end
+
+# |V_b ∇V_a − V_a ∇V_b|², the squared length of the unnormalized pair normal.
+@inline function _pair_normal2(V, G, a, b)
+    s = zero(V[1])
+    for d in 1:3
+        m = V[b] * G[d][a] - V[a] * G[d][b]
+        s += m * m
+    end
+    return s
 end
 
 """

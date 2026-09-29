@@ -818,7 +818,7 @@ end
                               parr, Tarr, carr, cparr, eos, mu_art, beta_art,
                               kappa_art, D_art, inv_h1, inv_h2, inv_h3, inv_r,
                               cot_over_r, metric, act, hh, transport, Y,
-                              n_species, o1, o2, o3, i, j, k)
+                              n_species, sharp, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         T = eltype(rho)
@@ -847,6 +847,7 @@ end
         molecular = transport_at(transport, eos, Tarr, rho, cparr, Y, I)
         ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, molecular,
                             mu_art, beta_art, kappa_art, D_art, I, n_species)
+        acc += _sharpening_rate(sharp, c, ih, hh, act, I)
         rate_out[I] = acc + 2 * ν * dsum
     end
     return nothing
@@ -866,7 +867,8 @@ function _local_max_rate_launch(solver::SolverLike, Q)
                solver.kappa_art, ft.D_art, solver.inv_h[1], solver.inv_h[2],
                solver.inv_h[3], solver.inv_r, solver.cot_over_r, solver.metric,
                decomp.active, solver.h,
-               tr, ft.Y, solver.equations.n_species, o1, o2, o3)
+               tr, ft.Y, solver.equations.n_species,
+               _sharpening_constants(solver), o1, o2, o3)
     interior = (o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
     rates = view(solver.tmp_a, interior...)
     rhos = view(solver.tmp_b, interior...)
@@ -884,6 +886,7 @@ function _local_max_rate_loop(solver::SolverLike, Q)
     tr = solver.transport
     modes = solver.truncation
     capped = _truncating(modes)
+    sharp = _sharpening_constants(solver)
     T = eltype(Q)
     rate = zero(T)
     ρ_min = T(Inf)
@@ -934,6 +937,7 @@ function _local_max_rate_loop(solver::SolverLike, Q)
                             molecular, solver.mu_art, solver.beta_art,
                             solver.kappa_art, solver.D_art, I,
                             solver.equations.n_species)
+        acc += _sharpening_rate(sharp, c, solver.inv_h, solver.h, decomp.active, I)
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
@@ -1025,6 +1029,8 @@ function dt_report(solver::Solver, Q)
             rd > wrate && (wrate = rd; wdim = d)
         end
         acc += c * sqrt(dsum)
+        acc += _sharpening_rate(_sharpening_constants(solver), c, solver.inv_h,
+                                solver.h, decomp.active, I)
         crate = curvature_rate(solver, solver.metric, I, uv)
         molecular = transport_at(tr, solver.eos, solver.T_ion, solver.rho,
                                   solver.cp_mix, solver.field_tuples.Y, I)

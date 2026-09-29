@@ -21,7 +21,8 @@
 # molecular row a nonzero entry); snapshots (instants in ms at which the widths
 # and the cumulative budget are printed); band (the half-width in metres of
 # the interface band the widths are measured over, a comma list); cfl; nmax;
-# progress (`ProgressLog` cadence in steps, 0 off).
+# progress (`ProgressLog` cadence in steps, 0 off); sharpen (the
+# `ArtificialProperties.C_sharpen` of the partial-density channel, 0 off).
 #
 # The attribution. A callback after every accepted step replays that step from
 # the state the previous step returned: the five low-storage Runge-Kutta
@@ -39,6 +40,9 @@
 #   mu*, beta*,    the increments the coefficient field makes to the assembled
 #   kappa*,        flux (D*: every species coefficient, which carries the
 #   species        channel's consistency fluxes and the mass-fraction bound)
+#   sharpening     the interface sharpening flux under `sharpen`, with its
+#                  consistency fluxes: the columns of `grad_Q` that hold it
+#                  are zeroed; zero when `sharpen = 0`
 #   molecular      the rest of the assembled flux without the boundary hooks:
 #                  zero to round-off under the Euler deck, which checks the
 #                  split
@@ -99,7 +103,8 @@ const CL = CompactLES
 const DEFAULTS = (part = "budget", nx = 768, ny = 48, tfinal = 2.5e-3,
                   eos = "nasa9", channels = "fickian,bulk,partial_density",
                   transport = "euler", snapshots = "1.0,1.5,2.0,2.5",
-                  band = "0.04,0.08", cfl = 0.5, nmax = 1_000_000, progress = 0)
+                  band = "0.04,0.08", cfl = 0.5, nmax = 1_000_000, progress = 0,
+                  sharpen = 0.0)
 const opt = CL.script_args(ARGS, DEFAULTS; positional = (:part,))
 
 MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
@@ -144,7 +149,8 @@ function tube(channel)
                            (1 - tanh_blend(x, x_diaphragm, δ))
                        Prim(Y = (1 - θ, θ), p = p, T_ion = T0)
                    end)
-    art = ArtificialProperties(enabled = true, species_flux = Symbol(channel))
+    art = ArtificialProperties(enabled = true, species_flux = Symbol(channel),
+                               C_sharpen = channel == "partial_density" ? opt.sharpen : 0.0)
     num = Numerics(n_global = (nx, ny, 1), art = art, cfl = opt.cfl,
                    control = StepControl(retries = 4, validity = :permissive))
     return setup(prob, num)
@@ -311,11 +317,12 @@ end
 
 # --- the split right-hand side --------------------------------------------------
 
-const TERMS = (:pressure, :convection, :mu, :beta, :kappa, :species, :molecular,
-               :wall_flux, :wall_state)
+const TERMS = (:pressure, :convection, :mu, :beta, :kappa, :species, :sharpening,
+               :molecular, :wall_flux, :wall_state)
 const LABELS = Dict(:pressure => "pressure", :convection => "convection",
                     :mu => "mu*", :beta => "beta*", :kappa => "kappa*",
-                    :species => "species channel", :molecular => "molecular",
+                    :species => "species channel", :sharpening => "sharpening",
+                    :molecular => "molecular",
                     :wall_flux => "wall flux", :wall_state => "wall state",
                     :filter => "filter", :repairs => "repairs",
                     :nonlinearity => "path quadrature")
@@ -509,8 +516,14 @@ end
 function split_stage!(bud, solver, Qs, dQs, dvs, arrays, w)
     full = bud.dQ
     dv = bud.dv
+    # The sharpening flux, where on, is held in the `grad_Q` columns past the
+    # partial densities, which `compute_rhs!` filled for this stage.
+    n_sp = solver.equations.n_species
+    sharp = CL._sharpening(solver) ?
+        [solver.grad_Q[d, n_sp + k] for d in 1:3 for k in 1:n_sp] : typeof(solver.rho)[]
     saved = (mu = copy(arrays.mu), beta = copy(arrays.beta),
-             kappa = copy(arrays.kappa), D = [copy(a) for a in solver.D_art])
+             kappa = copy(arrays.kappa), D = [copy(a) for a in solver.D_art],
+             S = [copy(a) for a in sharp])
     # The assembled flux with the hooks: must reproduce compute_rhs!.
     CL.assemble_fluxes!(solver, Qs)
     flux_divergence!(dvs, solver, Qs, true)
@@ -523,7 +536,8 @@ function split_stage!(bud, solver, Qs, dQs, dvs, arrays, w)
     for (t, zero_it!) in ((:mu, () -> fill!(arrays.mu, 0)),
                           (:beta, () -> fill!(arrays.beta, 0)),
                           (:kappa, () -> fill!(arrays.kappa, 0)),
-                          (:species, () -> foreach(a -> fill!(a, 0), solver.D_art)))
+                          (:species, () -> foreach(a -> fill!(a, 0), solver.D_art)),
+                          (:sharpening, () -> foreach(a -> fill!(a, 0), sharp)))
         zero_it!()
         CL.assemble_fluxes!(solver, Qs)
         flux_divergence!(dvs, solver, Qs, false)
@@ -534,6 +548,7 @@ function split_stage!(bud, solver, Qs, dQs, dvs, arrays, w)
         copyto!(arrays.beta, saved.beta)
         copyto!(arrays.kappa, saved.kappa)
         foreach((a, b) -> copyto!(a, b), solver.D_art, saved.D)
+        foreach((a, b) -> copyto!(a, b), sharp, saved.S)
     end
     for t in (:pressure, :convection)
         partial_flux!(solver, Qs, t)

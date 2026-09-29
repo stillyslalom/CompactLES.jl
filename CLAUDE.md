@@ -326,6 +326,12 @@ Names are spelled out in full. Current vocabulary:
   for `:fickian` and for a single species), `_species_gradients_skipped`
   (whether `compute_rhs!` leaves `grad_Y` to the one boundary condition that
   reads it)
+- `C_sharpen` (the interface sharpening flux's Γ/c, 0 off) and
+  `sharpen_width` (its ε in local spacings), `_sharpening` (whether a
+  solver's channel carries it), `_sharpening_fluxes!` / `_sharpen_flux_point!`
+  (the flux, held in the `grad_Q` columns past the partial densities),
+  `SHARPEN_GATE` / `SHARPEN_NORMAL` / `SHARPEN_MAX_SPECIES`,
+  `_sharpening_rate` (its term in `max_rate`), `_material_density_ratio`
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at

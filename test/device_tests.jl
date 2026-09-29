@@ -738,7 +738,8 @@ const POINTWISE_BODIES = (
     :_reciprocal_interior_point!, :_reciprocal_point!,
     :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_field_point!,
     :_ring_pack_point!, :_ring_unpack_point!, :_rk_point!,
-    :_scale_grad_point!, :_scale_interior_point!, :_shell_ring_point!,
+    :_scale_grad_point!, :_scale_interior_point!, :_sharpen_flux_point!,
+    :_shell_ring_point!,
     :_slip_flux_point!, :_slip_wall_point!,
     :_species_bound_point!, :_species_diffusivity_point!, :_split_flux_point!,
     :_strain_mag_point!,
@@ -746,7 +747,8 @@ const POINTWISE_BODIES = (
     :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,
     :_tag_rho_point!, :_tag_sensor_point!, :_tag_vorticity_point!,
     :_transport_status_point!,
-    :_volume_weight_point!, :_weighted_blend_point!, :_zero_component_point!)
+    :_volume_fraction_point!, :_volume_weight_point!, :_weighted_blend_point!,
+    :_zero_component_point!)
 
 @testset "pointwise bodies stay inside the splat budget" begin
     # `_point_kernel!` calls `body!(args..., i, j, k)`. Julia expands a

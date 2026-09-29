@@ -140,7 +140,7 @@ function _validate_configuration(transport, eos, art, bcs, metric, n_global,
                                  L_domain, origin, cfl, filter_interval,
                                  filter_cfl)
     validate_transport(transport, eos)
-    validate_art(art)
+    validate_art(art, eos)
     all(>=(1), n_global) ||
         throw(ArgumentError("n_global must be at least 1 in every direction " *
                             "(1 collapses one), got $n_global"))

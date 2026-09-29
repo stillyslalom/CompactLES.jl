@@ -1480,6 +1480,45 @@ channels of `compute_artificial!`.
 Base.@propagate_inbounds mole_fraction(::StiffenedGas, k::Int, Y, I, ::Int) =
     Y[k][I]
 
+# ρ_k/ρ, the density species k has alone at the mixture's pressure and
+# temperature over the mixture density: Σ_j Y_j R_j / R_k for the gas
+# mixtures, with the denominator of `mole_fraction` floored the same way. The
+# sharpening flux (rhs.jl) carries each volume-fraction flux as a mass flux at
+# this density, so that ρ_k R_k = p/T is common to every species.
+@inline function _material_density_ratio(Rk, k::Int, Y, I, n_species::Int)
+    @inbounds begin
+        s = zero(Rk[k])
+        for j in 1:n_species
+            s += Y[j][I] * Rk[j]
+        end
+        return positive_floor(s) / Rk[k]
+    end
+end
+@inline _material_density_ratio(eos::Union{IdealMixture,IdealMixtureCoeffs,Nasa9Model},
+                                k::Int, Y, I, n_species::Int) =
+    _material_density_ratio(eos.Rk, k, Y, I, n_species)
+
+# The volume fraction the sharpening flux acts on: the mole fraction of the
+# mass fractions clipped at zero, max(Y_k, 0) R_k / Σ_j max(Y_j, 0) R_j. It
+# lies in [0, 1] and its denominator stays positive, since the mass fractions
+# sum to one. `mole_fraction`'s denominator passes through zero at a
+# light-gas undershoot of −1/R inside a heavy gas of density ratio R, and a
+# fraction clamped there has a gradient of order 1/Δ that the compressive term
+# would carry at the speed Γ; an undershoot is the mass-fraction bound's to
+# remove.
+@inline function _clipped_volume_fraction(Rk, k::Int, Y, I, n_species::Int)
+    @inbounds begin
+        s = zero(Rk[k])
+        for j in 1:n_species
+            s += max(Y[j][I], zero(s)) * Rk[j]
+        end
+        return max(Y[k][I], zero(s)) * Rk[k] / positive_floor(s)
+    end
+end
+@inline _clipped_volume_fraction(eos::Union{IdealMixture,IdealMixtureCoeffs,Nasa9Model},
+                                 k::Int, Y, I, n_species::Int) =
+    _clipped_volume_fraction(eos.Rk, k, Y, I, n_species)
+
 # ---------------------------------------------------------------------------
 # Admissibility: whether a point lies in the thermodynamic domain of its EOS.
 #

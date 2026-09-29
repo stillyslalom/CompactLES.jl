@@ -50,7 +50,8 @@
                          C_D=1.0, C_Y=100.0, Y_tolerance=1e-4,
                          mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                          smoother=:gaussian, detector=:species_d8,
-                         species_flux=:partial_density)
+                         species_flux=:partial_density, C_sharpen=0.0,
+                         sharpen_width=1.0)
     ArtificialProperties(base::ArtificialProperties; keywords...)
 
 Cook-style artificial-property controls. The second form copies `base` with the
@@ -162,6 +163,36 @@ given keywords replaced, keeping its element type.
   Fickian channel.
   D_b is stored in every `D_art[k]` and enters the diffusive timestep. Patched
   and refined runs take the channel as the root does.
+- `C_sharpen`: strength of the interface sharpening flux, 0 (default) for
+  none. A positive value adds to each species flux of the `:partial_density`
+  channel, before its momentum and energy terms, the conservative
+  diffuse-interface flux of
+  [Brill, Olson & Bokman (2025, eq. 68)](https://arxiv.org/abs/2503.12680),
+  S_k = −ρ_k Γ g [ε ∇V_k − Σ_{j≠k} V_k V_j n̂_kj], whose equilibrium across a
+  planar interface is the logistic V = 1/(1 + e^(−x/ε)). V_k is the volume
+  fraction, the mole fraction of the ideal-gas mixtures taken from the mass
+  fractions clipped at zero, and ρ_k the density
+  species k has alone at the local pressure and temperature, so that ρ_k R_k
+  is the same for every species and the flux leaves a uniform (u, p, T) state
+  uniform; a mass-fraction form would move the pressure as the Fickian flux
+  does. n̂_kj is the unit normal of the pair fraction V_k/(V_k + V_j), and
+  Γ = `C_sharpen` · c with the local sound speed c, the speed that scales D_b,
+  so the thickness the two fluxes settle to, ε + D_b/Γ, is a number of cells
+  independent of the Mach number. n̂_kj is built from gradients passed
+  through the smoother, as Brill, Olson & Bokman build theirs. The gate g is 1
+  where the local logistic thickness of the pair fractions,
+  V_k V_j / |∇V_k/V_k − ∇V_j/V_j|, is below 2(ε + D_b/Γ) and 0 above three
+  times it, so a composition gradient resolved over more cells than an
+  interface is left to the channel. Use it to hold a shocked interface to a
+  few cells where the channel alone leaves a tail of the heavy gas on the
+  light side; it requires `species_flux = :partial_density`, at most three
+  species and a gas-mixture EOS. It costs n_species − 1 line solves and
+  smoothing passes per direction and one pass per right-hand side, and adds
+  C_sharpen · c (Σ_d 1/Δ_d + 2ε Σ_d 1/Δ_d²) to the step's rate at every
+  point.
+- `sharpen_width`: ε of the sharpening flux in units of the largest local
+  physical spacing among the active directions; 1 is the value of Brill,
+  Olson & Bokman. The 10–90% width of the equilibrium profile is 4.4ε.
 - `detector`: the high-pass that builds the sensors, in
   `detect_sum!`. `:delta4` is Cook's undivided fourth difference, computed
   explicitly. `:d8` is Pyranda's compact eighth derivative
@@ -185,8 +216,9 @@ material properties. Their useful values depend on resolution, flow regime,
 the state filter's scheme and cadence ([`StateFilter`](@ref)). The displayed
 defaults are documented starting points, not universal values; larger
 values can reduce the explicit diffusive timestep. Each of `C_mu`, `C_beta`,
-`C_kappa`, `C_D`, `C_Y` and `Y_tolerance` must be finite and nonnegative;
-[`Solver`](@ref) construction raises an `ArgumentError` otherwise.
+`C_kappa`, `C_D`, `C_Y`, `Y_tolerance` and `C_sharpen` must be finite and
+nonnegative and `sharpen_width` finite and positive; [`Solver`](@ref)
+construction raises an `ArgumentError` otherwise.
 """
 Base.@kwdef struct ArtificialProperties{T}
     enabled::Bool = true
@@ -202,21 +234,82 @@ Base.@kwdef struct ArtificialProperties{T}
     smoother::Symbol = :gaussian
     detector::Symbol = :species_d8
     species_flux::Symbol = :partial_density
+    C_sharpen::T = 0.0
+    sharpen_width::T = 1.0
 end
 
 ArtificialProperties(base::ArtificialProperties; kw...) = _with(base, kw)
 
 # The numeric fields of an `ArtificialProperties`, checked at `Solver` construction. A
 # negative coefficient makes an artificial diffusivity negative, which is
-# anti-diffusion, and a non-finite one reaches the state as NaN.
-function validate_art(art::ArtificialProperties)
-    for name in (:C_mu, :C_beta, :C_kappa, :C_D, :C_Y, :Y_tolerance)
+# anti-diffusion, and a non-finite one reaches the state as NaN. The
+# sharpening flux is checked against the EOS as well: its pressure argument
+# takes each species' own density at the mixture's pressure and temperature,
+# which the gas mixtures define, and its per-point pass holds the fractions
+# of at most `SHARPEN_MAX_SPECIES` species in the `grad_Q` columns the
+# partial-density channel leaves free.
+function validate_art(art::ArtificialProperties, eos=nothing)
+    for name in (:C_mu, :C_beta, :C_kappa, :C_D, :C_Y, :Y_tolerance, :C_sharpen)
         value = getfield(art, name)
         isfinite(value) && value >= 0 ||
             throw(ArgumentError("ArtificialProperties: $name must be finite and >= 0, " *
                                 "got $value"))
     end
+    isfinite(art.sharpen_width) && art.sharpen_width > 0 ||
+        throw(ArgumentError("ArtificialProperties: sharpen_width must be finite and " *
+                            "> 0, got $(art.sharpen_width)"))
+    (eos === nothing || art.C_sharpen == 0 || nspecies(eos) == 1) && return nothing
+    art.enabled && art.species_flux === :partial_density ||
+        throw(ArgumentError("ArtificialProperties: C_sharpen > 0 requires " *
+                            "enabled = true and species_flux = :partial_density, " *
+                            "the channel whose flux it is added to"))
+    nspecies(eos) <= SHARPEN_MAX_SPECIES ||
+        throw(ArgumentError("ArtificialProperties: C_sharpen > 0 supports at most " *
+                            "$SHARPEN_MAX_SPECIES species, got $(nspecies(eos))"))
+    eos isa Union{IdealMixture,Nasa9Mixture} ||
+        throw(ArgumentError("ArtificialProperties: C_sharpen > 0 requires a gas " *
+                            "mixture EOS (IdealMixture or Nasa9Mixture), got " *
+                            "$(nameof(typeof(eos)))"))
     return nothing
+end
+
+# The interface sharpening flux (`_sharpening_fluxes!` in rhs.jl): on with the
+# partial-density channel, more than one species and a positive strength. A
+# single-species run never builds or reads any of it, and its step rate adds
+# an exact zero, so it is the unsharpened run bit for bit.
+const SHARPEN_MAX_SPECIES = 3
+_sharpening(art::ArtificialProperties, n_species::Integer) =
+    _shared_species_diffusivity(art, n_species) &&
+    art.species_flux === :partial_density && art.C_sharpen > 0
+_sharpening(solver) = _sharpening(solver.art, solver.equations.n_species)
+
+# The two constants the step rate reads, a zero strength where the flux is off.
+_sharpening_constants(solver) =
+    (_sharpening(solver) ? solver.art.C_sharpen : zero(solver.art.C_sharpen),
+     solver.art.sharpen_width)
+
+# The sharpening flux's contribution to the step rate at a point. Its
+# compressive part carries the volume fraction at speeds up to Γ =
+# `C_sharpen` · c and its diffusive part at the diffusivity Γε, with ε
+# `sharpen_width` times the largest local spacing; the two enter as the
+# advective and diffusive rates of `max_rate` do. The gate that localizes the
+# flux is computed from the volume-fraction gradients, which are not
+# available to the rate sweep, so the bound is taken at every point.
+@inline function _sharpening_rate(sharp, c, ih, hh, act, I)
+    C, width = sharp
+    C > 0 || return zero(c)
+    isum = zero(c)
+    dsum = zero(c)
+    idx_min = oftype(c, Inf)
+    for d in 1:3
+        act[d] || continue
+        idx = ih[d][I] / hh[d]
+        isum += idx
+        dsum += idx * idx
+        idx_min = min(idx_min, idx)
+    end
+    Γ = C * c
+    return Γ * isum + 2 * Γ * (width / idx_min) * dsum
 end
 
 # Whether the species channel builds one diffusivity D_b shared by every species

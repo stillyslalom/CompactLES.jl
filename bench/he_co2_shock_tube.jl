@@ -17,7 +17,8 @@
 # override of bench/detector_split.jl);
 # mu_sensor (strain or velocity); beta_sensor (strain, gated_strain,
 # dilatation or ungated_dilatation); reduction (sum or max); the five
-# constants C_mu C_beta C_kappa C_D C_Y; every (diagnostic cadence in steps);
+# constants C_mu C_beta C_kappa C_D C_Y; C_sharpen (the interface sharpening
+# flux, 0 off); every (diagnostic cadence in steps);
 # snapshots (comma-separated instants in ms at which profiles are written);
 # prefix (output file stem). The Pyranda-matched configuration is deriv=c10
 # filter=pyranda detector=d8 mu_sensor=velocity beta_sensor=ungated_dilatation
@@ -65,6 +66,7 @@ const DEFAULTS = (nx = 768, ny = 48, tfinal = 2.5e-3, cfl = 0.5, alphaf = 0.45,
                   deriv = "c6", filter = "gv", detector = "species_d8", mu_sensor = "strain",
                   beta_sensor = "strain", reduction = "sum",
                   C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 1.0, C_Y = 100.0,
+                  C_sharpen = 0.0,
                   every = 50, snapshots = "0.5,1.0,1.5,2.0,2.5",
                   prefix = "he_co2_tube")
 const opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:nx, :ny, :tfinal))
@@ -108,6 +110,7 @@ function main()
 
     art = ArtificialProperties(enabled=true, C_mu=opt.C_mu, C_beta=opt.C_beta,
                                C_kappa=opt.C_kappa, C_D=opt.C_D, C_Y=opt.C_Y,
+                               C_sharpen=opt.C_sharpen,
                                mu_sensor=Symbol(opt.mu_sensor),
                                beta_sensor=Symbol(opt.beta_sensor),
                                reduction=Symbol(opt.reduction),
