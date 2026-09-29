@@ -7,8 +7,9 @@
 # here means the matrix and the guards cannot drift apart: a guard is set
 # from exactly the run the matrix measures.
 #
-# Every case but `entropy2d_case` is one-dimensional along dimension 1 with
-# the transverse dimensions collapsed, so each costs N points rather than N³. Three
+# Every case but `entropy2d_case` and `corner_level_case` is one-dimensional
+# along dimension 1 with the transverse dimensions collapsed, so each costs N
+# points rather than N³. Three
 # references are used, and each case says which:
 #
 #   * an exact solution (the entropy wave, the decaying shear mode);
@@ -341,6 +342,97 @@ function plane_level_case(N; refined=true, opts...)
     level = refined ? (refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)),) : (;)
     wall_case(refined ? N : 3N; folded=true, slip=true,
               merge((cfl=0.9,), level, values(opts))...)
+end
+
+"""
+    axis_level_case(N; refined=true, viscous=false, mu=0.002, opts...)
+
+A converging cylindrical pulse on the axisymmetric line r ∈ (0, 2] (θ and z
+collapsed) between the axis and a slip wall, at rest with ρ = 1 + 0.05
+exp(−((r − 1/2)/0.1)²) and isentropic p, and a refined level over the first
+N ÷ 6 + 1 root nodes, [0, (N ÷ 6 + 1/2)h], against the axis, the tile
+folding there at the fine spacing; under `refined = false` the uniform run
+at the level's spacing, 3N − 1 nodes, which is its reference. The axis puts
+root node i at (i − ½)h, h = 2/(N − ½), and fine node j at (j − ½)h/3, so
+root node i is fine node 3i − 1 and the tile's first node, at h/6, is fine
+node 1. By t = 0.3 the ingoing half has crossed the coarse-fine face and its
+front has reached the axis, and the outgoing half is short of the wall by
+more than five pulse widths. Both are built to take equal steps
+(`fixed_step_run!`).
+
+The state is filtered at every step, as in production. Unfiltered, the
+grid-scale waves the coarse-fine face emits reach the axis, where the
+cylindrical divergence does not hold the π mode of the radial momentum in its
+null space as the Cartesian one does: a sawtooth in ρu near the axis of a
+uniform run grows by orders of magnitude by t = 0.05, and the tile's axis
+window then reads that growth, not the coupling's order.
+"""
+function axis_level_case(N; refined=true, viscous=false, mu=0.002, Pr=0.7, opts...)
+    level = refined ? (refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)),) : (;)
+    prof = r -> begin
+        rho = 1 + 0.05 * exp(-((r - 0.5) / 0.1)^2)
+        (rho, zero(r), zero(r), rho^1.4)
+    end
+    _smooth_solver((refined ? N : 3N - 1, 1, 1), 2.0,
+                   ((AxisBC(), SlipWallBC()), per3[2], per3[3]), prof;
+                   mu=viscous ? mu : 0.0, Pr=Pr, metric=CylindricalMetric(),
+                   merge(SMOOTH_DEFAULTS, (cfl=0.9, filter_interval=1), level,
+                         values(opts))...)
+end
+
+"""
+    corner_level_case(N; refined=true, opts...)
+
+A spherical pulse converging on the corner of the axis and a symmetry plane
+at z = 0, the r-z quarter plane (0, 1] × (0, 1] closed by slip walls at r = 1
+and z = 1, at rest with ρ = 1 + 0.05 exp(−((√(r² + z²) − 0.4)/0.15)²) and
+isentropic p, and a refined corner tile over the first N ÷ 6 + 1 root nodes
+of r and z; under `refined = false` the uniform run at the level's spacing,
+(3N − 1)² nodes, whose node (i, k) is the tile's. By t = 0.3 the ingoing
+half has crossed both coarse-fine faces into the corner, and the outgoing
+half, whose reflection from the walls would carry their closures' error
+back, has not returned. Both are built to take equal steps
+(`fixed_step_run!`) and are filtered at every step, for the reason
+`axis_level_case` gives.
+"""
+function corner_level_case(N; refined=true, opts...)
+    m = N ÷ 6 + 1
+    n = refined ? N : 3N - 1
+    level = refined ? (refine=BlockRegion((0, 0, 0), (m, 1, m)),) : (;)
+    o = merge(SMOOTH_DEFAULTS, (cfl=0.9, filter_interval=1), level, values(opts))
+    solver = Solver(; n_global=(n, 1, n), L_domain=(1.0, 1.0, 1.0),
+                    bcs=((AxisBC(), SlipWallBC()), per3[2],
+                         (SymmetryPlaneBC(), SlipWallBC())),
+                    metric=CylindricalMetric(), art=ArtificialProperties(enabled=false),
+                    o...)
+    states = allocate_state(solver)
+    initialize!(solver, states, (r, θ, z) -> begin
+        rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
+        Prim(rho=rho, u=(0.0, 0.0, 0.0), p=rho^1.4)
+    end)
+    return solver, states
+end
+
+"""
+    fold_window_error(solver, states, uniform, ustates; comp=1, W=SMOOTH_W)
+
+The maximum difference of component `comp` between the refined patch of a
+two-level r-z run whose tile folds at the low ends of r and z
+(`corner_level_case`) and the uniform run at the level's spacing, over the
+tile's nodes within `W` of either fold. The tile's node (i, k) is the uniform
+run's, both starting half a fine cell from each fold.
+"""
+function fold_window_error(solver, states, uniform, ustates; comp=1, W=SMOOTH_W)
+    ps = CompactLES.PatchSolver(solver, getfield(solver, :patches)[2])
+    pu = CompactLES.PatchSolver(uniform, getfield(uniform, :patches)[1])
+    nl = ps.decomp.n_local
+    e = 0.0
+    for k in 1:nl[3], i in 1:nl[1]
+        (i <= W || k <= W) || continue
+        e = max(e, abs(states[2][padded_index(ps, i, 1, k), comp] -
+                       ustates[padded_index(pu, i, 1, k), comp]))
+    end
+    return e
 end
 
 """

@@ -3820,6 +3820,76 @@ function test_plane_level()
     end
 end
 
+# ---------------------------------------------------------------------------
+# A refined level reaching the axis of an r-z run and a symmetry plane at
+# z = 0, the corner tile folding on both at the fine spacing, with the tile
+# decomposed over the level's ranks: the axis fold's mirror fill on the edge
+# rank with its odd radial velocity and area factor, the box mirror across
+# both folds on every owner, and the restriction's coincident samples. A few
+# steps with the artificial properties and the `:d8` detector on two species
+# and molecular ghost fluxes, against the serial rebuild on COMM_SELF, tile
+# by tile.
+# ---------------------------------------------------------------------------
+function test_axis_level()
+    section("level on the r-z axis: decomposed corner tile against serial")
+    axis = (AxisBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    plane = (SymmetryPlaneBC(), SlipWallBC())
+    function blockdiff(ps, a, pr, b)
+        e = 0.0
+        for I in CL.interior(ps.decomp), c in 1:size(a, 4)
+            loc = Tuple(I) .- ps.decomp.n_halo_d
+            J = padded_index(pr, (loc .+ ps.decomp.offset)...)
+            e = max(e, abs(a[I, c] - b[J, c]))
+        end
+        e
+    end
+    function build(comm_here, tile)
+        s = Solver(n_global=(48, 1, 36), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(axis, per, plane), metric=CylindricalMetric(),
+                   comm=comm_here, cfl=0.4,
+                   eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                                     IdealSpecies{Float64}("b", 0.7, 1.3)]),
+                   transport=ConstantTransport{Float64}(mu0=0.01),
+                   art=ArtificialProperties(enabled=true, detector=:d8),
+                   filter_interval=1, tile=tile,
+                   refine=BlockRegion((0, 0, 0), (10, 1, 10)))
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, z) -> begin
+            Y1 = 0.5 + 0.2 * cos(pi * r) * cos(pi * z)
+            Prim(rho=1 + 0.1 * cos(pi * r) * cos(2pi * z),
+                 u=(0.05 * sin(pi * r), 0.0, 0.03 * sin(pi * z)),
+                 p=1.0 + 0.05 * cos(pi * r), Y=(Y1, 1 - Y1))
+        end)
+        run!(s, Q; tfinal=1e9, nmax=3)
+        return s, Q
+    end
+    for tile in (0, 5)
+        s, Q = build(comm, tile)
+        ref, Qref = build(MPI.COMM_SELF, tile)
+        e = 0.0
+        for (k, p) in enumerate(s.patches)
+            p.level == 1 || continue
+            r = findfirst(q -> q.level == 1 && q.region == p.region, ref.patches)
+            ps, pr = PatchSolver(s, p), PatchSolver(ref, ref.patches[r])
+            e = max(e, blockdiff(ps, Q[k], pr, Qref[r]))
+        end
+        # A tile folds on a dimension exactly where it reaches the axis or
+        # the plane, which puts its first node there at offset −1.
+        check("tile $tile: the tiles fold where they reach the axis and the plane",
+              gmax(count(p -> p.level == 1 &&
+                              any(d -> (p.folds[d] !== nothing) != (p.region.offset[d] == -1),
+                                  (1, 3)),
+                         s.patches)), 0.5)
+        check("tile $tile: fine state against serial", gmax(e), 1e-11)
+        check("tile $tile: root state against serial",
+              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q[1],
+                             PatchSolver(ref, ref.patches[1]), Qref[1])), 1e-11)
+        check("tile $tile: composite volume against serial",
+              abs(domain_volume(s) - domain_volume(ref)), 1e-14)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -3843,6 +3913,7 @@ const SUITE = (
     ("mode truncation", test_mode_truncation),
     ("symmetry plane", test_symmetry_plane),
     ("level at a symmetry plane", test_plane_level),
+    ("level on the axis", test_axis_level),
     ("NSCBC inflow", test_nscbc_inflow),
     ("NSCBC level face", test_nscbc_level),
     ("turbulent inflow", test_turbulent_inflow),

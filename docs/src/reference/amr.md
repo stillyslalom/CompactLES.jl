@@ -6,8 +6,9 @@ CurrentModule = CompactLES
 
 [`AMR`](@ref) groups the refinement choices in `Numerics(amr=...)`. Refinement
 uses a fixed ratio of three between levels on an unstretched Cartesian grid
-or an axisymmetric (θ-collapsed) cylindrical one, where the levels stay off
-an axis the root carries.
+or an axisymmetric (θ-collapsed) cylindrical one. A `BlockRegion` of the
+first refined level may reach a symmetry plane or the axis; the level's patch
+then starts half a fine cell from it and folds there as the root does.
 The coarse grid spans the full domain; fine patches replace its resolution
 inside nested regions. Initial refinement and later movement are separate
 decisions: `initial` chooses the first region, while `regrid_interval` controls
@@ -120,9 +121,9 @@ patch; a nesting error prints the admissible offsets. A level's fine index corre
 `3(g-1)+1`. The solver enforces a coarse-node nesting margin around each
 fine region and a minimum fine patch extent. An explicit region may instead
 reach a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC`
-or `NSCBCInflowBC`, or, on the first refined level of a Cartesian run,
-`SymmetryPlaneBC`; its face there then carries that condition at the fine
-spacing, and the margin applies to its other faces. Explicit regions provide
+or `NSCBCInflowBC`, or, on the first refined level, `SymmetryPlaneBC` and
+the `AxisBC` of an r-z run; its face there then carries that condition at
+the fine spacing, and the margin applies to its other faces. Explicit regions provide
 exact placement; sensor and predicate placement is clamped to that legal
 interior.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags

@@ -540,9 +540,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   "θ collapsed (n_global[2] = 1)")
         all(isnothing, stretch) ||
             error("refinement requires an unstretched grid")
-        # The axis of an r-z run stays on the root, whose fold is untouched by
-        # a level held off it by the nesting margin; a region reaching it is
-        # refused below, where the face's condition is named.
+        # The axis of an r-z run is a self-paired parity fold, which the first
+        # refined level may reach as it does a symmetry plane (below). The
+        # spherical origin and poles are rejected with their metric above.
         (orig1 || poles) &&
             error("refinement across a coordinate fold is forbidden")
         level_restriction in (:inject, :filter) ||
@@ -566,16 +566,16 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # above it, in that level's node space (the root's is the grid), at
         # every face but one on the domain boundary, which a region may reach
         # where the root's condition there qualifies
-        # (`_level_boundary_condition`); a symmetry plane only on the first
-        # refined level.
+        # (`_level_boundary_condition`); a symmetry plane or the r-z axis
+        # only on the first refined level.
         margin = max(n_halo, LEVEL_BUFFER)
         parent_folded = _NO_BOUNDARY
         parent_regions = [BlockRegion((0, 0, 0), n_global)]
         for (ℓ, rg) in enumerate(refines)
             extent = _level_extent(n_global, active_g, ℓ - 1)
             eligible = _level_boundary_eligible(bcs, active_g, periodic, ℓ == 1)
-            # A nested level stays the margin inside a parent on a symmetry
-            # plane; the refinement ends at the first level there.
+            # A nested level stays the margin inside a parent on a fold; the
+            # refinement ends at the first level there.
             for d in 1:3, side in 1:2
                 parent_folded[d][side] || continue
                 p = only(parent_regions)
@@ -583,9 +583,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                          rg.offset[d] + rg.extent[d] + margin <= p.offset[d] + p.extent[d]
                 inside ||
                     error("level $ℓ region $rg comes within $margin level-$(ℓ - 1) " *
-                          "nodes of the SymmetryPlaneBC on the " *
+                          "nodes of the $(nameof(typeof(bcs[d][side]))) on the " *
                           "$(side == 1 ? "low" : "high") face of dimension $d; " *
-                          "only the first refined level reaches a symmetry plane")
+                          "only the first refined level reaches a symmetry plane " *
+                          "or the axis")
             end
             for d in 1:3
                 if active_g[d]
@@ -603,7 +604,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                   "a refined level cannot carry; a level reaches " *
                                   "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC and " *
                                   "NSCBCInflowBC faces, and the first refined " *
-                                  "level SymmetryPlaneBC faces, only")
+                                  "level SymmetryPlaneBC and AxisBC faces, only")
                     end
                 else
                     rg.offset[d] == 0 && rg.extent[d] == 1 ||
@@ -614,23 +615,20 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             bnd = _boundary_faces(rg, extent, eligible)
             folded = _level_fold_faces(bnd, bcs)
             if any(any, folded)
-                # The fold of a tile at a symmetry plane rests on the host
-                # line solves of its own plans and on coincident injection, and
-                # is measured on the Cartesian metric only.
-                metric isa CartesianMetric ||
-                    error("a refined level reaching a SymmetryPlaneBC requires " *
-                          "CartesianMetric; keep the region $margin root nodes " *
-                          "off the plane on $(nameof(typeof(metric)))")
+                # The fold of a tile at a symmetry plane or the r-z axis rests
+                # on the host line solves of its own plans and on coincident
+                # injection, and the regrid places no level on it.
                 backend isa DeviceBackend &&
-                    error("a refined level reaching a SymmetryPlaneBC runs on " *
-                          "the host backend only")
+                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
+                          "runs on the host backend only")
                 level_restriction === :inject ||
-                    error("a refined level reaching a SymmetryPlaneBC takes " *
-                          "level_restriction = :inject")
+                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
+                          "takes level_restriction = :inject")
                 regrid_interval == 0 ||
-                    error("a refined level reaching a SymmetryPlaneBC is placed at " *
-                          "setup and is not regridded; pass regrid_interval = 0 or " *
-                          "keep the region $margin root nodes off the plane")
+                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
+                          "is placed at setup and is not regridded; pass " *
+                          "regrid_interval = 0 or keep the region $margin root " *
+                          "nodes off the fold")
             end
             # The box stops at a wall face, where the interpolation takes
             # one-sided stencils of the order's width over the box.
@@ -1331,7 +1329,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     # elsewhere, as on the root). The signs are the root fold's on the same
     # dimension.
     root_folds === nothing &&
-        error("a refined patch on a symmetry plane needs the root's folds")
+        error("a refined patch on a fold needs the root's folds")
     fp(σ, d) = (lo_fold=folded[d][1] ? σ : nothing, hi_fold=folded[d][2] ? σ : nothing)
     pairof(sch, d, lo, hi) = (mkf(sch, d; fp(1, d)..., lo_closures=lo, hi_closures=hi),
                               mkf(sch, d; fp(-1, d)..., lo_closures=lo, hi_closures=hi))
@@ -1379,8 +1377,8 @@ _patch_arrays(g::F, n_species::Int) where {F} =
      inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g())
 
 # The refined `Patch` from its parts, with no pair buffers (`empty` stands in
-# for both): a refined patch's folds, those of a symmetry plane, are
-# self-paired.
+# for both): a refined patch's folds, those of a symmetry plane or the r-z
+# axis, are self-paired.
 _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
                 empty, a, ws, covered, scratch, gflux) =
     Patch(id, level, region, comm, decomp, hf, faces, bcs,

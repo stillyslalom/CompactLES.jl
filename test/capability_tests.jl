@@ -119,9 +119,6 @@ include("capability_cases.jl")
                 cyl, Numerics(n_global=(48, 16, 1), amr=box))
         rejects("AMR: requires CartesianMetric or CylindricalMetric with θ collapsed",
                 sph, Numerics(n_global=(16, 16, 1), amr=box))
-        rejects("whose AxisBC a refined level cannot carry",
-                C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
-                Numerics(n_global=n1, amr=AMR(initial=BlockRegion((0, 0, 0), (10, 1, 1)))))
         switched = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
         rejects("a refined level cannot carry",
                 C.problem(bcs=((SlipWallBC(), switched), per, per)),
@@ -129,26 +126,25 @@ include("capability_cases.jl")
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))
+        # The symmetry plane and the r-z axis are refused alike; each row
+        # takes the fold the other rows do not.
         plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
+        axis_rz = C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial)
         at_plane = BlockRegion((0, 0, 0), (12, 1, 1))
-        rejects("a refined level reaching a SymmetryPlaneBC requires CartesianMetric",
-                C.problem(bcs=(wall, per, (SymmetryPlaneBC(), SlipWallBC())),
-                          domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
-                          metric=CylindricalMetric(), ic=C.ic_shell),
-                Numerics(n_global=(16, 1, 24),
-                         amr=AMR(initial=BlockRegion((4, 0, 0), (8, 1, 6)))))
-        rejects("a refined level reaching a SymmetryPlaneBC runs on the host backend only",
+        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the " *
+                "host backend only",
                 plane, Numerics(n_global=n1, execution=Execution(backend=C.device()),
                                 amr=AMR(initial=at_plane)))
-        rejects("a refined level reaching a SymmetryPlaneBC takes level_restriction = " *
-                ":inject", plane,
+        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC takes " *
+                "level_restriction = :inject", axis_rz,
                 Numerics(n_global=n1, amr=AMR(initial=at_plane, level_restriction=:filter)))
-        rejects("a refined level reaching a SymmetryPlaneBC is placed at setup and is " *
-                "not regridded", plane,
+        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC is placed at " *
+                "setup and is not regridded", plane,
                 Numerics(n_global=n1, amr=AMR(initial=at_plane, regrid_interval=1)))
-        rejects("only the first refined level reaches a symmetry plane", plane,
-                Numerics(n_global=n1, amr=AMR(initial=[at_plane,
-                                                       BlockRegion((0, 0, 0), (12, 1, 1))])))
+        rejects("only the first refined level reaches a symmetry plane or the axis",
+                axis_rz, Numerics(n_global=n1, amr=AMR(initial=[at_plane,
+                                                                BlockRegion((0, 0, 0),
+                                                                            (12, 1, 1))])))
         rejects("AMR: regridding moves one refined level", gas,
                 Numerics(n_global=n1, amr=AMR(initial=[Box((0.25, 0, 0), (0.75, 1, 1)),
                                                        Box((0.4, 0, 0), (0.6, 1, 1))],

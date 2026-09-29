@@ -155,8 +155,9 @@ when several fine patches are useful. The [AMR reference](@ref "Adaptive mesh re
 explains tags, tiling, restrictions, and restarts.
 
 AMR currently requires unstretched Cartesian coordinates, or axisymmetric
-cylindrical ones with θ collapsed, and no fold on a refined level: an r-z run
-may keep its axis, which the levels do not reach. It does
+cylindrical ones with θ collapsed. A `BlockRegion` of the first refined level
+may reach a symmetry plane or the axis of an r-z run, on the host backend and
+without regridding; deeper levels stay inside it. It does
 not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
 budgets as diagnostics to check. A refined device configuration supports
 subcycling, tiling, and regridding, but not `level_restriction=:filter`.

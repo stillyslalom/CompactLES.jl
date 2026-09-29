@@ -144,7 +144,9 @@ numbering.
    +P/2 for P ranks along that dimension, reflected partner for the reversed
    one). Refinement across a fold's singular region or its antipodal partner
    is forbidden and rejected at setup. The singular region keeps uniform
-   resolution.
+   resolution. The θ-collapsed axis and a symmetry plane are self-paired
+   mirrors with no partner, which the first refined level reaches (see
+   "Levels on the domain boundary" and "Levels on the axisymmetric metric").
 5. **The bit-exact oracle survives only within a patch.** The
    spike/reduced-interface solve reproduces the single-domain answer at any
    rank count *within* one patch; patch interfaces are approximate by
@@ -447,8 +449,8 @@ the deep regrid's moved tile and the migration audit's reference.
 
 A region may reach a non-periodic domain face whose root condition a tile
 can carry (`_level_boundary_condition`: `SlipWallBC`, `NoSlipWallBC`, the
-two NSCBC conditions, and `SymmetryPlaneBC` on the first refined level,
-below).
+two NSCBC conditions, and `SymmetryPlaneBC` and the r-z `AxisBC` on the first
+refined level, below and in "Levels on the axisymmetric metric").
 The tile's face there is not parent-fed: it carries the root's condition
 object itself (`_fine_bcs`), so the wall's `enforce!` and `correct_flux!`
 act on the fine wall plane and a switch of the root's face switches the
@@ -507,11 +509,12 @@ the fold's mirror. The covered mask treats the face as closed, so the root's
 node at h/2, whose cell spans [0, h], is covered on both halves, and the
 tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
 Setup accepts an explicit region, box or tiled `refine` reaching a plane on
-the first refined level of a Cartesian run, on the host backend, under
-`level_restriction = :inject` and without regridding. A nested level at the
-plane, whose node space would start at offset −1, a regridded tile there,
-stacked device tiles and the `:filter` restriction are refused by name; a
-run whose levels stay the margin off its planes is unrestricted.
+the first refined level, of a Cartesian run or at z of an r-z run, on the
+host backend, under `level_restriction = :inject` and without regridding. A
+nested level at the plane, whose node space would start at offset −1, a
+regridded tile there, stacked device tiles and the `:filter` restriction are
+refused by name; a run whose levels stay the margin off its planes is
+unrestricted.
 
 **A level at an NSCBC face.** An `NSCBCOutflowBC` or `NSCBCInflowBC`
 face is carried as a wall face is, and its characteristic correction runs
@@ -552,10 +555,39 @@ and the plain form stays valid where r vanishes. The ghost fluxes carry the
 area factor and the Jacobian (`_ghost_geometry`), and the molecular flux
 evaluated from the gradient ring adds the curvature terms of the velocity
 gradient that the interior takes from `metric_correct_gradients!`; without
-those terms the viscous coupling does not converge. A root on the axis keeps
-its fold, and the nesting margin holds every level off it; a region reaching
-the axis is refused by the face's condition. The spherical metric and a
-resolved θ carry angular scale factors into the transfers and stay rejected.
+those terms the viscous coupling does not converge. The spherical metric and
+a resolved θ carry angular scale factors into the transfers and stay
+rejected.
+
+**A level on the axis.** With θ collapsed, `AxisBC` is a self-paired parity
+mirror in r: each radial line continues into itself through r = 0, with no
+antipodal partner, so the prohibition of constraint 4 does not apply to it.
+The first refined level reaches the axis as it reaches a symmetry plane
+(`_level_fold_condition`). The root's node nearest the axis lies at h/2, so
+the tile takes the extra node at h/6 and its nodes are those of a uniform
+axis run at h/3; `_fine_region`, the box shift, the shell, the ring and the
+restriction's coincident samples are the plane's. The tile's fold, the box
+mirror and the ghost-flux divergence read the root fold's parities, which
+at the axis make the radial velocity, the swirl and the area factor A₁ = r
+odd. The metric takes nothing beyond the per-tile geometry: r, 1/r and the
+face areas at h/6 are the uniform run's, and the p/r source cancels the
+folded divergence of r·p on a uniform state: the folded operator
+differentiates the odd continuation of A₁ = r exactly, and the far end's
+one-sided rows differentiate a linear function exactly. The curvature terms
+of the gradient ring are evaluated only at ring slots inside the domain,
+since the ring leaves out the slots beyond the fold. The covered mask treats
+the axis face as closed, so the root's node at h/2 is covered on both
+halves of its cell [0, h], and the tile's node at h/6 carries the weight
+(h/6)(h/3), the exact r-weighted measure of [0, h/3]. A corner tile at the
+axis and a symmetry plane at z = 0, the capsule's layout, folds on both
+dimensions; the box mirror takes them in turn. The restrictions are the
+plane's: the first refined level only, the host backend, `:inject` and no
+regridding. The resolved-θ axis, an antipodal butterfly, stays forbidden.
+Unfiltered, the grid-scale waves a coarse-fine face emits reach the axis,
+where the cylindrical divergence does not hold the π mode of the radial
+momentum in its null space and the tile departs from the uniform run; the
+axis rows are filtered, as a production run is
+([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
 
 ### Subcycling
 
@@ -1533,14 +1565,15 @@ Configurations rejected at setup, and the reason:
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require the Cartesian or the θ-collapsed cylindrical
-  metric, no stretching, no coordinate fold on a refined level (an r-z root
-  keeps its axis, which no level reaches), one region per level, and no same-level
+  metric, no stretching, no fold on a refined level but a symmetry plane or
+  the r-z axis on the first, one region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above at every parent-fed face and span ≥ 4
   parent nodes per active dimension; it may reach a slip, no-slip or NSCBC
-  face of the domain instead, the first refined level a symmetry plane
-  (host backend, `:inject`, no regrid), and no other domain face. A tiled
+  face of the domain instead, the first refined level a symmetry plane or
+  the r-z axis (host backend, `:inject`, no regrid), and no other domain
+  face. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`
   reaches that wall, and must still lie inside the parent tiles. Regridding more
   than one refined level requires tiles and the host backend and excludes

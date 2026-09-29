@@ -89,6 +89,9 @@
 #   a level at a wall (fine wall window against the uniform run at the fine
 #   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68 |
 #   two levels at a symmetry plane C6 6.33
+#   a level at the r-z axis (fine axis window against the uniform run at the
+#   fine spacing, equal steps, filtered, t = 0.3): C6 6.93 | viscous 6.42 |
+#   the corner of the axis and a plane at z = 0, fold window, C6 6.97
 #   a level on an r-z annulus (fine interface window against the uniform run
 #   at the fine spacing, equal steps, t = 0.2): C6 5.83 | viscous 5.40
 #   a level at an NSCBC outflow (fine face window against the uniform run at
@@ -108,7 +111,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those eighty-one numbers are also passed to each study as `recorded` and
+# Those eighty-four numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -995,6 +998,53 @@ evolution_study("two levels at a symmetry plane, C6", LEVEL_PLANE_NS,
                 N -> plane_level_case(N), plane_level_reference;
                 primary=:wall, tfinal=0.4, steps=N -> 6N, patches=(2,),
                 expect=6.3, tol=0.8, recorded=6.33)
+# The same at the axis of an r-z run: a pulse converging on the axis crosses
+# the coarse-fine face into the tile, which folds at r = 0 as the uniform run
+# does, and the axis window is read against the uniform run at the fine
+# spacing. Both runs are filtered at every step; `axis_level_case` says why.
+const LEVEL_AXIS_NS = (96, 192, 384)
+axis_level_reference(viscous, steps) = s -> begin
+    fine, states = axis_level_case(s.n_global[1]; refined=false, viscous=viscous)
+    fixed_step_run!(fine, states, 0.3, steps(s.n_global[1]))
+    NodeReference(fine, states)
+end
+for (name, viscous, steps, expect, recorded) in
+        (("two levels at the r-z axis, C6, filtered", false, N -> 3N, 6.9, 6.93),
+         ("two levels at the r-z axis, viscous", true, N -> 12N, 6.4, 6.42))
+    evolution_study(name, LEVEL_AXIS_NS, N -> axis_level_case(N; viscous=viscous),
+                    axis_level_reference(viscous, steps);
+                    primary=:wall, tfinal=0.3, steps=steps, patches=(2,),
+                    expect=expect, tol=1.0, recorded=recorded)
+end
+# The corner of the axis and a symmetry plane at z = 0, the capsule's layout:
+# a spherical pulse converging on the corner crosses both coarse-fine faces
+# into the tile, which folds on both dimensions. The fold window, the tile's
+# nodes within four of either fold, against the uniform run at the fine
+# spacing in equal steps; the grids are pre-asymptotic, and the order is the
+# regression guard's, not a claim.
+function corner_study(name, Ns; tfinal, steps, expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    hs = Float64[]; errs = Float64[]
+    for N in Ns
+        solver, states = corner_level_case(N)
+        fixed_step_run!(solver, states, tfinal, steps(N))
+        uniform, ustates = corner_level_case(N; refined=false)
+        fixed_step_run!(uniform, ustates, tfinal, steps(N))
+        push!(hs, root_spacing(solver))
+        push!(errs, fold_window_error(solver, states, uniform, ustates))
+    end
+    p = observed_order(hs, errs)
+    @printf("%-38s  ", name)
+    for (N, e) in zip(Ns, errs)
+        @printf("N=%-4d %.3e  ", N, e)
+    end
+    @printf("order ≈ %.2f\n", p)
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+corner_study("two levels at the r-z corner, C6, filtered", (24, 36, 48);
+             tfinal=0.3, steps=N -> 4N, expect=7.0, tol=1.0, recorded=6.97)
 
 # A level on the axisymmetric annulus: a cylindrical pulse leaves the refined
 # patch through both of its coarse-fine faces, and the patch's interface

@@ -138,6 +138,12 @@ restrictions.
 
 There is no wall-plane state enforcement: the parity fill and the folded
 implicit rows carry the whole treatment.
+
+With θ collapsed, the first refined level of a run may reach the axis: its
+patch then starts half a fine cell from r = 0, one fine node beyond the
+parent's lattice, and folds as the root does. Such a level is placed at
+setup, on the host backend, and is not regridded; deeper levels stay inside
+it.
 """
 struct AxisBC <: BoundaryCondition end
 

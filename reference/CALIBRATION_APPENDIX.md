@@ -6162,6 +6162,30 @@ At N = 25 the root holds under three nodes per pulse width, and the level's
 reflection carries that error; from N = 49 it is the fine run's to 2e-4 of
 its value.
 
+**Levels on the axis.** The instrument is the axis rows' case (a pulse
+converging on the axis of the radial line (0, 2], a level over the first
+N/6 + 1 root nodes, the tile against the uniform run at its spacing in equal
+steps) with scratch scripts. On one state the tile's right-hand side agrees
+with the uniform run's at the axis to 1e-14, and one step from one state to
+1e-17. Unfiltered, the tile's axis window departs from the uniform run: 2.7e-4,
+1.4e-5, 1.7e-6 at N = 96, 192, 384 at t = 0.4, where the root alone reads
+1.1e-4, 8.4e-7, 1.3e-8 at its own nodes and the same pulse at a Cartesian
+plane's tile 9e-8 at N = 96. The difference is a sawtooth emitted at the
+coarse-fine face whose amplitude grows at the axis node. A uniform run shows
+the same response without a level: a 1e-9 sawtooth in ρ, ρu and E over
+r < 0.3 reaches 6.0e-7 at node 1 by t = 0.05 and decays afterwards (4.5e-8 at
+t = 0.2); in ρ alone it stays at 1e-9, and at a Cartesian plane the
+three-component sawtooth stays at 7e-10. The cylindrical divergence
+(1/r)D(r·) does not hold the π mode of ρu in its null space. Filtered at
+every step (αf = 0.45, the rows' filter), the axis window reads 4.6e-7,
+3.0e-9, 3.0e-11 at t = 0.3, the row's 6.93. Under the default αf = 0.47 the
+window at N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45, and the
+limit is the root discretization's: the unrefined pulse on 767 and 2303
+radial nodes gives ρ − 1 = 0.116 at node 1 at t = 0.4 under either filter,
+while on 6908 nodes under αf = 0.47 the axis node runs away from t ≈ 0.2 and
+reads 0.380 (0.116 under 0.45). Not diagnosed further; it bounds the radial
+spacing at which an axis run, refined or not, keeps the default filter.
+
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
 cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches

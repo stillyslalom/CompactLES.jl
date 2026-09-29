@@ -66,10 +66,10 @@
 # through K − 1 intermediate grids, each stage carrying its own scratch array.
 #
 # Scope, enforced by `Solver`: the Cartesian or axisymmetric (θ-collapsed)
-# cylindrical metric, no stretching, no coordinate fold on a refined level (an
-# r-z root keeps its axis; a symmetry plane only where the first level of a
-# Cartesian run reaches it, see "Levels on the domain boundary" below), and no
-# same-level patch decomposition alongside refinement. The transfers move the
+# cylindrical metric, no stretching, no fold on a refined level but a symmetry
+# plane or the r-z axis where the first level reaches it (see "Levels on the
+# domain boundary" below), and no same-level patch decomposition alongside
+# refinement. The transfers move the
 # conserved variables themselves on either metric; each tile evaluates its own
 # geometry at its nodes. The fine patch's
 # line solves close at the coarse–fine boundary with the same-level interface
@@ -679,7 +679,8 @@ struct LevelTransfer{T}
                                      # there; the box takes no buffer beyond it
                                      # unless the face is folded
     folded::NTuple{3,NTuple{2,Bool}} # per face: a boundary face carrying a
-                                     # fold (a symmetry plane), where the tile
+                                     # fold (a symmetry plane or the r-z
+                                     # axis), where the tile
                                      # takes one fine node beyond the
                                      # coincident lattice and the box its
                                      # mirror image (`_fold_lead`)
@@ -2129,8 +2130,8 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # The buffered box stops at the face (`_box_buffer`), where the Lagrange
 # interpolation takes its one-sided stencils. The nesting margin applies to
 # the parent-fed faces only (`_buffered`). The faces a level may reach carry
-# a condition in `_level_boundary_condition`; a periodic seam, a coordinate
-# fold and any other condition keep the margin.
+# a condition in `_level_boundary_condition`; a periodic seam and any other
+# condition keep the margin.
 #
 # A symmetry plane lies half a root cell outside the root's first node, so
 # at ratio 3 the fine nodes nearest it sit at h/6 and h/2: the tile takes one
@@ -2141,24 +2142,41 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # nodes (`_mirror_folded_box!`), so the Lagrange chain stays centred there
 # and interpolates the extra node. Only the first refined level reaches a
 # symmetry plane; the setup, not the regrid, places such a level.
+#
+# The axis of a θ-collapsed r-z run is the same fold with other parities.
+# Each radial line continues into itself through r = 0, so the fold is
+# self-paired, and the root's node nearest the axis lies at h/2, which puts
+# the tile's nodes at h/6 + (j − 1)h/3, those of a uniform axis run at h/3.
+# The radial velocity, the swirl and the area factor A₁ = r are odd there;
+# the root fold's `sigvel` and `sigflux` carry these signs to the tile's fold
+# and to the box mirror. The metric needs nothing beyond the per-tile
+# geometry: `init_geometry!` evaluates r, 1/r and the face areas at the
+# tile's own nodes, and the p/r source cancels the folded divergence of r·p
+# on a uniform state, since the folded operator differentiates the odd
+# continuation of the linear A₁ exactly and the one-sided rows at the far end
+# differentiate a linear function exactly.
 
 "Whether a refined level may reach a domain face carrying `bc`."
 _level_boundary_condition(bc) =
-    bc isa Union{SlipWallBC,NoSlipWallBC,SymmetryPlaneBC,NSCBCOutflowBC,NSCBCInflowBC}
+    bc isa Union{SlipWallBC,NoSlipWallBC,SymmetryPlaneBC,AxisBC,NSCBCOutflowBC,
+                 NSCBCInflowBC}
+
+# Whether a tile reaching a face carrying `bc` folds there: a symmetry plane,
+# and the axis of a θ-collapsed run, the only axis a refined run carries.
+_level_fold_condition(bc) = bc isa Union{SymmetryPlaneBC,AxisBC}
 
 # Per dimension and side, whether a level may reach that domain face: a
 # non-periodic active dimension whose root condition there qualifies, a
-# symmetry plane only where `folds` admits one (the first refined level at
-# setup).
+# fold only where `folds` admits one (the first refined level at setup).
 _level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool},
                          folds::Bool=false) =
     ntuple(d -> ntuple(s -> active[d] && !periodic[d] &&
                             _level_boundary_condition(bcs[d][s]) &&
-                            (folds || !(bcs[d][s] isa SymmetryPlaneBC)), 2), 3)
+                            (folds || !_level_fold_condition(bcs[d][s])), 2), 3)
 
 # The boundary faces among `boundary` whose root condition is a fold.
 _level_fold_faces(boundary::NTuple{3,NTuple{2,Bool}}, bcs) =
-    ntuple(d -> ntuple(s -> boundary[d][s] && bcs[d][s] isa SymmetryPlaneBC, 2), 3)
+    ntuple(d -> ntuple(s -> boundary[d][s] && _level_fold_condition(bcs[d][s]), 2), 3)
 
 # The fine nodes a tile takes beyond its coincident lattice at face `side` of
 # dimension `d`: one at a folded face, none elsewhere.
@@ -2167,11 +2185,13 @@ _level_fold_faces(boundary::NTuple{3,NTuple{2,Bool}}, bcs) =
 
 # Fill the part of a delivered box beyond a folded face with the parity mirror
 # of the parent's nodes inside it, for every transfer of `lev` whose tile this
-# rank holds: parent node 1 − n reads node n at a low plane, N + n reads
+# rank holds: parent node 1 − n reads node n at a low fold, N + n reads
 # N + 1 − n at a high one, each component signed by its parity across the
-# plane. `A` is `select(transfer)`, padded like the chain's stage 0; `N` is
-# the parent's node count along the dimension, the root's, since only the
-# first refined level reaches a plane.
+# fold, a plane's or the axis's. `A` is `select(transfer)`, padded like the
+# chain's stage 0; `N` is the parent's node count along the dimension, the
+# root's, since only the first refined level reaches a fold. A tile at a
+# corner of two folds takes the dimensions in turn, the second mirroring
+# what the first filled.
 function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
     root = getfield(solver, :patches)[1]
     for lt in lev.transfers
@@ -2218,8 +2238,9 @@ function _region_boundaries(solver, regions::AbstractVector{BlockRegion}, ℓ::I
     root = getfield(solver, :patches)[1]
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    # A symmetry plane is not eligible: a regrid never places a level on one,
-    # and a region the setup placed there is not regridded.
+    # Neither a symmetry plane nor the axis is eligible: a regrid never
+    # places a level on either, and a region the setup placed there is not
+    # regridded.
     eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
     extent = _level_extent(n_global, active, ℓ - 1)
     return [_boundary_faces(r, extent, eligible) for r in regions]

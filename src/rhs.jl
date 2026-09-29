@@ -539,8 +539,9 @@ function _flux_remainder(solver::SolverLike, d::Int)
         return true
     bc_lo, bc_hi = solver.bcs[d]
     per = solver.decomp.periodic[d]
-    # A symmetry plane corrects no flux; its fold carries the condition.
-    unforced(bc) = per || bc isa Union{InterfaceBC,SymmetryPlaneBC}
+    # A symmetry plane or the axis corrects no flux; its fold carries the
+    # condition.
+    unforced(bc) = per || bc isa Union{InterfaceBC,SymmetryPlaneBC,AxisBC}
     return !unforced(bc_lo) || !unforced(bc_hi)
 end
 
@@ -760,7 +761,7 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     Y = solver.field_tuples.Y
     Ad, iJ = _ghost_geometry(solver, d)
     # The flux's sign across a fold at the dimension's other end (a refined
-    # patch on a symmetry plane); 1 without one.
+    # patch on a symmetry plane or the r-z axis); 1 without one.
     σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
     if viscous
         _flux_remainder(solver, d) || return dQ

@@ -168,6 +168,23 @@ include("capability_cases.jl")
                                   amr=AMR(initial=(r, θ, z, t) -> abs(r - 0.5) < 0.1 &&
                                                                   abs(z - 0.5) < 0.1,
                                           regrid_interval=1, tile=4)))
+        # A level reaching the axis, on the host backend at either precision,
+        # and a viscous tiled level at the corner of the axis and a symmetry
+        # plane at z = 0, the capsule's layout.
+        for precision in (Float64, Float32)
+            @test C.advances(axis_rz, Numerics(n_global=(48, 1, 1),
+                                               execution=Execution(; precision),
+                                               amr=AMR(initial=BlockRegion((0, 0, 0),
+                                                                           (12, 1, 1)))))
+        end
+        @test C.advances(C.problem(bcs=(axis[1], per, (SymmetryPlaneBC(), SlipWallBC())),
+                                   metric=CylindricalMetric(),
+                                   transport=ConstantTransport(mu0=1e-3),
+                                   ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r^2 + z^2)),
+                                                        rho=1.0)),
+                         Numerics(n_global=(32, 1, 32),
+                                  amr=AMR(initial=BlockRegion((0, 0, 0), (13, 1, 13)),
+                                          tile=4)))
         @test C.advances(C.problem(transport=ConstantTransport(mu0=1e-3)),
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))

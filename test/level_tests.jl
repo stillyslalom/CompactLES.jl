@@ -2270,8 +2270,6 @@ const RZ_LEVEL_TOL = 1e-6
                 refine=BlockRegion((12, 0, 6), (10, 1, 8)))
     @test domain_volume(onaxis) ≈
           domain_volume(rz((37, 1, 24); origin=0.0, bcs=axis)) atol = 1e-14
-    @test_throws "AxisBC" rz((37, 1, 24); origin=0.0, bcs=axis,
-                             refine=BlockRegion((0, 0, 6), (10, 1, 8)))
     @test_throws "CylindricalMetric with θ collapsed" rz((24, 16, 1);
         L_domain=(1.0, 2π, 1.0), refine=BlockRegion((8, 0, 0), (6, 16, 1)))
     # Freestream: a uniform state translating along z stays uniform to
@@ -2448,4 +2446,187 @@ const NSCBC_REFLECTION_TOL = 1e-6
     @test_throws "SwitchableBC" Solver(n_global=(49, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                        bcs=((SlipWallBC(), sw), per, per),
                                        refine=BlockRegion((40, 0, 0), (9, 1, 1)))
+end
+
+# The axis tile against the uniform run at its spacing, a pulse converging on
+# the axis, N = 96, t = 0.3: measured 1.6e-7 over the five components and the
+# whole tile. The corner tile of the axis and a plane at z = 0, a spherical
+# pulse, N = 36, t = 0.3: measured 2.0e-5.
+const AXIS_LEVEL_TOL = 5e-7
+const CORNER_LEVEL_TOL = 5e-5
+
+@testset "a level reaching the r-z axis folds on that face" begin
+    per = (PeriodicBC(), PeriodicBC())
+    axis = (AxisBC(), SlipWallBC())
+    zplane = (SymmetryPlaneBC(), SlipWallBC())
+    # A pulse converging on the axis of the radial line r ∈ (0, 1], with a
+    # level over the first N ÷ 6 + 1 root nodes; `refined = false` gives the
+    # uniform run at the level's spacing, 3N − 1 nodes, whose node j is the
+    # tile's node j. Filtered at every step: the axis converts the grid-scale
+    # waves the coarse-fine face emits into smooth ones
+    # (`axis_level_case` in smooth_cases.jl).
+    function axis_level(N; refined=true, nest=nothing, kw...)
+        region = BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1))
+        refine = !refined ? nothing : nest === nothing ? region : [region, nest]
+        solver = Solver(; n_global=(refined ? N : 3N - 1, 1, 1),
+                        L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
+                        metric=CylindricalMetric(), filter_interval=1, cfl=0.9,
+                        art=ArtificialProperties(enabled=false), refine=refine, kw...)
+        states = allocate_state(solver)
+        initialize!(solver, states, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((r - 0.3) / 0.1)^2)
+            Prim(rho=rho, u=(0.0, 0.0, 0.0), p=rho^1.4)
+        end)
+        return solver, states
+    end
+    N = 96
+    s, q = axis_level(N)
+    root = PatchSolver(s, s.patches[1])
+    fine = PatchSolver(s, s.patches[2])
+    lt = getfield(s, :levels)[2].transfers[1]
+    # The axis face carries the root's condition and its fold, self-paired,
+    # with the axis parities; the other face stays parent-fed.
+    @test fine.bcs[1][1] === root.bcs[1][1]
+    @test CL.parent_fed(fine.bcs[1][2])
+    @test fine.folds[1] isa CL.FoldSpec && fine.folds[1].pair === nothing
+    @test (fine.folds[1].lo, fine.folds[1].hi) == (true, false)
+    @test fine.folds[1].sigvel == root.folds[1].sigvel == (-1, -1, 1)
+    @test fine.folds[1].sigflux == root.folds[1].sigflux
+    @test lt.boundary[1][1] && lt.folded[1][1] && !lt.imposed[1][1] && lt.imposed[1][2]
+    # One fine node beyond the coincident lattice: 3m − 1 nodes, the first at
+    # h/6, and the geometry of the uniform run at h/3 node for node.
+    m = lt.region.extent[1]
+    h = root.h[1]
+    @test fine.decomp.n_global[1] == 3m - 1
+    @test xcoord(fine, 1, 1) ≈ h / 6
+    f, fq = axis_level(N; refined=false)
+    pf = PatchSolver(f, f.patches[1])
+    e = 0.0
+    for (a, b) in zip((fine.inv_J, fine.area_d[1], fine.inv_r),
+                      (pf.inv_J, pf.area_d[1], pf.inv_r)), i in 1:fine.decomp.n_local[1]
+        I, J = padded_index(fine, i, 1, 1), padded_index(pf, i, 1, 1)
+        e = max(e, abs(a[I] - b[J]) / abs(b[J]))
+    end
+    @test e < 1e-14
+    @test CL._box_buffer(lt)[1] == (CL.LEVEL_BUFFER, CL.LEVEL_BUFFER)
+    @test first(CL._restrict_window(lt)[1]) == 1
+    # The composite quadrature: the root's node at h/2 is covered on both
+    # halves of [0, h], the tile's node at h/6 weighs (h/6)(h/3), the exact
+    # r-weighted measure of [0, h/3], and only the coarse-fine face departs
+    # from the root alone, by the half cells (h/6 inside, h/2 outside) that
+    # the midpoint weights of the linear r miss there: h²/72 − h²/8 = −h²/9.
+    @test CL.uncovered_fraction(root.covered[padded_index(root, 1, 1, 1)]) == 0
+    @test CL.quad_weight(fine, 1, 1) == 1.0
+    alone = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
+                   metric=CylindricalMetric())
+    @test domain_volume(s) ≈ domain_volume(alone) - h^2 / 9 atol = 1e-15
+    # Against the uniform run at the level's spacing in the same equal steps,
+    # the tile differs by the refinement's error alone.
+    n = 3N
+    for k in 1:n
+        run!(s, q; tfinal=0.3k / n)
+        run!(f, fq; tfinal=0.3k / n)
+    end
+    @test s.step == f.step == n
+    # The box keeps its buffer across the axis, the mirror of the parent's
+    # nodes: density even, radial momentum odd.
+    box = lt.box_gather
+    pad = lt.pdecomps[1].n_halo_d[1]
+    B = CL.LEVEL_BUFFER
+    @test any(!iszero, view(box, :, 1, 1, 2))
+    for j in 1:B
+        @test box[B + 1 - j + pad, 1, 1, 1] == box[B + j + pad, 1, 1, 1]
+        @test box[B + 1 - j + pad, 1, 1, 2] == -box[B + j + pad, 1, 1, 2]
+    end
+    e = maximum(abs(q[2][padded_index(fine, i, 1, 1), c] -
+                    fq[padded_index(pf, i, 1, 1), c])
+                for i in 1:fine.decomp.n_local[1], c in 1:5)
+    @info "axis level against the uniform run" e
+    @test e < AXIS_LEVEL_TOL
+    # The configurations the fold does not carry are refused by name.
+    @test_throws "regrid" axis_level(N; regrid_interval=5)
+    @test_throws ":inject" axis_level(N; level_restriction=:filter)
+    @test_throws "first refined level" axis_level(N;
+                                                  nest=BlockRegion((0, 0, 0), (10, 1, 1)))
+
+    # The corner of the axis and a symmetry plane at z = 0: the tile folds on
+    # both dimensions, with each root fold's parities.
+    function corner(N; refined=true, kw...)
+        n = refined ? N : 3N - 1
+        solver = Solver(; n_global=(n, 1, n), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(axis, per, zplane), metric=CylindricalMetric(),
+                        refine=refined ? BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, N ÷ 6 + 1)) :
+                               nothing, kw...)
+        states = allocate_state(solver)
+        initialize!(solver, states, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
+            Prim(rho=rho, u=(0.0, 0.0, 0.0), p=rho^1.4)
+        end)
+        return solver, states
+    end
+    N = 36
+    s, q = corner(N)
+    root = PatchSolver(s, s.patches[1])
+    fine = PatchSolver(s, s.patches[2])
+    lt = getfield(s, :levels)[2].transfers[1]
+    @test lt.folded == ((true, false), (false, false), (true, false))
+    @test fine.folds[3].sigvel == root.folds[3].sigvel == (1, 1, -1)
+    @test fine.folds[1].sigvel == root.folds[1].sigvel
+    @test xcoord(fine, 1, 1) ≈ root.h[1] / 6 && xcoord(fine, 3, 1) ≈ root.h[3] / 6
+    # The face term of the r-weighted quadrature along the tile's r face,
+    # which spans (m − ½)h of z.
+    h = root.h[1]
+    m = lt.region.extent[3]
+    alone = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, zplane),
+                   metric=CylindricalMetric())
+    @test domain_volume(s) ≈ domain_volume(alone) - h^2 / 9 * (m - 0.5) * h atol = 1e-15
+    # A uniform state at rest stays at rest to round-off through both folds,
+    # the viscous ghost fluxes, the artificial properties, the d8 detector and
+    # the filter.
+    rest, rq = corner(N; transport=ConstantTransport(mu0=1e-3), filter_interval=1,
+                      art=ArtificialProperties(enabled=true, detector=:d8))
+    initialize!(rest, rq, (r, θ, z) -> Prim(rho=1.3, u=(0.0, 0.0, 0.0), p=0.9))
+    q0 = [copy(parent(x)) for x in rq]
+    run!(rest, rq; tfinal=1.0, nmax=10)
+    drift = 0.0
+    for (i, p) in enumerate(getfield(rest, :patches))
+        pp = PatchSolver(rest, p)
+        nl = pp.decomp.n_local
+        for c in 1:5, k in 1:nl[3], ii in 1:nl[1]
+            I = padded_index(pp, ii, 1, k)
+            drift = max(drift, abs(rq[i][I, c] - q0[i][I, c]))
+        end
+    end
+    @test rest.step == 10
+    @test drift < 1e-12
+    # Against the uniform run at the level's spacing in the same equal steps.
+    s, q = corner(N; filter_interval=1, art=ArtificialProperties(enabled=false), cfl=0.9)
+    f, fq = corner(N; refined=false, filter_interval=1,
+                   art=ArtificialProperties(enabled=false), cfl=0.9)
+    n = 4N
+    for k in 1:n
+        run!(s, q; tfinal=0.3k / n)
+        run!(f, fq; tfinal=0.3k / n)
+    end
+    @test s.step == f.step == n
+    fine = PatchSolver(s, s.patches[2])
+    pf = PatchSolver(f, f.patches[1])
+    nl = fine.decomp.n_local
+    e = maximum(abs(q[2][padded_index(fine, i, 1, k), c] -
+                    fq[padded_index(pf, i, 1, k), c])
+                for i in 1:nl[1], k in 1:nl[3], c in 1:5)
+    @info "corner level against the uniform run" e
+    @test e < CORNER_LEVEL_TOL
+    # The composite budget of the closed corner run: the ledger's pieces
+    # telescope to the r-weighted drift of the mass.
+    s, q = corner(N; art=ArtificialProperties(enabled=false))
+    b0 = CL._conserved_budget(s, q)
+    CL._ledger_begin!(s, q)
+    run!(s, q; tfinal=0.2)
+    r = CL._ledger_end!(s, q)
+    b1 = CL._conserved_budget(s, q)
+    drift = (b1.total_mass - b0.total_mass) / b0.total_mass
+    @info "corner composite mass drift" drift
+    @test maximum(abs, r.residual) < 1e-13
+    @test abs(drift) < 5e-6
 end
