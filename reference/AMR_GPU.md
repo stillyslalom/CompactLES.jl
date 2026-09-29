@@ -1413,13 +1413,14 @@ Configurations rejected at setup, and the reason:
 
 ## Open work
 
-The open items are in [ROADMAP.md](ROADMAP.md): N12a and N14–N16 for the
-interface numerics (level-aware global-step filtering, the interface
-divergence closures, and the live transfer order), S1–S4 for the
+The open items are in [ROADMAP.md](ROADMAP.md): N23 for refinement of an
+r-z run onto its axis and symmetry plane, A10 for a level reaching every
+domain boundary, A13 for the remaining metrics and layouts, S8 for
+rebalancing, migration and the device backend below level 1 and for
+multiblock geometry beyond the slab layout, and S1–S4 for the
 target-machine device campaign, the compact-solve and transfer scaling
-limits, the production tile and ownership cost studies and the mixed-precision
-policy, and S8 for regridding below level 1 and
-for multiblock geometry beyond the slab layout.
+limits, the production tile and ownership cost studies and the
+mixed-precision policy.
 
 Additional open items and long-term targets are recorded here.
 

@@ -288,7 +288,8 @@ Presets:
   eigenmode of the step, half of it within four nodes of the walls),
   which the cascade filter's F2 row damped exactly and the one-sided
   rows only halve; Dirichlet ends, viscous no-slip walls and unfiltered
-  C6 `:brady_livescu` are neutral. Removing it is roadmap N6d. The runs
+  C6 `:brady_livescu` are neutral. The `:neutral3` rows, the default
+  since roadmap N6d, carry no such mode. The runs
   are in `reference/CALIBRATION_APPENDIX.md` under "Wall closures under
   the artificial properties", "The filter's wall rows on the current
   solver", "The Brady–Livescu rows as a wall configuration" and
@@ -1082,7 +1083,7 @@ material contracts, while material evaluators remain independent of the solver:
 | Numerical execution | Storage, spatial operators, communication, stages, solves, rollback |
 
 Keep H1/H2 implicit operators and integration in the numerical infrastructure.
-Develop H3/H4/H4a/H6 and H8 as internal equation/closure components first. H7's
+Develop H3/H4/H4a/H6/H9 and H8 as internal equation/closure components first. H7's
 local ray and absorption calculations may later be reusable independently; ray
 migration and mesh deposition still require a solver-owned schedule.
 
@@ -1238,7 +1239,12 @@ consistent linearization or Jacobian action, not just scalar diffusivities.
 
 Equation components declare conserved layout/parities, primitive requirements,
 inviscid flux and wave-speed methods, diffusive closure, local exchanges, and
-boundary/regularization support. Setup checks the combination before allocating
+boundary/regularization support. The declaration also gives each field's role
+(evolved or derived, exchanged in halos, carried by the checkpoint record,
+written by output), so that a new component's fields reach those paths from
+the declaration and not through edits to the conserved layout; Parthenon's
+field metadata, on which Riot's physics packages register their state, is the
+precedent. Setup checks the combination before allocating
 plans. Current `EquationSet` layout/parity hooks alone do not provide this
 contract. NSCBC projections, wall energies, artificial conductivity scales,
 filtering and admissibility must be qualified for each new equation/EOS pair;
@@ -1615,13 +1621,18 @@ properties are written for the one-temperature Navier–Stokes system and are
 not dispatched on the equation set. The planned items require the following
 hooks beyond the current ones:
 
-- H3 (separate ion, electron and radiation energies): one energy component and
-  temperature per subsystem in primitive recovery, an EOS query per
-  temperature, an exchange-rate term between them, and wave speeds, NSCBC
-  amplitudes and wall energies that read the partition.
-- H6 (radiation diffusion): a radiation-energy component with its own diffusive
-  flux and opacity query, a residual and linearization for the implicit
-  integrator of H2, and a rate bound that keeps it out of the explicit step.
+- H3 (ion and electron energies): one energy component and temperature per
+  subsystem in primitive recovery, an EOS query per temperature with a mean
+  ionization and an electron EOS per material, an exchange-rate term between
+  them, a declared share of the artificial viscous heating for each, and wave
+  speeds, NSCBC amplitudes and wall energies that read the partition.
+- H6 (radiation diffusion): a radiation-energy component per group with its
+  own diffusive flux and opacity query, a residual and linearization for the
+  implicit integrator of H2, and a rate bound that keeps it out of the
+  explicit step. The radiation temperature is derived from that energy, not
+  a third material temperature.
+- H9 (burn): a reaction source on the isotope partial densities and its
+  energy deposited in the ion and electron components by a declared split.
 - H8 (MHD): magnetic-field components with their own fold parities, an
   inviscid flux and fast-magnetosonic wave speed supplied by the equation set,
   and a divergence-cleaning source with its boundary treatment.

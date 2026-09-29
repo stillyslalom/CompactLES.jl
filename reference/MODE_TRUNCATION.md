@@ -71,14 +71,14 @@ are not re-derived:
   region.
 - **Standalone local time stepping.** Conflicts with every collective in the
   step loop (`max_rate`, the filter, the folds). AMR subcycling
-  (`AMR_GPU.md` Stage 4) is the sanctioned form of the idea.
+  ([`AMR_GPU.md`](AMR_GPU.md#subcycling)) is the sanctioned form of the idea.
 - **Reduced-θ inner patch via patch AMR.** Legitimate long-term home: the
   fold region must stay uniform (`AMR_GPU.md` constraint 4), so the innermost
   patch is the coarse-θ one with 3× θ-refinement rings outward, the classic
-  reduced polar grid. Requires θ-only anisotropic refinement ratios to be
-  admitted into AMR Stages 2–3, which should be decided when those stages are
-  designed. Not a near-term fix, and truncation remains useful on the coarse
-  patch afterwards.
+  reduced polar grid. Requires θ-only anisotropic refinement ratios, which
+  refinement does not admit, and refinement on a cylindrical metric, which
+  roadmap N23 brings only with θ collapsed. Not a near-term fix, and
+  truncation remains useful on the coarse patch afterwards.
 - **Cartesian core / overset patch.** Breaks the no-line-cut constraint and
   conservation at the seam; effectively a second solver.
 - **FARGO-style orbital advection.** Relieves only |u_θ|-dominated CFL

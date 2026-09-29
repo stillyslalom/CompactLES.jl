@@ -1,8 +1,8 @@
 # CompactLES — Implicit diffusion and IMEX integration: design
 
 This document is the design for roadmap items H1 (implicit diffusion
-infrastructure) and H2 (compatible IMEX time integration), written before any
-solver code exists. The operator and integrator choices below rest on the
+infrastructure) and H2 (compatible IMEX time integration). The operator and
+integrator choices below rest on the
 1-D model studies of `bench/stiffdiffusion.jl`, whose tables are in the
 appendix under [stiff diffusion](CALIBRATION_APPENDIX.md#stiff-diffusion).
 The material, closure and energy contracts that H3–H6 bring to the implicit
@@ -47,6 +47,17 @@ below. R of order 1e3 to 1e6 is the design range.
   hydrodynamics, radiation advection in frequency, and one implicit solve of
   radiation diffusion, electron conduction and energy exchange together, with
   a Krylov solver on the coupled system.
+- **Riot** (LANL; [documentation](https://lanl.github.io/riot/main/index.html)),
+  a Parthenon/Kokkos finite-volume code, splits its stiff physics from the
+  explicit stages and applies it in a fixed order: electron–ion exchange by
+  an exact exponential update, then Spitzer–Härm electron and Braginskii ion
+  conduction, both solved by BiCGSTAB without a multigrid preconditioner and
+  without a flux limiter. Its multigroup P1 radiation diffusion holds the
+  group energy at cell centres and the flux at faces, solves every group
+  together in one Newton iteration under BiCGSTAB preconditioned by
+  geometric multigrid, and uses the P1 relaxation factor in place of a flux
+  limiter. Its implicit packages size the step by a target fractional change
+  of temperature, not by a stability bound.
 - **Athena++, PLUTO** and several astrophysical codes treat anisotropic
   conduction explicitly by RKL2 super-time-stepping (Meyer, Balsara and
   Aslam, MNRAS 422, 2012 and JCP 257, 2014), Strang-split from the
@@ -272,6 +283,11 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
   contracting by 0.14 per outer step needs about twelve outer steps to the
   same tolerance, each an inner solve, and competes only if loose inner
   solves keep that contraction.
+- The step size of the implicit half. The L-stable implicit half imposes no
+  stability limit, so its step is set by accuracy: either the embedded error estimate of the ARK
+  pair, or a target fractional change of each implicit temperature per step,
+  Riot's rule, which needs no error norm across components of different
+  units. Stage 3 measures both on the existing conduction.
 - A flux limiter makes the coefficient depend on the gradient, so the
   Picard iteration may stall; JFNK with the limited flux is the fallback.
 - The V-cycle's counts are measured on smooth coefficients; a coefficient

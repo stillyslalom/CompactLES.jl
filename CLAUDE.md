@@ -721,12 +721,12 @@ them.
   It needs initial data resolved over ≳3 cells and will not take Noh's singular
   t = 0 start, both of which the axis handles. The cause remains unknown.
 - **The compact filter, not the Cook artificial properties, holds this solver
-  together, and it has never been calibrated.** At 128³ TGV the filter
+  together, and its fit is joint with `C_mu`.** At 128³ TGV the filter
   supplies 37% of the energy sink yet removing it kills the run, while removing
-  the artificial properties entirely does not. So every `C_mu` number is
-  conditional on the compact filter applied every step (fitted at αf = 0.45,
-  re-swept at 0.49; the default is 0.47), and `C_mu` itself is
-  active but not yet fitted. → `reference/CALIBRATION_APPENDIX.md`
+  the artificial properties entirely does not. The filter was fitted at
+  αf = 0.45 and re-swept at 0.49, both at `C_mu = 0.002` (the default is
+  0.47), and Taylor-Green selects no positive `C_mu`, so a change to either
+  reopens the other (roadmap N4). → `reference/CALIBRATION_APPENDIX.md`
 - **`compute_artificial!` is 24.8–26.0% of the multicomponent RHS** under the
   default `:gaussian` smoother (the 31.8% figure is the `:compact` one),
   in the filter line-solves that smooth the sensors, one sweep per species. At

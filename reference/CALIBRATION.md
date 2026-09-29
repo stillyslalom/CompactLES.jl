@@ -26,7 +26,7 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 |---|---|---|---|
 | `C_beta` | 1.0 | keep | Accuracy optimum near 0.4; 1.0 maximizes the spherical-origin CFL ceiling and is the one value viable under both detectors ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `C_mu` | 0.002 | keep | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green is consistent with the value and cannot select it ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
+| `C_mu` | 0.002 | open (N4) | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green at Re = 1600 fits best at 0 at 64³ and 128³ and selects no positive value; the evidence for 0.002 is decaying turbulence under a different filter ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green), [where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)). |
 | `C_D` | 1.0 | keep | The value for the `:d8` species detector: the ringing behind a shocked interface is flat from 1 to 3 on the air/SF6 case and at density ratio 100 while the width and the smooth deposit keep growing. Under `detector = :delta4` the value is 0.1, where the excess variation falls 12-fold from 0.01. Under `:fickian` the interface pressure error grows in proportion ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [battery](CALIBRATION_APPENDIX.md#the-shock-battery), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
 | `C_Y` | 100 | keep | A shocked 2h interface rings to ±0.2 without the bound and ±0.012 with it ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
@@ -250,12 +250,14 @@ cost. The link is to the section holding the evidence.
 
 ## Known limitations of the calibration
 
-- The compact filter holds the solver together and has never been calibrated:
-  every constant above is conditional on it
+- The compact filter holds the solver together, and every constant above is
+  conditional on it; its α was fitted on Taylor-Green at `C_mu = 0.002`, so
+  the two fits are joint
   ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
-- `C_mu` is active but not fitted. A fit needs a case with an unresolved
-  cascade; the Taylor-Green peak cannot select it
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
+- `C_mu` is active but not fitted: Taylor-Green selects no positive value, and
+  a fit needs a case with an unresolved cascade under the default filter
+  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)); the decision is
+  roadmap N4.
 - At two species the per-species sensor machinery is a measurable no-op, and
   the species constants earn their cost only at three or more
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).

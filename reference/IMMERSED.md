@@ -301,19 +301,17 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 
 ## Interplay with AMR, GPU, folds, and metrics
 
-- **Ordering-independent of the patch refactor.** The imposition is
-  pointwise and mask-driven, so it works identically on today's monolithic
-  arrays and on patches; implementing before AMR Stage 2 costs only the
-  mechanical port of one loop and two setup arrays. If AMR lands first, χ
-  and n̂ are built per patch and per level from the same analytic φ.
+- **Patches and levels.** The imposition is pointwise and mask-driven, so
+  χ and n̂ are built per patch and per level from the same analytic φ, and
+  rebuilt for the new tiles at a regrid.
 - **AMR synergy**: the sensor tagger will refine at the interface, and
   because δ is fixed in cells the physical smearing shrinks under refinement,
   so the body sharpens where it is refined at no extra cost. A body
-  crossing a coarse–fine boundary needs the Stage 2 sweep repeated at the
-  interface; note it in the AMR plan's Stage 3 gates when both exist.
-- **GPU**: the imposition and mask construction are pointwise (trivial
-  KernelAbstractions kernels under G1); the Stage 3 extrapolation sweeps are
-  the only new stencil kernels and they are local.
+  crossing a coarse–fine boundary needs this design's Stage 2 sweep repeated
+  at the interface, as a gate of the body's first refined run.
+- **GPU**: the imposition and mask construction are pointwise bodies under
+  `pointwise!`; the Stage 3 extrapolation sweeps are the only new stencil
+  kernels and they are local.
 - **Folds and metrics**: φ is a function of physical coordinates, so bodies
   compose with cylindrical/spherical metrics and stretch maps with no new
   machinery. Antipodal pairs both see the body automatically for the same

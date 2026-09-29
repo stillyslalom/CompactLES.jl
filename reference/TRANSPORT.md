@@ -168,6 +168,14 @@ or the equivalent chemical-potential force, `grad(T_ion)`, `grad(T_ele)`, and
 the electric-field/electron-momentum closure.  It must enforce zero total mass
 diffusion and the selected current constraint to solver tolerance.
 
+The Coulomb logarithm is one declared choice of the material state, shared by
+the electron–ion exchange of roadmap H3, the electron conduction of H4 and the
+ion transport here. LANL's Riot offers several forms for its electron–ion
+coupling (a basic form, Brysk, Lee–More, and Brown–Preston–Singleton); here
+the form is chosen once and applied to every consumer, since a consumer
+choosing its own would let the exchange and the conduction disagree in the
+dense, cold regime where the forms differ.
+
 The scalar `transport_at(...).D` result cannot carry those coefficients.  The
 flux routine must accept a transport result type and dispatch to neutral
 mixture-averaged or plasma multicomponent assembly.  The diffusive timestep
@@ -286,7 +294,7 @@ qualified CD model.
 
 ## Staged execution and gates
 
-1. **H4a coefficient foundation, now.** Implement a standalone
+1. **H4a coefficient foundation.** Implement a standalone
    Stanton--Murillo evaluator for fully ionized `H+`, `D+`, and `T+` using the
    published masses, `Z = 1`, and Eq. 25 electron screening.  It returns binary interdiffusion and all
    dimensionless regime diagnostics required to judge the result; it does not
@@ -296,7 +304,9 @@ qualified CD model.
    points.  Test the isotope masses directly; do not test a post-hoc `H`
    rescaling.  Keep fully ionized, classical-ion, unmagnetized and equilibrium-
    temperature assumptions explicit, and report degeneracy even inside the
-   current `theta >= 10` software domain.
+   current `theta >= 10` software domain.  Delivered in
+   `src/ion_transport.jl` (commit `7c33651`), with the H-D, H-T and D-T
+   values checked against the authors' independent calculator.
 2. **H5a cold-to-warm material contract.** Select an openly usable multiphase
    DT EOS or construct a documented table from open data and published models. Its query
    returns phase, molecular/atomic and charge-state populations (or a validated
