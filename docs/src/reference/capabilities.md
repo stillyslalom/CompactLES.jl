@@ -72,14 +72,15 @@ such as `(0, π)` places it on the pole.
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
 | same-level slabs | `patch_grid` | yes | uniform Cartesian or a θ-collapsed cylindrical annulus, or a resolved-θ annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
-| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; no symmetry planes; an axis stays on the root, which the levels do not reach |
-| one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
+| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; an axis stays on the root, which the levels do not reach; on a Cartesian run a `BlockRegion` of the first level may reach a symmetry plane on the host backend, deeper levels staying inside it |
+| one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels, with every level off the symmetry planes |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
 | subcycled levels | `AMR(subcycle = true)` | yes | any refined layout |
 
 `level_restriction = :filter` is accepted on the host backend of a serial
-run only; the default `:inject` has no restriction. At a patch or level
+run only, and not with a level reaching a symmetry plane; the default
+`:inject` has no restriction. At a patch or level
 interface the default `PatchInterfaces(flux = :ghost)` requires
 `rhs = :extended` and a uniform Cartesian grid or a uniform cylindrical grid
 with θ collapsed, and with molecular
@@ -129,7 +130,11 @@ text below.
 | `AMR` on a spherical metric or a resolved-θ cylindrical one | `AMR: requires CartesianMetric or CylindricalMetric with θ collapsed` |
 | a refined region reaching the axis | `whose AxisBC a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
-| `AMR` with a symmetry plane | `AMR: cannot refine a run with a SymmetryPlaneBC` |
+| a level reaching a symmetry plane on the cylindrical metric | `a refined level reaching a SymmetryPlaneBC requires CartesianMetric` |
+| a level reaching a symmetry plane on a device | `a refined level reaching a SymmetryPlaneBC runs on the host backend only` |
+| a level reaching a symmetry plane with `level_restriction = :filter` | `a refined level reaching a SymmetryPlaneBC takes level_restriction = :inject` |
+| a level reaching a symmetry plane with regridding | `a refined level reaching a SymmetryPlaneBC is placed at setup and is not regridded` |
+| a nested level within the margin of a symmetry plane | `only the first refined level reaches a symmetry plane` |
 | `AMR` regridding a vector of shapes | `AMR: regridding moves one refined level` |
 | `max_levels > 2` without tiles and regridding | `requires tile > 0 and regridding` |
 | more than one regridded level on a device | `regridding more than one refined level runs on the host backend only` |

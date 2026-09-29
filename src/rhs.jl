@@ -82,10 +82,10 @@ Compact derivative of `f` along `d` through the divergence plans. These are
 data that a flux array does not carry, so the divergence keeps one-sided
 closure rows there, the scheme's own or the cascade's for the neutral set
 (`interface_divergence_closures`, `solver.div_plans`). A folded dimension draws on the
-fold's own derivative plans instead, which is the same operator because folds
-and patch interfaces never share a dimension. The flux-divergence loop and the
-discrete-GCL construction `gcl_cotr!` go through here so the two apply the
-identical operator. Same collective, halo, and fold contract as
+fold's own divergence plans instead, which are its derivative plans except on a
+refined patch whose folded dimension ends at an interface. The flux-divergence
+loop and the discrete-GCL construction `gcl_cotr!` go through here so the two
+apply the identical operator. Same collective, halo, and fold contract as
 [`deriv_along!`](@ref).
 """
 function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
@@ -93,7 +93,7 @@ function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     if fold === nothing
         apply_along!(out, _plan_at(solver.div_plans, d), f, solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf, Val(:deriv))
+        fold_apply!(out, f, solver, fold, σf, Val(:div))
     end
     return out
 end
@@ -228,7 +228,7 @@ function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1,
         apply_along!(out, _ring_plan(_plan_at(solver.ring_plans, d), σw, ghosts), f,
                      solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf, Val(:ring), σw)
+        fold_apply!(out, f, solver, fold, σf, Val(:ring), σw, ghosts)
     end
     return out
 end
@@ -521,8 +521,12 @@ end
 # every closure row differentiates the linear A_1 = r exactly.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
-@inline _interface_dim(solver::SolverLike, d::Int) =
-    _plan_at(solver.div_plans, d) !== _plan_at(solver.deriv_plans, d)
+@inline function _interface_dim(solver::SolverLike, d::Int)
+    fold = solver.folds[d]
+    fold === nothing &&
+        return _plan_at(solver.div_plans, d) !== _plan_at(solver.deriv_plans, d)
+    return fold.div_plans !== nothing
+end
 
 # Whether the flux along `d` carries a part beyond the ghost-differenced one:
 # the artificial properties, molecular transport not carried by the ghost
@@ -535,7 +539,9 @@ function _flux_remainder(solver::SolverLike, d::Int)
         return true
     bc_lo, bc_hi = solver.bcs[d]
     per = solver.decomp.periodic[d]
-    return !(per || bc_lo isa InterfaceBC) || !(per || bc_hi isa InterfaceBC)
+    # A symmetry plane corrects no flux; its fold carries the condition.
+    unforced(bc) = per || bc isa Union{InterfaceBC,SymmetryPlaneBC}
+    return !unforced(bc_lo) || !unforced(bc_hi)
 end
 
 # The area factor and the Jacobian the ghost-differenced divergence along `d`
@@ -753,13 +759,16 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     G = solver.ghost_flux[d]
     Y = solver.field_tuples.Y
     Ad, iJ = _ghost_geometry(solver, d)
+    # The flux's sign across a fold at the dimension's other end (a refined
+    # patch on a symmetry plane); 1 without one.
+    σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
     if viscous
         _flux_remainder(solver, d) || return dQ
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, true, true)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
     elseif !_flux_remainder(solver, d)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
@@ -773,14 +782,14 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
                    solver.tmp_b, solver.tmp_a, Fdc, Q, solver.rho, solver.u,
                    solver.v, solver.w, solver.p, Y, G, Ad, c, d, eq.n_species,
                    m1, m2, m3, eq.i_energy, viscous)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
         _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d, iJ)
     else
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, true, viscous)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
@@ -799,12 +808,15 @@ _host_line_solves(solver::SolverLike, d::Int) =
 
 # dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
 # interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit
-# geometry; a device plan takes the two-pass route through `tmp_a`.
+# geometry; a device plan or a fold takes the two-pass route through `tmp_a`,
+# the fold with the flux's sign of component `c`.
 function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J)
     decomp = solver.decomp
     plan = _plan_at(solver.deriv_plans, d)
-    if plan isa DevicePlan
-        apply_along!(solver.tmp_a, plan, f, decomp)
+    fold = solver.folds[d]
+    if fold !== nothing || plan isa DevicePlan
+        fold === nothing ? apply_along!(solver.tmp_a, plan, f, decomp) :
+            fold_apply!(solver.tmp_a, f, solver, fold, fold.sigflux[c], Val(:deriv))
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
         if inv_J === nothing

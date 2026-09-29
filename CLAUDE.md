@@ -229,10 +229,10 @@ interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
 (two levels under the closure rows, C6 / `:brady_livescu`), 6.00 (three
 levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 `:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
-pentadiagonal filter), a level at a slip wall 4.68 (the fine wall window
-against the uniform run at the fine spacing), a level on an r-z annulus
-5.83 / 5.40 (inviscid / viscous, the fine interface window against the
-uniform run at the fine spacing), temporal order 3.99 / 4.09
+pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
+6.33 (the fine wall window against the uniform run at the fine spacing), a
+level on an r-z annulus 5.83 / 5.40 (inviscid / viscous, the fine interface
+window against the uniform run at the fine spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
 additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is
@@ -575,7 +575,13 @@ Names are spelled out in full. Current vocabulary:
   condition the tile carries), `_level_boundary_condition` (which conditions
   qualify), `_boundary_faces` / `_region_boundaries` / `_level_extent`,
   `_box_buffer` / `_box_shift` / `_box_extent` (the box's per-face buffer,
-  none at a boundary face), `_interface_dims`
+  none at a boundary face), `_interface_dims`; `folded` (a `LevelTransfer`
+  field: the boundary faces on a symmetry plane), `_level_fold_faces`,
+  `_fold_lead` (the fine node a tile takes beyond the coincident lattice
+  there), `_fine_region` (a tile's region in its own level's node space),
+  `_mirror_folded_box!` (the box across the plane), `FoldSpec.div_plans`
+  and `FoldRingPlans` (a refined patch's fold, whose far end is an
+  interface)
 - `SesameTable` (one material of a SESAME ASCII 2 library in SI, not an
   `EOS`), its `SesameComponent`s `total` / `ion` / `electron` / `nuclear`
   (the 301 / 303 / 304 / 305 records, each on its own grid) and

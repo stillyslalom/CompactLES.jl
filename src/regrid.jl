@@ -1230,10 +1230,6 @@ _nest_buffer(buffer::Int, tile::Int, margin::Int) =
 _cell_of(r::BlockRegion, tile::Int, active::NTuple{3,Bool}) =
     ntuple(d -> active[d] ? r.offset[d] ÷ tile : 0, 3)
 
-# A tile region of level ℓ − 1's node space as a region of level ℓ's.
-_fine_region(r::BlockRegion, active::NTuple{3,Bool}) =
-    BlockRegion(ntuple(d -> active[d] ? 3 * r.offset[d] : 0, 3), fine_extent(r, active))
-
 # Fill every refined tile by interpolation of its parent, top-down: the
 # initial layout of the AMR frontend, whose seed tile holds no state yet.
 # Collective over each parent level's communicator.
@@ -1260,7 +1256,7 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     old_owners = lev.owners
     created = copy(_created(spec, ℓ))
     parent_valid = ℓ == 1 ? [BlockRegion((0, 0, 0), solver.n_global)] :
-                   [_erode(_fine_region(lt.region, active), lt.imposed, active)
+                   [_erode(_fine_region(lt), lt.imposed, active)
                     for lt in parent.transfers]
     parent_np = parent.level_comm.size
     lo = ntuple(d -> 1 + margin, 3)
@@ -1502,7 +1498,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     coupling = LevelCoupling{T}()
     if parent_lc.owned
         pregions = ℓ == 1 ? [patches[1].region] :
-                   [_fine_region(lt.region, active) for lt in parent.transfers]
+                   [_fine_region(lt) for lt in parent.transfers]
         plocal = ℓ == 1 ? [1] : [lt.fine_index for lt in parent.transfers]
         pdecomp(li) = li == 0 ? nothing : patches[li].decomp
         fdecomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - base].decomp

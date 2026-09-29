@@ -1053,10 +1053,8 @@ end
 # space, as `_mesh_blocks` selects them.
 function _level_plane_regions(solver::Solver, level::Int, normal::Int, index::Int)
     n_global = solver.n_global
-    active = ntuple(d -> n_global[d] > 1, 3)
     regions = level == 0 ? getfield(solver, :patch_regions) :
-        [BlockRegion(ntuple(d -> active[d] ? 3 * r.offset[d] : 0, 3),
-                     fine_extent(r, active)) for r in level_regions(solver, level)]
+        [_fine_region(lt) for lt in getfield(solver, :levels)[level + 1].transfers]
     node = _level_node(n_global, level, normal, index)
     return [r for r in regions
             if r.offset[normal] < node <= r.offset[normal] + r.extent[normal]]

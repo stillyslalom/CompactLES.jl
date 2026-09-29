@@ -545,9 +545,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # refused below, where the face's condition is named.
         (orig1 || poles) &&
             error("refinement across a coordinate fold is forbidden")
-        any(any, symplane) &&
-            error("refinement across a SymmetryPlaneBC is forbidden; a " *
-                  "refined run takes SlipWallBC at that face")
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
@@ -569,12 +566,27 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # above it, in that level's node space (the root's is the grid), at
         # every face but one on the domain boundary, which a region may reach
         # where the root's condition there qualifies
-        # (`_level_boundary_condition`).
+        # (`_level_boundary_condition`); a symmetry plane only on the first
+        # refined level.
         margin = max(n_halo, LEVEL_BUFFER)
-        eligible = _level_boundary_eligible(bcs, active_g, periodic)
+        parent_folded = _NO_BOUNDARY
         parent_regions = [BlockRegion((0, 0, 0), n_global)]
         for (ℓ, rg) in enumerate(refines)
             extent = _level_extent(n_global, active_g, ℓ - 1)
+            eligible = _level_boundary_eligible(bcs, active_g, periodic, ℓ == 1)
+            # A nested level stays the margin inside a parent on a symmetry
+            # plane; the refinement ends at the first level there.
+            for d in 1:3, side in 1:2
+                parent_folded[d][side] || continue
+                p = only(parent_regions)
+                inside = side == 1 ? rg.offset[d] - margin >= p.offset[d] :
+                         rg.offset[d] + rg.extent[d] + margin <= p.offset[d] + p.extent[d]
+                inside ||
+                    error("level $ℓ region $rg comes within $margin level-$(ℓ - 1) " *
+                          "nodes of the SymmetryPlaneBC on the " *
+                          "$(side == 1 ? "low" : "high") face of dimension $d; " *
+                          "only the first refined level reaches a symmetry plane")
+            end
             for d in 1:3
                 if active_g[d]
                     rg.extent[d] >= 4 ||
@@ -589,7 +601,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                   "$(side == 1 ? "low" : "high") domain face of " *
                                   "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
                                   "a refined level cannot carry; a level reaches " *
-                                  "SlipWallBC and NoSlipWallBC faces only")
+                                  "SlipWallBC and NoSlipWallBC faces, and the first " *
+                                  "refined level SymmetryPlaneBC faces, only")
                     end
                 else
                     rg.offset[d] == 0 && rg.extent[d] == 1 ||
@@ -598,11 +611,31 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 end
             end
             bnd = _boundary_faces(rg, extent, eligible)
-            # The box stops at a boundary face, where the interpolation takes
+            folded = _level_fold_faces(bnd, bcs)
+            if any(any, folded)
+                # The fold of a tile at a symmetry plane rests on the host
+                # line solves of its own plans and on coincident injection, and
+                # is measured on the Cartesian metric only.
+                metric isa CartesianMetric ||
+                    error("a refined level reaching a SymmetryPlaneBC requires " *
+                          "CartesianMetric; keep the region $margin root nodes " *
+                          "off the plane on $(nameof(typeof(metric)))")
+                backend isa DeviceBackend &&
+                    error("a refined level reaching a SymmetryPlaneBC runs on " *
+                          "the host backend only")
+                level_restriction === :inject ||
+                    error("a refined level reaching a SymmetryPlaneBC takes " *
+                          "level_restriction = :inject")
+                regrid_interval == 0 ||
+                    error("a refined level reaching a SymmetryPlaneBC is placed at " *
+                          "setup and is not regridded; pass regrid_interval = 0 or " *
+                          "keep the region $margin root nodes off the plane")
+            end
+            # The box stops at a wall face, where the interpolation takes
             # one-sided stencils of the order's width over the box.
             for d in 1:3
                 active_g[d] || continue
-                n = _box_extent(rg, _box_buffer(active_g, bnd))[d]
+                n = _box_extent(rg, _box_buffer(active_g, bnd, folded))[d]
                 n >= level_interpolation_order ||
                     error("level $ℓ region $rg spans $n level-$(ℓ - 1) nodes " *
                           "along dimension $d with its buffer, fewer than the " *
@@ -624,10 +657,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             # The next level reads this one's own nodes: a one-patch level's
             # parent-fed boundary planes are imposed data and are eroded (the
             # tiled cover is checked face by face at construction).
-            parent_regions = [_erode(BlockRegion(
-                ntuple(d -> active_g[d] ? 3 * rg.offset[d] : 0, 3),
-                fine_extent(rg, active_g)),
-                ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
+            parent_regions = [_erode(_fine_region(rg, active_g, folded),
+                                     ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
+            parent_folded = folded
         end
     end
     # --- Interface divergence rows ------------------------------------------
@@ -943,11 +975,11 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     parent_valid = parent_regions
     parent_h = h
     margin = max(n_halo, LEVEL_BUFFER)
-    eligible = _level_boundary_eligible(bcs, active_g, periodic)
     parent_lc = root_lc
     level_tiles = Vector{BlockRegion}[]     # every level's tiles, on every rank
     for (ℓ, rg) in enumerate(refines)
         extent = _level_extent(n_global, active_g, ℓ - 1)
+        eligible = _level_boundary_eligible(bcs, active_g, periodic, ℓ == 1)
         if tile == 0
             tregions = [rg]
         else
@@ -967,6 +999,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         push!(level_tiles, tregions)
         faces = _tile_faces(tregions)
         boundaries = [_boundary_faces(tr, extent, eligible) for tr in tregions]
+        folded_all = [_level_fold_faces(b, bcs) for b in boundaries]
         for (tr, bnd) in zip(tregions, boundaries)
             _covered_by(_buffered(tr, active_g, margin, bnd), parent_valid) ||
                 error("level $ℓ tile $tr must be nested at least $margin " *
@@ -976,9 +1009,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # The level's geometry is derived, not read off built patches, so a
         # rank outside the level's subset carries the same node spaces into
         # the next level's nesting checks as its owners do.
-        fine_regions = [BlockRegion(
-            ntuple(d -> active_g[d] ? 3 * tr.offset[d] : 0, 3),
-            fine_extent(tr, active_g)) for tr in tregions]
+        fine_regions = [_fine_region(tr, active_g, fo)
+                        for (tr, fo) in zip(tregions, folded_all)]
         imposed_all = [ntuple(d -> (f[d][1] == 0 && !b[d][1], f[d][2] == 0 && !b[d][2]), 3)
                        for (f, b) in zip(faces, boundaries)]
         next_h = ntuple(d -> active_g[d] ? parent_h[d] / 3 : parent_h[d], 3)
@@ -1008,7 +1040,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                      _ghost_viscous(interface_flux,
                                                                     transport),
                                                  ring=_ring_detector(art, n_species),
-                                                 boundaries, bcs)
+                                                 boundaries, bcs, root_folds=folds)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -1028,7 +1060,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                     interpolation_order=level_interpolation_order,
                     gradient_deriv=_ghost_viscous(interface_flux, transport) ?
                                    deriv : nothing,
-                    parent_h=parent_h, boundary=boundaries[ti]))
+                    parent_h=parent_h, boundary=boundaries[ti],
+                    folded=folded_all[ti]))
             end
             coupling = build_level_coupling(T, parent_lc.comm, transfers,
                                             parent_regions,
@@ -1142,13 +1175,14 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            ghost_viscous::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                           bcs=nothing) where {T}
-    region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
+                           bcs=nothing, root_folds=nothing) where {T}
+    folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundary, bcs)
+    region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm, folded)
     fbcs = _fine_bcs(active_g, faces, boundary, bcs)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
                         interface_divergence, ring, boundary,
                         wall_faces=_sensor_wall_faces(fbcs),
-                        gaussian=smoother === :gaussian)
+                        gaussian=smoother === :gaussian, folded, root_folds)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     # `ring` adds the `:d8` ringing buffer; `bulk` selects the conserved
@@ -1184,12 +1218,13 @@ _ghost_flux_arrays(g4::F, empty4, dims::NTuple{3,Bool}) where {F} =
     ntuple(d -> dims[d] ? g4() : empty4, 3)
 
 # The refined region's node space, decomposition and spacing: parent-level
-# node g is refined-level node 3(g − 1) + 1.
+# node g is refined-level node 3(g − 1) + 1, and a folded face adds the node
+# beyond (`_fine_region`).
 function _fine_decomp(::Type{T}, refine::BlockRegion, active_g::NTuple{3,Bool},
-                      h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm) where {T}
+                      h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
+                      folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
-    region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
-                           fine_extent(refine, active_g))
+    region_f = _fine_region(refine, active_g, folded)
     pper_f = ntuple(d -> !active_g[d], 3)
     np_f = (MPI.Initialized() || MPI.Init(threadlevel=:funneled);
             MPI.Comm_size(comm))
@@ -1211,7 +1246,9 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                      ring::Bool=false,
                      boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                      wall_faces::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                     gaussian::Bool=true) where {T}
+                     gaussian::Bool=true,
+                     folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     root_folds=nothing) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
@@ -1282,8 +1319,54 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
         end
         rplans_f = ntuple(rplans, 3)
     end
-    return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f,
-            ring=rplans_f)
+    any(any, folded) || return (deriv=dplans_f, div=vplans_f, filter=fplans_f,
+                                smooth=splans_f, ring=rplans_f,
+                                folds=(nothing, nothing, nothing))
+    # A dimension with a folded face routes every operator through its fold,
+    # as the root's does, and holds no plan of its own. The fold's plans fold
+    # the folded end onto the diagonal per ghost parity and close the other
+    # end as above, with its interface, wall or scheme rows, so the divergence
+    # keeps a pair of its own where that end is an interface (`nothing`
+    # elsewhere, as on the root). The signs are the root fold's on the same
+    # dimension.
+    root_folds === nothing &&
+        error("a refined patch on a symmetry plane needs the root's folds")
+    fp(σ, d) = (lo_fold=folded[d][1] ? σ : nothing, hi_fold=folded[d][2] ? σ : nothing)
+    pairof(sch, d, lo, hi) = (mkf(sch, d; fp(1, d)..., lo_closures=lo, hi_closures=hi),
+                              mkf(sch, d; fp(-1, d)..., lo_closures=lo, hi_closures=hi))
+    function foldspec(d)
+        (decomp_f.active[d] && any(folded[d])) || return nothing
+        rf = root_folds[d]
+        dp = pairof(deriv, d, at(d, 1, icd), at(d, 2, icd))
+        vp = ivd !== nothing && iface[d] ? pairof(deriv, d, at(d, 1, ivd), at(d, 2, ivd)) :
+             nothing
+        fq = pairof(filt, d, at(d, 1, icf), at(d, 2, icf))
+        sw_f(side) = folded[d][side] ? nothing : sw(d, side)
+        sp = pairof(smoo, d, sw_f(1), sw_f(2))
+        rp = ((nothing, nothing), (nothing, nothing))
+        if ring
+            d8 = compact_d8(T)
+            rrows = _ring_interface_rows(T)
+            wrf(side, σw, rows) = folded[d][side] ? nothing :
+                boundary[d][side] ? _sensor_wall_rows(d8, wall_faces[d][side], σw, true) :
+                rows
+            rfold(σg, σw, rows) = mkf(d8, d; fp(σg, d)..., lo_closures=wrf(1, σw, rows),
+                                      hi_closures=wrf(2, σw, rows))
+            function rpair(σg, rows)
+                even = rfold(σg, 1, rows)
+                any(wall_faces[d]) ? (even, rfold(σg, -1, rows)) : (even, even)
+            end
+            rp = FoldRingPlans((rpair(1, rrows), rpair(-1, rrows)),
+                               (rpair(1, nothing), rpair(-1, nothing)))
+        end
+        return FoldSpec(d, folded[d][1], folded[d][2], nothing, rf.sigvel, rf.sigflux,
+                        dp, fq, sp, rp, vp)
+    end
+    folds = ntuple(foldspec, 3)
+    keep(plans) = ntuple(d -> folds[d] === nothing ? plans[d] : nothing, 3)
+    return (deriv=keep(dplans_f), div=keep(vplans_f), filter=keep(fplans_f),
+            smooth=keep(splans_f), ring=rplans_f === nothing ? nothing : keep(rplans_f),
+            folds=folds)
 end
 
 # The persistent arrays of a patch from an allocator `g()`, by name, in the
@@ -1294,12 +1377,13 @@ _patch_arrays(g::F, n_species::Int) where {F} =
      D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
      inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g())
 
-# The refined `Patch` from its parts; fold-free, with no pair buffers
-# (`empty` stands in for both).
+# The refined `Patch` from its parts, with no pair buffers (`empty` stands in
+# for both): a refined patch's folds, those of a symmetry plane, are
+# self-paired.
 _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
                 empty, a, ws, covered, scratch, gflux) =
     Patch(id, level, region, comm, decomp, hf, faces, bcs,
-          (nothing, nothing, nothing), plans.deriv, plans.div, plans.filter,
+          plans.folds, plans.deriv, plans.div, plans.filter,
           plans.smooth, plans.ring, empty, empty,
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
@@ -1342,7 +1426,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               ghost_viscous::Bool=false,
                               ring::Bool=false,
                               boundaries=fill(_NO_BOUNDARY, length(tregions)),
-                              bcs=nothing) where {T}
+                              bcs=nothing, root_folds=nothing) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1353,7 +1437,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              n_species, n_cons, bulk, id0 + k,
                                              level, faces[ti]; interface_divergence,
                                              ghost_viscous, ring,
-                                             boundary=boundaries[ti], bcs))
+                                             boundary=boundaries[ti], bcs,
+                                             root_folds))
         end
         return patches, stacks
     end

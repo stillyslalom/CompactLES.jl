@@ -125,9 +125,26 @@ include("capability_cases.jl")
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))
-        rejects("AMR: cannot refine a run with a SymmetryPlaneBC",
-                C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)),
-                Numerics(n_global=n1, amr=box))
+        plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
+        at_plane = BlockRegion((0, 0, 0), (12, 1, 1))
+        rejects("a refined level reaching a SymmetryPlaneBC requires CartesianMetric",
+                C.problem(bcs=(wall, per, (SymmetryPlaneBC(), SlipWallBC())),
+                          domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
+                          metric=CylindricalMetric(), ic=C.ic_shell),
+                Numerics(n_global=(16, 1, 24),
+                         amr=AMR(initial=BlockRegion((4, 0, 0), (8, 1, 6)))))
+        rejects("a refined level reaching a SymmetryPlaneBC runs on the host backend only",
+                plane, Numerics(n_global=n1, execution=Execution(backend=C.device()),
+                                amr=AMR(initial=at_plane)))
+        rejects("a refined level reaching a SymmetryPlaneBC takes level_restriction = " *
+                ":inject", plane,
+                Numerics(n_global=n1, amr=AMR(initial=at_plane, level_restriction=:filter)))
+        rejects("a refined level reaching a SymmetryPlaneBC is placed at setup and is " *
+                "not regridded", plane,
+                Numerics(n_global=n1, amr=AMR(initial=at_plane, regrid_interval=1)))
+        rejects("only the first refined level reaches a symmetry plane", plane,
+                Numerics(n_global=n1, amr=AMR(initial=[at_plane,
+                                                       BlockRegion((0, 0, 0), (12, 1, 1))])))
         rejects("AMR: regridding moves one refined level", gas,
                 Numerics(n_global=n1, amr=AMR(initial=[Box((0.25, 0, 0), (0.75, 1, 1)),
                                                        Box((0.4, 0, 0), (0.6, 1, 1))],

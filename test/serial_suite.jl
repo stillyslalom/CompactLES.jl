@@ -2112,11 +2112,13 @@ end
     # Setup detects the plane by type, so the wrapper cannot carry it.
     @test_throws ArgumentError SwitchableBC(SymmetryPlaneBC(), SlipWallBC())
     @test_throws ArgumentError SwitchableBC(SlipWallBC(), SymmetryPlaneBC())
-    # Patched and refined runs take SlipWallBC at that face instead.
+    # A patched run takes SlipWallBC at that face instead. A refined run
+    # keeps the plane, whether its level stays off it or reaches it (the
+    # level tests cover the second).
     @test_throws ErrorException cart(patch_grid=(2, 1, 1))
-    @test_throws ErrorException Solver(n_global=(48, 1, 1),
+    @test length(Solver(n_global=(48, 1, 1),
         L_domain=(2π, 1.0, 1.0), bcs=(sym, per3[2], per3[3]), art=off,
-        filter_interval=0, refine=BlockRegion((20, 0, 0), (8, 1, 1)))
+        filter_interval=0, refine=BlockRegion((20, 0, 0), (8, 1, 1))).patches) == 2
 end
 
 @testset "rigid rotation in cylindrical: zero strain" begin

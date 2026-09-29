@@ -288,6 +288,24 @@ function annulus_level_case(N; refined=true, viscous=false, mu=0.002, Pr=0.7, op
 end
 
 """
+    plane_level_case(N; refined=true, opts...)
+
+`wall_case(N; folded = true)` with a refined level over the first N ÷ 6 + 1
+root nodes, [0, 1/6 + 1/(2N)], against the low symmetry plane, the tile
+folding there at the fine spacing; under `refined = false` the uniform run at
+the level's spacing, 3N nodes, which is its reference. A plane at each end
+puts root node i at (i − ½)/N and fine node j at (j − ½)/(3N), so root node
+i is fine node 3i − 1 and the tile's first node, at 1/(6N), is fine node 1.
+Both are built to take equal steps (`fixed_step_run!`), so that the
+difference between them is the refinement's spatial error alone.
+"""
+function plane_level_case(N; refined=true, opts...)
+    level = refined ? (refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)),) : (;)
+    wall_case(refined ? N : 3N; folded=true, slip=true,
+              merge((cfl=0.9,), level, values(opts))...)
+end
+
+"""
     mirror_case(N; viscous=false, folded=false, a=0.05, b=0.05, c=0.0,
                 mu=0.005, opts...)
 

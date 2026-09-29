@@ -192,8 +192,11 @@ on it: every dimension of `CartesianMetric` and z (dimension 3) of
 `CylindricalMetric` qualify and the rest are rejected by [`validate_bc`](@ref).
 The plane's dimension cannot be stretched, cannot also carry [`AxisBC`](@ref),
 [`OriginBC`](@ref) or [`PoleBC`](@ref), and cannot be wrapped in a
-[`SwitchableBC`](@ref). A patched or refined run does not take it;
-[`SlipWallBC`](@ref) is the condition there.
+[`SwitchableBC`](@ref). A patched run does not take it; [`SlipWallBC`](@ref)
+is the condition there. The first refined level of a run may reach the plane:
+its patch then starts half a fine cell from the plane, one fine node beyond
+the parent's lattice, and folds as the root does. Such a level is placed at
+setup, on the host backend, and is not regridded; deeper levels stay inside it.
 """
 struct SymmetryPlaneBC <: BoundaryCondition end
 

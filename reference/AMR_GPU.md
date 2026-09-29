@@ -446,7 +446,8 @@ the deep regrid's moved tile and the migration audit's reference.
 ### Levels on the domain boundary
 
 A region may reach a non-periodic domain face whose root condition a tile
-can carry (`_level_boundary_condition`: `SlipWallBC` and `NoSlipWallBC`).
+can carry (`_level_boundary_condition`: `SlipWallBC` and `NoSlipWallBC`, and
+`SymmetryPlaneBC` on the first refined level, below).
 The tile's face there is not parent-fed: it carries the root's condition
 object itself (`_fine_bcs`), so the wall's `enforce!` and `correct_flux!`
 act on the fine wall plane and a switch of the root's face switches the
@@ -469,10 +470,48 @@ quadrature counts the wall node once. Setup accepts an explicit region, box
 or tiled `refine`, that reaches such a face; the regrid, the restart and
 the deep regrid carry the faces of whatever regions they are given
 (`_region_boundaries`), while the tag clamp, the lattice clip of a regrid
-and the AMR frontend's shapes still stop at the margin. A symmetry plane
-needs a tile whose first node lies half a fine cell from the plane, one
-fine node outside the coincident lattice, and an NSCBC face its
-characteristic correction at the fine spacing; neither is accepted yet.
+and the AMR frontend's shapes still stop at the margin. An NSCBC face needs
+its characteristic correction at the fine spacing and is not accepted yet.
+
+**A level at a symmetry plane.** The root's node nearest a plane lies half
+a root cell h from it, so the coincident lattice (parent node g at fine node
+3(g − 1) + 1) starts at h/2. The tile takes one fine node outside that
+lattice, at h/6, half a fine cell from the plane: its nodes are then those of
+a uniform folded run at h/3, and the plane is a face-centred fold at the fine
+spacing. `LevelTransfer.folded` marks the face and `_fold_lead` counts the
+extra node. The tile's region in the level's node space (`_fine_region`) has
+offset 3·offset − 1 at a low plane, which places node 1 at h/6 through the
+root's `coord_shift`, and one more node at each folded face; the box shift,
+the shell and ring extents and the restriction's coincident samples
+(`_coincident`: region node m at patch node 3(m − 1) + 2) carry the lead.
+
+The tile holds a self-paired `FoldSpec` on its own decomposition with the
+root fold's parities. Each operator pair folds the plane end onto the
+diagonal and closes the far end with the rows it takes without a fold, so
+that end may be a coarse-fine or same-level interface, a wall or a second
+plane. At an interface end the divergence takes the one-sided
+`interface_divergence_rows`, so `FoldSpec.div_plans` holds a pair of its own
+there and `nothing` elsewhere, as on the root, where the absence of an
+interface stays a property of the type; the `:d8` detector holds a
+`FoldRingPlans` of the ghost-reading and the closed sets. Under
+`interface_flux = :ghost` both halves of the split divergence go through the
+fold with the component's flux parity, and a plane adds no flux remainder.
+The box keeps `LEVEL_BUFFER` parent nodes across the plane, filled after
+every box exchange, the Hermite boxes included, with the parity mirror of the
+nodes inside (`_mirror_folded_box!`), so the Lagrange chain stays centred at
+the plane and interpolates the extra node from each component's even or odd
+continuation; the wall's box takes one-sided stencils instead. The face is
+not imposed: the restriction writes up to the region's node at h/2, and the
+shell and ring leave out the face and the slots beyond the plane, which hold
+the fold's mirror. The covered mask treats the face as closed, so the root's
+node at h/2, whose cell spans [0, h], is covered on both halves, and the
+tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
+Setup accepts an explicit region, box or tiled `refine` reaching a plane on
+the first refined level of a Cartesian run, on the host backend, under
+`level_restriction = :inject` and without regridding. A nested level at the
+plane, whose node space would start at offset −1, a regridded tile there,
+stacked device tiles and the `:filter` restriction are refused by name; a
+run whose levels stay the margin off its planes is unrestricted.
 
 ### Levels on the axisymmetric metric
 
@@ -1470,14 +1509,15 @@ Configurations rejected at setup, and the reason:
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require the Cartesian or the θ-collapsed cylindrical
-  metric, no stretching, no fold on a refined level (an r-z root keeps its
-  axis, which no level reaches), one region per level, and no same-level
+  metric, no stretching, no coordinate fold on a refined level (an r-z root
+  keeps its axis, which no level reaches), one region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above at every parent-fed face and span ≥ 4
   parent nodes per active dimension; it may reach a slip or no-slip wall
-  face of the domain instead, and no other domain face. A tiled level's
-  tiles are clipped to the margin at the domain edge unless `refine`
+  face of the domain instead, the first refined level a symmetry plane
+  (host backend, `:inject`, no regrid), and no other domain face. A tiled
+  level's tiles are clipped to the margin at the domain edge unless `refine`
   reaches that wall, and must still lie inside the parent tiles. Regridding more
   than one refined level requires tiles and the host backend and excludes
   rebalancing. Rebalancing requires a tiled, regridding level. Converging-shock

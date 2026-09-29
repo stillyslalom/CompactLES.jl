@@ -205,24 +205,32 @@ function _check_amr_scope(prob, num)
              "(n_global[2] = 1); spherical and resolved-θ runs cannot refine yet")
     all(isnothing, num.stretch) ||
         fail("requires a uniform grid; set stretch = nothing in every direction")
-    any(pair -> any(bc -> bc isa SymmetryPlaneBC, pair), prob.bcs) &&
-        fail("cannot refine a run with a SymmetryPlaneBC; use SlipWallBC at that face")
     return nothing
 end
 
 # The node spacing of the root along each dimension, as the solver sets it:
 # an axis moves the first radial node half a cell off r = 0, so the line
-# carries half a cell less.
+# carries half a cell less, and a symmetry plane lies half a cell beyond the
+# node nearest it.
 _root_spacing(prob, num) = ntuple(3) do d
     L = prob.domain[d][2] - prob.domain[d][1]
     n = num.n_global[d]
-    n == 1 ? L : isperiodic(prob.bcs[d][1]) ? L / n :
+    planes = count(bc -> bc isa SymmetryPlaneBC, prob.bcs[d])
+    n == 1 ? L : planes > 0 ? L / (n - planes / 2) :
+    isperiodic(prob.bcs[d][1]) ? L / n :
     _root_axis(prob, d) ? L / (n - 0.5) : L / (n - 1)
 end
 
 # Whether dimension `d` of the root is the radius of an axis, whose first
 # node lies half a spacing from the domain's low end.
 _root_axis(prob, d::Int) = d == 1 && prob.bcs[1][1] isa AxisBC
+
+# The coordinate of the root's first node along each dimension: half a cell
+# inside an axis or a symmetry plane at the low end.
+_root_first_node(prob, h) =
+    ntuple(d -> prob.domain[d][1] +
+                (_root_axis(prob, d) || prob.bcs[d][1] isa SymmetryPlaneBC ?
+                 h[d] / 2 : 0.0), 3)
 
 # Nested regions covering nested shapes. Each shape is sampled on its parent's
 # lattice, over the parent's own nodes; a node within one cell diagonal of the
@@ -233,7 +241,7 @@ function _shape_regions(shapes, prob, num)
     active = ntuple(d -> n_global[d] > 1, 3)
     margin = max(num.n_halo, LEVEL_BUFFER)
     h = _root_spacing(prob, num)
-    origin = ntuple(d -> prob.domain[d][1] + (_root_axis(prob, d) ? h[d] / 2 : 0.0), 3)
+    origin = _root_first_node(prob, h)
     plo = (0, 0, 0)
     phi = ntuple(d -> n_global[d] - 1, 3)
     regions = BlockRegion[]

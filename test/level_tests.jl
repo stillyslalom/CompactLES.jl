@@ -2111,10 +2111,117 @@ const WALL_LEVEL_TOL = 1e-7
         @info "wall level against the uniform run" side e
         @test e < WALL_LEVEL_TOL
     end
-    # A face whose condition a level cannot carry is refused by name; the
-    # symmetry plane keeps its rejection.
+    # A face whose condition a level cannot carry is refused by name.
     @test_throws "ExtrapolationBC" wall_level(49; bc=ExtrapolationBC())
-    @test_throws "SymmetryPlaneBC" wall_level(49; bc=SymmetryPlaneBC())
+end
+
+# Measured 5.3e-12 at the low plane and 1.0e-11 at the high one, on the three
+# conserved components of the 1-D standing wave at N = 48, t = 0.2.
+const PLANE_LEVEL_TOL = 1e-10
+
+@testset "a level reaching a symmetry plane folds on that face" begin
+    per = (PeriodicBC(), PeriodicBC())
+    plane = SymmetryPlaneBC()
+    function plane_level(N; refined=true, side=:lo, bcs=((plane, plane), per, per),
+                         nest=nothing, kw...)
+        m = N ÷ 6 + 1
+        region = BlockRegion((side == :lo ? 0 : N - m, 0, 0), (m, 1, 1))
+        refine = !refined ? nothing : nest === nothing ? region : [region, nest]
+        solver = Solver(n_global=(refined ? N : 3N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=bcs, filter_interval=0, cfl=0.9,
+                        art=ArtificialProperties(enabled=false), refine=refine;
+                        kw...)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> begin
+            rho = 1 + 0.05 * cos(pi * x)
+            Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4)
+        end)
+        return solver, states
+    end
+    N = 48
+    for side in (:lo, :hi)
+        s, q = plane_level(N; side=side)
+        root = PatchSolver(s, s.patches[1])
+        fine = PatchSolver(s, s.patches[2])
+        lt = getfield(s, :levels)[2].transfers[1]
+        k = side == :lo ? 1 : 2
+        # The plane's face carries the root's condition and its fold; the
+        # other face stays parent-fed.
+        @test fine.bcs[1][k] === root.bcs[1][k]
+        @test CL.parent_fed(fine.bcs[1][3 - k])
+        @test fine.folds[1] isa CL.FoldSpec && fine.folds[1].pair === nothing
+        @test (fine.folds[1].lo, fine.folds[1].hi) == (k == 1, k == 2)
+        @test fine.folds[1].sigvel == root.folds[1].sigvel
+        @test lt.boundary[1][k] && lt.folded[1][k] && !lt.imposed[1][k]
+        @test lt.imposed[1][3 - k]
+        # One fine node beyond the coincident lattice, half a fine cell from
+        # the plane: the tile has 3m − 1 nodes and its node next to the plane
+        # sits at h/6 from it.
+        m = lt.region.extent[1]
+        @test fine.decomp.n_global[1] == 3m - 1
+        edge = k == 1 ? xcoord(fine, 1, 1) : 1 - xcoord(fine, 1, 3m - 1)
+        @test edge ≈ root.h[1] / 6
+        @test CL._box_buffer(lt)[1] == (CL.LEVEL_BUFFER, CL.LEVEL_BUFFER)
+        # The restriction reaches the region's node on the plane side, the
+        # coincident fine node one past the extra node there.
+        win = CL._restrict_window(lt)[1]
+        @test k == 1 ? first(win) == 1 : last(win) == m
+        # The composite quadrature counts the covered cell at the plane once,
+        # the tile's node there holding the whole fine cell [0, h/3].
+        @test domain_volume(s) ≈ 1.0 atol = 1e-14
+        lin = map(getfield(s, :patches)) do p
+            ps = PatchSolver(s, p)
+            a = zeros(size(p.rho))
+            for i in 1:ps.decomp.n_local[1]
+                a[padded_index(ps, i, 1, 1)] = 1 + 2 * xcoord(ps, 1, i)
+            end
+            a
+        end
+        # A half cell takes its node's value, so for f = 1 + 2x each half cell
+        # contributes ∓(its width)² by the side of its node it lies on. At a
+        # plane every cell is whole; at the coarse-fine face the root's half
+        # cell and the tile's do not cancel, and the difference is the face's
+        # alone: ∓(h² − (h/3)²)/4 with the face on the tile's high or low side.
+        h = root.h[1]
+        face = (k == 1 ? -1 : 1) * (h^2 - (h / 3)^2) / 4
+        @test volume_integral(s, lin) ≈ 2.0 + face atol = 1e-13
+        # Against the uniform run at the level's spacing in the same equal
+        # steps, the tile differs by the refinement's error alone.
+        f, fq = plane_level(N; refined=false)
+        for n in 1:96
+            run!(s, q; tfinal=0.2n / 96)
+            run!(f, fq; tfinal=0.2n / 96)
+        end
+        @test s.step == f.step == 96
+        # The box keeps its buffer across the plane, the mirror of the
+        # parent's nodes, with the component's parity.
+        box = lt.box_gather
+        pad = lt.pdecomps[1].n_halo_d[1]
+        nb = lt.pdecomps[1].n_global[1]
+        B = CL.LEVEL_BUFFER
+        @test any(!iszero, view(box, :, 1, 1, 2))
+        for j in 1:B
+            out, in_ = k == 1 ? (B + 1 - j, B + j) : (nb - B + j, nb - B + 1 - j)
+            @test box[out + pad, 1, 1, 1] == box[in_ + pad, 1, 1, 1]
+            @test box[out + pad, 1, 1, 2] == -box[in_ + pad, 1, 1, 2]
+        end
+        pf = PatchSolver(f, f.patches[1])
+        # The uniform run's node 1 lies at h/6, the root's at h/2, so the
+        # level's node g is the uniform run's node g + 1.
+        off = fine.patch.region.offset[1] + 1
+        @test maximum(abs(xcoord(fine, 1, i) - xcoord(pf, 1, off + i))
+                      for i in 1:fine.decomp.n_local[1]) < 1e-15
+        e = maximum(abs(q[2][padded_index(fine, i, 1, 1), c] -
+                        fq[padded_index(pf, off + i, 1, 1), c])
+                    for i in 1:fine.decomp.n_local[1], c in 1:3)
+        @info "plane level against the uniform run" side e
+        @test e < PLANE_LEVEL_TOL
+    end
+    # The configurations the fold does not carry are refused by name.
+    @test_throws "regrid" plane_level(N; regrid_interval=5)
+    @test_throws ":inject" plane_level(N; level_restriction=:filter)
+    @test_throws "first refined level" plane_level(N;
+                                                   nest=BlockRegion((0, 0, 0), (10, 1, 1)))
 end
 
 # The r-z level's fine patch against the uniform run at its spacing, a

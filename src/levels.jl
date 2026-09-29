@@ -66,10 +66,12 @@
 # through K − 1 intermediate grids, each stage carrying its own scratch array.
 #
 # Scope, enforced by `Solver`: the Cartesian or axisymmetric (θ-collapsed)
-# cylindrical metric, no stretching, no fold on a refined level (an r-z root
-# keeps its axis), and no same-level patch decomposition alongside
-# refinement. The transfers move the conserved variables themselves on either
-# metric; each tile evaluates its own geometry at its nodes. The fine patch's
+# cylindrical metric, no stretching, no coordinate fold on a refined level (an
+# r-z root keeps its axis; a symmetry plane only where the first level of a
+# Cartesian run reaches it, see "Levels on the domain boundary" below), and no
+# same-level patch decomposition alongside refinement. The transfers move the
+# conserved variables themselves on either metric; each tile evaluates its own
+# geometry at its nodes. The fine patch's
 # line solves close at the coarse–fine boundary with the same-level interface
 # rows (extended-data gradients and filters, one-sided divergence); a
 # pentadiagonal scheme, the C10 derivative or a banded filter, takes two such
@@ -551,12 +553,14 @@ end
 function _box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf,
                              pad::NTuple{3,Int},
                              faces::NTuple{3,NTuple{2,Bool}}=ntuple(d -> (true, true), 3),
-                             buffer=_box_buffer(active, _NO_BOUNDARY)) where {T}
-    shift = _box_shift(buffer)
+                             buffer=_box_buffer(active, _NO_BOUNDARY),
+                             folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+    shift = _box_shift(buffer, folded)
+    beyond = ntuple(e -> 3 * buffer[e][2] - _fold_lead(folded, e, 2), 3)
     all(e -> !faces[e][1] || shift[e] >= pad[e], 1:3) &&
-        all(e -> !faces[e][2] || 3 * buffer[e][2] >= pad[e], 1:3) ||
+        all(e -> !faces[e][2] || beyond[e] >= pad[e], 1:3) ||
         error("a ring wider than the box buffer: pad $pad")
-    Nf = ntuple(e -> boxf.n_global[e] - shift[e] - 3 * buffer[e][2], 3)
+    Nf = ntuple(e -> boxf.n_global[e] - shift[e] - beyond[e], 3)
     read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2 if faces[d][side]]
     isempty(read_faces) && (read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2])
     plans = Any[]
@@ -673,6 +677,12 @@ struct LevelTransfer{T}
     boundary::NTuple{3,NTuple{2,Bool}} # per face: on a non-periodic domain
                                      # boundary, carrying the root's condition
                                      # there; the box takes no buffer beyond it
+                                     # unless the face is folded
+    folded::NTuple{3,NTuple{2,Bool}} # per face: a boundary face carrying a
+                                     # fold (a symmetry plane), where the tile
+                                     # takes one fine node beyond the
+                                     # coincident lattice and the box its
+                                     # mirror image (`_fold_lead`)
     restriction::Symbol             # :inject (coincident-node copy, default)
                                      # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
@@ -830,15 +840,21 @@ const _NO_BOUNDARY = ((false, false), (false, false), (false, false))
 # The buffer of a transfer's box per face, in parent nodes: `LEVEL_BUFFER`
 # along an active dimension, none at a face on the domain boundary, where
 # the parent holds no node beyond the region and the interpolation takes
-# its one-sided stencils instead.
-_box_buffer(active::NTuple{3,Bool}, boundary::NTuple{3,NTuple{2,Bool}}) =
-    ntuple(d -> active[d] ? (boundary[d][1] ? 0 : LEVEL_BUFFER,
-                             boundary[d][2] ? 0 : LEVEL_BUFFER) : (0, 0), 3)
-_box_buffer(lt::LevelTransfer) = _box_buffer(lt.active, lt.boundary)
+# its one-sided stencils instead. A folded boundary face keeps the buffer,
+# filled with the mirror image of the parent's nodes (`_mirror_folded_box!`).
+_box_buffer(active::NTuple{3,Bool}, boundary::NTuple{3,NTuple{2,Bool}},
+            folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) =
+    ntuple(d -> active[d] ? (boundary[d][1] && !folded[d][1] ? 0 : LEVEL_BUFFER,
+                             boundary[d][2] && !folded[d][2] ? 0 : LEVEL_BUFFER) :
+                            (0, 0), 3)
+_box_buffer(lt::LevelTransfer) = _box_buffer(lt.active, lt.boundary, lt.folded)
 
 # The fine box node of fine patch node g is g + shift: three fine nodes per
-# parent node of the low buffer.
-_box_shift(buffer) = ntuple(d -> 3 * buffer[d][1], 3)
+# parent node of the low buffer, less the node a tile takes beyond the
+# coincident lattice at a folded low face.
+_box_shift(buffer, folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) =
+    ntuple(d -> 3 * buffer[d][1] - _fold_lead(folded, d, 1), 3)
+_box_shift(lt::LevelTransfer) = _box_shift(_box_buffer(lt), lt.folded)
 
 # The box's extent in parent nodes.
 _box_extent(region::BlockRegion, buffer) =
@@ -867,10 +883,13 @@ end
 
 # The region-local coarse nodes whose coincident fine node lies in the fine
 # block `fb`: fine node f ↔ coarse node (f − 1) ÷ 3 + 1 along a refined
-# dimension, when f ≡ 1 (mod 3).
-function _coincident(fb::BlockRegion, active::NTuple{3,Bool})
+# dimension, when f ≡ 1 (mod 3), f counted on the coincident lattice, which
+# starts `lead[d]` nodes into the patch (`_fold_lead`).
+function _coincident(fb::BlockRegion, active::NTuple{3,Bool},
+                     lead::NTuple{3,Int}=(0, 0, 0))
     return ntuple(3) do d
-        lo, hi = fb.offset[d] + 1, fb.offset[d] + fb.extent[d]
+        lo = fb.offset[d] + 1 - lead[d]
+        hi = fb.offset[d] + fb.extent[d] - lead[d]
         active[d] ? ((cld(lo - 1, 3) + 1):(fld(hi - 1, 3) + 1)) : (lo:hi)
     end
 end
@@ -933,6 +952,7 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
         roff = lt.region.offset
         fdc = fine_decomps[t]
         sample = ntuple(d -> active[d] ? 3 : 1, 3)
+        lead = ntuple(d -> _fold_lead(lt.folded, d, 1), 3)
         # The box array: parent-level node n at n − box offset + pad.
         boxoff = ntuple(d -> first(box[d]) - 1, 3)
         padb = fdc === nothing ? (0, 0, 0) : lt.pdecomps[1].n_halo_d
@@ -958,7 +978,7 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
                 mreg = _isect3(win, _block_nodes(BlockRegion(pdc.offset, pdc.n_local),
                                                  (.-to_patch)))
                 for fb in fine_blocks[t]
-                    m = _isect3(mreg, _coincident(fb.block, active))
+                    m = _isect3(mreg, _coincident(fb.block, active, lead))
                     any(isempty, m) && continue
                     lr = _padded_steps(m, pdc.offset .- to_patch, pad)
                     push!(restrict_recvs, CouplingPiece(fb.rank, t, k, lr, 1, 1))
@@ -968,7 +988,8 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
             share = MPI.Comm_rank(fdc.comm)
             shares = MPI.Comm_size(fdc.comm)
             padf = fdc.n_halo_d
-            coin = _isect3(win, _coincident(BlockRegion(fdc.offset, fdc.n_local), active))
+            coin = _isect3(win, _coincident(BlockRegion(fdc.offset, fdc.n_local), active,
+                                            lead))
             for pb in parent_blocks[p]
                 nodes = _isect3(box, _block_nodes(pb.block, creg.offset))
                 if !any(isempty, nodes)
@@ -977,11 +998,11 @@ function build_level_coupling(::Type{T}, comm::MPI.Comm,
                 end
                 m = _isect3(coin, _block_nodes(pb.block, (.-to_patch)))
                 any(isempty, m) && continue
-                # Coincident fine node s(m − 1) + 1 on this rank's block.
+                # Coincident fine node s(m − 1) + 1 + lead on this rank's block.
                 lr = ntuple(3) do d
                     s = sample[d]
-                    lo = s * (first(m[d]) - 1) + 1 - fdc.offset[d] + padf[d]
-                    hi = s * (last(m[d]) - 1) + 1 - fdc.offset[d] + padf[d]
+                    lo = s * (first(m[d]) - 1) + 1 + lead[d] - fdc.offset[d] + padf[d]
+                    hi = s * (last(m[d]) - 1) + 1 + lead[d] - fdc.offset[d] + padf[d]
                     lo:s:hi
                 end
                 push!(restrict_sends, CouplingPiece(pb.rank, t, k, lr, 1, 1))
@@ -1258,6 +1279,7 @@ function _exchange_boxes!(solver, srcs, lev::Level, select::F, all_comps::Bool,
     _run_coupling!(cp, cp.box_sends, cp.box_recvs, solver.equations.n_cons, all_comps,
                    tiles, _BOX_TAG, q -> srcs[tr[q.tile].coarse_local[q.part]],
                    q -> select(tr[q.tile]))
+    _mirror_folded_box!(solver, lev, select)
     return srcs
 end
 
@@ -1886,11 +1908,12 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                               interpolation_order::Int=6,
                               gradient_deriv=nothing,
                               parent_h=nothing,
-                              boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                              boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                              folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     imposed = ntuple(d -> (faces[d][1] == 0 && !boundary[d][1],
                            faces[d][2] == 0 && !boundary[d][2]), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
-    buffer = _box_buffer(active, boundary)
+    buffer = _box_buffer(active, boundary, folded)
     boxext = _box_extent(region, buffer)
     held = fine_decomp !== nothing
     pdecomps, pplans, pstage = held ?
@@ -1914,7 +1937,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                              Int[], GatherBuffers{T}())
     else
         slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
-                            fine_decomp.n_halo_d, boundary)
+                            fine_decomp.n_halo_d, boundary, folded)
         table, ringlen = _slab_table(slabs)
         # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
         ring_counts = [ringlen * length((r+1):np_tile:n_cons)
@@ -1931,12 +1954,13 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     if gradient_deriv !== nothing && fine_decomp !== nothing
         plans, gdecomps = _box_gradient_plans(pdecomps[end], gradient_deriv, active,
                                               ntuple(d -> T(parent_h[d]) / 3, 3),
-                                              fine_decomp.n_halo_d, imposed, buffer)
+                                              fine_decomp.n_halo_d, imposed, buffer,
+                                              folded)
         gradients = ShellGradients{T}(plans, gdecomps, zeros(T, size(pstage[end])),
                                       zeros(T, shell.len, 3 * n_cons))
     end
     return LevelTransfer{T}(region, active, coarse_regions, coarse_local,
-                            fine_index, parent_comm, imposed, boundary,
+                            fine_index, parent_comm, imposed, boundary, folded,
                             restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
@@ -2068,6 +2092,21 @@ end
 fine_extent(region::BlockRegion, active::NTuple{3,Bool}) =
     ntuple(d -> active[d] ? 3 * region.extent[d] - 2 : region.extent[d], 3)
 
+# The same with the node a folded face adds beyond the coincident lattice
+# (`_fold_lead`), and the fine patch of a region in the refined level's node
+# space: parent node g is fine node 3(g − 1) + 1, the folded low face's
+# extra node fine node 3(g − 1).
+fine_extent(region::BlockRegion, active::NTuple{3,Bool},
+            folded::NTuple{3,NTuple{2,Bool}}) =
+    ntuple(d -> fine_extent(region, active)[d] + _fold_lead(folded, d, 1) +
+                _fold_lead(folded, d, 2), 3)
+_fine_region(region::BlockRegion, active::NTuple{3,Bool},
+             folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) =
+    BlockRegion(ntuple(d -> active[d] ? 3 * region.offset[d] - _fold_lead(folded, d, 1) :
+                            0, 3),
+                fine_extent(region, active, folded))
+_fine_region(lt::LevelTransfer) = _fine_region(lt.region, lt.active, lt.folded)
+
 # `region` grown by `margin` nodes per side along active dimensions, except
 # at a face on the domain boundary (`boundary`), which a level reaches
 # without a margin.
@@ -2090,17 +2129,74 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # The buffered box stops at the face (`_box_buffer`), where the Lagrange
 # interpolation takes its one-sided stencils. The nesting margin applies to
 # the parent-fed faces only (`_buffered`). The faces a level may reach carry
-# a condition in `_level_boundary_condition`; a periodic seam, a fold and any
-# other condition keep the margin.
+# a condition in `_level_boundary_condition`; a periodic seam, a coordinate
+# fold and any other condition keep the margin.
+#
+# A symmetry plane lies half a root cell outside the root's first node, so
+# at ratio 3 the fine nodes nearest it sit at h/6 and h/2: the tile takes one
+# fine node beyond the coincident lattice there (`_fold_lead`), which puts
+# its own first node half a fine cell from the plane, and carries the root's
+# face-centred fold at the fine spacing (`_fine_plans`). The box keeps its
+# buffer across the plane, filled with the parity mirror of the parent's
+# nodes (`_mirror_folded_box!`), so the Lagrange chain stays centred there
+# and interpolates the extra node. Only the first refined level reaches a
+# symmetry plane; the setup, not the regrid, places such a level.
 
 "Whether a refined level may reach a domain face carrying `bc`."
-_level_boundary_condition(bc) = bc isa Union{SlipWallBC,NoSlipWallBC}
+_level_boundary_condition(bc) = bc isa Union{SlipWallBC,NoSlipWallBC,SymmetryPlaneBC}
 
 # Per dimension and side, whether a level may reach that domain face: a
-# non-periodic active dimension whose root condition there qualifies.
-_level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool}) =
+# non-periodic active dimension whose root condition there qualifies, a
+# symmetry plane only where `folds` admits one (the first refined level at
+# setup).
+_level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool},
+                         folds::Bool=false) =
     ntuple(d -> ntuple(s -> active[d] && !periodic[d] &&
-                            _level_boundary_condition(bcs[d][s]), 2), 3)
+                            _level_boundary_condition(bcs[d][s]) &&
+                            (folds || !(bcs[d][s] isa SymmetryPlaneBC)), 2), 3)
+
+# The boundary faces among `boundary` whose root condition is a fold.
+_level_fold_faces(boundary::NTuple{3,NTuple{2,Bool}}, bcs) =
+    ntuple(d -> ntuple(s -> boundary[d][s] && bcs[d][s] isa SymmetryPlaneBC, 2), 3)
+
+# The fine nodes a tile takes beyond its coincident lattice at face `side` of
+# dimension `d`: one at a folded face, none elsewhere.
+@inline _fold_lead(folded::NTuple{3,NTuple{2,Bool}}, d::Int, side::Int) =
+    folded[d][side] ? 1 : 0
+
+# Fill the part of a delivered box beyond a folded face with the parity mirror
+# of the parent's nodes inside it, for every transfer of `lev` whose tile this
+# rank holds: parent node 1 − n reads node n at a low plane, N + n reads
+# N + 1 − n at a high one, each component signed by its parity across the
+# plane. `A` is `select(transfer)`, padded like the chain's stage 0; `N` is
+# the parent's node count along the dimension, the root's, since only the
+# first refined level reaches a plane.
+function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
+    root = getfield(solver, :patches)[1]
+    for lt in lev.transfers
+        lt.fine_index == 0 && continue
+        any(any, lt.folded) || continue
+        A = select(lt)
+        isempty(A) && continue
+        box = _box_nodes(lt)
+        pad = lt.pdecomps[1].n_halo_d
+        for d in 1:3, side in 1:2
+            lt.folded[d][side] || continue
+            fold = root.folds[d]
+            N = solver.n_global[d]
+            at(n) = n - first(box[d]) + 1 + pad[d]
+            for c in axes(A, 4)
+                σ = conserved_parity(solver.equations, fold.sigvel, c)
+                for m in 1:LEVEL_BUFFER
+                    dst, src = side == 1 ? (at(1 - m), at(m)) : (at(N + m), at(N + 1 - m))
+                    sl(i) = ntuple(e -> e == d ? (i:i) : axes(A, e), 3)
+                    view(A, sl(dst)..., c) .= σ .* view(A, sl(src)..., c)
+                end
+            end
+        end
+    end
+    return lev
+end
 
 # The node count of level ℓ's node space along each dimension, the root's
 # being `n_global`; along a periodic dimension no face lies on the boundary
@@ -2121,6 +2217,8 @@ function _region_boundaries(solver, regions::AbstractVector{BlockRegion}, ℓ::I
     root = getfield(solver, :patches)[1]
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
+    # A symmetry plane is not eligible: a regrid never places a level on one,
+    # and a region the setup placed there is not regridded.
     eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
     extent = _level_extent(n_global, active, ℓ - 1)
     return [_boundary_faces(r, extent, eligible) for r in regions]
@@ -2257,8 +2355,8 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     padb = boxf.n_halo_d
     nf = df.n_local
     off = df.offset
-    Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
-    shift = _box_shift(_box_buffer(lt))
+    Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3), lt.folded)
+    shift = _box_shift(lt)
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
     boundary = lt.boundary
@@ -2330,8 +2428,9 @@ end
 # stop at its plane, since the box holds nothing beyond it.
 function _ring_slabs(region::BlockRegion, active::NTuple{3,Bool},
                      pad::NTuple{3,Int},
-                     boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
-    Nf = fine_extent(region, active)
+                     boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
+    Nf = fine_extent(region, active, folded)
     full = ntuple(d -> (boundary[d][1] ? 1 : 1 - pad[d]):
                        (boundary[d][2] ? Nf[d] : Nf[d] + pad[d]), 3)
     slabs = NTuple{3,UnitRange{Int}}[]
@@ -2414,7 +2513,7 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     ringlen = shell.len
     ring = shell.ring
     padb = lt.pdecomps[K+1].n_halo_d
-    shift = _box_shift(_box_buffer(lt))
+    shift = _box_shift(lt)
     # This rank's components, as a range, not a filtered vector: the
     # ascending order is the one the ring unpack below assumes.
     owned = (me+1):np:n_cons
@@ -2492,7 +2591,7 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     g = lt.gradients
     boxf = lt.pdecomps[K+1]
     padb = boxf.n_halo_d
-    shift = _box_shift(_box_buffer(lt))
+    shift = _box_shift(lt)
     owned = (me+1):np:n_cons
     n_owned = length(owned)
     sendbuf = _fit!(shell.buffers.send, 4 * ringlen * n_owned)
@@ -2679,7 +2778,7 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     padf = df.n_halo_d
     nf = df.n_local
     off = df.offset
-    Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
+    Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3), lt.folded)
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
     boundary = lt.boundary

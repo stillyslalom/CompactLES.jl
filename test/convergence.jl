@@ -87,7 +87,8 @@
 #   filter 6.87 | two levels :brady_livescu, d8 detector 5.93 | two levels,
 #   pentadiagonal filter 6.01
 #   a level at a wall (fine wall window against the uniform run at the fine
-#   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68
+#   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68 |
+#   two levels at a symmetry plane C6 6.33
 #   a level on an r-z annulus (fine interface window against the uniform run
 #   at the fine spacing, equal steps, t = 0.2): C6 5.83 | viscous 5.40
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
@@ -105,7 +106,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those seventy-nine numbers are also passed to each study as `recorded` and
+# Those eighty numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -976,6 +977,22 @@ evolution_study("two levels at a slip wall, C6", LEVEL_WALL_NS,
                 N -> wall_level_case(N), wall_level_reference;
                 primary=:wall, tfinal=0.4, steps=N -> 6 * (N - 1), patches=(2,),
                 expect=4.6, tol=0.8, recorded=4.68)
+# The same against a symmetry plane: the tile's first node lies half a fine
+# cell from the plane, one node beyond the coincident lattice, and the tile
+# folds there as the uniform run does, so the window reads what the coarse
+# region and the coarse-fine face bring to the plane: the interior order of
+# the coarse region, the plane adding no defect of its own. At N = 96 the
+# difference is 3e-15, round-off; these grids keep it above 1e-12.
+const LEVEL_PLANE_NS = (18, 24, 36)
+plane_level_reference(s) = begin
+    fine, states = plane_level_case(s.n_global[1]; refined=false)
+    fixed_step_run!(fine, states, 0.4, 6 * s.n_global[1])
+    NodeReference(fine, states)
+end
+evolution_study("two levels at a symmetry plane, C6", LEVEL_PLANE_NS,
+                N -> plane_level_case(N), plane_level_reference;
+                primary=:wall, tfinal=0.4, steps=N -> 6N, patches=(2,),
+                expect=6.3, tol=0.8, recorded=6.33)
 
 # A level on the axisymmetric annulus: a cylindrical pulse leaves the refined
 # patch through both of its coarse-fine faces, and the patch's interface

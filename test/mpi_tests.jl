@@ -3664,6 +3664,71 @@ function test_implicit_stage()
     end
 end
 
+# ---------------------------------------------------------------------------
+# A refined level reaching a symmetry plane, its tile folding there at the
+# fine spacing, with the tile decomposed over the level's ranks: the fold's
+# mirror fill on the edge rank, the box's mirror across the plane on every
+# owner, and the restriction's coincident samples shifted by the node beyond
+# the lattice. A few steps with the artificial properties and the `:d8`
+# detector on two species and molecular ghost fluxes, against the serial
+# rebuild on COMM_SELF, tile by tile.
+# ---------------------------------------------------------------------------
+function test_plane_level()
+    section("level at a symmetry plane: decomposed tile against serial")
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    per = (PeriodicBC(), PeriodicBC())
+    # Max |distributed − serial| over this rank's block of one patch.
+    function blockdiff(ps, a, pr, b)
+        e = 0.0
+        for I in CL.interior(ps.decomp), c in 1:size(a, 4)
+            loc = Tuple(I) .- ps.decomp.n_halo_d
+            J = padded_index(pr, (loc .+ ps.decomp.offset)...)
+            e = max(e, abs(a[I, c] - b[J, c]))
+        end
+        e
+    end
+    function build(comm_here, tile)
+        s = Solver(n_global=(48, 24, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(sym, per, per), comm=comm_here, cfl=0.4,
+                   eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                                     IdealSpecies{Float64}("b", 0.7, 1.3)]),
+                   transport=ConstantTransport{Float64}(mu0=0.01),
+                   art=ArtificialProperties(enabled=true, detector=:d8),
+                   filter_interval=1, tile=tile,
+                   refine=BlockRegion((0, 4, 0), (10, 16, 1)))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            Y1 = 0.5 + 0.2 * cos(pi * x) * sin(2pi * y)
+            Prim(rho=1 + 0.1 * cos(pi * x), u=(0.05 * sin(pi * x), 0.02, 0.0),
+                 p=1.0 + 0.05 * cos(2pi * y), Y=(Y1, 1 - Y1))
+        end)
+        run!(s, Q; tfinal=1e9, nmax=3)
+        return s, Q
+    end
+    for tile in (0, 5)
+        s, Q = build(comm, tile)
+        ref, Qref = build(MPI.COMM_SELF, tile)
+        e = 0.0
+        for (k, p) in enumerate(s.patches)
+            p.level == 1 || continue
+            r = findfirst(q -> q.level == 1 && q.region == p.region, ref.patches)
+            ps, pr = PatchSolver(s, p), PatchSolver(ref, ref.patches[r])
+            e = max(e, blockdiff(ps, Q[k], pr, Qref[r]))
+        end
+        # A tile folds exactly where it reaches the plane, which puts its
+        # first node, one beyond the coincident lattice, at offset −1.
+        check("tile $tile: the tiles fold where they reach the plane",
+              gmax(count(p -> p.level == 1 &&
+                              (p.folds[1] !== nothing) != (p.region.offset[1] == -1),
+                         s.patches)), 0.5)
+        check("tile $tile: fine state against serial", gmax(e), 1e-11)
+        check("tile $tile: root state against serial",
+              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q[1],
+                             PatchSolver(ref, ref.patches[1]), Qref[1])), 1e-11)
+        check("tile $tile: composite volume exact", abs(domain_volume(s) - 1), 1e-13)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -3686,6 +3751,7 @@ const SUITE = (
     ("off-rank folds", test_offrank_folds),
     ("mode truncation", test_mode_truncation),
     ("symmetry plane", test_symmetry_plane),
+    ("level at a symmetry plane", test_plane_level),
     ("NSCBC inflow", test_nscbc_inflow),
     ("turbulent inflow", test_turbulent_inflow),
     ("composite face", test_composite_face),

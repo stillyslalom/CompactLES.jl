@@ -108,6 +108,17 @@ include("capability_cases.jl")
                                   amr=AMR(initial=[BlockRegion((16, 0, 0), (16, 1, 1)),
                                                    BlockRegion((60, 0, 0), (20, 1, 1))],
                                           regrid_interval=1, tile=4)))
+        # A level reaching a symmetry plane, on the host backend at either
+        # precision, and a regridded level kept off one.
+        plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
+        for precision in (Float64, Float32)
+            @test C.advances(plane, Numerics(n_global=(48, 1, 1),
+                                             execution=Execution(; precision),
+                                             amr=AMR(initial=BlockRegion((0, 0, 0),
+                                                                         (12, 1, 1)))))
+        end
+        @test C.advances(plane, Numerics(n_global=(48, 1, 1),
+                                         amr=AMR(initial=feature, regrid_interval=1)))
         # Every EOS on a patched and on a refined layout.
         for (name, eos, ic) in C.EOSES[2:end],
             kw in ((; execution=Execution(patch_grid=(2, 1, 1))),
