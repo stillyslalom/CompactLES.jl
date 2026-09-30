@@ -139,10 +139,6 @@ DocMeta.setdocmeta!(
             "Verification and validation" =>
                 "explanation/verification-validation.md",
         ],
-        "Examples" => [
-            "Switchable boundary" =>
-                "case-studies/switchable-boundary.md",
-        ],
         "Reference" => [
             "Supported combinations" => "reference/capabilities.md",
             "Input and runtime API" => [
