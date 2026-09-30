@@ -1,10 +1,10 @@
 # # Initialize a resolved cylindrical domain
 #
-# [Setting up a radial acoustic pulse](@ref)
-# collapsed the angular and axial directions to reach an axisymmetric
+# [Supernova remnant](@ref)
+# collapsed both angular directions of a sphere to reach a spherically symmetric
 # calculation at one-dimensional cost. This tutorial keeps all three cylindrical
 # directions resolved: ``(r,\theta,z)`` with the azimuth periodic over a full
-# turn and the axis regularized by the fold introduced there. It shows how to
+# turn and the axis regularized by a fold, as the origin was there. It shows how to
 # place an off-axis feature, which additional constraints a resolved angle
 # imposes, and how to view a coordinate slice as a physical disk.
 

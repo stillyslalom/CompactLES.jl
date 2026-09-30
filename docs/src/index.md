@@ -47,10 +47,13 @@ a shocked interface with Richtmyer's model.
 [Rayleigh–Taylor instability](@ref) adds a body force and an initial state in
 hydrostatic balance with it, and compares the growth of a diffuse interface
 with linear theory.
+[Supernova remnant](@ref) adds a spherical grid resolved in radius alone,
+continued through its origin, and astrophysical units, and compares the growth
+of a blast wave with the Sedov–Taylor solution.
 [Follow a moving feature with refinement](@ref) shows how a
 physical-coordinate selector places fine cells. The geometry
-sequence starts with a collapsed radial calculation before resolving a full
-cylinder and, finally, a sphere with an origin and poles.
+sequence then resolves a full cylinder and, finally, a sphere with an origin
+and poles.
 
 The tutorials give enough explanation to run and interpret each calculation.
 For the mathematical development, read [Governing equations](@ref) followed by

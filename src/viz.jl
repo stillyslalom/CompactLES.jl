@@ -854,8 +854,8 @@ Revolve a one-dimensional radial profile into a two-dimensional axisymmetric
 raster: the `(axis, disk)` pair a heatmap draws as a disk of radius
 `radius[end]`, with `values` interpolated radially and `fill` (default `NaN`,
 transparent) outside. This is the view for a collapsed radial calculation, such
-as the azimuthally symmetric run of the [radial coordinate tutorial](@ref
-"Setting up a radial acoustic pulse") or the converging shock, where there is no
+as the spherical blast wave of the [supernova remnant tutorial](@ref
+"Supernova remnant") or the converging shock, where there is no
 resolved angle to slice with [`field_slice`](@ref). The field is a function of
 ``r`` alone and the disk is its surface of revolution.
 
