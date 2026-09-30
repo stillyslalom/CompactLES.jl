@@ -193,7 +193,7 @@ Choose each face's condition from its physics, as described in
 | [`NoSlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral, viscosity damps every closure's wall mode | the wall flux contract | adiabatic by default; a wall temperature makes it isothermal |
 | [`DirichletBC`](@ref) | closure rows | neutral under every closure option | none | shock tubes and supersonic inflow |
 | [`NSCBCInflowBC`](@ref), [`NSCBCOutflowBC`](@ref) | closure rows | depends on the relaxation scale | one to three compact solves per face per stage, six for an inflow carrying its transverse terms | faces with a unit scale factor only; both carry the transverse coupling of Yoo and Im, weighted by `beta_t` |
-| folds ([`AxisBC`](@ref), [`OriginBC`](@ref), [`PoleBC`](@ref)) | 3 | neutral | the fold exchange | the spherical origin needs data resolved over three cells and a CFL of 0.3 on a converging shock |
+| folds ([`AxisBC`](@ref), [`OriginBC`](@ref), [`PoleBC`](@ref)) | 3 | neutral | the fold exchange | a strong shock at the spherical origin needs a CFL of 0.5 or less, 0.15 from a singular start and 0.2 for a blast |
 
 When the problem's symmetry permits a periodic or folded dimension, use it
 instead of adding a wall at the symmetry plane. This avoids the wall's
@@ -216,7 +216,7 @@ filtering even when artificial properties are enabled. Use
 | `StateFilter` `cfl` | 0.35, the reference CFL at which a pass is full strength | 0 applies every pass at full strength; dissipation per unit time then depends on the timestep |
 | `smoother` | `:gaussian`, explicit | `:compact`, one pass of the state filter per sensor: a quarter of the right-hand side in the multicomponent case, and one sweep per species |
 | `beta_sensor` | `:strain` | `:dilatation` on an inviscid wall or wherever the strain cusp costs order |
-| `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` elsewhere | `:d8` on every field separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling to 0.25; `:delta4` with `C_D = 0.1` is the earlier default and Cook's form of the Fickian channel |
+| `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` elsewhere | `:d8` on every field separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling on Noh from 0.5 to 0.4; `:delta4` with `C_D = 0.1` is the earlier default and Cook's form of the Fickian channel |
 | `species_flux` | `:partial_density`, one diffusivity on the partial densities with the mass flux carried into momentum and energy | `:bulk` for a shocked interface at a density ratio of 100 or more, at about a tenth more per step again; `:fickian`, Cook's per-species flux, is cheaper and moves the pressure at an interface of unequal molecular weight (see [Filtering and artificial properties](@ref)) |
 
 Sensor smoothing is the largest single cost in the artificial-property
@@ -234,11 +234,11 @@ At 96 points, a single derivative's wall error is about 9e-5 in either
 precision. Keep the default closures in Float32: the Brady–Livescu rows
 have a higher wall-derivative error floor, near 1e-3.
 
-The default `cfl = 0.5` completes every case in the regression battery except
-the converging strong shock at the spherical origin, whose limit is 0.3
-at every tested resolution. `StepControl(retries = 4)` recovers that case
-by rolling back and retrying at a lower CFL; the same mechanism handles
-startup transients.
+The default `cfl = 0.5` completes every case in the regression battery. It
+is the limit of a converging strong shock at the spherical origin at every
+tested resolution, and a singular start or a strong blast at the origin has
+a lower one. `StepControl(retries = 4)` recovers those cases by rolling back
+and retrying at a lower CFL; the same mechanism handles startup transients.
 
 The three-dimensional CFL uses a Euclidean bound over the three directions.
 For the same timestep, its value is smaller than a per-direction CFL
@@ -257,5 +257,5 @@ below covers those regimes and others, with the reasoning for each choice.
 | periodic turbulence box | C8 or C10 | not used | default | default | Float64, or Float32 on a device | every dimension retains the formal order; choose based on resolving power per point and step cost |
 | wall-bounded channel or cavity | C6 | `:brady_livescu` for a sixth-order wall; `:neutral3` for a shocked start at a high CFL number | default `:onesided` rows | `:dilatation` if the walls are inviscid | Float64 | wall closure coefficients determine the wall order |
 | shock tube, Dirichlet ends | C6 | `:neutral3` | default | default | either | the ends are neutral and the shock sets the resolution |
-| converging shock on a cylindrical axis or spherical origin | C6 | `:neutral3` | default | default; not `:d8` at the origin | Float64 | the fold is third order; at the origin start with resolved data, `cfl = 0.3` and retries |
+| converging shock on a cylindrical axis or spherical origin | C6 | `:neutral3` | default | default; not `:d8` at the origin | Float64 | the fold is third order; at the origin keep the default `cfl = 0.5` and the retries |
 | long inviscid run between symmetry planes | any | `:neutral3` | default | default | either | the neutral rows hold the round-off seed; the cascade rows do not |

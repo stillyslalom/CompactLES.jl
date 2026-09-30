@@ -792,23 +792,20 @@ Each of these took time to establish. The measurements and the
 rejected hypotheses are in the file named; read it before re-deriving any of
 them.
 
-- **A converging strong shock at the spherical origin is CFL-limited to 0.3**
-  by an excursion of the origin cell near t = 0.39 on Noh, at every
-  resolution; `StepControl(retries = 4)` recovers it. The planar wall and the
-  cylindrical axis carry no ceiling, since `run!` primes the artificial
-  coefficients before the first step. The discretization-order explanations,
-  the density proportionality of β\* and the per-step filter strength have
-  been ruled out for the origin. → `reference/CALIBRATION_APPENDIX.md`
+- **A strong shock at the spherical origin has a lower CFL ceiling than at
+  the planar wall or the cylindrical axis**, which complete Noh from 0.9
+  since `run!` primes the artificial coefficients before the first step. The
+  warm-started Noh is limited to 0.5 by an excursion of the origin cell near
+  t = 0.39, the singular t = 0 start to 0.15 and a top-hat blast to 0.2–0.3;
+  `StepControl(retries = 4)` recovers each. The discretization-order
+  explanations, the density proportionality of β\* and the per-step filter
+  strength have been ruled out; the area form of the radial pressure term set
+  a lower ceiling and a resolution requirement on the initial data, and the
+  blast fails in either form. → `reference/CALIBRATION_APPENDIX.md`
 - **κ\* is written as `ρc/T_ion`** and is not singular in practice: the sound
   speed vanishes with the temperature at a floored cell, and on Noh the κ\*
   rate is an order below the β\* rate at every ambient pressure from 1e-2 to
   1e-8. `artificial_conductivity_scale` remains an EOS dispatch point.
-- **The spherical origin fold is much less forgiving than the cylindrical axis.**
-  It needs initial data resolved over ≳3 cells and will not take Noh's singular
-  t = 0 start, both of which the axis handles. A candidate cause is measured
-  but not changed: the radial momentum's pressure term, in the area form
-  (1/r²)D(r² p) − 2p/r, makes the filtered one-step map at the origin grow
-  at rest, and ∂p/∂r makes it neutral. → `reference/CALIBRATION_APPENDIX.md`
 - **The compact filter, not the Cook artificial properties, holds this solver
   together, and its fit is joint with `C_mu`.** At 128³ TGV the filter
   supplies 37% of the energy sink yet removing it kills the run, while removing

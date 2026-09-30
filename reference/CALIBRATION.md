@@ -32,9 +32,9 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.3 to 0.25 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
+| `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.5 to 0.4 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs about 10% more per step than `:fickian` against `:bulk`'s 20 to 25% ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)). |
-| `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
+| `cfl` | 0.5 | keep | A converging shock at a spherical origin completes at 0.5; keep `StepControl(retries = 4)` for a singular start or a strong blast through the origin, whose ceilings are 0.15 and 0.2; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
 | `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)). |
 | `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
 | `StepControl.species_band` | 0.05 | keep | A grid-scale species interface carries about 1% outside [0, 1] at every resolution under the mass-fraction bound and 5 to 7% at its worst without it; the band sits between the two, is also the threshold of the failsafe's composition clip, and is separate from the bound's dead band `Y_tolerance` ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
@@ -48,6 +48,8 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17 times less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)). |
 | `NSCBCInflowBC` `beta_t` | 1 | keep | The full transverse share admits an entering vortex with a third of the LODI error at every relaxation rate and is the only weight under which the imposed state follows its target through a transverse flow; it reflects an oblique pulse at 0.13 of the incident amplitude against 0.047 at the outflow's Mach-number weight ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
 | `NSCBCOutflowBC` `beta_t` | −1 (local Mach) | keep | Least pulse reflection near the Mach number; a vortex leaves most cleanly at 1 − M, measured at one Mach number only ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
+| `C_sharpen` | 0 (off) | opt-in | The interface sharpening flux thins a shocked interface at density ratio 100 at a cost in ringing and steps, improves nothing at 1000, and its gate opens on the plateau extrema of a smooth slab, so it stays off until the localization is fixed ([sharpening flux](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux)). |
+| `ImplicitConduction` `step_rule`, `tolerance`, `rtol` | `:error`, 1e-3, 1e-8 | opt-in | The embedded estimate and Riot's fractional temperature change reach the same pulse error at the same Krylov work, so the rule without a per-field target is the default; the pair itself stays opt-in, single-patch and host-only ([additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)). |
 
 Every constant above was fitted under `compact_filter(0.45)` applied at full
 strength every step, and the four that could depend on it have been re-swept at
@@ -60,17 +62,13 @@ number sets stability more than any constant in the list.
 Each entry gives the symptom, the setting to move and in which direction, and the
 cost. The link is to the section holding the evidence.
 
-- **A converging shock loses positivity at the spherical origin early in the
-  run.** Lower `cfl` to 0.3, or keep 0.5 with `StepControl(retries = 4)`,
-  which recovers the case in about half the steps of a fixed `cfl = 0.15` and
-  is what `setup` takes for a problem with an `OriginBC` when the deck gives
-  no `control`. Do
-  not lower `C_beta` below 0.5 for the origin
-  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
-- **A spherical-origin run fails within tens of steps of a sharp start.** Warm
-  the run from a profile resolved over three cells or more; the origin fold
-  cannot take the singular start of Noh, which the cylindrical axis accepts
-  ([fold order](CALIBRATION_APPENDIX.md#fold-order-and-geometry-limits)).
+- **A shock loses positivity at the spherical origin.** A converging shock
+  completes at `cfl = 0.5`; a singular start or a strong blast through the
+  origin does not, and `StepControl(retries = 4)`, which `setup` takes for a
+  problem with an `OriginBC` when the deck gives no `control`, recovers both.
+  Do not lower `C_beta` below 0.5 for the origin
+  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell),
+  [fold limits](CALIBRATION_APPENDIX.md#fold-order-and-geometry-limits)).
 - **A resolved or smooth solution is over-dissipated.** Weaken the filter with
   `compact_filter(0.49)`, which fits at 128³ and at 256³. The filter is the
   sink, 37% of the Taylor-Green dissipation at 128³, and raising `C_mu` does not

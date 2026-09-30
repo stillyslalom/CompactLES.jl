@@ -28,23 +28,24 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 The first four are independent and may proceed together, subject to one heavy
 run at a time.
 
-1. **N23** refines the r-z capsule, the production configuration, which setup
-   rejects today. Its first stage also delivers the physical-face half of A10.
+1. **N23** finishes refining the r-z capsule, the production configuration:
+   levels reach its axis and its symmetry plane, and three stages remain.
 2. **N4** settles `C_mu` before any external comparison: the filter fits
    behind the α = 0.47 default were made at `C_mu = 0.002`, and V1 compares
    the defaults.
 3. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
    It supplies N18's remaining reference and V2's use case.
 4. **H2** integrates the existing molecular conduction implicitly with the ARK
-   pair. H1's operator and one-patch solve are delivered, so the IMEX contract
-   is verified on a known equation before any new physics depends on it.
+   pair, which verifies the IMEX contract on a known equation before any new
+   physics depends on it. The serial pair is delivered; an MPI phase remains.
 5. **A7** draws the material boundary and the per-component field declaration
    before H3 adds the first new evolved field.
 6. **H3**, then **H4**: two temperatures with an ionization closure and the
    electron–ion exchange, then electron and ion conduction through the implicit
-   stage. H5's table reader may start at any point.
-7. **N22** sharpens the species channel's interfaces, and becomes urgent when a
-   case at density ratio 100 or more is in production.
+   stage. H5's table readers are delivered; its adapters follow A7.
+7. **N22** sharpens the species channel's interfaces. The flux is delivered
+   off by default; its localization and density ratio 1000 remain, and
+   become urgent when a case at density ratio 100 or more is in production.
 8. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
@@ -119,11 +120,48 @@ surface; H8 for a magnetized target.
   for the authors.
   M2 is the phase-field counterpart for immiscible materials on the staggered
   operators; share the analysis but not the requirement that M1 come first.
+  Delivered, opt-in and experimental (commits `2da228c`, `64109d7`,
+  `d1836dd`): `C_sharpen` and `sharpen_width` on the partial-density channel,
+  sharpening the volume fraction with the ρ_k weights that keep a uniform
+  (u, p, T) state uniform, with gated and regularized normals, its rate in
+  `max_rate`, and the default path bit-identical. It thins the interface at
+  density ratio 100 at a cost in ringing and steps, improves nothing at 1000,
+  and acts on the plateaus of a smooth slab, so `C_sharpen` defaults to 0
+  ([the sharpening flux](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux)).
+  Remaining: fix the localization on the smooth slab, then qualify at
+  density ratio 1000; the discretization, normal
+  regularization and step-limit questions to the authors; the He/CO2 tube
+  and the N20 budgets with the flux on; MPI and GPU coverage.
   **Depends on:** nothing. **Gate:** the shocked interface at
   density ratios 100 and 1000 against the unsharpened channel (width in
   volume and mass fraction, TV−1, worst Y), the smooth-slab deposit of
   `bench/falseactivation.jl`, the He/CO2 tube, the N20 budgets, and
   `test/validation.jl` baselines explained.
+
+- [ ] **N24 — Remove the grid-scale growth at the coordinate folds.**
+  The area form of a fold's pressure term differs from the gradient at the
+  grid scale, and the fold's one-step map grows at a rate per step
+  independent of N
+  ([grid-scale growth at the r-z axis](CALIBRATION_APPENDIX.md#grid-scale-growth-at-the-r-z-axis)).
+  Delivered: the gradient form on θ-collapsed r-z (commit `17b0e44`) and on
+  the spherical radial and polar momenta; the axis runaway,
+  the αf dependence of Noh's axis deficit and the origin's resolution
+  requirement are gone, and Noh's origin ceiling rises from 0.3 to 0.5.
+  Remaining: a strong blast through the origin still has a CFL ceiling of
+  0.2 to 0.3 in either form, where the axis and the plane take 0.5, and the
+  mechanism is open; the resolved-θ axis carries the defect unfiltered only.
+  **Gate:** the origin blast at `cfl = 0.5` without retries.
+
+- [ ] **N25 — Diagnose the cylindrical slip wall's order in r.**
+  On an r-z annulus a standing wave touching the slip walls converges at
+  about second order where the Cartesian line converges at the interior
+  order; a pulse that never reaches the wall converges fully, so the loss is
+  at the curved wall
+  ([the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+  Find whether the wall rows, the flux correction's area weighting, the
+  curvature source at the wall, or the filter's wall rows set it.
+  **Gate:** a slip-wall evolution row on the annulus in
+  `test/convergence.jl` at the order of the Cartesian wall row.
 
 ## Validation and verification
 
@@ -158,9 +196,10 @@ surface; H8 for a magnetized target.
   S6); each instrument's current transcript under `bench/results/<script>.txt`,
   so that an appendix table is a quoted output and never a retyped one, each
   landing with that script's next run rather than assembled from the tables it
-  would replace; and a `bench/` runner taking medians over repeated processes,
-  which the performance gates of A7 and S3 need to resolve differences under
-  the run-to-run spread.
+  would replace. The runner taking medians over repeated processes, with an
+  order-alternated paired mode for a before/after comparison, is
+  `bench/repeat.jl` (commit `2290c83`), and its first paired transcript is
+  `bench/results/derivcost.txt` (commit `a2d7311`).
   **Gate:** KA-on-CPU equality does not substitute for hardware-GPU tests
   under S1.
 
@@ -179,34 +218,29 @@ candidate is qualified on the N10 budgets and the N11 shock crossings before
 promotion.
 
 - [ ] **N23 — Refine axisymmetric r-z runs (high priority).** An ICF capsule
-  in r-z with a symmetry plane at z = 0 is the production configuration, and
-  setup rejects both halves of it: `AMR: requires CartesianMetric`, and
-  `AMR: cannot refine a run with a SymmetryPlaneBC`. A Cartesian mock-up of
-  the capsule shows the third gap: every level stays `max(n_halo, 4)` parent
-  nodes off every root boundary, so the shell where it meets the symmetry
-  plane (and, in r-z, the axis, where the hot spot forms) keeps root
-  resolution. Stages, in order:
-  1. A tile face on a root boundary: a refined tile carries the boundary's own
-     condition on that face (wall, `SymmetryPlaneBC`, NSCBC) instead of a
-     parent-fed shell, with the nesting margin applied to parent-fed faces
-     only; the restriction margin and the covered mask follow. This extends
-     N6l's face-centred fold to refined runs.
-  2. `CylindricalMetric` with θ collapsed on refined levels: the per-tile
-     metric (`inv_r`, face areas, the discrete GCL) at the fine spacing, and
-     the composite quadrature and conservation budgets weighted by r.
-  3. A tile on the axis: `AxisBC` on θ-collapsed r-z is a parity mirror, not
-     the antipodal butterfly constraint 4 of `AMR_GPU.md` forbids refining
-     across, so a tile face at r = 0 takes the mirror as its boundary
-     condition. The half-cell offset carries over at ratio 3: the coarse node
-     at h/2 puts the fine nodes nearest the axis at ±h/6. This is the one
-     fold at which refinement is designed; the prohibition of S8 stands at
-     the others.
-  **Gate:** smooth-solution orders across a coarse-fine face in r-z and
-  across a tile face on the axis and on the symmetry plane
-  (`test/convergence.jl`), composite conservation with r weights, a
-  converging shock refined onto the axis against a uniform-fine run, and the
-  tutorials whose walls are true symmetry planes switched from `SlipWallBC`
-  to `SymmetryPlaneBC`.
+  in r-z with a symmetry plane at z = 0 is the production configuration, with
+  the hot spot on the axis. Delivered: a level at a slip or no-slip wall
+  (`99a7fcf`), levels on θ-collapsed r-z off the axis (`153430e`), the first
+  level at a Cartesian symmetry plane (`0e92d7c`), at an NSCBC face
+  (`9aed6e7`), on the axis and at the axis/z = 0 corner (`c2e7a39`), the opt-in
+  `level_boundaries` placing regridded levels on wall and NSCBC faces
+  (`1e15700`), and cylindrical Noh refined onto the axis as a validation row
+  (`7c629b0`); no tutorial wall stands for a mirror plane. Remaining:
+  1. Fold faces (the plane and the axis) on stacked device tiles and with
+     `:filter` restriction. Regridding and nesting at a fold are delivered
+     (commit `56993d0`).
+  2. Done (commit `8b2f20e`): the nested-level convergence row takes the
+     filter, as the axis rows do; the unfiltered coupling's growing mode is
+     A16.
+  3. Done (commit `93f084c`): `level_boundaries` on by default, periodic
+     seams included, a face a level cannot carry keeping the margin.
+  4. The phase change `setup(solver, Q; ...)` replaces `SwitchableBC`, now
+     deprecated (commit `f2d130a`). Remaining: remove `SwitchableBC` in the
+     next release, and decide whether a phase may change `art.enabled`.
+  The axis's sawtooth response is N24, the cylindrical slip wall's order
+  N25, and the shock-crossing mass loss A14.
+  **Gate:** per remaining stage, the refined-versus-uniform rows of
+  `test/convergence.jl` and the Noh axis rows of `test/validation.jl`.
 
 - [ ] **S15 — Run a refined hierarchy across many nodes.**
   The target is a mixing layer or a plane shock resolved by a tiled level, or
@@ -240,21 +274,30 @@ promotion.
   table at the largest count available, the MPI suite at 2, 4 and 8 ranks,
   and bitwise agreement of every stage that only moves data.
 
+- [ ] **A15 — Nest each refined patch inside one parent patch.**
+  A level-ℓ ≥ 2 patch lies within one parent patch, and its box reads that
+  parent's padded array after the parent's halo exchange (under subcycling
+  the right-hand side's halos too, for the Hermite box), so ownership is a
+  tree: a parent tile and its children migrate together, and co-located
+  children couple on one rank. The tile lattice already nests children in
+  one parent cell; the one-box path splits at parent tile boundaries. Level
+  1 keeps the root coupling, since the root is one patch over many ranks.
+  **Depends on:** S15 stage 2 and S8's migration, which it reshapes.
+  **Gate:** the level rows of `test/convergence.jl` unchanged, the migration
+  audit bitwise, the coupling's point-to-point traffic per rank falling in
+  `bench/amr_scaling.jl` when children are placed with their parents.
+
 - [ ] **A10 — Let a refined level reach every domain boundary.**
-  Every level now stays `max(n_halo, 4)` parent nodes inside its parent, so a
-  feature at a wall, an inflow face, or across a periodic seam stays coarse
-  (a warning says so for a box and for shapes; the tiled path drops the
-  margin band silently). N23 stage 1 delivers the physical faces. Remaining:
-  a periodic image of the parent data in the level coupling and wrapped tile
-  regions, so a level crosses a periodic seam; the warning on the tiled path;
-  and the target case, the 3-D vortex ring fired from a tube's top face into
-  an air/SF6 interface and then shocked through it (the axisymmetric form is
-  `examples/vortex_ring_shock.jl`). The ring forms at the injector face, so
-  before N23 stage 1 it can only be formed inside the domain by a body force;
-  in that workaround one refined box follows the ring well, and lattice tiles
-  of small edge cost many times more per step than the box for a compact
-  feature.
-  **Depends on:** N23 stage 1.
+  A level reaches a wall, a symmetry plane, an NSCBC face and the r-z axis
+  (N23), and crosses a periodic seam (commit `a642ad7`; the regrid and
+  shapes only under `level_boundaries`). Remaining: one box spanning a
+  whole period, and the target case, the 3-D vortex ring fired from a tube's
+  top face into an air/SF6 interface and then shocked through it (the
+  axisymmetric form is `examples/vortex_ring_shock.jl`), with the ring
+  formed at the injector face rather than by a body force inside the
+  domain. Under the body force one refined box follows the ring well, and
+  lattice tiles of small edge cost many times more per step than the box
+  for a compact feature.
   **Gate:** a shock and an interface followed into a wall and through a
   periodic seam, with the conservation and interface-reflection tests of a
   uniformly fine run; the vortex-ring case with the ring formed at the face.
@@ -268,7 +311,73 @@ promotion.
   **Depends on:** a concrete case.
   **Gate:** interface accuracy, conservation budgets, restart, and distributed
   consistency. Refinement across a fold stays forbidden pending a separate
-  design; N23 stage 3 is that design for the θ-collapsed axis only.
+  design; N23's axis tile (commit `c2e7a39`) is that design for the
+  θ-collapsed axis only.
+
+- [ ] **A14 — Add a conservative flux correction at coarse-fine faces.**
+  The level coupling interpolates and injects and reconciles no fluxes. A
+  strong shock leaving a static tile on Noh loses mass at the crossing, at
+  the r-z axis and at a symmetry plane alike, and the plateau inside the tile
+  falls to about the coarse level's
+  ([the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+  Regridding that follows the shock avoids most crossings, but the dendritic
+  layouts of [AMR_GPU.md](AMR_GPU.md#long-term-target-dendritic-meshes) put
+  shocks across coarse-fine faces in every converging run without AMR. Design
+  a flux register for the node-centred coupling: the coarse face flux
+  replaced by the time- and area-integrated fine flux, under global stepping
+  and subcycling, over tiles and ranks, and on the metric's face areas.
+  **Gate:** mass, momentum and energy to round-off on the Noh crossing rows
+  of `test/validation.jl`; the smooth interface orders of
+  `test/convergence.jl` unchanged or better.
+
+- [ ] **A16 — Make the level coupling stable without the filter.**
+  Under the default ghost fluxes and no filter, the one-step map of a
+  refined run has a real eigenvalue above one at the edge of the restriction
+  window, a density offset with a sawtooth component, whose rate rises with
+  resolution; it sets the order of a second nested level. A filter pass at
+  any tested cadence removes it; the closure rows are stable at lower order;
+  interpolation order and a wider restriction margin do not help
+  (`bench/couplingspectrum.jl`,
+  [the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+  Candidates: a dissipative band at coarse-fine faces active without the
+  global filter, or a restriction window blended at its edge instead of
+  injected up to a hard cutoff; each needs a stability argument checked on
+  the spectrum.
+  **Gate:** no eigenvalue above the uniform run's on the nest and one-level
+  cases at N = 36 to 144 unfiltered; the unfiltered interface rows of
+  `test/convergence.jl` unchanged or better.
+
+- [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
+  Refinement exists to reach the fine grid's answer sooner. On the small
+  serial cases measured it does not: a 1-D converging shock at the axis, a
+  planar Sod tube in 2-D and three blobs advected through a periodic 2-D box,
+  each warm against the uniform grid at the refined spacing, take from 0.93
+  to 2.5 times the uniform wall. Three causes, each measurable on its own:
+  1. The root step. Covered root nodes carry the artificial diffusivity of
+     the restricted fine solution, whose features the root cannot resolve,
+     and its diffusive rate sizes the subcycled step: the root takes 1.5 to
+     1.7 times the steps of a root-only run, and with the artificial
+     properties off the two rates agree. Restriction overwrites those nodes,
+     so their rate need not bound the step; candidates are excluding covered
+     nodes from `max_rate` through `covered`, or not evaluating the
+     artificial properties there.
+  2. The cover. The tagged region is broader than the feature: 15 of 16
+     tiles for three blobs of radius 0.08 in a unit box, and tiles of edge 8
+     do more work than one box on the Sod tube. Revisit `tag_buffer`, the
+     default `tag_threshold` and the reach of the gradient criterion.
+  3. The cost per point, 1.4 to 2.5 times the uniform grid's: the Hermite
+     fill of the ghost shell (14–30% of a subcycled run, more as tiles
+     shrink), the ghost-flux divergence at coarse-fine faces (12–22%),
+     regridding (up to 9%) and the folded box at the axis (7–12% in 1-D).
+  Build the instrument first: a `bench/` script that times warm coarse,
+  refined and uniform-fine runs of one problem in one process and reports
+  point-steps, a phase profile and the composite error against the fine run,
+  with `bench/amr_cost.jl`'s 3-D case, where refinement already wins, as one
+  of its problems.
+  **Gate:** on the Sod tube, the blob case and the 3-D cost case, the refined
+  wall below the uniform fine wall at a composite error no larger than the
+  current refined run's; bit-identical numerics for any change that claims
+  to touch cost only.
 
 - [ ] **A13 — Refinement on the remaining metrics and layouts.**
   N23 takes the cylindrical metric and the symmetry plane. Refinement still
@@ -312,8 +421,8 @@ limiter.
   exactly symmetric at the cylindrical axis and the spherical poles, where no
   symmetric closure keeps fourth order (commit `b80d0fb`); and stage 2, the
   one-patch implicit stage solved by conjugate gradients, or GMRES at the axis
-  and poles, under a line-relaxation V-cycle, which holds 13–23 iterations
-  flat in grid and stiffness except on a spherical grid with an origin (commit
+  and poles, under a line-relaxation V-cycle, whose iteration count is flat
+  in grid and stiffness except on a spherical grid with an origin (commit
   `8819db1`). Remaining, each when a case needs it: a smoother for that grid
   (plane relaxation is the candidate), agglomeration of the coarsest level at
   large rank counts, and stage 4, the implicit stage on refined levels and on
@@ -336,12 +445,37 @@ limiter.
   explicit half: the pair's embedded error estimate or Riot's target
   fractional change of temperature per step, chosen by measurement
   ([IMPLICIT.md](IMPLICIT.md#open-questions)).
+  Delivered, opt-in (commit `9fd6365`): `ImplicitConduction` through
+  `Numerics(implicit = ...)` on a single host-storage patch, the conduction
+  removed from the explicit half by a transport wrapper, Newton stages on
+  the delivered implicit solve, a failed solve recovered through the
+  `StepControl` rollback, both step rules implemented and measured alike at
+  equal work ([the additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)).
+  The defaults are `:error` at 1e-3 and `rtol = 1e-8`
+  ([CALIBRATION.md](CALIBRATION.md)); the pair is not the default
+  integrator. Remaining before closing: an MPI phase for the pair. The
+  refined-level and device forms are H1 stage 4.
   **Depends on:** H1 stages 1 and 2, delivered.
   **Gate:** temporal order on the smooth-evolution cases, a Gaussian
   conduction pulse at steps far beyond the explicit diffusive limit (Riot's
   `conduction_analytic`), stiff stability at large R, the acoustic CFL limit
   of the explicit half, and a failed implicit solve recovered by collective
   rollback.
+
+- [ ] **H10 — Carry the implicit stage to the production configuration.**
+  The implicit conduction of H1 and H2 runs on one host-storage patch
+  without refinement, which the refined, decomposed capsule run cannot use.
+  Design the stage for that configuration: the Krylov solve and its
+  multigrid preconditioner over ranks and the compact interface solves, the
+  implicit stage across same-level patches and refined levels (a composite
+  operator, or level-by-level solves consistent with the level coupling and
+  the subcycled step), and device storage. The single-patch stage remains
+  the reference that verifies and benchmarks it. H3 onward inherits this
+  constraint.
+  **Depends on:** H2.
+  **Gate:** the H2 pulse and temporal-order rows reproduced on a decomposed
+  run, on a refined level against the uniform-fine run, and under the
+  device backend; iteration counts flat in rank count.
 
 - [ ] **A7 — Implement material interfaces with an explicit analytic fast path.**
   Follow [the interface design](DESIGN.md#material-and-physics-interfaces):
@@ -423,6 +557,19 @@ limiter.
   that interface. Declare frozen/equilibrium derivatives and supported
   temperature partitions; a 1T table alone does not supply a 2T EOS or the
   populations required by transport.
+  Delivered, standalone and unexported: the IONMIX4/6 reader and writer
+  with bilinear (ln T, ln ρ) interpolation, its own derivatives, column
+  inversion and the `TABLE_` statuses (commit `5598c9c`), and the SESAME
+  ASCII 2 reader and writer for records 201 and 301–306 on the same table
+  machinery, with an opt-in free-energy-consistent bicubic Hermite route
+  (commit `44ca2f8`). Remaining: the SP5 HDF5 form in the HDF5 extension, a
+  check against a real table of each format, the A7 adapters and the
+  artificial-conductivity scale. Thermodynamic consistency between nodes is
+  a declared property of a table model, not a contract requirement: the
+  adapters read the interpolant's own c² and c_v rather than recomputing
+  them from p and e. A SESAME adapter carries an energy reference per
+  material, since the zero of energy varies between tables, and falls back
+  to the 306 cold curve below the first positive isotherm.
   **Depends on:** the relevant A7 contracts; reader/data work may precede them.
   **Gate:** table-node/interpolation checks, inverse consistency, derivatives,
   phase/domain handling, and an EOS-specific artificial-conductivity scale.
@@ -631,7 +778,8 @@ under [the refinement track](#refinement-for-the-production-geometry).
   at N = 256 and 10.4 / 8.3 at N = 1024, a few hundred to a thousand ranks.
   The 224-rank rzhound run with dims (8,7,4) was at that crossover along x.
   Per-step collective latency is not the limit: Allgathers span one direction's
-  P ranks and the measured node scaling was 93% per doubling at four nodes.
+  P ranks and the measured node scaling holds to four nodes
+  ([CLUSTER.md](CLUSTER.md)).
   Stages, in order:
   1. Instrument first: `bench/reducedsolve.jl` (commit `3fb37a9`) times the
      local sweep, the Allgather and the reduced solve separately for both
@@ -639,8 +787,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
      remains.
   2. Done in commit `6bfeb55`: a pivoted band LU of the block-tridiagonal
      reduced matrix, periodic lines by an interleaved ordering, the dense LU
-     kept only at P = 1; the reduced stage is 2.3–5.6× faster at P = 2–16 on
-     the workstation and departs from serial within the dense solve's range.
+     kept only at P = 1; the reduced stage is faster than the dense solve at
+     every P measured on the workstation and departs from serial within the
+     dense solve's range.
   3. Only if the Allgather volume (2qP lines' worth per rank) then shows in
      the probe: a distributed reduced solve in which only neighbors exchange,
      the SPIKE recursion, which also removes the replicated factorization.
@@ -706,14 +855,16 @@ under [the refinement track](#refinement-for-the-production-geometry).
 
 - [ ] **S13 — Cut the remaining cost of the NASA-9 temperature inversion.**
   `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
-  per point and per Runge–Kutta stage, and that solve is the ~6× step cost of
-  the NASA-9 model over `IdealMixture`. The interval table is isbits and the
+  per point and per Runge–Kutta stage, which makes the recovery several times
+  as costly as under `IdealMixture` and the CPU step a third dearer
+  ([NASA-9 on the device](CALIBRATION_APPENDIX.md#benchdevice_nasa9jl-nasa-9-on-the-device)).
+  The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
   `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). The
   convergence criterion is eps^(2/3), floored at 1e-10 (commit `dc67f71`), which
   saves most of one iteration, and the iterates stay inside the fitted range
   (commit `3ede230`). What remains is a warm start from the stored
-  `T_ion` field, one or two iterations instead of about four. It trades away
+  `T_ion` field, which would cut the Newton iterations per point. It trades away
   the state-only seed that `mixture_temperature_status` documents for
   bit-for-bit agreement between serial and decomposed runs and for restart
   independence; only worth it if the model is still far from the ideal-gas
@@ -724,20 +875,19 @@ under [the refinement track](#refinement-for-the-production-geometry).
   before and after at four species in the same session.
 
 - [ ] **S11 — Fuse each compact line solve into one threaded region.** Low
-  priority: on the 2-D case that motivated it, `mpiexec -n 8 -t 1` at 12 ms/step
-  already beats the fused-threads target of about 15, so this waits for a
-  setting in which threads are the only parallelism, such as the host-side
-  interface stage of a device plan.
+  priority: on the 2-D case that motivated it, `mpiexec -n 8 -t 1` already
+  beats what fused threads would reach, so this waits for a setting in which
+  threads are the only parallelism, such as the host-side interface stage of
+  a device plan.
   A line solve is three regions today (fill, solve, scatter) and each carries
   a spawn/join floor and a barrier, with the solved block crossing cores
   between them. On a 37k-point planar case at eight threads that granularity,
-  not bandwidth, is the loss against ranks: 195 regions per RHS at about 54 µs
-  serial work each, ranks 2x faster per step than pinned threads
-  ([CLUSTER.md](CLUSTER.md), hybrid-desktop paragraph). A prototype in which
-  each thread fills, solves and scatters its own chunk of lines in one region
-  measured 1.86x on the x-direction filter solve at `-t 8`, parity serially
-  and bitwise identical, provided the 16-wide column blocking of `solve_cols!`
-  is kept inside each chunk. The transposed y/z path fuses the same way over
+  not bandwidth, is the loss against ranks: many short regions per RHS, and
+  ranks faster per step than pinned threads ([CLUSTER.md](CLUSTER.md),
+  hybrid-desktop paragraph). A prototype in which each thread fills, solves
+  and scatters its own chunk of lines in one region sped up the x-direction
+  filter solve at `-t 8`, at parity serially and bitwise identical, provided
+  the 16-wide column blocking of `solve_cols!` is kept inside each chunk. The transposed y/z path fuses the same way over
   chunks of x-columns, since a chunk's fill, row-sweep solve and scatter are
   all contiguous in it. Where the dimension is decomposed the reduced
   interface stage is a collective between the local solve and the spike
@@ -760,6 +910,20 @@ under [the refinement track](#refinement-for-the-production-geometry).
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.
+
+- [ ] **S16 — Keep mode truncation stable under the artificial properties.**
+  An isentropic vortex carried across the axis of a resolved (r, θ) grid
+  (48 × 96, θ over 2π, z collapsed, a Dirichlet outer face holding the exact
+  translation) loses positivity near t = 0.28 with the default
+  `ArtificialProperties` under `polar_truncation = 1` (CFL 0.3 and 0.5) and
+  2 (CFL 0.5). With the artificial properties off the same run completes to
+  t = 1.6, and without truncation it runs past t = 0.4 with them on. Find the
+  coupling that fails (the sensors or their smoothing on projected rings, the
+  artificial rate against the capped θ rate, or the weakened θ filter pass S9
+  notes) before S9's calibration sets defaults.
+  **Gate:** the vortex to t = 1.6 under truncation and the default artificial
+  properties, its density error no larger than with them off; the mode
+  truncation rows of the MPI suite unchanged.
 
 - [ ] **S10 — Add immersed boundaries on demand.**
   Follow [IMMERSED.md](IMMERSED.md): level-set geometry and graded post-stage
@@ -917,8 +1081,8 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **N15a** — Under `interface_flux = :ghost` the molecular flux is
   differenced through interface ends from ghost fluxes, a same-level face's taken
   from the neighbour's flux records and a coarse-fine face's from the shell's
-  gradient ring; viscous interface rows read 6.1–6.8, and promotion moves to
-  N15b (commit `decf45a`).
+  gradient ring; the viscous interface rows reach the interior order, and
+  promotion moves to N15b (commit `decf45a`).
 - [x] **N15b** — `interface_flux = :ghost` is the default at patch and level
   interfaces and inert without one; `:closure` remains for shock-dominated and
   Float32 runs, and a configuration `:ghost` does not support raises an
@@ -959,8 +1123,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   unrefined, refines when tags appear and empties when they vanish; the box
   keeps its region (commit `1a97ab4`).
 - [x] **A12** — A tiled hierarchy regrids every level up to `max_levels`, each
-  tagged on its parent; a three-level shock–contact run is 16× closer to the
-  uniform-fine reference than the root (commit `737550c`).
+  tagged on its parent; a three-level shock–contact run lands an order of
+  magnitude closer to the uniform-fine reference than the root (commit
+  `737550c`).
 - [x] **A14** — `Hydrostatic` sets the pressure of an initial condition in
   discrete balance with the run's derivative operator, and an unfiltered
   two-fluid column stays at rest to round-off (commit `acfe5cb`).

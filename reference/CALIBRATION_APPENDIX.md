@@ -1707,7 +1707,7 @@ julia --project=. -t 1 bench/nohprobe.jl 1 cfl=0.15 nmax=5000 every=2000 floor=1
 No setting of the four constants stabilizes a converging strong shock at the default `cfl =
 0.5`. The restriction is a symmetry-plane startup problem: the wall, axis or origin cell,
 not the shock front. The planar and cylindrical ceilings were the unprimed first step and
-are gone; the spherical origin's stands at 0.3.
+are gone; the spherical origin's stands at 0.5.
 
 ### The first step of a run
 
@@ -1721,8 +1721,8 @@ correct plateau:
 
 ```
                     nu = 1 wall          nu = 2 axis          nu = 3 origin
-unprimed            0.25 (0.3 wrong)     0.2  (0.25 fails)    0.3 (0.4 fails @106)
-primed              none to 0.9          none to 0.9          0.3 (0.4 fails @106)
+unprimed            0.25 (0.3 wrong)     0.2  (0.25 fails)    0.5 (0.6 fails @71)
+primed              none to 0.9          none to 0.9          0.5 (0.6 fails @71)
 primed, first dt    1.04e-3 at 0.9       1.77e-3 at 0.9       unchanged
 ```
 
@@ -1733,8 +1733,11 @@ axis at 0.25 failed at step 110, over-dense and cold from step 25. Under `detect
 the wall and the axis complete through cfl 1.0 even unprimed.
 
 The origin does not move: its excursion lands at t ≈ 0.39 from the warm start at t₀ = 0.3,
-well after the first step, and 0.4 fails at step 106 primed or not. Two explanations were
-measured and rejected. **The density proportionality of β\***: rebuilt as `C_beta · ρ̃ ·
+well after the first step, and 0.6 fails at step 71 primed or not; 0.7, 0.8 and 0.9 fail at
+steps 60, 52 and 47, each at t = 0.386 to 0.387. The ceiling was 0.3, 0.4 failing at step
+106, while the radial momentum took its pressure term in the area form ([grid-scale
+growth](#grid-scale-growth-at-the-r-z-axis)); the two explanations below were measured and
+rejected in that form. **The density proportionality of β\***: rebuilt as `C_beta · ρ̃ ·
 sensor` with ρ̃ the Gaussian-smoothed density, it raised β\* at the origin during the
 excursion (0.61 against 0.43 of the line maximum at step 100 of the cfl 0.4 run) and moved
 no ceiling, the wall's 0.3 failure becoming explicit at step 659, the axis's 0.25 failure
@@ -1831,6 +1834,11 @@ step   rho1/rho2   b*1/max            step   rho1/rho2   b*1/max
  128     FAILED
 ```
 
+The table was taken with the radial pressure term in the area form, where the ceiling was
+0.3. Under ∂p/∂r the same excursion ends the run at cfl 0.6 under the default detector:
+rho1/rho2 reads 0.9788, 1.0509 and 0.5764 at steps 60, 65 and 70 with b*1/max 0.230, 0.901
+and 0.662, and the run fails at step 71.
+
 The symmetry cell is quiescent for most of the run, so whatever sets the ceiling does not
 act gradually from the start; during the excursion β\* at the origin reaches the domain
 maximum in both surviving configurations. Every configuration has the excursion, and the
@@ -1912,50 +1920,51 @@ first step primed and the coefficient arrays banked beside the savepoint:
 nu   start cfl   recovered cfl   retries   steps   plateau/exact
 1    0.9         0.9             0          582    0.9990
 2    0.9         0.9             0          364    0.9381
-3    0.9         0.225           2          635    0.9768
+3    0.9         0.45            1          333    0.9779
 ```
 
-The planar and cylindrical cases need no retry. The spherical case fails at step 45 in the
-excursion, rolls back to step 25 at 0.45, fails again at step 68 and completes from step 50
-at 0.225; the fixed `cfl = 0.15` run takes 1113 steps for a plateau of 0.9766, so recovery
-is about twice as fast, and `solver.cfl` records the accepted value. The coefficient arrays
+The planar and cylindrical cases need no retry. The spherical case fails in the excursion,
+rolls back and completes at 0.45; the fixed `cfl = 0.15` run takes 1080 steps for a plateau
+of 0.9778 and the default 0.5, without a retry, 323 steps for 0.9777, and `solver.cfl`
+records the accepted value. The coefficient arrays
 have to be banked with the state: a restore leaving the failed trajectory's coefficients in
 place throttled each retry's first step, and the ν = 3 case then ended in `:no_progress`
 sized by coefficients of order 1e57.
 
 **Recommendation:** the default `cfl = 0.5` with `StepControl(retries = 4)` for automatic
-recovery, or `cfl = 0.3` for a converging shock at a spherical origin. Under `detector =
-:d8` the origin's ceiling is 0.25.
+recovery; the warm-started origin completes at 0.5 without a retry. Under `detector = :d8`
+the origin's ceiling is 0.4, 0.5 failing at step 78.
 
 ### The singular start and the warm start
 
 The spherical case is warm-started at t₀ = 0.3 from the exact solution with a tanh blend of
-width 4h at the shock. Primed, the singular t = 0 start survives its first step but fails at
-step 40 at cfl 0.15 and completes only at cfl 0.05, or through `retries = 4` down to 0.075,
-in either case with a plateau 18% low and a wall deficit of 77%. The start time and the
-blend at N = 256, cfl 0.15:
+width 4h at the shock. Primed, the singular t = 0 start completes at cfl 0.15 and fails at
+step 5 at 0.2 and at step 2 at 0.3 and 0.5; `retries = 4` from 0.5 completes at 0.125 in
+2586 steps. Either way the plateau is 18% low and the wall deficit 77%. In the area form of
+the radial pressure term it failed at step 36 at cfl 0.15 and completed only at 0.05. The
+start time and the blend at N = 256, cfl 0.15:
 
 ```
 nu  t0    blend   N      steps   plateau/exact   deficit   shock
-3   0     4h      256    4400*   0.8207          77%       0.2152
-3   0.1   4h      256    1851    0.7573          11%       0.2183
-3   0.1   4h      512    3786    0.8803          13%       0.2086
-3   0.1   4h     1024    7675    0.9404          25%       0.2043
-3   0.2   4h      256    1493    0.8759          21%       0.2177
-3   0.3   2h      256    1134    0.9478          22%       0.2094
-3   0.3   4h      256    1113    0.9766          28%       0.2090
-3   0.3   8h      256    1066    0.9805          32%       0.2133
-3   0.3   4h      512    2279    0.9911          30%       0.2039
-3   0.3   4h     1024    4615    0.9961          36%       0.2018
+3   0     4h      256    2155    0.8220          77%       0.2151
+3   0.1   4h      256    1802    0.7597          10%       0.2181
+3   0.1   4h      512    3668    0.8813          13%       0.2085
+3   0.1   4h     1024    7401    0.9408          22%       0.2042
+3   0.2   4h      256    1453    0.8783          20%       0.2175
+3   0.3   2h      256    1102    0.9489          18%       0.2093
+3   0.3   4h      256    1080    0.9778          25%       0.2089
+3   0.3   8h      256    1040    0.9811          32%       0.2132
+3   0.3   4h      512    2202    0.9916          27%       0.2039
+3   0.3   4h     1024    4445    0.9963          32%       0.2017
 2   0.1   4h      256    1882    0.8704           2%       0.2132
 2   0.2   4h      256    1514    0.9749           6%       0.2127
 2   0.3   4h      256    1114    1.0412           2%       0.2001
 ```
 
-`*` through retries, at cfl 0.075. The plateau error is made while the shock is within a few
-cells of the origin: from t₀ = 0.1, where the shock starts at 8.5 cells, the plateau
-converges under refinement at first order (24%, 12%, 6% low), and from t₀ = 0.3, where it
-starts at 26 cells, at 2.3%, 0.9% and 0.4%. The blend width moves the plateau by 3% either
+The plateau error is made while the shock is within a few cells of the origin: from t₀ =
+0.1, where the shock starts at 8.5 cells, the plateau converges under refinement at first
+order (24%, 12%, 6% low), and from t₀ = 0.3, where it starts at 26 cells, at 2.2%, 0.8% and
+0.4%. The blend width moves the plateau by 3% either
 way at 4h and the wider blend costs the shock position, so 4h is retained. The battery
 starts the cylindrical case singular at t = 0, which the axis takes, and its plateau of
 0.938 is a startup error of the same kind: the warm start returns 1.041 with the shock
@@ -4668,17 +4677,37 @@ calculation differentiates at the origin. A face-centred symmetry plane reads th
 fold-window orders bitwise ([the face-centred symmetry
 plane](#the-face-centred-symmetry-plane)).
 
-**The spherical origin requires initial data resolved over ≳3 cells.** A blast initialized
-as a top hat with a 1–2 cell transition loses positivity within tens of steps; at 3 cells
-and wider it runs to completion. The cylindrical axis accepts a 1-cell transition and the
-same top hat completes in Cartesian, so this is specific to the origin fold and its
-antipodal pairing, and `test/cases.jl` initializes Sedov with a Gaussian deposit. Why the
-origin fold is less forgiving than the cylindrical axis is open; the fold order above rules
-out the closure.
+**A blast at the spherical origin carries a lower CFL ceiling than at the axis.** A top hat
+of the Sedov deposit's energy, p = 1e-5 + p_in inside r₀ with a tanh edge of w cells, on
+N = 256 over (0, 1.2] to t = 0.2 without retries; "area form" restores the former radial
+pressure term through `bench/axisvariant.jl`, and the axis and the plane take the same p_in
+over the same line:
 
-**The spherical origin is incompatible with the singular t = 0 start of Noh.** Every CFL and
-every constant setting fails, since the exact solution requires 64× compression to appear at
-r = 0 instantaneously. A warm start from the exact solution at t = 0.3 integrates to 0.6,
+```
+r0     w        cfl    origin                    area form               axis, plane
+0.03   0        0.3    completes                 fails at step 3
+0.03   0        0.15                             fails at step 144
+0.03   1, 2, 3  0.3    completes (w = 1)         fails at 42, 32, 46
+0.03   1        0.5    fails at step 18          fails at step 11        complete
+0.1    1        0.15   completes                 completes
+0.1    1        0.2    completes
+0.1    1, 4     0.3    fails at t = 0.046, 0.050 fails at t = 0.046      complete
+0.1    8        0.3    completes
+0.1    1        0.5    fails at t = 0.045        fails at t = 0.045      complete
+```
+
+The former requirement of initial data resolved over three cells or more was the area form
+of the radial pressure term ([grid-scale growth](#grid-scale-growth-at-the-r-z-axis)): in
+that form the small top hat fails within tens of steps at every edge width to three cells,
+and under ∂p/∂r a sharp edge completes. What remains is a ceiling of 0.2 to 0.3 on the
+larger blast, which fails at the same time in either form, well after the start, and of 0.3
+to 0.5 on the smaller one; `retries = 4` completes both, from 0.3 at 0.15 and from 0.5 at
+0.25. `test/cases.jl` initializes Sedov with a Gaussian deposit.
+
+**The singular t = 0 start of Noh completes at the origin at cfl 0.15** and returns a plateau
+18% low ([the singular start](#the-singular-start-and-the-warm-start)), since the exact
+solution requires 64× compression to appear at r = 0 instantaneously; in the area form it
+completed only at 0.05. A warm start from the exact solution at t = 0.3 integrates to 0.6,
 testing maintenance of the solution through the origin without the initialization
 singularity. The cylindrical axis accepts the cold start at 16× compression.
 
@@ -8061,12 +8090,15 @@ line on (0, 2] linearized by central differences about ρ = p = 1 in ρ, ρu_r
 (and ρu_θ on a resolved θ) and E at every node, and `bench/axisrunaway.jl`,
 runs of the converging pulse of `axis_level_case` and of cylindrical Noh with
 the grid-scale content of the first 16 nodes read after every step. The
-package's form of the radial pressure term is ∂p/∂r on θ-collapsed r-z
-(`_radial_pressure_gradient`) and the area form elsewhere; the other forms
-are source terms and the near-axis filter a callback (`bench/axisvariant.jl`):
-`areap` restores the area form on θ-collapsed r-z, `gradp` takes ∂p/∂r on a
-resolved θ or at the spherical origin, `product` writes every radial
-divergence of the mass, radial momentum and energy fluxes as D(F) + F/r.
+package's form of the radial pressure term is ∂p/∂r on θ-collapsed r-z and
+under the spherical metric (`_radial_pressure_gradient`), and the area form
+on a resolved cylindrical θ; the spherical θ-momentum takes (1/r)∂p/∂θ
+(`_polar_pressure_gradient`). The other forms are source terms and the
+near-axis filter a callback (`bench/axisvariant.jl`): `areap` restores the
+area form on θ-collapsed r-z and at the spherical origin, `gradp` takes ∂p/∂r
+on a resolved θ, `areatheta` restores the area form of the θ-momentum at the
+poles, `product` writes every radial divergence of the mass, radial momentum
+and energy fluxes as D(F) + F/r.
 
 **The mechanism.** In the area form the radial momentum carries the pressure
 as (1/r)D(r p) − p/r. On a mode of wavenumber ω under a slowly varying
@@ -8161,10 +8193,12 @@ N/3 root nodes, and 59.9% at plateau 14.8044 on the level over N/6 + 1, to the
 values its header carries; fronts moved by at most 1e-4. The near-axis filter
 in the area form gives 55.1% on 256 nodes and 50.2% on 767.
 
-**The resolved θ and the spherical origin.** The same map on a resolved θ
-(12 nodes over the full circle, N = 32 and 64) and on the spherical line with
-θ and φ collapsed, whose pressure term is (1/r²)D(r² p) − 2p/r in the
-package, against ∂p/∂r through `gradp`:
+**The resolved θ, the spherical origin and the poles.** The same map on a
+resolved θ (12 nodes over the full circle, N = 32 and 64, the area form in the
+package and ∂p/∂r through `gradp`), on the spherical line with θ and φ
+collapsed, whose area form (1/r²)D(r² p) − 2p/r `areap` restores, and on a
+θ line through both poles at r = 1 with r and φ collapsed (N = 32 and 64),
+whose area form (1/(r sinθ))D(sinθ p) − (cotθ/r) p `areatheta` restores:
 
 | | area form | ∂p/∂r |
 |---|---|---|
@@ -8175,13 +8209,25 @@ package, against ∂p/∂r through `gradp`:
 | origin, 0.45 / 0.47, cfl 0.18 | 0.144 / 0.174 per step | neutral |
 | origin, 0.45 / 0.47, cfl 0.5 | 0.501 / 0.571 | neutral |
 | origin, 0.45 / 0.47, cfl 0.9, full strength | 1.87 / 1.91 | neutral |
+| poles, unfiltered, cfl 0.18 | 4.1e-7 per step (N = 32), 9.1e-7 (64) | 3.8e-10, 2.5e-8 |
+| poles, unfiltered, cfl 0.5 | 2.8e-7, 1.2e-6 | 4.6e-8, 4.6e-8 |
+| poles, 0.45, cfl 0.18 | neutral | neutral |
+| poles, 0.47, cfl 0.18 | 6.90e-3 / 6.92e-3 per step (N = 32 / 64) | neutral |
+| poles, 0.45 / 0.47, cfl 0.5 | 9.7e-3 / 4.7e-2 (N = 32), 9.9e-3 / 5.0e-2 (64) | neutral |
+| poles, 0.45 / 0.47, cfl 0.9, full strength | 0.078 / 0.13 (N = 32), 0.086 / 0.14 (64) | neutral |
 
 The filtered rates at the origin are independent of N, peak at node 1 with
-smooth share 0.41, and exceed the r-z axis's by a factor of about 25. On the
+smooth share 0.41, and exceed the r-z axis's by a factor of about 25; at the
+poles they are within 4% of the r-z axis's at 0.47 and peak at the first or last
+node with smooth share 0.46 to 0.48. Under the package's forms the largest
+filtered eigenvalue at the origin and the poles is below 6.2e-9 per step, the
+smooth mode at 1. On the
 resolved θ the pass along θ runs at full strength at these steps (its rate
 reads the ring's spacing at the axis), and the filtered map is neutral in
 both forms; at cfl 0.5 the ring's θ step is beyond the scheme's limit and
-both forms grow at 0.8 per step. A seeded rest state at the origin (1e-10 in ρ, N = 64,
+both forms grow at 0.8 per step. In the area form a seeded rest state at the origin (1e-10 in ρ, N = 64,
 αf = 0.47, the solver's own step) fails between 160 and 200 steps at cfl
 0.18 without the artificial properties and between 40 and 80 at 0.5; with them the density
-deviation at the origin saturates at 1e-2 to 4e-2.
+deviation at the origin saturates at 1e-2 to 4e-2. The consequences for runs at the origin
+are under [the CFL restriction](#the-cfl-restriction-and-the-symmetry-cell) and [fold order
+and geometry limits](#fold-order-and-geometry-limits).

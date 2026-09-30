@@ -292,10 +292,11 @@ checkpoint are listed with the setup error each rejected one raises.
   CPU and GPU) reduces state-array storage, with precision-dependent
   conservation error. See
   [Precision and step size](docs/src/how-to/numerics-choices.md#precision-and-step-size).
-- A converging strong shock at a spherical origin is CFL-limited to 0.3 by an
-  excursion of the origin cell as the shock forms; `StepControl(retries=4)`
-  recovers it automatically. The planar wall and the cylindrical axis carry
-  no such limit and complete Noh from cfl 0.9.
+- A converging strong shock at a spherical origin is CFL-limited to 0.5 by an
+  excursion of the origin cell as the shock forms, and a singular start or a
+  strong blast at the origin to less; `StepControl(retries=4)` recovers these
+  automatically. The planar wall and the cylindrical axis carry no such limit
+  and complete Noh from cfl 0.9.
 - Converging-shock runs carry cells of negative internal energy at the front,
   while density, total energy, and the Noh plateau stay sound (within 0.07%); an
   optional floor repairs negative-energy cells.

@@ -50,9 +50,9 @@ refined_shock() = (; filter=StateFilter(compact_filter(0.45)), patch_interfaces=
 
 A shock converging on a cylindrical axis or a spherical origin. The step
 control retries a failed step at a lowered CFL four times, which recovers
-the positivity excursion at the spherical origin at the default CFL in about
-half the steps of a fixed CFL of 0.15; a problem with an `OriginBC` already
-takes this when `control` is left unset. `cold_ambient = true` adds
+the positivity excursion at the spherical origin when a run starts above
+the origin's CFL ceiling; a problem with an `OriginBC` already takes this
+when `control` is left unset. `cold_ambient = true` adds
 `validity = :permissive`: a shock converging into a cold or near-vacuum gas
 carries a few cells of negative internal energy for the whole run and still
 reaches the exact plateau, so the state is reported rather than rejected.

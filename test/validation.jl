@@ -60,7 +60,7 @@
 #   Sedov      R_s 0.8083 vs 0.8000 analytic (+1.04%), peak rho 5.14 (jump 6)
 #   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
 #   Noh nu=2   plateau 15.010/16   shock 0.2091/0.2   wall deficit 55%
-#   Noh nu=3   plateau 62.565/64   shock 0.2089/0.2   wall deficit 29%
+#   Noh nu=3   plateau 62.581/64   shock 0.2089/0.2   wall deficit 25%
 #   Shock/SF6  worst Y -0.0050 / 1.0050, width 5 cells, 642 steps, TV - 1 0.0045
 #   Pulse lh   N=1600  R 0.3189/0.3290  T 1.3293/1.3290  energy 0.9937  err 7.9e-2
 #   Pulse hl   N=1600  R -0.3258/-0.3290  T 0.6710/0.6710  energy 0.9981  err 3.0e-2
@@ -244,13 +244,12 @@
 #   * The Noh cases run at cfl 0.15, the value they were calibrated at. The
 #     planar wall and the cylindrical axis complete from cfl 0.9 now that
 #     run! sizes the first step from the initial data's artificial
-#     coefficients; the spherical origin is limited to 0.3 by an excursion
+#     coefficients; the spherical origin is limited to 0.5 by an excursion
 #     of the origin cell near t = 0.39, which StepControl(retries = 4)
 #     recovers. reference/CALIBRATION_APPENDIX.md has the ladders.
-#   * The spherical origin will not take a discontinuity that is not resolved
-#     over at least ~3 cells, and the singular t = 0 start of spherical Noh
-#     completes only below cfl 0.075 and returns a plateau 18% low. The
-#     cylindrical axis takes both.
+#   * The singular t = 0 start of spherical Noh completes at cfl 0.15 and not
+#     at 0.2, and returns a plateau 18% low; a top-hat blast at the origin
+#     completes at 0.2. The cylindrical axis takes both at 0.5.
 #
 # --- What has been checked against something other than this code ------------
 #

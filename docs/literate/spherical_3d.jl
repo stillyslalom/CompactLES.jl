@@ -27,10 +27,10 @@ CairoMakie.activate!(type = "png")
 #     ``\theta`` over ``(0, \pi)``;
 #   * the azimuth is periodic over ``2\pi`` with an even number of points.
 #
-# The origin fold is less forgiving than the cylindrical axis: it needs initial
-# data that is smooth and resolved over several cells at the center, and will
-# not accept a feature concentrated at ``t=0`` into a single cell. The Gaussian
-# blast below is broad enough to satisfy that.
+# The origin fold carries a lower CFL ceiling than the cylindrical axis for a
+# strong shock, whether it converges on the origin or starts there; a blast
+# with a sharp edge completes at a CFL of 0.2. The Gaussian blast below is
+# smooth and weak, and runs at a CFL of 0.3.
 
 nr, ntheta, nphi = 24, 16, 12
 

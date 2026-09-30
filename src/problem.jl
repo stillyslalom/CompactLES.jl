@@ -912,10 +912,10 @@ keywords the ones given after it override.
 - `control`: timestep prediction, failure floors, and retry policy, a
   [`StepControl`](@ref). Left at `nothing`, the default, [`setup`](@ref)
   takes `StepControl()`, or `StepControl(retries = 4)` when the problem has
-  an [`OriginBC`](@ref): a converging shock at the spherical origin loses
-  positivity above a CFL of about 0.3 early in the run, and the retries
-  recover it at the default CFL in about half the steps a fixed CFL of 0.15
-  takes. A `StepControl` given here is used as it is.
+  an [`OriginBC`](@ref): a strong shock at the spherical origin can lose
+  positivity at the default CFL, a converging one from a singular start or
+  above a CFL of 0.5 and a blast above 0.2 to 0.3, and the retries recover
+  it at a lowered CFL. A `StepControl` given here is used as it is.
 - `patch_interfaces`: how the flux divergence closes at a patch or level
   interface, a [`PatchInterfaces`](@ref); a `Symbol` is shorthand for
   `PatchInterfaces(flux = symbol)`. Without such an interface it has no
@@ -1071,10 +1071,11 @@ end
 
 _legacy_amr_keywords(num::Numerics) = num.legacy_amr
 
-# The step policy of a problem whose deck gives none. A converging shock at
-# a spherical origin is limited by an excursion of the origin cell early in
-# the run, at every resolution, and rollback with a lowered CFL recovers it;
-# no other geometry needs the retries or the savepoint they keep.
+# The step policy of a problem whose deck gives none. A strong shock at a
+# spherical origin is limited to a lower CFL than at a wall or an axis, a
+# converging one by an excursion of the origin cell at every resolution, and
+# rollback with a lowered CFL recovers it; no other geometry needs the
+# retries or the savepoint they keep.
 _default_control(prob::Problem) =
     any(pair -> any(bc -> bc isa OriginBC, pair), prob.bcs) ? StepControl(retries=4) :
                                                                StepControl()

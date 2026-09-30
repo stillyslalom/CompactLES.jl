@@ -127,12 +127,13 @@ Changing any of those invalidates a claim of unchanged calibration.
 
 Current evidence includes two important limits:
 
-- a converging strong shock at a spherical origin needs `cfl = 0.3` under
-  the default detector, or retry control from a larger initial CFL; the
-  planar wall and cylindrical axis complete the current calibrated cases
-  from `cfl = 0.9` with the initial RHS primed; and
-- the spherical origin requires initial data smooth over at least several
-  cells.
+- a converging strong shock at a spherical origin needs `cfl = 0.5` or
+  less under the default detector, or retry control from a larger initial
+  CFL; the planar wall and cylindrical axis complete the current calibrated
+  cases from `cfl = 0.9` with the initial RHS primed; and
+- from a singular start, or with a strong blast, the spherical origin needs
+  a lower CFL again: 0.15 for the singular start of Noh and 0.2 for a
+  top-hat blast.
 
 ## Verifying a new scientific calculation
 

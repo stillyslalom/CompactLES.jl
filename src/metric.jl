@@ -219,18 +219,22 @@ function _fill_geometry!(solver, inv_J, area_d, inv_h, inv_r, cot_over_r)
 end
 
 # Discrete Geometric Conservation Law correction for the spherical θ-momentum
-# source. The θ-momentum balance for a uniform state pits the flux divergence
-# −inv_J·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ (metric.jl below), where
-# A₂ = r sinθ is the θ area factor and D_ξ2 is the compact θ-derivative used in
-# the divergence loop (rhs.jl). Analytically inv_J·∂_ξ2(A₂) = cotθ/r and the two
-# cancel; discretely D_ξ2(sinθ) ≠ cosθ, so the analytically sampled cotθ/r
-# leaves an O(h⁴) freestream residual (a GCL truncation error, not a bug).
+# source. In the area form the θ-momentum balance for a uniform state pits the
+# flux divergence −inv_J·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ
+# (metric.jl below), where A₂ = r sinθ is the θ area factor and D_ξ2 is the
+# compact θ-derivative used in the divergence loop (rhs.jl). Analytically
+# inv_J·∂_ξ2(A₂) = cotθ/r and the two cancel; discretely D_ξ2(sinθ) ≠ cosθ, so
+# the analytically sampled cotθ/r leaves an O(h⁴) freestream residual (a GCL
+# truncation error, not a bug).
 #
 # Exact discrete freestream preservation uses cotθ/r defined as
 # inv_J·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
-# fold, same antipodal sign σ as the m2 pressure flux) applied to the identical
-# area factor. By linearity the source then cancels the divergence node-by-node
-# for any uniform state, by construction.
+# fold, same antipodal sign σ as the m2 flux) applied to the identical area
+# factor. By linearity the source then cancels the divergence node-by-node for
+# any uniform state, by construction. With θ resolved the θ-momentum takes
+# its pressure term as (1/r)∂p/∂θ (`_polar_pressure_gradient`), which a uniform
+# state leaves at zero without this cancellation, and the array weights the
+# rest of Π_φφ and Π_φθ in the sources.
 #
 # The result lives in `cot_over_r_gcl`, read by `add_metric_sources!` alone,
 # and not in `cot_over_r`, which `metric_correct_gradients!` reads for the
@@ -342,23 +346,43 @@ add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 end
 
 # Whether the radial momentum carries its pressure term as the radial
-# derivative ∂p/∂r rather than as the area-weighted divergence (1/r)∂(r p)/∂r
-# less the source p/r: on `CylindricalMetric` with θ collapsed. The two agree
-# analytically. Discretely, on a mode of wavenumber ω they differ by
-# (1 − k'(ω)) p/r, k' the derivative of the scheme's modified wavenumber, which
-# vanishes on resolved modes and is 16/3 at ω = π for the sixth-order rows. The
-# divergence of the mass and energy fluxes is then not the negative adjoint of
-# the pressure gradient, and under the default filter strength the one-step
-# map near the axis amplifies a grid-scale acoustic mode at a rate per step
-# independent of the spacing, so a run's growth per unit time rises with the
-# radial node count. The radial momentum has no conservation law in cylindrical
-# coordinates, so the gradient form gives up no conservation; mass and energy
-# keep the divergence form. The measurements are in
-# reference/CALIBRATION_APPENDIX.md under "Grid-scale growth at the r-z axis".
-# A setup constant, identical on every rank.
+# derivative ∂p/∂r rather than as the area-weighted divergence
+# (1/r^s)∂(r^s p)/∂r less the source s p/r: on `CylindricalMetric` with θ
+# collapsed (s = 1) and on `SphericalMetric` with r resolved (s = 2). The two
+# agree analytically. Discretely, on a mode of wavenumber ω they differ by
+# (1 − k'(ω)) s p/r, k' the derivative of the scheme's modified wavenumber,
+# which vanishes on resolved modes and is 16/3 at ω = π for the sixth-order
+# rows. The divergence of the mass and energy fluxes is then not the negative
+# adjoint of the pressure gradient, and under the default filter strength the
+# one-step map near the axis or the origin amplifies a grid-scale acoustic
+# mode at a rate per step independent of the spacing, so a run's growth per
+# unit time rises with the radial node count. The radial momentum has no
+# conservation law in either metric, so the gradient form gives up no
+# conservation; mass and energy keep the divergence form. The measurements are
+# in reference/CALIBRATION_APPENDIX.md under "Grid-scale growth at the r-z
+# axis". A setup constant, identical on every rank.
 _radial_pressure_gradient(solver) =
-    solver.metric isa CylindricalMetric && solver.decomp.active[1] &&
-    !solver.decomp.active[2]
+    solver.decomp.active[1] &&
+    (solver.metric isa SphericalMetric ||
+     solver.metric isa CylindricalMetric && !solver.decomp.active[2])
+
+# Whether the spherical θ-momentum carries its pressure term as (1/r)∂p/∂θ
+# rather than as (1/(r sinθ))∂(sinθ p)/∂θ less the source (cotθ/r) p: on
+# `SphericalMetric` with θ resolved. Near a pole sinθ ≈ θ, and the area form
+# differs from the gradient at the grid scale as the r-z axis's does, with the
+# same growth of the filtered one-step map at the poles, measured in the same
+# appendix section. The other angular pressure terms are gradients already:
+# A_θ = 1 on the cylindrical metric and A_φ = r on the spherical one carry no
+# dependence on their own coordinate.
+_polar_pressure_gradient(solver) =
+    solver.metric isa SphericalMetric && solver.decomp.active[2]
+
+# Whether component `c`'s flux along `d` enters without the pressure, whose
+# term is then inv_h_d ∂p/∂ξ_d: the radial momentum along r and the spherical
+# θ-momentum along θ where the two rules above hold.
+@inline _pressure_gradient(solver, d::Int, c::Int) =
+    (d == 1 && c == solver.equations.i_mom[1] && _radial_pressure_gradient(solver)) ||
+    (d == 2 && c == solver.equations.i_mom[2] && _polar_pressure_gradient(solver))
 
 @inline function _metric_src_cyl_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
                                         rho, u, v, w, p, inv_r, m1, m2, with_p,
@@ -391,17 +415,22 @@ end
 
 @inline function _metric_src_sph_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
                                         rho, u, v, w, p, inv_r, cot_over_r,
-                                        m1, m2, m3, o1, o2, o3, i, j, k)
+                                        m1, m2, m3, with_pr, with_pθ, o1, o2, o3,
+                                        i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir  = inv_r[I]
         ctr = cot_over_r[I]
-        Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
-        Pφφ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3)
+        # Π_θθ and Π_φφ on the radial momentum without the pressure where it
+        # takes ∂p/∂r, and Π_φφ on the θ-momentum without it where that takes
+        # (1/r)∂p/∂θ.
+        Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2, with_pr)
+        Pφφ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3, with_pr)
+        Pφφθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3, with_pθ)
         dQ[I, m1] += ir * (Pθθ + Pφφ)
         dQ[I, m2] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1) +
-                     ctr * Pφφ
+                     ctr * Pφφθ
         dQ[I, m3] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 1) -
                      ctr * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 2)
     end
@@ -417,6 +446,7 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
                solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, solver.cot_over_r_gcl, m[1], m[2], m[3],
+               !_radial_pressure_gradient(solver), !_polar_pressure_gradient(solver),
                o1, o2, o3)
     return solver
 end

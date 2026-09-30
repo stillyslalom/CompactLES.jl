@@ -8,7 +8,7 @@
 # they were the first step of the run, sized before any artificial
 # coefficient had been computed, and run! now evaluates the right-hand side
 # once before that step. Under the priming planar and cylindrical Noh
-# complete from cfl 0.9 and the spherical origin keeps a ceiling of 0.3 from
+# complete from cfl 0.9 and the spherical origin keeps a ceiling of 0.5 from
 # the excursion described in item 4 below. The write-up is in
 # reference/CALIBRATION_APPENDIX.md under "The first step of a run"; what
 # follows is the record of the readings that led there, all taken before

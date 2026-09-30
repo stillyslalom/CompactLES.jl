@@ -166,10 +166,10 @@ end
 #
 # θ and φ are collapsed, so this costs N points; θ sits at π/2 so the collapsed
 # scale factor r·sinθ is exactly r and the divergence is the true
-# (1/r²)∂_r(r² F). The deposit is a Gaussian rather than a top hat: the origin
-# fold will not take a discontinuity resolved over fewer than about three cells
-# (see reference/CALIBRATION.md), and a smoothed source is standard practice
-# for Sedov anyway.
+# (1/r²)∂_r(r² F). The deposit is a Gaussian rather than a top hat: a top hat
+# at the origin completes at cfl 0.2 and fails at 0.3 or 0.5 depending on its
+# radius (reference/CALIBRATION_APPENDIX.md has the ladder), and a smoothed
+# source is standard practice for Sedov anyway.
 
 const SEDOV_E = 0.851 * 0.8^5      # chosen for R_s(t = 1) ≈ 0.8
 const SEDOV_T = 1.0
@@ -222,9 +222,8 @@ end
 #
 # ν = 1 planar (slip wall), ν = 2 cylindrical axis fold, ν = 3 spherical origin
 # fold. Only ν = 3 is warm-started: from the singular t = 0 start the origin
-# completes only below cfl 0.075 and returns a plateau 18% low, the error
-# being made while the shock is within a few cells of the origin; see
-# reference/CALIBRATION.md.
+# returns a plateau 18% low, the error being made while the shock is within a
+# few cells of the origin; see reference/CALIBRATION_APPENDIX.md.
 
 const NOH_G = 5 / 3
 const NOH_T = 0.6

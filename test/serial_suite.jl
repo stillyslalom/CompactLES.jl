@@ -3733,11 +3733,11 @@ end
     #   and the rollback that appeared to recover it rested on the failed
     #   trajectory's coefficients throttling the retry's first step.
     #
-    #   Spherical Noh from the warm start at cfl = 0.5 fails abruptly in the
+    #   Spherical Noh from the warm start at cfl = 0.9 fails abruptly in the
     #   origin's excursion near t = 0.39, representative of a guessed CFL,
     #   and must fail loudly rather than grind.
     #
-    #   The same run from cfl = 0.9 with retries rolls back past the
+    #   The same run from cfl = 1.8 with retries rolls back past the
     #   excursion with a halved CFL, twice, and recovers the correct plateau.
     #
     # All arms run the unrelaxed filter (filter_cfl = 0), the configuration
@@ -3786,7 +3786,7 @@ end
     @test s1.cfl == 0.9                        # no retry was needed
     @test plateau(s1, Q1, 400) ≈ 4.0 rtol = 0.05  # exact Noh plateau for nu = 1
 
-    s2, Q2 = build(3, 0.5, StepControl(); N=256, t0=0.3)
+    s2, Q2 = build(3, 0.9, StepControl(); N=256, t0=0.3)
     err = nothing
     try
         run!(s2, Q2; tfinal=tfin - 0.3, nmax=20_000)
@@ -3797,15 +3797,15 @@ end
     @test err.reason in (:negative_density, :dt_collapse)
     @test s2.step < 20_000                     # it stopped early, it did not grind
 
-    s3, Q3 = build(3, 0.9, StepControl(retries=5, savepoint_interval=20,
+    s3, Q3 = build(3, 1.8, StepControl(retries=5, savepoint_interval=20,
                                        validity=:permissive); N=256, t0=0.3)
     run!(s3, Q3; tfinal=tfin - 0.3, nmax=20_000)
     @test s3.t ≈ tfin - 0.3 rtol = 1e-9
-    @test s3.cfl < 0.9                         # it backed off, and says by how much
+    @test s3.cfl < 1.8                         # it backed off, and says by how much
     @test plateau(s3, Q3, 256) ≈ 64.0 rtol = 0.05  # exact Noh plateau for nu = 3
     # The backoff compounds: successive retries must keep halving, not keep
     # re-applying one factor to the same starting CFL.
-    @test s3.cfl <= 0.9 * 0.5 + 1e-12
+    @test s3.cfl <= 1.8 * 0.25 + 1e-12
 end
 
 @testset "NASA-9 mixture reduces exactly to the ideal mixture" begin

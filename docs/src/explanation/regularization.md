@@ -206,8 +206,9 @@ choosing its first step, so startup estimates already include the artificial
 coefficients. In the current converging-shock calibration, planar and
 cylindrical cases complete from `cfl = 0.9` without retry; the spherical
 origin requires a lower accepted CFL during the shock excursion. For a
-converging shock at that origin, use `cfl = 0.3` under the default detector,
-or allow retry control to reduce a larger initial CFL only when needed:
+converging shock at that origin, use `cfl = 0.5` or less under the default
+detector, or allow retry control to reduce a larger initial CFL only when
+needed:
 
 ```julia
 Numerics(
@@ -219,10 +220,10 @@ Numerics(
 ```
 
 The spherical-origin limit depends on the detector and the initial profile;
-under `detector = :d8` the measured ceiling is 0.25. An initially unresolved
-shock at the origin remains a separate limitation even when the first RHS is
-primed. See the [calibration appendix](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md#recovery-strategy)
-for the measured trajectories and accepted CFL values.
+under `detector = :d8` the measured ceiling is 0.4. The singular start of Noh
+completes up to `cfl = 0.15` and a top-hat blast through the origin up to
+0.2, with the first RHS primed; the retries recover both from the default
+CFL.
 
 ## Selecting coefficients
 

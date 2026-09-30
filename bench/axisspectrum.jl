@@ -4,7 +4,8 @@
 #   julia --project=. -t 1 bench/axisspectrum.jl N=64,128,256 alpha=0,0.45,0.47
 #   julia --project=. -t 1 bench/axisspectrum.jl geom=plane alpha=0
 #   julia --project=. -t 1 bench/axisspectrum.jl variant=none,areap alpha=0,0.47
-#   julia --project=. -t 1 bench/axisspectrum.jl geom=origin variant=none,gradp
+#   julia --project=. -t 1 bench/axisspectrum.jl geom=origin variant=none,areap
+#   julia --project=. -t 1 bench/axisspectrum.jl geom=pole variant=none,areatheta
 #
 # --- Why this exists ---------------------------------------------------------
 #
@@ -16,11 +17,13 @@
 # ω = π for the C6 rows. The divergence of the mass and energy fluxes then
 # pairs with a gradient that is not its adjoint, and the axis can feed energy
 # into grid-scale acoustics at a rate of order c/r. The package takes D(p) on
-# θ-collapsed r-z and the area form on a resolved θ and at the spherical
-# origin, where it is (1/r²)D(r² p) − 2p/r. This script linearizes the
+# θ-collapsed r-z and under the spherical metric, and the area form on a
+# resolved cylindrical θ; at the spherical origin that form is
+# (1/r²)D(r² p) − 2p/r, and the spherical θ-momentum takes (1/r)D(p) in
+# place of the same form about the poles. This script linearizes the
 # map from the state after one step to the state `nmap` steps later by central
-# differences in ρ, ρu_r (and ρu_θ on a resolved θ) and E at every interior
-# node, and prints the eigenvalues of largest modulus with |λ|, log|λ| per step
+# differences in ρ, ρu_r (and ρu_θ on a resolved θ; ρu_θ in place of ρu_r at
+# the poles) and E at every interior node, and prints the eigenvalues of largest modulus with |λ|, log|λ| per step
 # and per unit time, the radial node at which the eigenvector peaks, and its
 # smooth share ‖(v_i + v_{i+1})/2‖/‖v‖ along r over the components (0 for a
 # pure sawtooth, 1 for a constant). The measurements are in
@@ -32,18 +35,21 @@
 #            (SymmetryPlaneBC, Cartesian), `origin` (OriginBC, SphericalMetric,
 #            θ and φ collapsed) or `resolved` (AxisBC, CylindricalMetric, θ on
 #            `ntheta` nodes over the full circle), all on (0, 2] closed by a
-#            slip wall
+#            slip wall, or `pole` (PoleBC at both ends, SphericalMetric, N
+#            nodes over θ in (0, π) at r = 1, r and φ collapsed)
 #   N        radial node counts (list)
 #   alpha    filter αf (list); 0 runs no filter
 #   base     `rest` (ρ = p = 1) or `pulse` (the converging pulse of
 #            `axis_level_case`, advanced to `tbase` before linearizing)
-#   cfl      the step as a fraction of h/c₀, c₀ = √1.4 (list)
+#   cfl      the step as a fraction of h/c₀, c₀ = √1.4, h the physical
+#            spacing along the line (list)
 #   fcfl     `filter_cfl`; 0 filters at full strength every step
 #   variant  `none`, the package's form; `areap`, the area form on θ-collapsed
-#            r-z; `gradp`, D(p) on a resolved θ or at the origin; `product`,
-#            every radial divergence of the mass, radial momentum and energy
-#            fluxes of θ-collapsed r-z replaced by D(F) + F/r (list), each
-#            through a source (`bench/axisvariant.jl`)
+#            r-z or at the origin; `gradp`, D(p) on a resolved θ;
+#            `areatheta`, the area form for the θ-momentum at the poles;
+#            `product`, every radial divergence of the mass, radial momentum
+#            and energy fluxes of θ-collapsed r-z replaced by D(F) + F/r
+#            (list), each through a source (`bench/axisvariant.jl`)
 #   mu       the viscosity (Pr = 0.7); 0 by default
 #   near     αf over the first `M` nodes, tapering linearly to the run's
 #            αf at node 2M (a callback in place of the solver's filter); 0 off
@@ -80,8 +86,8 @@ _list(T, s) = [parse(T, x) for x in split(s, ',')]
 include(joinpath(@__DIR__, "axisvariant.jl"))
 
 function build(geom, N, α, fcfl, mode, base, near, M, ntheta, mu)
-    geom in ("axis", "plane", "origin", "resolved") ||
-        error("geom must be axis, plane, origin or resolved, got $geom")
+    geom in ("axis", "plane", "origin", "resolved", "pole") ||
+        error("geom must be axis, plane, origin, resolved or pole, got $geom")
     prof = base == "rest" ? (r -> (one(r), zero(r), zero(r), one(r))) :
            (r -> begin
                rho = 1 + 0.05 * exp(-((r - 0.5) / 0.1)^2)
@@ -94,6 +100,23 @@ function build(geom, N, α, fcfl, mode, base, near, M, ntheta, mu)
     bcs = ((lo, SlipWallBC()), per3[2], per3[3])
     kw = (metric=metric, filt=filt, filter_interval=α > 0 && near == 0 ? 1 : 0,
           filter_cfl=fcfl, cfl=50.0)
+    if geom == "pole"
+        # A θ line through both poles at r = 1; the base state is uniform.
+        base == "rest" || error("geom pole is written for the rest state")
+        near > 0 && error("near is written for a radial line")
+        s = merge(SMOOTH_DEFAULTS, kw)
+        solver = Solver(n_global=(1, N, 1), L_domain=(1.0, π, 1.0),
+                        origin=(1.0, 0.0, 0.0),
+                        bcs=(per3[1], (PoleBC(), PoleBC()), per3[3]),
+                        metric=SphericalMetric(), deriv=s.deriv, filt=s.filt,
+                        filter_interval=s.filter_interval, filter_cfl=s.filter_cfl,
+                        cfl=s.cfl, transport=ConstantTransport{Float64}(mu0=mu),
+                        art=ArtificialProperties(enabled=false),
+                        sources=(AxisVariant(mode),))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
+        return solver, Q, nothing
+    end
     if geom == "resolved"
         # θ over the full circle on `ntheta` nodes; the pressure pulse is
         # axisymmetric, so the base state is too.
@@ -129,7 +152,9 @@ end
 
 function spectrum(o, geom, N, α, cfl, mode)
     solver, Q, cb = build(geom, N, α, o.fcfl, mode, o.base, o.near, o.M, o.ntheta, o.mu)
-    h = solver.h[1]
+    # The line's dimension, and its physical spacing (r = 1 at the poles).
+    ld = geom == "pole" ? 2 : 1
+    h = solver.h[ld]
     dt = cfl * h / sqrt(1.4)
     if o.base == "pulse"
         nb = ceil(Int, o.tbase / dt)
@@ -144,10 +169,11 @@ function spectrum(o, geom, N, α, cfl, mode)
     eq = solver.equations
     # Every node of the block, the radial index innermost; ρu_θ joins the
     # components on a resolved θ.
-    nθ = solver.decomp.n_local[2]
+    nθ = ld == 1 ? solver.decomp.n_local[2] : 1
     comps = nθ > 1 ? (1, eq.i_mom[1], eq.i_mom[2], eq.i_energy) :
-                     (1, eq.i_mom[1], eq.i_energy)
-    dofs = [(padded_index(solver, i, j, 1), c) for c in comps for j in 1:nθ for i in 1:N]
+            ld == 2 ? (1, eq.i_mom[2], eq.i_energy) : (1, eq.i_mom[1], eq.i_energy)
+    dofs = ld == 2 ? [(padded_index(solver, 1, i, 1), c) for c in comps for i in 1:N] :
+           [(padded_index(solver, i, j, 1), c) for c in comps for j in 1:nθ for i in 1:N]
     n = length(dofs)
     function advance(x)
         copyto!(Q, base)
@@ -176,7 +202,7 @@ function spectrum(o, geom, N, α, cfl, mode)
     order = sortperm(abs.(E.values); rev=true)
     @printf("%s %s, N = %d%s, αf = %s, cfl %.2f, filter weight %.3f, variant %s\n",
             geom, o.base, N, nθ > 1 ? " × $nθ" : "", α > 0 ? string(α) : "off", cfl,
-            α > 0 ? CL.filter_weight(solver, 1) : 0.0, mode)
+            α > 0 ? CL.filter_weight(solver, ld) : 0.0, mode)
     for r in 1:min(o.top, n)
         k = order[r]
         λ = E.values[k]
@@ -196,7 +222,8 @@ function spectrum(o, geom, N, α, cfl, mode)
         # phase-aligned on its largest entry and scaled to it.
         v = E.vectors[:, order[1]]
         v = v ./ v[argmax(abs.(v))]
-        names = nθ > 1 ? ("rho", "rho u", "rho v", "E") : ("rho", "rho u", "E")
+        names = nθ > 1 ? ("rho", "rho u", "rho v", "E") :
+                ld == 2 ? ("rho", "rho v", "E") : ("rho", "rho u", "E")
         for (k, name) in enumerate(names)
             println("    ", rpad(name, 6), join((@sprintf("%+.3f", real(v[(k-1)*N*nθ+i]))
                                           for i in 1:o.show), " "))

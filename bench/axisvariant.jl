@@ -6,15 +6,18 @@
 """
 The radial momentum's pressure term, or every radial divergence, rewritten as
 a source added to the right-hand side. The package writes the pressure term of
-the radial momentum as ∂p/∂r on θ-collapsed r-z and as the area-weighted
-divergence (1/J)D(A p) less the metric source s p elsewhere, s = 1/r under
-`CylindricalMetric` and 2/r under `SphericalMetric`. Under `:areap` the
-θ-collapsed r-z run takes the area form, the package's before it carried
-∂p/∂r; under `:gradp` a run the package gives the area form (the resolved-θ
-axis, the spherical origin) takes ∂p/∂r; under `:product` every divergence of
-the mass, radial momentum and energy fluxes of a θ-collapsed r-z run becomes
-D(F) + F/r. Inviscid fluxes, one species, an unstretched radial dimension; a
-refined run takes the scratch of each patch extent from `cache`.
+the radial momentum as ∂p/∂r on θ-collapsed r-z and under `SphericalMetric`,
+and as the area-weighted divergence (1/J)D(A p) less the metric source s p
+on a resolved θ, s = 1/r under `CylindricalMetric` and 2/r under
+`SphericalMetric`. Under `:areap` a run the package gives ∂p/∂r takes the
+area form, the package's before it carried ∂p/∂r; under `:gradp` the
+resolved-θ axis takes ∂p/∂r; under `:areatheta` the spherical θ-momentum,
+which the package gives (1/r)∂p/∂θ, takes the area form (1/J)D(A₂ p) less
+(cotθ/r) p, the latter from the discrete-GCL array the package's source
+reads; under `:product` every divergence of the mass, radial momentum and
+energy fluxes of a θ-collapsed r-z run becomes D(F) + F/r. Inviscid fluxes,
+one species, an unstretched radial dimension; a refined run takes the scratch
+of each patch extent from `cache`.
 """
 struct AxisVariant
     mode::Symbol
@@ -22,8 +25,8 @@ struct AxisVariant
 end
 
 function AxisVariant(mode::Symbol)
-    mode in (:none, :areap, :gradp, :product) ||
-        error("variant must be none, areap, gradp or product, got $mode")
+    mode in (:none, :areap, :gradp, :areatheta, :product) ||
+        error("variant must be none, areap, gradp, areatheta or product, got $mode")
     return AxisVariant(mode, Dict{NTuple{3,Int},NTuple{2,Array{Float64,3}}}())
 end
 
@@ -39,11 +42,30 @@ function CompactLES.add_source!(src::AxisVariant, solver, dQ, Q, t)
     gradient = CL._radial_pressure_gradient(solver)
     src.mode === :gradp && gradient &&
         error("variant gradp: this run already takes the pressure term as ∂p/∂r")
-    src.mode in (:areap, :product) && !gradient &&
-        error("variant $(src.mode) is written for a θ-collapsed r-z run")
+    src.mode === :areap && !gradient &&
+        error("variant areap: this run takes the area form already")
+    src.mode === :product && !(gradient && solver.metric isa CylindricalMetric) &&
+        error("variant product is written for a θ-collapsed r-z run")
     ir, iJ, A = solver.inv_r, solver.inv_J, solver.area_d[1]
     ρ, u, p = solver.rho, solver.u, solver.p
     f, g = get!(() -> (similar(p), similar(p)), src.cache, size(p))
+    if src.mode === :areatheta
+        CL._polar_pressure_gradient(solver) && solver.folds[2] !== nothing ||
+            error("variant areatheta is written for the spherical poles")
+        # Adds (1/r)D(p) − (1/J)D(A₂ p) + (cotθ/r) p to the θ-momentum.
+        m2 = eq.i_mom[2]
+        f .= solver.area_d[2] .* p
+        CL.deriv_along!(g, f, solver, 2, solver.folds[2].sigflux[m2])
+        for I in _interior(solver)
+            dQ[I, m2] -= iJ[I] * g[I] - solver.cot_over_r_gcl[I] * p[I]
+        end
+        copyto!(f, p)
+        CL.deriv_along!(g, f, solver, 2, 1)
+        for I in _interior(solver)
+            dQ[I, m2] += solver.inv_h[2][I] * g[I]
+        end
+        return dQ
+    end
     # Sign of the flux product A·F across the fold, and of F itself.
     σA(c) = solver.folds[1] === nothing ? 1 : solver.folds[1].sigflux[c]
     s = solver.metric isa SphericalMetric ? 2 : 1
