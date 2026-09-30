@@ -52,7 +52,10 @@ continued through its origin, and astrophysical units, and compares the growth
 of a blast wave with the Sedov–Taylor solution.
 [Imploding shock](@ref) adds a refined level that follows a shock converging
 on the axis of a cylinder, and compares the shock trajectory with
-Guderley's self-similar law. The geometry
+Guderley's self-similar law. [Advected bubbles](@ref) adds a refined level
+made of tiles, which follows three bubbles of different gases across the
+periodic faces of a box, and compares each with its exact, translated shape.
+The geometry
 sequence then resolves a full cylinder and, finally, a sphere with an origin
 and poles.
 
