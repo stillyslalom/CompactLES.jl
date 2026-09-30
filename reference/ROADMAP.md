@@ -149,7 +149,10 @@ surface; H8 for a magnetized target.
   requirement are gone, and Noh's origin ceiling rises from 0.3 to 0.5.
   Remaining: a strong blast through the origin still has a CFL ceiling of
   0.2 to 0.3 in either form, where the axis and the plane take 0.5, and the
-  mechanism is open; the resolved-θ axis carries the defect unfiltered only.
+  mechanism is open; the resolved-θ axis carries the defect unfiltered only:
+  the isentropic vortex of the Axis-crossing vortex tutorial
+  (`docs/literate/axis_crossing_vortex.jl`, 32 × 64) runs away at the axis
+  with the filter off and loses positivity near t = 0.9.
   **Gate:** the origin blast at `cfl = 0.5` without retries.
 
 - [ ] **N25 — Diagnose the cylindrical slip wall's order in r.**
@@ -162,6 +165,43 @@ surface; H8 for a magnetized target.
   curvature source at the wall, or the filter's wall rows set it.
   **Gate:** a slip-wall evolution row on the annulus in
   `test/convergence.jl` at the order of the Cartesian wall row.
+
+- [ ] **N26 — Keep the pressure positive ahead of a strong shock into cold gas.**
+  A blast wave at Mach 20 in cold ideal gas (the Supernova remnant tutorial,
+  `docs/literate/supernova_remnant.jl`, Sedov on a radial spherical grid)
+  drives the pressure below zero at one to seven nodes just ahead of the
+  captured shock, at every ambient temperature tried over three decades and
+  with the artificial properties off as well. The run completes under
+  `validity = :permissive`, which the Sedov case of `test/cases.jl` also
+  carries. Find whether the oscillation comes from the scheme's response at
+  the shock foot, the filter, or the recovery of pressure from a small
+  internal energy, and whether the positivity floor should apply there.
+  **Gate:** the Sedov case of `test/cases.jl` and the tutorial under the
+  default strict validity, their errors unchanged.
+
+- [ ] **N27 — Decide the artificial species diffusivity's scale in slow flows.**
+  The artificial species diffusivity scales with the sound speed times the
+  spacing, so on a coarse grid a slow instability loses growth as the sound
+  speed rises at fixed flow: in the Rayleigh–Taylor tutorial's setup
+  (`docs/literate/rayleigh_taylor.jl`) on 73 × 12 nodes the growth rate
+  falls by about 1.5% between ambient pressures 20 and 160, and turning the
+  artificial diffusivity off removes the fall. Decide whether the species
+  channel's scale should follow the flow speed where the flow is slow, or
+  whether the dependence stays and is documented with its size.
+  **Gate:** the tutorial's growth rate on the coarse grid independent of the
+  ambient pressure to within its resolved-grid value, or the decision
+  recorded with its measurement.
+
+- [ ] **N28 — Correct the characteristic outflow face for spherical waves.**
+  `NSCBCOutflowBC` treats the wave at the face as plane. The dipole of the
+  Oscillating sphere tutorial (`docs/literate/oscillating_sphere.jl`)
+  reflects from the face by 1/(2kR) without pressure relaxation, to three
+  digits at two outer radii, and the relaxation adds about σc/(2ωL). A
+  curvature term in the incoming-wave relation, of the kind the far-field
+  radiation conditions of Bayliss and Turkel carry, would remove the leading
+  term.
+  **Gate:** the reflection on the tutorial configuration below a tenth of
+  1/(2kR); the planar NSCBC rows of the test suite unchanged.
 
 ## Validation and verification
 
@@ -199,7 +239,11 @@ surface; H8 for a magnetized target.
   would replace. The runner taking medians over repeated processes, with an
   order-alternated paired mode for a before/after comparison, is
   `bench/repeat.jl` (commit `2290c83`), and its first paired transcript is
-  `bench/results/derivcost.txt` (commit `a2d7311`).
+  `bench/results/derivcost.txt` (commit `a2d7311`). Also remaining:
+  `test/docrefs_tests.jl` does not detect a heading whose slug collides
+  with a docstring binding or another page's heading: a second `## Sphere`
+  heading on a tutorial made ``[`Sphere`](@ref)`` ambiguous, docrefs passed
+  and `makedocs` failed.
   **Gate:** KA-on-CPU equality does not substitute for hardware-GPU tests
   under S1.
 
@@ -236,7 +280,7 @@ promotion.
      seams included, a face a level cannot carry keeping the margin.
   4. Done: the phase change `setup(solver, Q; ...)` replaces `SwitchableBC`
      (commit `f2d130a`), a phase may switch the artificial properties
-     (commit `ART`), and `SwitchableBC` is removed (commit `REM`).
+     (commit `bd59d6d`), and `SwitchableBC` is removed (commit `07ed3ac`).
   The axis's sawtooth response is N24, the cylindrical slip wall's order
   N25, and the shock-crossing mass loss A14.
   **Gate:** per remaining stage, the refined-versus-uniform rows of
@@ -346,6 +390,26 @@ promotion.
   **Gate:** no eigenvalue above the uniform run's on the nest and one-level
   cases at N = 36 to 144 unfiltered; the unfiltered interface rows of
   `test/convergence.jl` unchanged or better.
+
+- [ ] **A18 — Remove the disturbances a moving refined level leaves behind.**
+  A level that moves carries disturbances the uniform grid at its spacing
+  does not have. In the Imploding shock tutorial
+  (`docs/literate/imploding_shock.jl`, one sensor-placed box following a
+  converging cylindrical shock) the level carries density disturbances of a
+  few percent ahead of the shock, about fifty times the uniform fine grid's
+  there; a fixed box carries a tenth of that, and neither regridding every
+  step, `level_interpolation_order = 2` nor the global step removes them. In
+  the Advected bubbles tutorial (`docs/literate/advected_bubbles.jl`, tiles
+  following bubbles whose edges the root does not resolve) the tiles leave
+  mole-fraction disturbances beside each bubble as large as the error at
+  its edge, three orders above the uniform grid's, and each gas's mass
+  changes by up to 0.006%, mostly at regrids; with the edge resolved on the
+  root both vanish. Both point at the root's under-resolved copy of the
+  feature and the interpolation into newly covered fine nodes. The density
+  sensor then tags the disturbances and widens the cover, A17's second
+  cause.
+  **Gate:** on both tutorial configurations, the refined run's disturbances
+  away from the feature within a small factor of the uniform fine grid's.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   Refinement exists to reach the fine grid's answer sooner. On the small
@@ -921,6 +985,20 @@ under [the refinement track](#refinement-for-the-production-geometry).
   coupling that fails (the sensors or their smoothing on projected rings, the
   artificial rate against the capped θ rate, or the weakened θ filter pass S9
   notes) before S9's calibration sets defaults.
+  On the current code the run fails near t = 0.19, and the Axis-crossing
+  vortex tutorial's measurements point at the cause. The mode limit on the
+  innermost ring is 1, but the physical velocity components carry
+  azimuthal mode m at order r^(m−1), so the
+  vortex's strain (m = 2 in u_r and u_θ at O(r)) is deleted there every
+  step; after one truncated step the first ring's velocity error equals the
+  exact field's m = 2 content. Truncation is also inaccurate with the
+  artificial properties off, its density error at the axis about 150 times
+  the untruncated run's. Raising the first ring's limit to 2, with its θ rate
+  cap, brings the error within a factor five of the untruncated run and
+  lets the run with the artificial properties complete; the remaining gap
+  suggests one more mode for the velocity components on every ring. The fix
+  is in `mode_truncation` / `truncate_modes!` and the mode-count rule of
+  [MODE_TRUNCATION.md](MODE_TRUNCATION.md).
   **Gate:** the vortex to t = 1.6 under truncation and the default artificial
   properties, its density error no larger than with them off; the mode
   truncation rows of the MPI suite unchanged.
