@@ -60,7 +60,7 @@ const TUTORIALS = [
     "richtmyer_meshkov.jl",
     "rayleigh_taylor.jl",
     "supernova_remnant.jl",
-    "adaptive_refinement.jl",
+    "imploding_shock.jl",
     "cylindrical_3d.jl",
     "spherical_3d.jl",
 ]
@@ -115,7 +115,7 @@ DocMeta.setdocmeta!(
             "Richtmyer–Meshkov instability" => "tutorials/richtmyer_meshkov.md",
             "Rayleigh–Taylor instability" => "tutorials/rayleigh_taylor.md",
             "Supernova remnant" => "tutorials/supernova_remnant.md",
-            "Adaptive refinement" => "tutorials/adaptive_refinement.md",
+            "Imploding shock" => "tutorials/imploding_shock.md",
             "3D cylinder" => "tutorials/cylindrical_3d.md",
             "3D sphere" => "tutorials/spherical_3d.md",
         ],

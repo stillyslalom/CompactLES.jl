@@ -50,8 +50,9 @@ with linear theory.
 [Supernova remnant](@ref) adds a spherical grid resolved in radius alone,
 continued through its origin, and astrophysical units, and compares the growth
 of a blast wave with the Sedov–Taylor solution.
-[Follow a moving feature with refinement](@ref) shows how a
-physical-coordinate selector places fine cells. The geometry
+[Imploding shock](@ref) adds a refined level that follows a shock converging
+on the axis of a cylinder, and compares the shock trajectory with
+Guderley's self-similar law. The geometry
 sequence then resolves a full cylinder and, finally, a sphere with an origin
 and poles.
 
