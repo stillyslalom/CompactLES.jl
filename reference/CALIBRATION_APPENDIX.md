@@ -61,6 +61,8 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/interfaceacoustics.jl`, `test/validation.jl`)
 30. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/sharpening.jl`,
     `test/sharpening_tests.jl`)
+31. [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis)
+    (`bench/axisspectrum.jl`, `bench/axisrunaway.jl`)
 
 ## The shock battery
 
@@ -6179,12 +6181,9 @@ three-component sawtooth stays at 7e-10. The cylindrical divergence
 (1/r)D(r·) does not hold the π mode of ρu in its null space. Filtered at
 every step (αf = 0.45, the rows' filter), the axis window reads 4.6e-7,
 3.0e-9, 3.0e-11 at t = 0.3, the row's 6.93. Under the default αf = 0.47 the
-window at N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45, and the
-limit is the root discretization's: the unrefined pulse on 767 and 2303
-radial nodes gives ρ − 1 = 0.116 at node 1 at t = 0.4 under either filter,
-while on 6908 nodes under αf = 0.47 the axis node runs away from t ≈ 0.2 and
-reads 0.380 (0.116 under 0.45). Not diagnosed further; it bounds the radial
-spacing at which an axis run, refined or not, keeps the default filter.
+window at N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45. The
+growth belongs to the unrefined axis and is measured under
+[Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis).
 
 **Levels placed on a face by tags.** The instrument is the `level_boundaries`
 testset of `test/level_tests.jl`, at N = 49 in equal steps against the uniform
@@ -8051,3 +8050,92 @@ limits the step, and whether their runs localize the flux at all. The He/CO2 tub
 768 × 48 under 0.3 it had not reached 2.5 ms after 16 minutes, against about 90 s without
 the flux, and was stopped; the N20 budget with the flux (`bench/tubebudget.jl sharpen=`,
 which attributes it to its own row) was not run.
+
+## Grid-scale growth at the r-z axis
+
+The instruments are `bench/axisspectrum.jl`, the one-step map of an unrefined
+θ-collapsed line on (0, 2] linearized by central differences about ρ = p = 1
+in ρ, ρu_r and E at every node, and `bench/axisrunaway.jl`, runs of the
+converging pulse of `axis_level_case` and of cylindrical Noh with the
+grid-scale content of the first 16 nodes read after every step. The variants
+of the radial divergence are source terms and the near-axis filter a
+callback (`bench/axisvariant.jl`); the package is unchanged.
+
+**The mechanism.** The radial momentum carries the pressure as
+(1/r)D(r p) − p/r. On a mode of wavenumber ω under a slowly varying envelope
+it differs from D(p) by (1 − k'(ω)) p/r, k' being the derivative of the C6
+modified wavenumber, and 1 − k' is 0.00 at ω = 1, 0.05 at 1.5, 0.56 at 2π/3,
+2.0 at 2.5 and 16/3 at π. The leading eigenvector of the map peaks at node 1, is acoustic
+(δE/δρ = 3.5) and repeats every three nodes (+1.00, −0.33, −0.24, +0.35 in E
+at αf = 0.47); its smooth share is 0.47. The Cartesian line with a symmetry
+plane at x = 0 has no eigenvalue above 1 + 1e-8 in any configuration tried.
+
+**The rate.** log|λ| per step of the leading eigenvalue; "neutral" is below
+1e-8. At αf = 0.47, cfl 0.18 under `filter_cfl = 0.35` it is 7.032e-3 at
+N = 64, 128 and 256, so the rate per unit time is proportional to N (1.47,
+2.95 and 5.90).
+
+| αf, `filter_cfl` 0.35 | cfl 0.1 | 0.15 | 0.18 | 0.3 | 0.5 |
+|---|---|---|---|---|---|
+| 0.45 | neutral | | neutral | neutral | 0.0104 |
+| 0.46 | neutral | neutral | neutral | neutral | 0.0292 |
+| 0.465 | | 0.0021 | | | |
+| 0.47 | 0.0040 | 0.0059 | 0.0070 | 0.0106 | 0.0511 |
+| 0.475 | | 0.0101 | | | |
+| 0.48 | 0.0098 | 0.0149 | 0.0180 | 0.0301 | 0.0775 |
+| 0.49 | | 0.0267 | | | |
+
+At full strength (`filter_cfl = 0`) cfl 0.9 gives 0.089 under αf = 0.45 and
+0.142 under 0.47, and a rest state seeded at 1e-10 fails in 146 steps under
+0.47. Unfiltered, the rate is 1.34 and 1.51 per unit time at N = 64 and 128.
+
+**The runs.** The pulse at the axis rows' step, cfl 0.177, to t = 0.4, stopped
+where the grid-scale content reaches 5% (ρ − 1 at node 1 is 0.1161 on a
+completed run):
+
+| αf | nodes | end |
+|---|---|---|
+| 0.45, 0.46 | 6908 | complete, content 2.1e-6 |
+| 0.47 | 2303 | complete, content 5.3e-5 |
+| 0.47 | 3455, 4607, 6908 | stopped at t = 0.392, 0.300, 0.204 |
+| 0.48 | 1151, 1535, 2303, 3455 | stopped at t = 0.387, 0.308, 0.202, 0.139 |
+
+The symmetry-plane line on 3455 nodes under 0.48 completes with 8.6e-6. At
+the solver's own step, cfl 0.9, the pulse on 767 nodes completes under 0.45
+and stops at t = 0.355 under 0.47. Cylindrical Noh (cfl 0.15) completes at
+every setting, with the plateau (15.6523, 15.8163, 15.8985 on 767, 1535 and
+3071 nodes) and the front unchanged by αf, while the axis deficit 1 − ρ₁/16
+moves:
+
+| αf | 767 | 1535 | 3071 |
+|---|---|---|---|
+| 0.45 | 50.1% | 48.9% | 46.0% |
+| 0.47 | 46.6% | 41.0% | 40.1% |
+| 0.48 | 46.5% | 33.0% | 25.1% |
+
+**The candidate remedies.** `gradp` replaces the pressure term by D(p);
+`product` writes every radial divergence of the mass, radial momentum and
+energy fluxes as D(F) + F/r; the near-axis filter takes αf = 0.45 over the
+first 8 nodes, tapering to the run's αf at node 16.
+
+| | map, filtered | map, unfiltered | pulse at cfl 0.177 |
+|---|---|---|---|
+| `gradp` | neutral at every αf and cfl above | 0.24 to 0.40 per unit time | 0.47 on 6908 and 0.48 on 3455 nodes complete, 0.1161 |
+| `product` | neutral at 0.47 and 0.48, cfl 0.18 | neutral at cfl 0.9, 0.19 per unit time at 0.18 | not run |
+| near-axis 0.45 | neutral under 0.47 and 0.48 at cfl 0.18; 0.0100 at cfl 0.5 | | 0.47 on 6908 nodes completes, 0.1161 |
+
+The axis convergence rows (errors at N = 96, 192, 384 and the order):
+
+| | inviscid | viscous |
+|---|---|---|
+| present | 4.594e-7, 2.986e-9, 3.012e-11, 6.93 | 1.078e-6, 1.164e-8, 1.429e-10, 6.42 |
+| `gradp` | 3.693e-7, 1.555e-9, 4.816e-11, 6.43 | 9.873e-7, 1.034e-8, 1.229e-10, 6.47 |
+| `product` | 3.966e-7, 2.032e-9, 3.905e-11, 6.64 | 8.762e-7, 8.621e-9, 9.599e-11, 6.56 |
+
+The rows filter at αf = 0.45, so the near-axis filter leaves them unchanged.
+The Noh axis rows, present against `gradp`: `noh_case(2)` on 256 nodes reads
+plateau 15.0100 and 15.0099 and axis deficit 57.1% and 55.2%; the uniform run
+on 767 nodes 15.6523 in both and 46.6% and 50.9%; a level over N/3 root nodes
+46.6% and 50.9%; a level over N/6 + 1 plateau 14.8044 and 14.8034, deficit
+59.9% and 61.0%. Fronts move by at most 1e-4. The near-axis filter gives
+55.1% on 256 nodes and 50.2% on 767.
