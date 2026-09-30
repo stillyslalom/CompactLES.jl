@@ -54,6 +54,7 @@ const TUTORIAL_DIR = joinpath(@__DIR__, "src", "tutorials")
 const TUTORIALS = [
     "coalescing_shock.jl",
     "shock_tube.jl",
+    "acoustic_interface.jl",
     "molecular_diffusion.jl",
     "adaptive_refinement.jl",
     "radial_coordinates.jl",
@@ -105,6 +106,7 @@ DocMeta.setdocmeta!(
         "Tutorials" => [
             "Coalescing shock" => "tutorials/coalescing_shock.md",
             "Shock tube" => "tutorials/shock_tube.md",
+            "Acoustic interface" => "tutorials/acoustic_interface.md",
             "Molecular diffusion" => "tutorials/molecular_diffusion.md",
             "Adaptive refinement" => "tutorials/adaptive_refinement.md",
             "Radial coordinates" => "tutorials/radial_coordinates.md",

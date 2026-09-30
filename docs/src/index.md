@@ -36,8 +36,9 @@ The tutorials are ordered so that each adds one layer to the preceding
 calculations. [Coalescing shock](@ref) introduces the state, grid,
 CFL-controlled time advancement, and output path. [Shock tube](@ref) adds
 multicomponent gases, initial conditions built from regions, and shock
-regularization. [Evolve a molecular mixing layer](@ref)
-then introduces binary diffusion. [Follow a moving feature with refinement](@ref)
+regularization. [Acoustic interface](@ref) adds regions whose state varies
+in space, and follows a sound pulse through the interface between two gases.
+[Evolve a molecular mixing layer](@ref) then introduces binary diffusion. [Follow a moving feature with refinement](@ref)
 shows how a physical-coordinate selector places fine cells. The geometry
 sequence starts with a collapsed radial calculation before resolving a full
 cylinder and, finally, a sphere with an origin and poles.
