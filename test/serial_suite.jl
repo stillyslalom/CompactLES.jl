@@ -1959,7 +1959,10 @@ end
     # The sensor operators' node-centred wall rows must not be planned here:
     # the fold takes its own half-offset mirror inside the same routines.
     @test sensor_mirror(SymmetryPlaneBC()) === false
-    @test CL.planned_sensor_mirror(SymmetryPlaneBC()) === false
+    @test CL._sensor_wall_faces(((SymmetryPlaneBC(), SlipWallBC()),
+                                 (PeriodicBC(), PeriodicBC()),
+                                 (PeriodicBC(), PeriodicBC()))) ==
+          ((false, true), (false, false), (false, false))
     @test isperiodic(SymmetryPlaneBC()) === false
     @test CL._is_fold_bc(SymmetryPlaneBC())
     # A plane on dimension 3 beside a cylindrical axis on dimension 1: the
@@ -2109,9 +2112,6 @@ end
     @test_throws ErrorException Solver(n_global=(16, 16, 12),
         L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(), art=off,
         bcs=((AxisBC(), SymmetryPlaneBC()), per3[2], per3[3]))
-    # Setup detects the plane by type, so the wrapper cannot carry it.
-    @test_throws ArgumentError SwitchableBC(SymmetryPlaneBC(), SlipWallBC())
-    @test_throws ArgumentError SwitchableBC(SlipWallBC(), SymmetryPlaneBC())
     # A patched run takes SlipWallBC at that face instead. A refined run
     # keeps the plane, whether its level stays off it or reaches it (the
     # level tests cover the second).
@@ -2448,10 +2448,6 @@ end
     @test_throws ErrorException cyl((NSCBCOutflowBC(pinf=1.0), SlipWallBC()))
     @test_throws ErrorException cyl((SlipWallBC(),
                                      NSCBCInflowBC(u=(0.0, 0.1, 0.0), T_ion=1.0)))
-    # Wrapping does not evade it: the `after` arm never passes through setup again.
-    @test_throws ErrorException cyl((SwitchableBC(SlipWallBC(),
-                                                 NSCBCOutflowBC(pinf=1.0)),
-                                     SlipWallBC()))
     # Composition length, checked once at setup rather than on every RHS call.
     cart(Y) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
                      bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
@@ -4686,7 +4682,6 @@ end
     @test names(() -> Prim(p=1.0, rho=1.0, Y=(0.5, 0.6)), "sum to 1")
     @test names(() -> AtTime([0.1, NaN]), "finite")
     @test names(() -> EveryTime(Inf), "interval")
-    @test names(() -> SwitchableBC(SlipWallBC(), SlipWallBC(); at=NaN), "at")
     @test names(() -> mk(cfl=0.0), "cfl")
     @test names(() -> mk(filter_interval=-1), "filter_interval")
     @test names(() -> mk(filter_cfl=-0.1), "filter_cfl")
@@ -4963,51 +4958,6 @@ end
     @test !isapprox(stale[], fromQ[]; rtol=1e-12)        # unrefreshed does not
 end
 
-@testset "SwitchableBC: transparent before the switch, forwards after" begin
-    wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
-             (PeriodicBC(), PeriodicBC()))
-    @test_throws ArgumentError SwitchableBC(SlipWallBC(), PeriodicBC())
-    @test_throws ArgumentError SwitchableBC(AxisBC(), SlipWallBC())
-    @test_throws ArgumentError SwitchableBC(SlipWallBC(), OriginBC())
-    @test CL.isperiodic(SwitchableBC(PeriodicBC(), PeriodicBC()))
-    @test !CL.isperiodic(SwitchableBC(SlipWallBC(), ExtrapolationBC()))
-
-    mkrun(xbc) = begin
-        solver = Solver(bcs=(xbc, (PeriodicBC(), PeriodicBC()),
-                             (PeriodicBC(), PeriodicBC())),
-                        n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                        art=ArtificialProperties(enabled=false), cfl=0.4)
-        Q = allocate_state(solver)
-        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
-                                                 p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
-        solver, Q
-    end
-
-    # Unswitched, the wrapper must be bit-identical to the condition it wraps —
-    # making it safe to leave in a problem specification.
-    s_ref, Q_ref = mkrun((SlipWallBC(), SlipWallBC()))
-    run!(s_ref, Q_ref; tfinal=1e9, nmax=12)
-    sw = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
-          SwitchableBC(SlipWallBC(), ExtrapolationBC()))
-    s_wrap, Q_wrap = mkrun(sw)
-    run!(s_wrap, Q_wrap; tfinal=1e9, nmax=12)
-    @test Q_wrap == Q_ref
-    @test !switched(sw[1])
-
-    # Switched by a callback, it must actually take the other branch. That the
-    # branch is *physically* the right one is the next testset's job; this one
-    # only pins the wrapper's mechanics.
-    sw2 = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
-           SwitchableBC(SlipWallBC(), ExtrapolationBC()))
-    s_sw, Q_sw = mkrun(sw2)
-    run!(s_sw, Q_sw; tfinal=1e9, nmax=12,
-         callback=Callback(WhenState((s, _) -> s.step >= 4),
-                           (_, _) -> (switch!.(sw2); nothing)))
-    @test all(switched, sw2)
-    @test Q_sw != Q_ref
-    @test switch!(sw2[1]) === sw2[1]      # idempotent
-end
-
 @testset "phase change: opening the upstream face lets the reflected wave leave" begin
     # A shock/interface interaction in a translating frame, with the upstream
     # boundary changing from inflow to outflow, by a phase change, when the
@@ -5182,26 +5132,6 @@ end
     @test erru(uh) > 3 * erru(us)
     @test abs(ipos(xs, Ys) - ref_i) < 0.0015
     @test abs(ipos(xh, Yh) - ref_i) > 2.5 * abs(ipos(xs, Ys) - ref_i)
-
-    # The deprecated SwitchableBC, switched, must not merely resemble its
-    # `after` condition but be it: compared with the second phase's solver
-    # at the RHS, on its richly non-uniform final state, both enforce! and
-    # correct_rhs!.
-    sw = SwitchableBC(inflow(), outflow())
-    switch!(sw)
-    s_p, Q_p = build((sw, downstream()))
-    copyto!(Q_p, Q_sw)
-    s_p.t = s_sw.t
-    s_p.step = s_sw.step
-    s_p.tstage = s_sw.tstage
-    apply_bcs!(s_sw, Q_sw)
-    apply_bcs!(s_p, Q_p)
-    @test Q_sw == Q_p                          # enforce! forwards
-    dQ_sw, dQ_p = zero(Q_sw), zero(Q_p)
-    compute_rhs!(s_sw, Q_sw, dQ_sw)
-    compute_rhs!(s_p, Q_p, dQ_p)
-    @test maximum(abs, dQ_sw) > 1              # a non-trivial state
-    @test dQ_sw == dQ_p                        # correct_rhs! forwards
 end
 
 @testset "checkpoint round trip" begin

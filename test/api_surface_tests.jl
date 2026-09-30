@@ -26,7 +26,7 @@ NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NoSlipWallBC Numerics Ori
 PatchInterfaces
 PeriodicBC PoleBC Prim Problem ProgressLog Ramp SlipWallBC Solver SolverFailure
 Presets SphericalMetric StateFilter StateGuard StepControl StiffenedGas Stretch
-SwitchableBC SymmetryPlaneBC Trigger
+SymmetryPlaneBC Trigger
 TurbulentInflow WhenState Workspace
 allocate_state binary_diffusivity boundary_plane cartesian_coordinates cartesian_slice
 compact_filter compute_dt conserved_from_prim dissipation_rate domain_volume
@@ -39,7 +39,7 @@ nspecies plane_profile profile_coordinate profile_spacing profileplot profileplo
 pyranda_filter read_cea_transport read_nasa9 reflected_shock refined_region
 refresh_primitives! revolve_profile riemann_interface run! save_checkpoint
 save_checkpoint_hdf5 save_hdf5 save_vtk setup shock_jump shock_tube sine_cluster
-species_names species_pdf state_guard state_report state_valid switch! switched
+species_names species_pdf state_guard state_report state_valid
 tanh_blend temperature_domain thermodynamic_state tke_profile total_energy
 transport_coefficients turbulent_kinetic_energy validate_state! velocity
 volume_average volume_integral

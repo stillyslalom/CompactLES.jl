@@ -33,10 +33,10 @@
 # allocated through the backend (`field`, `backend_plan`) as it is built.
 
 # Which physical faces the sensor operators close on the node-centred mirror,
-# per dimension and side. `planned_sensor_mirror` (boundary.jl) is the
-# setup-time form of the detector's `sensor_mirror` hook.
-_sensor_wall_faces(bcs) = ntuple(d -> (planned_sensor_mirror(bcs[d][1]),
-                                       planned_sensor_mirror(bcs[d][2])), 3)
+# per dimension and side: those whose condition answers the detector's
+# `sensor_mirror` hook (boundary.jl) with `true`.
+_sensor_wall_faces(bcs) = ntuple(d -> (sensor_mirror(bcs[d][1]) === true,
+                                       sensor_mirror(bcs[d][2]) === true), 3)
 
 # The wall rows one sensor operator takes at one face, or `nothing` where it
 # keeps the scheme's own. `use` gates the hook to the two operators whose rows
@@ -1578,8 +1578,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
 end
 
 # A refined patch's face conditions: the root's condition `bcs[d][side]` at a
-# face on the domain boundary, the same object, so that a switch of the
-# root's face switches the tile's too; an interface marker elsewhere.
+# face on the domain boundary, the same object; an interface marker elsewhere.
 _fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}},
           boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY, bcs=nothing) =
     ntuple(d -> !active_g[d] ? (PeriodicBC(), PeriodicBC()) :

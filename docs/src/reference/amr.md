@@ -43,14 +43,12 @@ which the level then carries at its own spacing, so a feature at a wall or an
 open face is refined up to it, and place a level across a periodic seam, so a
 feature there is refined on both sides of it. They also place a level, at any
 depth, on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host
-backend under `:inject` restriction. Any other face keeps the band: a
-symmetry plane or the axis on the device backend or under `:filter`
-restriction, and a face under the deprecated `SwitchableBC`, whose
-replacement, a phase change ([`setup`](@ref)`(solver, Q; bcs)`), gives the
-face a plain condition a level reaches. A tiled level reaches a face only when the
-tile next to the face's tile stays the margin inside the domain: the edge is
-at least `max(n_halo, 4)`, and a partial last lattice cell at the high face
-spans at least that many parent cells. Otherwise that face keeps the band. A
+backend under `:inject` restriction. Any other face keeps the band, among
+them a symmetry plane or the axis on the device backend or under `:filter`
+restriction. A tiled level reaches a face only when the tile next to the
+face's tile stays the margin inside the domain: the edge is at least
+`max(n_halo, 4)`, and a partial last lattice cell at the high face spans at
+least that many parent cells. Otherwise that face keeps the band. A
 shape or a tagged feature reaching into the band of a face that keeps it is
 refined only up to the band, with one warning. `level_boundaries = false`
 keeps the band at every face.

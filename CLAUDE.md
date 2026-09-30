@@ -375,8 +375,7 @@ Names are spelled out in full. Current vocabulary:
   `extrapolate` (`Nasa9Mixture`: `:linear`, the default, `:polynomial` or
   `:missing`)
 - `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
-  `fired!`, `next_time`, `rewind!`, `landing_steps`,
-  `switch!`/`switched` (a `SwitchableBC`, deprecated)
+  `fired!`, `next_time`, `rewind!`, `landing_steps`
 - the phase change `setup(solver, Q; bcs, sources, transport, numerics)`
   (phases.jl), `inputs` (the `Solver` field holding the `Problem` and
   `Numerics` that `setup` built it from), `_check_phase`, `_carry_phase!`
@@ -648,16 +647,14 @@ crash, so it presents as a hang.
 **A boundary condition that changes mid-run must change on every rank at the
 same step.** This is the same collective trap from the other side: a phase
 change (`setup(solver, Q; bcs)`) takes the new conditions from the step the
-first `run!` ended on, and the deprecated `SwitchableBC` forwards to `after`
-only once switched. If the new condition runs collectives the old one does
-not, as `NSCBCOutflowBC` does, then ranks disagreeing about the stop or the
-switch is a deadlock, not a wrong answer. `WhenState` therefore reduces its
-condition across the communicator; end a run or drive a switch from a
-`Callback` and never from a rank-local test. `AtTime` and `EveryStep` are safe
-without a reduction because `t` and `step` advance identically everywhere. The
-MPI suite pins this with a condition that is true on one rank only, in the
-`callback consistency` and `phase change` phases; removing the reduction turns
-those tests into a hang, not a failure.
+first `run!` ended on. If the new condition runs collectives the old one does
+not, as `NSCBCOutflowBC` does, then ranks disagreeing about the stop is a
+deadlock, not a wrong answer. `WhenState` therefore reduces its condition
+across the communicator; end a run from a `Callback` and never from a
+rank-local test. `AtTime` and `EveryStep` are safe without a reduction because
+`t` and `step` advance identically everywhere. The MPI suite pins this with a
+condition that is true on one rank only: without the reduction the `callback
+consistency` phase fails and the `phase change` phase hangs.
 
 **Minimum local extent per dimension.** `plan_direction` errors when a rank's
 block is too small for the scheme: C6 needs 5 points, C10 needs 7, and the C8

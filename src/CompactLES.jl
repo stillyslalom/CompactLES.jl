@@ -108,7 +108,7 @@ export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpo
 export FieldWriter
 export BlockRegion
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
-export SwitchableBC, switch!, switched, CompositeBC
+export CompositeBC
 export StateFilter, PatchInterfaces, Execution, Presets
 export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, ConstantTransport

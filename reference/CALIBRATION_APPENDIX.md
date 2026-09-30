@@ -4065,8 +4065,8 @@ and for the tangential velocities, −1 for the wall-normal component, through
 `velocity_mu!`'s `wall_parity` keyword. `sensor_mirror(bc)` names the reflecting faces,
 `true` for `SlipWallBC` and `NoSlipWallBC` and `false` by default, so Dirichlet,
 extrapolation and NSCBC faces and interface ends keep the clamp; the `:delta4` path queries
-it per call, while the setup-time `planned_sensor_mirror(bc)` gives a `SwitchableBC` face
-the wall rows only when both of its conditions are mirrors.
+it per call, and the compact sensor operators' wall rows are planned from it once, when the
+solver is built.
 
 `wall_closures(scheme, σ)`, in `kernels.jl` and `kernels_banded.jl`, folds a symmetric
 scheme's interior stencil, taps and left-hand-side unknowns alike, onto the node-centred

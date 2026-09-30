@@ -179,9 +179,7 @@ using HDF5
            "metric mismatch")
 
     # The mutable run state. (t, step) alone leaves behind a retry's reduced
-    # CFL, the step history the growth cap and `filter_weight` read, and a
-    # boundary face that has already switched — which on a switch that changes
-    # the collective pattern is a deadlock on resume, not a wrong answer.
+    # CFL and the step history the growth cap and `filter_weight` read.
     mkstate(bcs) = begin
         s = Solver(bcs=bcs, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
                    eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
@@ -189,36 +187,28 @@ using HDF5
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1.0, rho=1.0))
         s, Q
     end
-    written_face = SwitchableBC(SlipWallBC(), ExtrapolationBC())
-    sst, Qst = mkstate(((written_face, SlipWallBC()), per3h[2], per3h[3]))
+    sst, Qst = mkstate(((ExtrapolationBC(), SlipWallBC()), per3h[2], per3h[3]))
     sst.cfl = 0.125
     sst.dt_prev = 1.5e-4
     sst.rate_prev = 987.5
     sst.filter_rate_prev = (12.5, 250.0, 0.0)
-    switch!(written_face)
     state_stem = joinpath(dir, "runstate")
     save_checkpoint_hdf5(sst, Qst, state_stem)
     MPI.Barrier(comm)
 
-    read_face = SwitchableBC(SlipWallBC(), ExtrapolationBC())
-    sback, Qback = mkstate(((read_face, SlipWallBC()), per3h[2], per3h[3]))
+    sback, Qback = mkstate(((ExtrapolationBC(), SlipWallBC()), per3h[2], per3h[3]))
     load_checkpoint_hdf5!(sback, Qback, state_stem)
     @test sback.cfl == 0.125
     @test sback.dt_prev == 1.5e-4
     @test sback.rate_prev == 987.5
     @test sback.filter_rate_prev == (12.5, 250.0, 0.0)
-    @test switched(read_face)
 
-    # A face the file describes as switchable where this solver has a plain
-    # condition: the boundary would silently differ for the rest of the run.
-    # The configuration record refuses it first; allowing the boundary
-    # change leaves the switch record in force.
+    # Another boundary condition is refused unless the load allows it.
     splain, Qplain = mkstate(((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]))
     @test_throws "configuration mismatch" load_checkpoint_hdf5!(splain, Qplain,
                                                                 state_stem)
-    @test_throws "boundary mismatch" load_checkpoint_hdf5!(splain, Qplain,
-                                                           state_stem;
-                                                           allow=(:boundaries,))
+    load_checkpoint_hdf5!(splain, Qplain, state_stem; allow=(:boundaries,))
+    @test splain.dt_prev == 1.5e-4
 
     # The configuration record: the same species names over another gamma are
     # refused on every rank, since every rank reads the one record; a numerics
@@ -243,7 +233,8 @@ using HDF5
     @test c8.step == 17
     if rank == 0
         h5open(stem * ".h5", "r") do file
-            @test read(file["meta/format"]) == 6
+            @test read(file["meta/format"]) == 7
+            @test !haskey(file, "meta/switched")
             digests = String.(read(file["config/digests"]))
             @test startswith(digests[1], "thermodynamics fnv1a64 ")
             @test "eos.sp[2].gamma" in String.(read(file["config/paths"]))
@@ -273,6 +264,22 @@ using HDF5
         load_checkpoint_hdf5!(old, Qold, legacy_stem)
     end
     @test old.step == 17
+
+    # Format 6 carried a per-face switch record under `meta/switched`, which
+    # the reader passes over.
+    six_stem = joinpath(dir, "six")
+    if rank == 0
+        cp(stem * ".h5", six_stem * ".h5")
+        h5open(six_stem * ".h5", "r+") do file
+            delete_object(file, "meta/format")
+            file["meta/format"] = 6
+            file["meta/switched"] = fill(Int64(-1), 6)
+        end
+    end
+    MPI.Barrier(comm)
+    six = mkrec(eos=eos)
+    load_checkpoint_hdf5!(six, allocate_state(six), six_stem)
+    @test six.step == 17
 
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)

@@ -624,9 +624,7 @@ dimension, as it is for [`delta4_sum!`](@ref). A wall face, which
 [`wall_closures`](@ref) carrying that sign, so the two detectors read the same
 continuation there; `ring_along!` selects between the two planned sign
 variants. Every other closed physical edge keeps the scheme's own rows, which
-fold onto the half-offset mirror. The rows are fixed when the solver is built,
-so a `SwitchableBC` face takes them only where both of its conditions are
-mirrors, `planned_sensor_mirror` being the setup-time form of the hook.
+fold onto the half-offset mirror. The rows are fixed when the solver is built.
 
 `solver.ring_buf` receives the directional result and is scratch belonging to
 this function alone. It cannot be `tmp_a` or `tmp_b`: both of

@@ -344,27 +344,26 @@ end
     @test solver.t == t5 && solver.step == 5
 end
 
-@testset "a rollback restores switches and re-arms their triggers" begin
+@testset "a rollback re-arms a trigger that fired after the savepoint" begin
     h = 1.0 / 23
-    face = SwitchableBC(SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, h, h),
-                    bcs=((face, SlipWallBC()), rl_per, rl_per), cfl=0.3,
+                    bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per), cfl=0.3,
                     art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0, 0, 0), p=1.0 + 0.1exp(-50(x - 0.5)^2), rho=1.0))
-    # Savepoints at steps 0, 2 and 4. After step 5 the face switches and the
+    # Savepoints at steps 0, 2 and 4. After step 5 the WhenState fires and the
     # state is spoiled once, so the run rolls back to step 4 and replays step 5.
-    seen = Tuple{Int,Bool}[]          # (step, switched) before the switcher runs
-    switches = Int[]
+    seen = Tuple{Int,Bool}[]          # (step, fired) before the trigger runs
+    fired = Int[]
     calls = Ref(0)                    # user state: not rewound
     spoiled = Ref(false)
     writer = FieldWriter(joinpath(mktempdir(), "frame"))
     callbacks = (
-        Callback(EveryStep(), (s, q) -> (push!(seen, (s.step, switched(face)));
+        Callback(EveryStep(), (s, q) -> (push!(seen, (s.step, !isempty(fired)));
                                          calls[] += 1; false)),
         Callback(WhenState((s, _) -> s.step >= 5),
-                 (s, q) -> (switch!(face); push!(switches, s.step); false)),
+                 (s, q) -> (push!(fired, s.step); false)),
         Callback(EveryStep(), (s, q) -> (s.step == 5 && !spoiled[] &&
                                          (spoiled[] = true;
                                           q[padded_index(s, 3, 1, 1), 1] = -1.0); false)))
@@ -372,11 +371,9 @@ end
         solver, Q; tfinal=1.0, nmax=7, callback=callbacks,
         control=StepControl(retries=1, savepoint_interval=2))
     @test solver.step == 7
-    # Step 5 ran twice. On the replay the face was back to `before`, and the
-    # re-armed WhenState switched it again.
-    @test [x for x in seen if x[1] == 5] == [(5, false), (5, false)]
-    @test switches == [5, 5]
-    @test switched(face)
+    # Step 5 ran twice, and the re-armed WhenState fired again on the replay.
+    @test [x for x in seen if x[1] == 5] == [(5, false), (5, true)]
+    @test fired == [5, 5]
     @test calls[] == solver.step + 1  # the abandoned step 5 is counted
     # A FieldWriter drops the frames recorded after the savepoint's time.
     writer.times = [0.0, 0.1, 0.2]

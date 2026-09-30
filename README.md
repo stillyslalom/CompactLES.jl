@@ -62,7 +62,8 @@ run!(solver, Q; tfinal=1.0)
   1-D, 2-D, and axisymmetric-with-swirl runs; optional grid stretching.
 - **Boundary conditions.** Periodic, slip / no-slip (adiabatic or isothermal)
   walls, face-centred symmetry planes, characteristic subsonic inflow/outflow
-  with transverse terms, and time-dependent or switchable forcing.
+  with transverse terms, and time-dependent forcing; the conditions may change
+  between phases of a run.
 - **Parallelism.** MPI 3-D decomposition with a distributed tridiagonal /
   pentadiagonal solve for the globally coupled compact schemes, over threads.
 - **Adaptive refinement.** `AMR(initial=:sensor)` or a physical-coordinate

@@ -43,18 +43,11 @@ PoleBC
 SymmetryPlaneBC
 ```
 
-## Time-dependent selection (deprecated)
+## Changing a condition during a run
 
-`SwitchableBC` is deprecated. A run that changes a boundary condition ends at
-the change and continues in a second phase built by
-[`setup`](@ref)`(solver, Q; bcs)`; see
+A run that changes a boundary condition ends at the change and continues in a
+second phase built by [`setup`](@ref)`(solver, Q; bcs)`; see
 [Change a boundary during a run](@ref).
-
-```@docs
-SwitchableBC
-switch!
-switched
-```
 
 ## Composite faces
 

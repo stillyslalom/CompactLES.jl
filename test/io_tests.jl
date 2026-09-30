@@ -20,8 +20,9 @@ using CompactLES: padded_index, global_xcoord, FieldSnapshot, hdf5_available
 
 const io_per = (PeriodicBC(), PeriodicBC())
 
-# Dimension 1 is closed to hold a SwitchableBC; the other two are
-# periodic, which keeps the grid small enough to build several of these.
+# Dimension 1 is closed to hold a boundary condition under test; the other
+# two are periodic, which keeps the grid small enough to build several of
+# these.
 io_solver(lo, hi; kw...) =
     Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
            bcs=((lo, hi), io_per, io_per), art=ArtificialProperties(enabled=false), kw...)
@@ -38,8 +39,7 @@ end
     # Under a directory that does not exist yet, which the writer creates.
     stem = joinpath(dir, "frames", "state")
 
-    written = SwitchableBC(SlipWallBC(), ExtrapolationBC())
-    s = io_solver(written, SlipWallBC())
+    s = io_solver(ExtrapolationBC(), SlipWallBC())
     Q = io_state(s)
     s.t = 0.37
     s.step = 42
@@ -47,12 +47,10 @@ end
     s.dt_prev = 1.5e-4
     s.rate_prev = 987.5
     s.filter_rate_prev = (12.5, 250.0, 0.0)
-    switch!(written)
     save_checkpoint(s, Q, stem)
     @test isfile(stem * ".r0000.ckpt")
 
-    read_back = SwitchableBC(SlipWallBC(), ExtrapolationBC())
-    s2 = io_solver(read_back, SlipWallBC())
+    s2 = io_solver(ExtrapolationBC(), SlipWallBC())
     Q2 = allocate_state(s2)
     load_checkpoint!(s2, Q2, stem)
     @test s2.t == 0.37
@@ -61,37 +59,32 @@ end
     @test s2.dt_prev == 1.5e-4
     @test s2.rate_prev == 987.5
     @test s2.filter_rate_prev == (12.5, 250.0, 0.0)
-    # Resuming with this cleared would run the remainder of the calculation
-    # under the pre-switch boundary condition, silently.
-    @test switched(read_back)
     @test all(Q2[padded_index(s2, i, j, k), c] == Q[padded_index(s, i, j, k), c]
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
 
-    # A face the file describes as switchable and this solver does not, and the
-    # reverse: both change what the boundary does for the rest of the run. The
-    # configuration record refuses either first; allowing a boundary change
-    # leaves the switch record in force.
-    @test_throws "configuration mismatch" load_checkpoint!(
-        io_solver(SlipWallBC(), SlipWallBC()), allocate_state(s2), stem)
-    @test_throws "boundary mismatch" load_checkpoint!(
-        io_solver(SlipWallBC(), SlipWallBC()),
-        allocate_state(s2), stem; allow=(:boundaries,))
-
-    plain_stem = joinpath(dir, "plain")
+    # Another boundary condition changes what the face does for the rest of
+    # the run; the configuration record refuses it unless the load allows it.
     sp = io_solver(SlipWallBC(), SlipWallBC())
-    save_checkpoint(sp, io_state(sp), plain_stem)
-    @test_throws "boundary mismatch" load_checkpoint!(
-        io_solver(SwitchableBC(SlipWallBC(), ExtrapolationBC()), SlipWallBC()),
-        allocate_state(sp), plain_stem; allow=:boundaries)
+    @test_throws "configuration mismatch" load_checkpoint!(sp, allocate_state(sp), stem)
+    load_checkpoint!(sp, allocate_state(sp), stem; allow=(:boundaries,))
+    @test sp.dt_prev == 1.5e-4
 
-    # switch! is one-way, so a checkpoint written before a face switched cannot
-    # be restored onto a solver whose face already has.
-    ahead = SwitchableBC(SlipWallBC(), ExtrapolationBC())
-    sa = io_solver(ahead, SlipWallBC())
-    save_checkpoint(sa, io_state(sa), joinpath(dir, "before"))
-    switch!(ahead)
-    @test_throws "already switched" load_checkpoint!(sa, allocate_state(sa),
-                                                     joinpath(dir, "before"))
+    # A file of the previous version carries six boundary-face codes after the
+    # run state, the switch record of a boundary wrapper since removed, which
+    # the reader passes over. Such a file is this version's file with the codes
+    # inserted and the version word set back.
+    bytes = read(stem * ".r0000.ckpt")
+    header = take!(CL._write_ckpt_header(IOBuffer(), s, s, Q))
+    six = vcat(header, reinterpret(UInt8, fill(Int64(-1), 6)),
+               bytes[length(header)+1:end])
+    six[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION_FACE_CODES)])
+    write(joinpath(dir, "six.r0000.ckpt"), six)
+    s6 = io_solver(ExtrapolationBC(), SlipWallBC())
+    Q6 = allocate_state(s6)
+    load_checkpoint!(s6, Q6, joinpath(dir, "six"))
+    @test (s6.t, s6.step, s6.filter_rate_prev) == (s.t, s.step, s.filter_rate_prev)
+    @test all(Q6[padded_index(s6, i, j, k), c] == Q[padded_index(s, i, j, k), c]
+              for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
 
     rm(dir; recursive=true)
 end
@@ -454,13 +447,17 @@ end
     save_checkpoint(off, allocate_state(off), cyl_stem)
     load_checkpoint!(cyl(0.0), allocate_state(off), cyl_stem)
 
-    # A file of the previous version carries no record: it loads with a
-    # warning and nothing compared. Such a file is this version's file with
-    # the record removed and the version word set back.
+    # A file of version 5 carries no record: it loads with a warning and
+    # nothing compared. Such a file is this version's file with the record
+    # removed, the six boundary-face codes of versions 5 and 6 inserted after
+    # the run state (64 bytes past the record's end), and the version word set
+    # back.
     bytes = read(stem * ".r0000.ckpt")
     image = take!(CL._write_configuration(IOBuffer(), rec(s)))
     at = findfirst(image, bytes)
-    legacy = vcat(bytes[1:first(at)-1], bytes[last(at)+1:end])
+    state_end = last(at) + 8 * 8
+    legacy = vcat(bytes[1:first(at)-1], bytes[last(at)+1:state_end],
+                  reinterpret(UInt8, fill(Int64(-1), 6)), bytes[state_end+1:end])
     legacy[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION_UNRECORDED)])
     write(joinpath(dir, "legacy.r0000.ckpt"), legacy)
     old = mk(eos=pair(1.4, 1.5))

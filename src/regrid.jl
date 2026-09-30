@@ -582,9 +582,7 @@ function _warn_margin_band(solver, margin::Int, ℓ::Int)
           "SymmetryPlaneBC or the AxisBC of an r-z run on the host backend under " *
           ":inject restriction; any other face keeps the margin, as every face " *
           "does under level_boundaries = false. A tiled level reaches a face " *
-          "only where the tile next to it stays the margin inside the domain. A " *
-          "face under the deprecated SwitchableBC keeps the margin; a phase " *
-          "change, setup(solver, Q; bcs), gives it a plain condition instead." maxlog = 1
+          "only where the tile next to it stays the margin inside the domain." maxlog = 1
     return nothing
 end
 
@@ -887,7 +885,6 @@ function _rebank!(solver, states, save)
         save.art = _art_snapshot(solver)
         save.t = solver.t
         save.step = solver.step
-        save.switches = _switch_snapshot(solver)
     end
     return save
 end

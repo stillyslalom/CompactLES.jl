@@ -15,13 +15,9 @@ const CL = CompactLES
     @test_throws ArgumentError CompositeBC((), (x, y, z) -> 1)
     @test_throws ArgumentError CompositeBC((wall, PeriodicBC()), (x, y, z) -> 1)
     @test_throws ArgumentError CompositeBC((wall, AxisBC()), (x, y, z) -> 1)
-    @test_throws ArgumentError CompositeBC((wall, SwitchableBC(wall, ExtrapolationBC())),
-                                           (x, y, z) -> 1)
     inner = CompositeBC((wall,), (x, y, z) -> 1)
     @test_throws ArgumentError CompositeBC((wall, inner), (x, y, z) -> 1)
     @test !isperiodic(inner)
-    # A composite face may itself be switched.
-    @test SwitchableBC(inner, ExtrapolationBC()) isa SwitchableBC
 
     # The detector mirror holds only where every member is a wall.
     @test sensor_mirror(CompositeBC((SlipWallBC(), NoSlipWallBC()), (x, y, z) -> 1))

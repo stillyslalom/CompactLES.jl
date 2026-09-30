@@ -119,11 +119,9 @@ copies `base` with the given keywords replaced.
   face's condition at its own spacing, so a feature at a wall, an open face
   or a fold is refined up to the face. A level also crosses a periodic seam,
   one box spanning at most the period less the margin at either end. Other
-  faces keep the margin: a fold on the device backend or under `:filter`
-  restriction, and a face under the deprecated `SwitchableBC`, whose
-  replacement, a phase change, gives the face a plain condition a level
-  reaches. With `tile`, a face keeps it also
-  when the tile next to the face's tile would come within the margin of the
+  faces keep the margin, among them a fold on the device backend or under
+  `:filter` restriction. With `tile`, a face keeps it also when the tile
+  next to the face's tile would come within the margin of the
   domain: an edge below `max(n_halo, 4)`, or a partial last lattice cell at
   the high face spanning fewer parent cells than that. A tagged feature
   inside the margin of a face that keeps it is reported by one warning. At

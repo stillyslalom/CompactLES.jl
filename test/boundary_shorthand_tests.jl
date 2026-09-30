@@ -24,11 +24,9 @@ MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     mixed = ((wall, NSCBCOutflowBC(pinf=1.0)), periodic, periodic)
     @test Problem(; domain, bcs=mixed, ic).bcs[1] == mixed[1]
 
-    shared = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0))
-    switched_prob = Problem(; domain, bcs=(shared, bcs[2], bcs[3]), ic)
-    @test switched_prob.bcs[1][1] === switched_prob.bcs[1][2]
-    switch!(shared)
-    @test all(switched, switched_prob.bcs[1])
+    shared = NSCBCOutflowBC(pinf=1.0)
+    shared_prob = Problem(; domain, bcs=(shared, bcs[2], bcs[3]), ic)
+    @test shared_prob.bcs[1][1] === shared_prob.bcs[1][2] === shared
 
     for bad in (((), bcs[2], bcs[3]), ((wall, wall, wall), bcs[2], bcs[3]),
                 ((:wall,), bcs[2], bcs[3]), (bcs[1], bcs[2]))

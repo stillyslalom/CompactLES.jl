@@ -83,8 +83,8 @@ backend under `:inject` restriction, placed by an explicit region or by
 shapes and regridding tags. The grid
 moves with it: the end node sits at `h/2` from the plane, with `h = L/(N − ½)`
 for one plane and `L/N` for two, and a wall-normal profile station shifts by
-half a cell. The condition cannot be switched during a run and is available
-on every Cartesian dimension and on cylindrical z.
+half a cell. Since the plane places the grid points, a phase change keeps it,
+and it is available on every Cartesian dimension and on cylindrical z.
 
 ## Imposed full-state forcing
 
@@ -209,9 +209,6 @@ conditions must keep each dimension's periodicity and its coordinate folds.
 Rebind both `solver` and `Q`, since the state of the new phase is new
 storage. Callbacks passed to both calls of `run!`, such as a
 [`FieldWriter`](@ref), carry their own schedules across the change.
-
-[`SwitchableBC`](@ref), which wrapped the two conditions in one face and
-switched between them within a run, is deprecated.
 
 ## Divide one face among conditions
 

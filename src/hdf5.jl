@@ -72,10 +72,9 @@ end
 
 Write the interior of `Q` to `prefix.h5` as one global array, with the run
 state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
-`filter_rate_prev`, the per-face `switched` flag of every `SwitchableBC`, and
-the artificial
-coefficient arrays when the artificial properties are enabled, from which
-[`max_rate`](@ref) sizes the next step), and return `prefix`. An existing
+`filter_rate_prev`, and the artificial coefficient arrays when the artificial
+properties are enabled, from which [`max_rate`](@ref) sizes the next step), and
+return `prefix`. An existing
 file of that name is truncated. Collective.
 
 Callback schedules and a `FieldWriter`'s frame index are not recorded and
@@ -146,13 +145,12 @@ save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
     load_checkpoint_hdf5!(solver, Q, prefix; allow = ())
 
 Restore the interior of `Q` and the run state (`t`, `step`, `cfl`, `dt_prev`,
-`rate_prev`, `filter_rate_prev`, each `SwitchableBC`'s `switched` flag through
-`switch!`, and the
-artificial coefficient arrays when the artificial properties are enabled) from
-the file written by [`save_checkpoint_hdf5`](@ref), onto whatever decomposition
-`solver` has, and return `Q`. Halos are left untouched, and the primitive
-fields are refreshed from the restored state. Every rank must call it, since
-each reads its own block; the read itself involves no communication, and the
+`rate_prev`, `filter_rate_prev`, and the artificial coefficient arrays when the
+artificial properties are enabled) from the file written by
+[`save_checkpoint_hdf5`](@ref), onto whatever decomposition `solver` has, and
+return `Q`. Halos are left untouched, and the primitive fields are refreshed
+from the restored state. Every rank must call it, since each reads its own
+block; the read itself involves no communication, and the
 primitive refresh is the one collective. Callback schedules and a
 `FieldWriter`'s frame index are the caller's to restore.
 
@@ -161,15 +159,17 @@ nothing else may differ. Every field of the header
 [`save_checkpoint_hdf5`](@ref) records is compared against `solver` and any
 mismatch throws: format version, global extent, conserved count, species count,
 level count, coefficient field count, conserved component names, element type,
-metric and EOS type names, the switchable-face layout, and the coordinates
-along each dimension. Coordinates are compared to a relative tolerance of
-1e-10, which separates a rebuilt identical grid from any different one.
+metric and EOS type names, and the coordinates along each dimension.
+Coordinates are compared to a relative tolerance of 1e-10, which separates a
+rebuilt identical grid from any different one.
 
 The configuration record is then compared, and `allow` accepts a
 `:numerics`, `:transport`, `:boundaries` or `:sources` difference, as
-[`load_checkpoint!`](@ref) describes. A file written in the previous format,
-which has no record, loads with a warning and without that comparison; a
-file in an older format is rejected outright.
+[`load_checkpoint!`](@ref) describes. A file of the previous format, which
+records a per-face switch flag of a boundary wrapper since removed, loads with
+the flags passed over; a file of the format before that, which has no record,
+loads with a warning and without that comparison; a file in an older format
+is rejected outright.
 
     load_checkpoint_hdf5!(solver, states::Vector, prefix; allow = ())
 

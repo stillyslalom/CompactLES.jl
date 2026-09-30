@@ -2444,11 +2444,10 @@ const NSCBC_REFLECTION_TOL = 1e-6
     @info "NSCBC reflection" r_level r_fine r_coarse
     @test abs(r_level - r_fine) < NSCBC_REFLECTION_TOL
     @test abs(r_coarse - r_fine) > 3 * NSCBC_REFLECTION_TOL
-    # A switchable face is refused by name.
-    sw = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
-    @test_throws "SwitchableBC" Solver(n_global=(49, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=((SlipWallBC(), sw), per, per),
-                                       refine=BlockRegion((40, 0, 0), (9, 1, 1)))
+    # A face no level carries is refused by name.
+    @test_throws "ExtrapolationBC" Solver(n_global=(49, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                          bcs=((SlipWallBC(), ExtrapolationBC()), per, per),
+                                          refine=BlockRegion((40, 0, 0), (9, 1, 1)))
 end
 
 # The axis tile against the uniform run at its spacing, a pulse converging on
@@ -2909,21 +2908,20 @@ end
         initialize!(s, q, wave)
         return s, q
     end
-    # A SwitchableBC face: the box, the tiles and a shape stop at the margin,
-    # and each path reports it by one warning instead of failing setup.
-    sw = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
-    switched = ((SlipWallBC(), sw), per, per)
-    s, q = tagged(switched, high)
+    # A face no level carries: the box, the tiles and a shape stop at the
+    # margin, and each path reports it by one warning instead of failing setup.
+    kept = ((SlipWallBC(), ExtrapolationBC()), per, per)
+    s, q = tagged(kept, high)
     r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
     @test r.offset[1] + r.extent[1] == N - margin
-    s, q = tagged(switched, high; tile=8)
+    s, q = tagged(kept, high; tile=8)
     getfield(s, :regrid).checks += 1
     @test_logs (:warn, r"does not reach") match_mode=:any CL.regrid!(s, q, CL.Workspace(q),
                                                                       nothing)
     @test !isempty(level_regions(s, 1))
     @test all(r -> r.offset[1] + r.extent[1] <= N - margin, level_regions(s, 1))
     s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any setup(
-        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=switched, ic=wave),
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=kept, ic=wave),
         Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=CL.Regions.Box((0.8, 0.0, 0.0), (1.0, 1.0, 1.0)))))
     @test refined_region(s).offset[1] + refined_region(s).extent[1] == N - margin

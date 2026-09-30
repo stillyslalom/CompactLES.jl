@@ -78,9 +78,6 @@ end
         numerics=Numerics(num; amr=AMR(initial=BlockRegion((24, 0, 0), (12, 1, 1)))))
     low = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls)
     @test_throws "Solver(; ...)" setup(low, allocate_state(low))
-    # The wrapper the phase change replaces warns that it is deprecated.
-    @test_logs (:warn, r"SwitchableBC is deprecated") SwitchableBC(SlipWallBC(),
-                                                                   SlipWallBC())
 end
 
 # The run state a phase carries, set by hand on a solver built for the next

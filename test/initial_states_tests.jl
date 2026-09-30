@@ -207,7 +207,7 @@ end
     @test thermodynamic_state(n9, r.left).p ≈ thermodynamic_state(n9, r.right).p rtol = 1e-10
 end
 
-@testset "scheduled boundary switch and a ramped boundary state" begin
+@testset "a phase change at a scheduled time and a ramped boundary state" begin
     eos = IdealMixture(IdealSpecies("air"; R=287.0, gamma=1.4))
     air = Prim(p=1e5, T_ion=300.0)
     jump = shock_jump(eos, air, 1.5)
@@ -221,28 +221,24 @@ end
     @test 1e5 < mid.p < jump.post.p && 0 < mid.u[1] < jump.post.u[1]
     @test_throws ArgumentError Ramp(eos, air, jump.post; start=0.0, duration=Cells(3))
 
-    face = SwitchableBC(SlipWallBC(), DirichletBC(fire); at=t_on)
     prob = Problem(eos=eos, domain=((0.0, 0.2), (0.0, 1.0), (0.0, 1.0)),
-                   bcs=((face, SlipWallBC()), PeriodicBC(), PeriodicBC()),
+                   bcs=((SlipWallBC(), SlipWallBC()), PeriodicBC(), PeriodicBC()),
                    ic=(x, y, z) -> air)
     solver, Q = setup(prob, Numerics(n_global=(64, 1, 1)))
-    times = Float64[]
+    # The first phase ends on a step landing on the opening time, and the next
+    # opens the low face to the ramped inflow there.
     run!(solver, Q; tfinal=4e-5, nmax=400,
-         callback=(s, q) -> push!(times, s.t))
-    # A step ends on the switch time, the face switched there, and the shock
-    # entered: the pressure at the far wall's side has not yet risen but the
-    # near end has.
-    @test any(t -> t == t_on, times)
-    @test switched(face)
+         callback=Callback(AtTime(t_on), Returns(true)))
+    @test solver.t == t_on
+    solver, Q = setup(solver, Q; bcs=((DirichletBC(fire), SlipWallBC()),
+                                      PeriodicBC(), PeriodicBC()))
+    run!(solver, Q; tfinal=4e-5, nmax=400)
+    # The shock entered: the pressure at the far wall's side has not yet risen
+    # but the near end has.
+    @test solver.t == 4e-5
     _, p = line_profile(solver, Q, :p)
     @test p[2] > 1.5e5
     @test p[end] ≈ 1e5 rtol = 1e-6
-    # A rollback to before the switch time restores the earlier condition.
-    CompactLES.rewind_scheduled_switches!(solver.bcs, 1e-5, 1e-20)
-    @test !switched(face)
-    # A switch already due when a run starts applies before its first step.
-    CompactLES.apply_scheduled_switches!(solver.bcs, 3e-5, 0.0)
-    @test switched(face)
 end
 
 @testset "AMR takes nested shapes, resolves defaults, and names its scope" begin

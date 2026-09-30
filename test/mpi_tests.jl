@@ -753,59 +753,50 @@ function test_sync()
 end
 
 # ---------------------------------------------------------------------------
-# 7b. Callback triggers must be globally consistent, and a SwitchableBC must
-#     switch on the same step everywhere. This is the deadlock case, not an
-#     accuracy case: NSCBCOutflowBC runs collectives that SlipWallBC does not,
-#     so if the ranks disagree about whether the switch has happened, some enter
-#     a collective the others never reach and the run hangs at zero CPU without
-#     failing. WhenState reduces its condition to prevent this.
+# 7b. Callback triggers must be globally consistent. A trigger whose effect
+#     changes what the ranks do next, a stop ahead of a phase change to an
+#     NSCBCOutflowBC face whose correction is collective, deadlocks when the
+#     ranks disagree about whether it fired: some enter a collective the others
+#     never reach, and the run hangs at zero CPU without failing. WhenState
+#     reduces its condition to prevent this.
 #
-#     The condition below tests the worst case: true on one rank only
-#     — the one owning the high-x boundary plane, which is where NSCBC would
-#     run. Without the reduction inside WhenState this test hangs. With it, the
-#     rank-local condition must produce bit-identical state to a condition every
-#     rank can evaluate for itself, since both fire on the same step.
+#     The condition below tests the worst case: true on one rank only, the
+#     one owning the high-x boundary plane. Every rank must fire on the step
+#     that rank first sees it, as a condition every rank evaluates for itself
+#     does; the phase change phase ends a run on the same condition and
+#     continues it under the collective face.
 # ---------------------------------------------------------------------------
 function test_callback_consistency()
-    section("callback triggers and SwitchableBC agree across ranks")
-    build() = begin
-        xbc = (SlipWallBC(), SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0)))
-        s, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
-                             bcs=(xbc, per3[2], per3[3]),
-                             ic=(x, y, z) -> Prim(u=(0, 0, 0),
-                                                  p=1 + 4exp(-200(x - 0.3)^2),
-                                                  rho=1 + exp(-200(x - 0.3)^2))),
-                     Numerics(n_global=(SPLITN, 16, 16),
-                              execution=Execution(dims=splitdims(1))))
-        s, Q, xbc[2]
-    end
+    section("callback triggers agree across ranks")
+    build() = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                            ic=(x, y, z) -> Prim(u=(0, 0, 0),
+                                                 p=1 + 4exp(-200(x - 0.3)^2),
+                                                 rho=1 + exp(-200(x - 0.3)^2))),
+                    Numerics(n_global=(SPLITN, 16, 16),
+                             execution=Execution(dims=splitdims(1))))
+    first_fire(fired) = (s, _) -> (fired[] < 0 && (fired[] = s.step); nothing)
 
     # (a) rank-local condition: only the last rank along x can see it.
-    s_local, Q_local, bc_local = build()
+    s_local, Q_local = build()
+    fired_local = Ref(-1)
     run!(s_local, Q_local; tfinal=1e9, nmax=12,
          callback=Callback(WhenState((s, _) -> rank == np - 1 && s.step >= 5),
-                           (_, _) -> (switch!(bc_local); nothing)))
+                           first_fire(fired_local)))
 
-    # (b) the same switch from a condition every rank evaluates identically.
-    s_glob, Q_glob, bc_glob = build()
+    # (b) the same condition, evaluated identically on every rank.
+    s_glob, Q_glob = build()
+    fired_glob = Ref(-1)
     run!(s_glob, Q_glob; tfinal=1e9, nmax=12,
-         callback=Callback(WhenState((s, _) -> s.step >= 5),
-                           (_, _) -> (switch!(bc_glob); nothing)))
+         callback=Callback(WhenState((s, _) -> s.step >= 5), first_fire(fired_glob)))
 
-    check("switched flag agrees on every rank",
-          MPI.Allreduce(Int(switched(bc_local)), max, comm) -
-          MPI.Allreduce(Int(switched(bc_local)), min, comm), 0.5)
-    err = 0.0
-    for c in 1:s_local.equations.n_cons, k in 1:s_local.decomp.n_local[3],
-        j in 1:s_local.decomp.n_local[2], i in 1:s_local.decomp.n_local[1]
-        I = padded_index(s_local, i, j, k)
-        err = max(err, abs(Q_local[I, c] - Q_glob[I, c]))
-    end
-    check("rank-local vs global trigger: state difference",
-          MPI.Allreduce(err, max, comm), 1e-15)
+    check("rank-local WhenState: every rank fires on step 5",
+          MPI.Allreduce(abs(fired_local[] - 5), max, comm), 0.5)
+    check("rank-local vs global WhenState: the step fired on",
+          MPI.Allreduce(abs(fired_local[] - fired_glob[]), max, comm), 0.5)
     tspread = MPI.Allreduce(s_local.t, max, comm) -
               MPI.Allreduce(s_local.t, min, comm)
-    check("time spread after a switched run", tspread,
+    check("time spread after a triggered run", tspread,
           1e-14 * max(s_local.t, 1e-30))
 
     # An AtTime trigger clips dt, which must stay a global decision: every rank
@@ -816,7 +807,7 @@ function test_callback_consistency()
     # the approach rather than clipping straight to it. Both branches of the clip
     # are therefore exercised in the eight steps this takes. See the note on run
     # length below.
-    s_t, Q_t, _ = build()
+    s_t, Q_t = build()
     landed = Float64[]
     run!(s_t, Q_t; tfinal=0.008,
          callback=Callback(AtTime([0.003, 0.006]),
@@ -857,7 +848,7 @@ function test_callback_consistency()
     # dt against it forever. Nothing in the checks below moved, so the step count
     # is the only evidence — leave the two literals as they are, and see the note
     # on the landing in `run!`.
-    s_e, Q_e, _ = build()
+    s_e, Q_e = build()
     ticks = Float64[]
     run!(s_e, Q_e; tfinal=0.009,
          callback=Callback(EveryTime(0.003), (s, _) -> (push!(ticks, s.t); nothing)))

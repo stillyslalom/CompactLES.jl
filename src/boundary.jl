@@ -34,8 +34,7 @@ dispatch in the boundary hooks costs.
 const FaceConditions = NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
 
 # Normalize deck shorthand once, before geometry checks or patch construction.
-# A bare condition shares the supplied object across both faces; in particular,
-# switching a shared SwitchableBC intentionally switches both faces together.
+# A bare condition shares the supplied object across both faces.
 function _face_conditions(bcs)
     bcs isa Tuple && length(bcs) == 3 ||
         throw(ArgumentError("bcs must be a three-tuple of conditions or face pairs"))
@@ -197,8 +196,7 @@ The fold reflects one coordinate, so the metric's scale factors must not depend
 on it: every dimension of `CartesianMetric` and z (dimension 3) of
 `CylindricalMetric` qualify and the rest are rejected by [`validate_bc`](@ref).
 The plane's dimension cannot be stretched, cannot also carry [`AxisBC`](@ref),
-[`OriginBC`](@ref) or [`PoleBC`](@ref), and cannot be wrapped in a
-[`SwitchableBC`](@ref). A patched run does not take it; [`SlipWallBC`](@ref)
+[`OriginBC`](@ref) or [`PoleBC`](@ref). A patched run does not take it; [`SlipWallBC`](@ref)
 is the condition there. A refined level may reach the plane, on the host
 backend under `level_restriction = :inject`: its patch then starts half its
 own spacing from the plane, one node beyond the parent's lattice, and folds as
@@ -262,146 +260,8 @@ directional plans.
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 
-"""
-    SwitchableBC(before, after; at = nothing)
-
-!!! warning "Deprecated"
-    `SwitchableBC` is deprecated and will be removed in the next release. End
-    the run where the condition changes, at `tfinal` or on a
-    [`Callback`](@ref) whose effect returns `true`, and continue it under the
-    new condition with the phase change [`setup`](@ref)`(solver, Q; bcs)`,
-    which carries the state, the hierarchy and the step history into a solver
-    built with `after` in place of `before`:
-
-    ```julia
-    run!(solver, Q; tfinal, callback = Callback(AtTime(t_switch), Returns(true)))
-    solver, Q = setup(solver, Q; bcs = bcs_after)
-    run!(solver, Q; tfinal)
-    ```
-
-One face that behaves as `before` until it switches, then as `after`. This
-supports calculations that require one boundary condition during an interaction
-and another afterwards: a wall that becomes an outflow once the waves of interest
-have formed, or an inflow that injects one flow and then fires a shock.
-
-With `at = t`, the face switches by itself at time `t`: [`run!`](@ref) ends a
-step exactly at `t`, as it does for a scheduled [`AtTime`](@ref) callback, and
-switches between that step and the next, so every Runge–Kutta stage of a step
-sees the same condition. Without `at`, the face switches when
-[`switch!`](@ref) is called on it, typically from a [`Callback`](@ref).
-
-A [`StepControl`](@ref) rollback restores the face as it was at the savepoint:
-a scheduled face from the savepoint's time, a face switched by hand from the
-flag recorded with the savepoint. A `once = true` [`WhenState`](@ref) trigger
-that made the switch after the savepoint is re-armed with it, so the switch is
-decided again on the replacement trajectory.
-
-The wrapper carries both conditions because `bcs` sits on an immutable
-[`Patch`](@ref) as an immutable tuple; a switch mutates the wrapper, not the
-solver's face list.
-
-Every rank must switch on the same step. `after` may perform collectives that
-`before` does not; `NSCBCOutflowBC` is one example. Rank disagreement therefore
-causes a collective-ordering deadlock. Use a [`Callback`](@ref), whose trigger
-verdict is globally consistent, not a rank-local test.
-
-Both conditions must agree on periodicity because `setup` uses that property to
-construct the decomposition and line plans. Fold conditions (`AxisBC`,
-`OriginBC`, `PoleBC`, and `SymmetryPlaneBC`) cannot be wrapped because `setup`
-identifies them by the boundary-condition type itself and builds the grid
-spacing and the folded operators from the answer.
-"""
-mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: BoundaryCondition
-    before::B1
-    after::B2
-    switched::Bool
-    at::Float64         # scheduled switch time; NaN when switched by hand
-end
-
 _is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC ||
                   bc isa SymmetryPlaneBC
-
-function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition;
-                      at::Union{Nothing,Real}=nothing)
-    Base.depwarn("SwitchableBC is deprecated. End the run where the condition " *
-                 "changes, with tfinal or a Callback whose effect returns true, and " *
-                 "continue it under the new condition with the phase change " *
-                 "setup(solver, Q; bcs = ...).", :SwitchableBC; force=true)
-    isperiodic(before) == isperiodic(after) ||
-        throw(ArgumentError("SwitchableBC: both conditions must agree on periodicity"))
-    (_is_fold_bc(before) || _is_fold_bc(after)) &&
-        throw(ArgumentError("SwitchableBC cannot wrap a fold condition " *
-                            "(AxisBC, OriginBC, PoleBC, SymmetryPlaneBC); " *
-                            "setup detects those by type"))
-    at === nothing || isfinite(at) ||
-        throw(ArgumentError("SwitchableBC: at must be a finite time or nothing, got $at"))
-    return SwitchableBC(before, after, false, at === nothing ? NaN : Float64(at))
-end
-
-# --- Scheduled switches. `t` advances identically on every rank, so a switch
-# decided from it needs no reduction, as for `AtTime`.
-
-# Every SwitchableBC reachable from a face list, including one nested as the
-# `before` or `after` of another.
-_switchables!(out, bc::SwitchableBC) =
-    (push!(out, bc); _switchables!(out, bc.before); _switchables!(out, bc.after); out)
-_switchables!(out, bc) = out
-
-function _switchables(bcs)
-    out = SwitchableBC[]
-    for d in 1:3, bc in bcs[d]
-        _switchables!(out, bc)
-    end
-    return unique!(out)     # a condition shared by two faces appears once
-end
-
-_scheduled(bc::SwitchableBC) = !isnan(bc.at)
-
-"The earliest scheduled switch still ahead, or `Inf`."
-function next_switch_time(bcs)
-    t = Inf
-    for bc in _switchables(bcs)
-        _scheduled(bc) && !bc.switched && (t = min(t, bc.at))
-    end
-    return t
-end
-
-"Switch every scheduled face whose time `t` has reached; `tol` absorbs rounding."
-function apply_scheduled_switches!(bcs, t, tol)
-    for bc in _switchables(bcs)
-        _scheduled(bc) && !bc.switched && t >= bc.at - tol && switch!(bc)
-    end
-    return bcs
-end
-
-"Set every scheduled face to the side of its switch time that `t` is on."
-function rewind_scheduled_switches!(bcs, t, tol)
-    for bc in _switchables(bcs)
-        _scheduled(bc) && (bc.switched = t >= bc.at - tol)
-    end
-    return bcs
-end
-
-"""
-    switch!(bc)
-
-Select the `after` condition of a [`SwitchableBC`](@ref). Repeated calls have no
-additional effect. Deprecated with `SwitchableBC`; a phase change,
-[`setup`](@ref)`(solver, Q; bcs)`, replaces it.
-"""
-switch!(bc::SwitchableBC) = (bc.switched = true; bc)
-
-"Whether a [`SwitchableBC`](@ref) has switched yet."
-switched(bc::SwitchableBC) = bc.switched
-
-isperiodic(bc::SwitchableBC) = isperiodic(bc.before)
-
-# Branch at the call site. Returning the active condition from a helper would
-# make `active(bc)` return a small Union and widen both arms; here each arm is
-# a concrete call.
-enforce!(bc::SwitchableBC, Q, solver, d, side) =
-    bc.switched ? enforce!(bc.after, Q, solver, d, side) :
-                  enforce!(bc.before, Q, solver, d, side)
 
 "Concrete plane type, so `for I in wallplane(...)` yields `CartesianIndex{3}`,
 not `Any`. See the note on the constructor below."
@@ -464,10 +324,6 @@ that order.
 """
 correct_rhs!(bc::BoundaryCondition, solver, Q, dQ, d, side) = nothing
 
-correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
-    bc.switched ? correct_rhs!(bc.after, solver, Q, dQ, d, side) :
-                  correct_rhs!(bc.before, solver, Q, dQ, d, side)
-
 """
     correct_flux!(bc, solver, Q, dim, side)
 
@@ -486,10 +342,6 @@ rows; overwriting only the endpoint RHS does not impose this condition.
 """
 correct_flux!(::BoundaryCondition, solver, Q, dim, side) = nothing
 
-correct_flux!(bc::SwitchableBC, solver, Q, dim, side) =
-    bc.switched ? correct_flux!(bc.after, solver, Q, dim, side) :
-                  correct_flux!(bc.before, solver, Q, dim, side)
-
 """
     validate_bc(bc, metric, eos, d, side)
 
@@ -498,15 +350,8 @@ default accepts anything. A condition whose derivation restricts the geometry, o
 whose keywords must agree with the EOS, validates that here. The run then fails at
 `setup`, avoiding a repeated check on every RHS call and preventing an uncovered
 face from completing with a wrong answer.
-
-Both arms of a [`SwitchableBC`](@ref) are validated, since the `after` condition
-is reached without passing through setup again.
 """
 validate_bc(::BoundaryCondition, metric, eos, d::Int, side::Int) = nothing
-
-validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
-    (validate_bc(bc.before, metric, eos, d, side);
-     validate_bc(bc.after, metric, eos, d, side))
 
 # Geometry restriction of a symmetry plane: the fold reflects one coordinate
 # about the plane, so no scale factor may depend on that coordinate. Cartesian
@@ -536,9 +381,7 @@ The compact sensor operators read the same face. Where this answers `true`,
 the `:gaussian` smoother and the `:d8` detector close the face with the
 node-centred rows of [`wall_closures`](@ref) in place of their own half-offset
 ones, the detector with one row set per sign of the field. Those rows are
-fixed when the solver is built, so a face whose condition can change mid-run
-takes them only when both of its conditions answer `true` here; see
-`ring_sum!`.
+fixed when the solver is built; see `ring_sum!`.
 
 The default is `false`. A mirror is the statement that the solution continues
 past the face as its own reflection, which holds at an impermeable wall and at
@@ -547,28 +390,10 @@ outflow admit an arbitrary continuation, an interface end reads the data the
 abutting patch or the coarse level supplied, and a fold end takes its own
 half-offset mirror inside the same routine. The clamp makes no such statement.
 Extend this method for a custom reflecting wall.
-
-A [`SwitchableBC`](@ref) answers for whichever condition is active, so a face
-that leaves the wall state during a run leaves the mirror with it. Every rank
-switches on the same step, and the detector communicates nothing on this path,
-so the two ends of a line cannot disagree.
 """
 sensor_mirror(::BoundaryCondition) = false
 sensor_mirror(::SlipWallBC) = true
 sensor_mirror(::NoSlipWallBC) = true
-
-sensor_mirror(bc::SwitchableBC) =
-    bc.switched ? sensor_mirror(bc.after) : sensor_mirror(bc.before)
-
-# Whether the closure rows planned at setup treat a face as a reflecting
-# mirror. A plan is fixed for the run while `sensor_mirror` follows a
-# `SwitchableBC`'s active condition, so a switchable face qualifies only when
-# both of its conditions are mirrors; otherwise it keeps the scheme's own rows
-# and the compact sensor operators fold onto the half-offset mirror there. The
-# `:delta4` detector queries `sensor_mirror` per call and is unaffected.
-planned_sensor_mirror(bc) = sensor_mirror(bc) === true
-planned_sensor_mirror(bc::SwitchableBC) =
-    planned_sensor_mirror(bc.before) && planned_sensor_mirror(bc.after)
 
 """
     wall_internal_energy(eos, Q, I, n_species, T_wall)
@@ -819,9 +644,8 @@ The face uses the scheme's closure rows, as every nonperiodic face does.
 a face mixing a wall with an open condition clamps the detector taps over the
 whole face.
 
-A member cannot be periodic, a fold, an interface marker, a
-[`SwitchableBC`](@ref) or another composite. A `SwitchableBC` may wrap a
-composite face.
+A member cannot be periodic, a fold, an interface marker or another
+composite.
 """
 struct CompositeBC{M<:Tuple,F} <: BoundaryCondition
     members::M
@@ -835,11 +659,10 @@ function CompositeBC(members::Tuple, selector)
     for m in members
         m isa BoundaryCondition ||
             throw(ArgumentError("CompositeBC members must be BoundaryCondition objects"))
-        (isperiodic(m) || _is_fold_bc(m) || m isa InterfaceBC || m isa SwitchableBC ||
-         m isa CompositeBC) &&
+        (isperiodic(m) || _is_fold_bc(m) || m isa InterfaceBC || m isa CompositeBC) &&
             throw(ArgumentError("CompositeBC cannot hold a $(nameof(typeof(m))): " *
-                                "periodic, fold, interface, switchable and " *
-                                "composite conditions act on the whole face"))
+                                "periodic, fold, interface and composite " *
+                                "conditions act on the whole face"))
     end
     return CompositeBC(members, selector, IdDict{Any,Any}())
 end
@@ -972,7 +795,6 @@ validate_bc(bc::CompositeBC, metric, eos, d::Int, side::Int) =
 
 sensor_mirror(bc::CompositeBC) = all(member -> sensor_mirror(member) === true,
                                      bc.members)
-planned_sensor_mirror(bc::CompositeBC) = all(planned_sensor_mirror, bc.members)
 
 "Enforce every boundary condition on the conserved state `Q` in place, over the
 active dimensions only, and return `Q`. No condition CompactLES provides

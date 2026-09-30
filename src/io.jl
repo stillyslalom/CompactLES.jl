@@ -43,11 +43,7 @@
 # A restart requires more mutable state than `(t, step)`. `run!` also reads
 # `solver.cfl`, which a `StepControl` retry lowers and which must persist across
 # rollback. The growth cap, rate predictor, and `filter_weight` read `dt_prev`,
-# `rate_prev` and `filter_rate_prev`. A `SwitchableBC` carries a `switched`
-# flag per face. Clearing
-# it on resume would apply the pre-switch boundary condition for the rest of the
-# run. If the switch changes the collective pattern (`NSCBCOutflowBC`), rank
-# disagreement also deadlocks.
+# `rate_prev` and `filter_rate_prev`.
 #
 # The artificial coefficient arrays are state as well. `max_rate` sizes a
 # step from the μ*, β*, κ* and D* the previous step's last right-hand side
@@ -78,8 +74,11 @@
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
-const CKPT_VERSION = 6
-# The previous version, read without a configuration record (see below).
+const CKPT_VERSION = 7
+# Version 6 is version 7 with six boundary-face codes after the run state, the
+# switch record of a boundary wrapper since removed; the reader passes over
+# them. Version 5 is version 6 without the configuration record (see below).
+const CKPT_VERSION_FACE_CODES = 6
 const CKPT_VERSION_UNRECORDED = 5
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
@@ -197,59 +196,6 @@ function set_art_block!(solver::SolverLike, block)
     return solver
 end
 
-"""
-The `switched` flag of each of the six boundary faces, in the order
-`(1, lo), (1, hi), (2, lo), ..., (3, hi)`, as `0` or `1` on a
-[`SwitchableBC`](@ref) and `-1` on any other condition. The `-1` records the
-absence of a switchable face. A restart placing a plain condition where a
-switchable one was written is rejected by [`restore_switches!`](@ref); resuming
-it would run under a boundary the checkpoint never described. Shared between the
-per-rank and shared-file checkpoint paths.
-"""
-switch_codes(solver::SolverLike) =
-    Int64[bc isa SwitchableBC ? Int64(switched(bc)) : Int64(-1)
-          for d in 1:3 for bc in solver.bcs[d]]
-
-"""
-Apply six codes as [`switch_codes`](@ref) produced them to `solver`'s boundary
-conditions, and return `solver`. `source` names the file in any error message.
-
-A face the codes record as switched is switched through [`switch!`](@ref), which
-is the supported route and is reached with the same code on every rank. The
-reverse is refused because `switch!` is one-way, so a solver whose face has
-switched cannot be returned to the state a checkpoint written before the switch
-describes.
-"""
-function restore_switches!(solver::SolverLike, codes, source::AbstractString)
-    length(codes) == 6 ||
-        error("$source records $(length(codes)) boundary faces, not 6")
-    i = 0
-    for d in 1:3, side in 1:2
-        i += 1
-        bc = solver.bcs[d][side]
-        code = Int(codes[i])
-        face = "dimension $d, " * (side == 1 ? "low" : "high") * " face"
-        if !(bc isa SwitchableBC)
-            code < 0 ||
-                error("boundary mismatch at $face: $source was written with a " *
-                      "SwitchableBC there and this solver has a " *
-                      "$(type_name(bc))")
-            continue
-        end
-        code < 0 &&
-            error("boundary mismatch at $face: this solver has a SwitchableBC " *
-                  "there and $source was written without one")
-        if code == 1
-            switch!(bc)
-        elseif switched(bc)
-            error("boundary mismatch at $face: this solver's SwitchableBC has " *
-                  "already switched and $source was written before it did; " *
-                  "switch! is one-way, so restart from an unswitched solver")
-        end
-    end
-    return solver
-end
-
 # --- The configuration record ------------------------------------------------
 #
 # The header checks above identify how the payload is laid out. They do not
@@ -278,9 +224,8 @@ end
 #   checked above cover a `Stretch`, and nothing covers a user boundary or
 #   source function. A mutable object other than an array is entered as
 #   `opaque` with its type name unless `_record_fields` names the fields to
-#   enter, since its state changes during a run (a `SwitchableBC` has its
-#   `switched` flag restored separately, and a `CompositeBC` holds per-face
-#   scratch).
+#   enter, since its state may change during a run (a `CompositeBC` holds
+#   per-face scratch).
 #
 #   Derived fields. `_record_fields` also drops fields computed from others at
 #   construction (an `IdealMixture`'s coefficient vectors, a `Nasa9Mixture`'s
@@ -369,7 +314,6 @@ _record_fields(x) = ismutable(x) ? nothing : fieldnames(typeof(x))
 _record_fields(::IdealMixture) = (:sp,)
 _record_fields(::Nasa9Mixture) = (:sp, :T_guess, :extrapolate)
 _record_fields(::CeaTransport) = (:species, :diffusion, :Lewis)
-_record_fields(::SwitchableBC) = (:before, :after, :at)
 _record_fields(::CompositeBC) = (:members, :selector)
 
 # Enter `x` under `path` in `group`, and its parts beneath it.
@@ -708,9 +652,8 @@ artificial-property parameters, the refinement options, the transport model,
 the boundary conditions and the sources, entered by value.
 
 The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
-`filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
-face, and the artificial coefficient arrays μ*, β*, κ* and D* when the
-artificial properties are enabled. `cfl` is recorded because a
+`filter_rate_prev`, and the artificial coefficient arrays μ*, β*, κ* and D*
+when the artificial properties are enabled. `cfl` is recorded because a
 [`StepControl`](@ref) retry lowers it, `dt_prev` / `rate_prev` /
 `filter_rate_prev` because the growth cap, the rate predictor and
 [`filter_weight`](@ref) read them, and the coefficients because
@@ -822,7 +765,6 @@ function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
     for d in 1:3
         write(io, Float64(solver.filter_rate_prev[d]))
     end
-    write(io, switch_codes(root))
     return io
 end
 
@@ -860,23 +802,22 @@ artificial-property parameters, refinement options), `:transport`,
 difference. Functions, such as a boundary target or a stretch mapping, are
 recorded as `function` and not compared. The CFL number, the
 [`StepControl`](@ref), the backend and the process grid are not compared. A
-file written by the previous version, which has no record, loads with a
-warning and without this comparison.
+file written by an earlier version without a record loads with a warning and
+without this comparison.
 
 The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
-`filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
-face, and the artificial
-coefficient arrays when the artificial properties are enabled; a file whose
-coefficient record disagrees with the solver's `art.enabled` is rejected. A
-face the checkpoint records as switched is switched here through
-[`switch!`](@ref); a face recorded as unswitched on a solver that has switched
-is rejected, `switch!` being one-way. The primitive fields are refreshed from
+`filter_rate_prev`, and the artificial coefficient arrays when the artificial
+properties are enabled; a file whose coefficient record disagrees with the
+solver's `art.enabled` is rejected. The primitive fields are refreshed from
 the restored state before returning, so a callback may read them. Callback
 schedules and a [`FieldWriter`](@ref)'s frame index are not recorded and
 remain the caller's to restore.
 
-A file written in the original unversioned format, or in any version before
-the previous one, is rejected outright: it carries no record of the species
+A file of the previous version, which records a per-face switch flag of a
+boundary wrapper since removed, loads with the flags passed over; the
+configuration record compares its boundary conditions as for any file. A
+file written in the original unversioned format, or in any version before
+the one preceding that, is rejected outright: it carries no record of the species
 set, the metric or the grid, so a partial validation would accept exactly the
 restart the header was extended to refuse.
 
@@ -986,10 +927,10 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
               "the grid and cannot be validated; rerun to regenerate it")
     magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
     version = Int(read(io, Int64))
-    version in (CKPT_VERSION, CKPT_VERSION_UNRECORDED) ||
+    CKPT_VERSION_UNRECORDED <= version <= CKPT_VERSION ||
         error("checkpoint version mismatch in $path: the file is version " *
               "$version; this build writes version $CKPT_VERSION and reads " *
-              "versions $CKPT_VERSION_UNRECORDED and $CKPT_VERSION")
+              "versions $CKPT_VERSION_UNRECORDED through $CKPT_VERSION")
     file_n_cons = Int(read(io, Int64))
     file_n_cons == n_cons ||
         error("conserved layout mismatch: file has $file_n_cons, solver " *
@@ -1039,9 +980,9 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
                   "extent, the origin or a Stretch mapping is not the one " *
                   "the checkpoint was written on")
     end
-    # Version 5 is version 6 without the record; it loads unchecked, with a
-    # warning. The comparison precedes every write to the solver.
-    stored = version == CKPT_VERSION ? _read_configuration(io) : nothing
+    # Version 5 has no record; it loads unchecked, with a warning. The
+    # comparison precedes every write to the solver.
+    stored = version >= CKPT_VERSION_FACE_CODES ? _read_configuration(io) : nothing
     _verify_configuration(stored, solver, allow, path, !phase)
     solver.t = read(io, Float64)
     solver.step = Int(read(io, Int64))
@@ -1050,11 +991,7 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     solver.rate_prev = read(io, Float64)
     solver.filter_rate_prev =
         ntuple(_ -> oftype(solver.dt_prev, read(io, Float64)), 3)
-    # A phase change brings its own conditions. A `SwitchableBC` it keeps is
-    # the same object, whose flag needs no restoring, and one it supplies anew
-    # starts unswitched.
-    codes = read!(io, Vector{Int64}(undef, 6))
-    phase || restore_switches!(root, codes, path)
+    version <= CKPT_VERSION_FACE_CODES && skip(io, 6 * sizeof(Int64))
     return io
 end
 

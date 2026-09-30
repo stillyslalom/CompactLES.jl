@@ -7,7 +7,7 @@ module CompactLESHDF5Ext
 using CompactLES
 using CompactLES: BlockRegion, Decomp, PatchSolver, Solver, owned_region, region_ranges
 using CompactLES: axis_matches, global_axis, type_name
-using CompactLES: ensure_output_dir, restore_switches!, switch_codes
+using CompactLES: ensure_output_dir
 using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
 using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
 using CompactLES: HierarchyRecord, LevelRecord, hierarchy_record, restore_hierarchy!
@@ -23,12 +23,15 @@ has_parallel() = HDF5.has_parallel()
 # type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
 # and the `switched` flag of each boundary face); format 4 the level count and
 # the artificial coefficient arrays; format 5 the per-direction rates
-# `filter_weight` reads; format 6 the configuration record under `config`.
-# The reasoning is at the top of `src/io.jl`. The reader accepts format 5,
-# which is format 6 without the record, and loads it unchecked with a
-# warning; an older file is refused, since a restart those fields do not
-# cover cannot be validated at all.
-const CKPT_FORMAT = 6
+# `filter_weight` reads; format 6 the configuration record under `config`;
+# format 7 dropped the `switched` flags with the boundary wrapper they
+# recorded. The reasoning is at the top of `src/io.jl`. The reader accepts
+# format 6, whose `meta/switched` it does not read, and format 5, which is
+# format 6 without the record and loads unchecked with a warning; an older
+# file is refused, since a restart those fields do not cover cannot be
+# validated at all.
+const CKPT_FORMAT = 7
+const CKPT_FORMAT_RECORDED = 6
 const CKPT_FORMAT_UNRECORDED = 5
 
 # --- Opening a shared file --------------------------------------------------
@@ -312,15 +315,13 @@ function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
     write_strings!(g, "eos", [type_name(solver.eos)], rank)
     write_strings!(g, "eltype", [string(eltype(Q))], rank)
     # The mutable run state, for the reasons src/io.jl gives: a retry
-    # lowers `cfl`, the growth cap and `filter_weight` read `dt_prev`
-    # and `rate_prev`, and a boundary face that has switched must not
-    # come back unswitched on any rank.
+    # lowers `cfl`, and the growth cap and `filter_weight` read `dt_prev`
+    # and `rate_prev`.
     write_meta!(g, "cfl", Float64(solver.cfl), rank)
     write_meta!(g, "dt_prev", Float64(solver.dt_prev), rank)
     write_meta!(g, "rate_prev", Float64(solver.rate_prev), rank)
     write_meta!(g, "filter_rate_prev", collect(Float64, solver.filter_rate_prev),
                 rank)
-    write_meta!(g, "switched", switch_codes(root), rank)
     cg = create_group(file, "grid")
     for d in 1:3
         write_meta!(cg, "xyz"[d:d], global_axis(root, d), rank)
@@ -489,10 +490,10 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, a
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     fmt = Int(read(file["meta/format"]))
-    fmt in (CKPT_FORMAT, CKPT_FORMAT_UNRECORDED) ||
+    CKPT_FORMAT_UNRECORDED <= fmt <= CKPT_FORMAT ||
         error("checkpoint format mismatch in $path: file is format $fmt, " *
               "this version writes format $CKPT_FORMAT and reads formats " *
-              "$CKPT_FORMAT_UNRECORDED and $CKPT_FORMAT. A file written " *
+              "$CKPT_FORMAT_UNRECORDED through $CKPT_FORMAT. A file written " *
               "before format $CKPT_FORMAT_UNRECORDED lacks header fields a " *
               "restart depends on and cannot be validated; rerun to " *
               "regenerate it.")
@@ -537,7 +538,7 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, a
                   "the checkpoint was written on")
     end
     # The comparison precedes every write to the solver.
-    stored = fmt == CKPT_FORMAT ? _read_configuration(file) : nothing
+    stored = fmt >= CKPT_FORMAT_RECORDED ? _read_configuration(file) : nothing
     _verify_configuration(stored, solver, allow, path)
     solver.t = read(file["meta/t"])
     solver.step = Int(read(file["meta/step"]))
@@ -546,7 +547,6 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, a
     solver.rate_prev = read(file["meta/rate_prev"])
     fr = read(file["meta/filter_rate_prev"])
     solver.filter_rate_prev = ntuple(d -> oftype(solver.dt_prev, fr[d]), 3)
-    restore_switches!(root, read(file["meta/switched"]), path)
     return n_art
 end
 

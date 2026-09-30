@@ -158,14 +158,13 @@ this file.
   as the only rollback target.
 
 A rollback restores, from the savepoint, the conserved state, the artificial
-coefficient arrays, `solver.t`, `solver.step` and the `switched` flag of every
-[`SwitchableBC`](@ref), and calls [`rewind!`](@ref) on the trigger and the
-effect of every [`Callback`](@ref), which re-arms the built-in triggers and
-drops the frames a [`FieldWriter`](@ref) wrote after the savepoint. It
-lowers `solver.cfl` and zeroes `dt_prev` and `rate_prev`. It does not restore
-`solver.floor_tally`, the wall-clock counters, the counts of a
-[`StateGuard`](@ref), or state an effect keeps elsewhere without a `rewind!`
-method; these include the abandoned steps. Callbacks run only after a step
+coefficient arrays, `solver.t` and `solver.step`, and calls [`rewind!`](@ref)
+on the trigger and the effect of every [`Callback`](@ref), which re-arms the
+built-in triggers and drops the frames a [`FieldWriter`](@ref) wrote after
+the savepoint. It lowers `solver.cfl` and zeroes `dt_prev` and `rate_prev`.
+It does not restore `solver.floor_tally`, the wall-clock counters, the
+counts of a [`StateGuard`](@ref), or state an effect keeps elsewhere without
+a `rewind!` method; these include the abandoned steps. Callbacks run only after a step
 has completed, so a step that fails does not run them, but the steps between
 the savepoint and the failure have run theirs, and those are the effects the
 rewind reverses. A regrid refreshes the savepoint, so a rollback never
@@ -535,10 +534,7 @@ refreshes in place at each savepoint; `art` holds copies of μ\\*, β\\*, κ\\* 
 the D\\* of every patch as the last right-hand-side evaluation left them, the
 arrays `max_rate` sizes the next step from, so that a retry's first step is
 sized as a restart from a checkpoint of the same instant would be; `t` and
-`step` are the solver clock at the moment of that copy. `switches` holds the
-`switched` flag of every [`SwitchableBC`](@ref) without a scheduled time, so
-a switch made by a callback on the abandoned trajectory is undone; a scheduled
-switch is restored from `t` instead.
+`step` are the solver clock at the moment of that copy.
 
 The CFL is excluded because reductions to it must persist across rollbacks and
 compound across retries; it remains on the solver when this state is restored.
@@ -550,11 +546,7 @@ mutable struct Savepoint{A}
     step::Int
     guard::Int   # step at or below which re-banking is suppressed after a
                  # rollback; -1 when none (see `run!`)
-    switches::Vector{Tuple{SwitchableBC,Bool}}
 end
-
-Savepoint(Q, art, t, step, guard) =
-    Savepoint(Q, art, t, step, guard, Tuple{SwitchableBC,Bool}[])
 
 """
     check_step(control, dt, rho_min, dt_seen, step, t, cfl) -> Union{Nothing,SolverFailure}

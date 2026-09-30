@@ -252,12 +252,10 @@ end
     @test errs[2] < 5e-8
 end
 
-@testset "wall flux: SwitchableBC forwards its active condition" begin
-    # An isothermal no-slip wall keeps the conductive heat flux and a slip
-    # wall removes it, so the two contracts are distinguishable at the same
-    # wall node.
+@testset "wall flux: an isothermal wall keeps the heat flux, a slip wall removes it" begin
+    # The two contracts at the same wall node, from the same assembled flux.
     T = Float64
-    bc = SwitchableBC(NoSlipWallBC(Twall=1.0), SlipWallBC())
+    bc = NoSlipWallBC(Twall=1.0)
     s = Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((bc, NoSlipWallBC()), _wf_per(), _wf_per()),
                transport=ConstantTransport(mu0=0.01), art=ArtificialProperties(enabled=false))
@@ -270,8 +268,7 @@ end
     @test abs(heat) > 1e-4
     CL.correct_flux!(bc, s, Q, 1, 1)
     @test s.flux[1, ie][I] ≈ heat rtol = 1e-12
-    switch!(bc)
-    CL.correct_flux!(bc, s, Q, 1, 1)
+    CL.correct_flux!(SlipWallBC(), s, Q, 1, 1)
     @test s.flux[1, ie][I] == 0
 end
 

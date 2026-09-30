@@ -497,10 +497,10 @@ node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
-alike; a face the run's configuration leaves out (a deprecated `SwitchableBC`, a fold on
-the device backend or under `:filter`) keeps the margin this way rather than
-failing setup. The same keyword lets them cross a periodic seam ("Levels
-across a periodic seam"). With it off every face keeps the margin.
+alike; a face the run's configuration leaves out (a fold on the device backend
+or under `:filter`) keeps the margin this way rather than failing setup. The
+same keyword lets them cross a periodic seam ("Levels across a periodic
+seam"). With it off every face keeps the margin.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -591,9 +591,8 @@ sub-communicators; the hoisting of those solves above the plane-ownership
 return that makes a root split along the face normal safe does the same for
 a tile split along it, so the collective scoping below gains no row. The
 root still corrects its own face nodes under the level, and the restriction
-replaces them. A `SwitchableBC` is refused at such a face, whichever
-conditions it wraps, as are `DirichletBC`, `ExtrapolationBC` and
-`CompositeBC`.
+replaces them. `DirichletBC`, `ExtrapolationBC` and `CompositeBC` are refused
+at such a face.
 
 ### Levels across a periodic seam
 
@@ -1360,9 +1359,11 @@ phase's solver through `setup(problem, numerics)` from the `Problem` and
 `Numerics` the first solver recorded, then writes this rank's per-rank
 checkpoint image to memory and reads it back into the new solver, so the
 hierarchy is rebuilt on its stored owners as the restart above rebuilds it,
-and the continuation is the per-rank restart's, bit for bit. It replaces the
-`SwitchableBC` wrapper, which could not reach a level face; a face a phase
-supplies is a plain condition the placement rules treat as any other.
+and the continuation is the per-rank restart's, bit for bit. A face a phase
+supplies is a plain condition the placement rules treat as any other. A
+phase may switch the artificial properties on or off; switched on, the
+coefficients are computed from the carried state before the next phase's
+first step, as `run!` computes them at step 0.
 
 ### Field output
 
