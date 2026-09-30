@@ -46,7 +46,7 @@ The polynomial model is usable by `CeaTransport` with
 `diffusion=:mixture_averaged` when the EOS species order and all required
 pure-species CEA records match. Its pair temperature ranges are checked during
 the solver's flux and timestep preflight; see
-[Thermodynamics and species transport](@ref).
+[Thermodynamics and transport](@ref).
 
 ```@docs
 DiffusionData

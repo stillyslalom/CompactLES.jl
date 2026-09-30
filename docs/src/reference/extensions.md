@@ -32,7 +32,7 @@ Subtype [`EOS`](@ref) and implement the following methods:
 A one-species EOS may omit `mole_fraction`.
 Array-level recovery must leave finite placeholders at invalid padded points so
 the following stencil passes remain safe. Keep the hot-loop methods concrete and
-type-stable. See [Thermodynamics and species transport](@ref) for the physical
+type-stable. See [Thermodynamics and transport](@ref) for the physical
 meaning of the derivatives, and [Supported combinations](@ref) for what a user
 EOS needs on a GPU.
 
@@ -109,8 +109,7 @@ condition needs:
 Periodic and fold behavior is collective setup state. If a boundary method
 enters a collective derivative or reduction, every rank must reach it in the
 same order. Conditions that do not need an operation may rely on the default
-method. See [Choose boundary conditions](@ref) and [Characteristic open
-boundaries](@ref).
+method. See [Choose boundary conditions](@ref) and [Open boundaries](@ref).
 
 ```@docs
 enforce!

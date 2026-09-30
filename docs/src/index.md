@@ -16,13 +16,13 @@ therefore be studied at several resolutions without rewriting its physics.
 ## Choose a path
 
 - **Learn by running a calculation.** Begin with
-  [Your first CompactLES simulation](@ref), a one-dimensional acoustic pulse
-  that builds an `x`--`t` diagram.
-- **Build an input deck quickly.** Use the [Input deck cheat sheet](@ref) for
+  [Coalescing shock](@ref), a one-dimensional sound wave that steepens into
+  a shock, checked against its exact solution.
+- **Build an input deck quickly.** Use the [Cheat sheet](@ref) for
   the complete constructor vocabulary, defaults, and common recipes.
 - **Complete a specific task.** Use the how-to guides to
   [Define a problem](@ref), [Choose boundary conditions](@ref),
-  [Control and diagnose a run](@ref), or [Write output and restart](@ref).
+  [Control a run](@ref), or [Write output and restart](@ref).
 - **Understand the model.** Start with [Governing equations](@ref), then read
   the explanation of discretization, regularization, thermodynamics, geometry,
   open boundaries, and parallel algorithms.
@@ -33,10 +33,10 @@ therefore be studied at several resolutions without rewriting its physics.
 ## How the tutorials build
 
 The tutorials are ordered so that each adds one layer to the preceding
-calculations. [Your first CompactLES simulation](@ref) introduces the state,
-grid, CFL-controlled time advancement, and output path. The shock tube adds
-filtering and artificial transport, and the multicomponent example adds
-thermodynamic closure and species storage. [Evolve a molecular mixing layer](@ref)
+calculations. [Coalescing shock](@ref) introduces the state, grid,
+CFL-controlled time advancement, and output path. [Shock tube](@ref) adds
+multicomponent gases, initial conditions built from regions, and shock
+regularization. [Evolve a molecular mixing layer](@ref)
 then introduces binary diffusion. [Follow a moving feature with refinement](@ref)
 shows how a physical-coordinate selector places fine cells. The geometry
 sequence starts with a collapsed radial calculation before resolving a full
@@ -44,7 +44,7 @@ cylinder and, finally, a sphere with an origin and poles.
 
 The tutorials give enough explanation to run and interpret each calculation.
 For the mathematical development, read [Governing equations](@ref) followed by
-[Spatial and temporal discretization](@ref); the later explanation pages deepen
+[Discretization](@ref); the later explanation pages deepen
 the regularization, thermodynamics, and geometry introduced along the way.
 
 ## Prerequisites and conventions
@@ -65,7 +65,7 @@ Molecular transport can use constant properties or temperature-dependent CEA
 fits, with unity-Lewis diffusion or mixture-averaged diffusion from supplied
 binary data. The bundled neutral-gas correlations feed the latter through
 validated polynomial fits with collective runtime domain checks; see
-[Thermodynamics and species transport](@ref).
+[Thermodynamics and transport](@ref).
 
 Cartesian, cylindrical, and spherical coordinates are available, including
 regularized axes, origins, and poles. Unstretched Cartesian runs also support

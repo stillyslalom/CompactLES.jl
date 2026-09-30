@@ -1,4 +1,4 @@
-# The parallel compact solve
+# Parallel compact solve
 
 A compact derivative is globally coupled along a grid line. Splitting that line
 over MPI ranks cannot turn it into independent local derivatives without

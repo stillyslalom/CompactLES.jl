@@ -76,5 +76,5 @@ fig
 # If a state leaves the polynomial fit's temperature or pressure domain, the
 # solver rejects it collectively with `SolverFailure(:transport_domain)`.
 # Lowering the CFL does not extend the physical fit range. See
-# [Thermodynamics and species transport](@ref) for units, source selection,
+# [Thermodynamics and transport](@ref) for units, source selection,
 # mixture rules, and the omitted Soret, Dufour, and pressure-diffusion effects.

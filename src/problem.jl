@@ -807,7 +807,7 @@ and `interface_divergence`.
   supported: a curvilinear or stretched grid, `rhs = :onesided`, or a user EOS
   at a refined level with molecular transport, each of which setup rejects
   under `:ghost` with an `ArgumentError`. See
-  [Choose numerics for accuracy per cost](@ref).
+  [Choose numerics](@ref).
 - `rhs`: `:extended` (default) evaluates the gradient and divergence rows at
   an interface end from exchanged ghost data; `:onesided` closes them with
   one-sided rows, as at a boundary. `:onesided` requires `flux = :closure`, and

@@ -1,4 +1,4 @@
-# A boundary that changes type
+# Switchable boundary
 
 This case studies a two-dimensional Richtmyer--Meshkov interaction whose
 upstream boundary must change from subsonic inflow to subsonic outflow. It is a

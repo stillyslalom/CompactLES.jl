@@ -1,4 +1,4 @@
-# Characteristic open boundaries
+# Open boundaries
 
 At a subsonic boundary, some information travels into the domain and some
 travels out. Prescribing the complete primitive state replaces both sets and

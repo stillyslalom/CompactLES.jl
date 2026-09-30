@@ -1,4 +1,4 @@
-# Spatial and temporal discretization
+# Discretization
 
 The governing equations are continuous in space and time. CompactLES first
 replaces their spatial derivatives by grid operators, producing the
@@ -32,7 +32,7 @@ eighth-order Lele C8, and tenth-order pentadiagonal Lele C10. These orders
 describe a periodic interior. A closed line also uses one-sided boundary
 closures; their measured order depends on the chosen rows. Coordinate folds
 instead impose parity across a half-offset singular set. The
-[verification results](@ref "Verification, validation, and calibration")
+[verification results](@ref "Verification and validation")
 report periodic, wall, and fold orders separately.
 
 ## From state to spatial right-hand side
@@ -286,7 +286,7 @@ side once to populate those coefficients. `StepControl` can mitigate a strong
 startup transient by rolling back to a saved state and retrying at lower
 CFL, but it does not make an
 intrinsically unstable configuration valid. See
-[Control and diagnose a run](@ref) for endpoint scheduling, retries, and
+[Control a run](@ref) for endpoint scheduling, retries, and
 timestep diagnostics.
 
 ## Resolution requirements
@@ -313,5 +313,5 @@ study can measure discretization convergence only while model parameters and
 the physical problem remain fixed. Shock solutions are not pointwise smooth,
 so high formal order does not imply high-order convergence at a discontinuity.
 
-See [Verification, validation, and calibration](@ref) for the tests that
+See [Verification and validation](@ref) for the tests that
 separate these error sources and for the current observed spatial orders.

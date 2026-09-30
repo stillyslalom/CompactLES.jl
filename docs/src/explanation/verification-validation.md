@@ -1,4 +1,4 @@
-# Verification, validation, and calibration
+# Verification and validation
 
 These activities answer different questions.
 

@@ -1,4 +1,4 @@
-# Input deck cheat sheet
+# Cheat sheet
 
 This is the terse reference for constructing a run. CompactLES attaches no
 units: any consistent unit system works, and a deck built from an explicit
@@ -92,14 +92,14 @@ returns SI properties (`R` in J/(kg K), temperatures in K), so the rest of the
 deck must be in SI too. Names in an `IdealMixture` or `Nasa9Mixture` define the
 order required by every `Prim.Y`. A single `IdealSpecies` is promoted
 internally to the one-species mixture representation. See
-[Thermodynamics and species transport](@ref).
+[Thermodynamics and transport](@ref).
 
 `ConstantTransport(mu0=..., Pr=..., Sc=...)` uses constant molecular properties: the
 thermal conductivity is `mu0 * cp / Pr` and the species diffusivity, common to
 all species, is `mu0 / (rho * Sc)`.
 Use `CeaTransport(eos)` for temperature-dependent viscosity and conductivity
 with unity-Lewis diffusion; mixture-averaged diffusion requires a supplied
-`BinaryDiffusion` model. See [Thermodynamics and species transport](@ref).
+`BinaryDiffusion` model. See [Thermodynamics and transport](@ref).
 
 ### Geometry
 

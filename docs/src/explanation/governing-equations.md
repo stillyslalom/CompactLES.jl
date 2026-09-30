@@ -98,7 +98,7 @@ mixture specific heat at constant pressure.
 
 [`CeaTransport`](@ref) instead evaluates temperature-dependent viscosity and
 conductivity from the bundled CEA fits, with unity-Lewis or mixture-averaged
-species diffusion. See [Thermodynamics and species transport](@ref) for the
+species diffusion. See [Thermodynamics and transport](@ref) for the
 mixture rules, units, and required binary diffusion data.
 
 The conductive heat flux is
@@ -149,7 +149,7 @@ equation of state. CompactLES currently supplies:
 
 The EOS provides pressure, temperature, sound speed, mixture heat capacity, and
 species enthalpies from the conserved state. See
-[Thermodynamics and species transport](@ref) for their assumptions.
+[Thermodynamics and transport](@ref) for their assumptions.
 
 ## Geometry
 
@@ -174,7 +174,7 @@ thermodynamic variables from ``Q_h``, differentiates velocity, temperature,
 and composition, constructs the complete physical and artificial fluxes,
 takes their metric-weighted divergence, and then adds geometric terms,
 boundary corrections, and explicit sources. The
-[Spatial and temporal discretization](@ref) page explains both that spatial
+[Discretization](@ref) page explains both that spatial
 operator and how repeated evaluations of ``R_h`` advance one timestep.
 
 ## Units and nondimensionalization

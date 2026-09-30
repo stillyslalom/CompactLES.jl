@@ -1,4 +1,4 @@
-# Choose numerics for accuracy per cost
+# Choose numerics
 
 The derivative operator, boundary closure rows, state filter and floating-point
 precision all affect accuracy and cost. Choose them together: a higher-order
@@ -7,9 +7,9 @@ its benefit on a bounded domain.
 
 This page compares the supported choices and gives recipes for common problems.
 For the numerical methods, see
-[Spatial and temporal discretization](@ref) and
+[Discretization](@ref) and
 [Filtering and artificial properties](@ref); the measured orders are in
-[Verification, validation, and calibration](@ref).
+[Verification and validation](@ref).
 
 ## Global spatial accuracy
 
@@ -243,7 +243,7 @@ startup transients.
 The three-dimensional CFL uses a Euclidean bound over the three directions.
 For the same timestep, its value is smaller than a per-direction CFL
 reported in the literature. See
-[Control and diagnose a run](@ref) for retries and timestep diagnostics.
+[Control a run](@ref) for retries and timestep diagnostics.
 
 ## Recipes
 

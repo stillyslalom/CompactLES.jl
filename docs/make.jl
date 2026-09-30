@@ -52,9 +52,8 @@ end
 const LITERATE_DIR = joinpath(@__DIR__, "literate")
 const TUTORIAL_DIR = joinpath(@__DIR__, "src", "tutorials")
 const TUTORIALS = [
-    "acoustic_pulse.jl",
-    "shock_tube_1d.jl",
-    "multicomponent_state.jl",
+    "coalescing_shock.jl",
+    "shock_tube.jl",
     "molecular_diffusion.jl",
     "adaptive_refinement.jl",
     "radial_coordinates.jl",
@@ -102,11 +101,10 @@ DocMeta.setdocmeta!(
     ),
     pages=[
         "Home" => "index.md",
-        "Input deck cheat sheet" => "reference/input-deck-cheat-sheet.md",
+        "Cheat sheet" => "reference/input-deck-cheat-sheet.md",
         "Tutorials" => [
-            "Your first simulation" => "tutorials/acoustic_pulse.md",
-            "Regularizing a shock" => "tutorials/shock_tube_1d.md",
-            "A multicomponent state" => "tutorials/multicomponent_state.md",
+            "Coalescing shock" => "tutorials/coalescing_shock.md",
+            "Shock tube" => "tutorials/shock_tube.md",
             "Molecular diffusion" => "tutorials/molecular_diffusion.md",
             "Adaptive refinement" => "tutorials/adaptive_refinement.md",
             "Radial coordinates" => "tutorials/radial_coordinates.md",
@@ -116,29 +114,29 @@ DocMeta.setdocmeta!(
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",
             "Choose boundary conditions" => "how-to/boundary-conditions.md",
-            "Choose numerics for accuracy per cost" => "how-to/numerics-choices.md",
-            "Control and diagnose a run" => "how-to/run-control.md",
+            "Choose numerics" => "how-to/numerics-choices.md",
+            "Control a run" => "how-to/run-control.md",
             "Write output and restart" => "how-to/output-restart.md",
             "Run in parallel" => "how-to/parallel-runs.md",
         ],
         "Explanation" => [
             "Governing equations" => "explanation/governing-equations.md",
-            "Spatial and temporal discretization" =>
+            "Discretization" =>
                 "explanation/discretization.md",
             "Filtering and artificial properties" =>
                 "explanation/regularization.md",
-            "Thermodynamics and species transport" =>
+            "Thermodynamics and transport" =>
                 "explanation/thermodynamics.md",
             "Curvilinear coordinates" => "explanation/geometry.md",
-            "Characteristic open boundaries" =>
+            "Open boundaries" =>
                 "explanation/open-boundaries.md",
-            "The parallel compact solve" =>
+            "Parallel compact solve" =>
                 "explanation/parallel-compact-solve.md",
-            "Verification, validation, and calibration" =>
+            "Verification and validation" =>
                 "explanation/verification-validation.md",
         ],
-        "Case studies" => [
-            "A boundary that changes type" =>
+        "Examples" => [
+            "Switchable boundary" =>
                 "case-studies/switchable-boundary.md",
         ],
         "Reference" => [

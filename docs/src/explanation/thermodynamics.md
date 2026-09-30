@@ -1,4 +1,4 @@
-# Thermodynamics and species transport
+# Thermodynamics and transport
 
 ```@meta
 CurrentModule = CompactLES

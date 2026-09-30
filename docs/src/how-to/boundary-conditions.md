@@ -174,7 +174,7 @@ NSCBCOutflowBC(pinf = 1.0, sigma = 0.25)
 `pinf` is a relaxation target, not a hard boundary pressure. Reducing
 `sigma` transmits an outgoing transient with weaker pressure anchoring; making
 it too small permits slow pressure drift. See
-[Characteristic open boundaries](@ref) for the wave interpretation and model
+[Open boundaries](@ref) for the wave interpretation and model
 limitations.
 
 ## Change a boundary during a run

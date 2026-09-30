@@ -117,7 +117,7 @@ and 10, and 6 for any other scheme. With C6 and the closure rows, an explicit
 order 8 reduces the error in viscous, filtered or multidimensional runs and
 with an interface `divergence` scheme, at no measurable cost in conservation or regrid
 drift. For when to choose the closure rows, see
-[Choose numerics for accuracy per cost](@ref). Orders above 2 are not
+[Choose numerics](@ref). Orders above 2 are not
 monotone: refilling a step narrower than one parent cell undershoots by 2.3%,
 2.9% and 3.2% of the jump at orders 6, 8 and 10. Order 4 has no measured advantage.
 `regrid_interval=0` keeps the initial layout fixed. A positive interval
@@ -171,5 +171,5 @@ AMR
 ```
 
 For transfer, subcycling, tiling, and the available tag thresholds, see
-[Choose numerics for accuracy per cost](@ref) and
+[Choose numerics](@ref) and
 [Operators and decomposition](@ref).

@@ -26,7 +26,7 @@ when interpreting an LES: grid resolution and regularization settings are part
 of the model and should be checked together in a refinement study.
 
 For a compact constructor reference, defaults, and common recipes, see the
-[Input deck cheat sheet](https://stillyslalom.github.io/CompactLES.jl/dev/reference/input-deck-cheat-sheet/).
+[Cheat sheet](https://stillyslalom.github.io/CompactLES.jl/dev/reference/input-deck-cheat-sheet/).
 
 ```julia
 using CompactLES
@@ -164,7 +164,7 @@ The Prandtl, Schmidt, and Lewis numbers compare momentum, species, and thermal
 diffusion: `Pr = mu*cp/kappa`, `Sc = mu/(rho*D)`, and
 `Le = kappa/(rho*cp*D)`. Unity Lewis sets species diffusivity equal to thermal
 diffusivity; it does not represent measured diffusion for every species pair.
-See [Thermodynamics and species transport](docs/src/explanation/thermodynamics.md)
+See [Thermodynamics and transport](docs/src/explanation/thermodynamics.md)
 for the mixture rules, units, and validity ranges.
 
 `setup` returns the solver and its initialized conserved state; `run!` advances

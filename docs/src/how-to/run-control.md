@@ -1,4 +1,4 @@
-# Control and diagnose a run
+# Control a run
 
 ```@meta
 CurrentModule = CompactLES
