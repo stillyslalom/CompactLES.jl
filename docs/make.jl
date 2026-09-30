@@ -62,7 +62,7 @@ const TUTORIALS = [
     "supernova_remnant.jl",
     "imploding_shock.jl",
     "advected_bubbles.jl",
-    "cylindrical_3d.jl",
+    "axis_crossing_vortex.jl",
     "spherical_3d.jl",
 ]
 
@@ -118,7 +118,7 @@ DocMeta.setdocmeta!(
             "Supernova remnant" => "tutorials/supernova_remnant.md",
             "Imploding shock" => "tutorials/imploding_shock.md",
             "Advected bubbles" => "tutorials/advected_bubbles.md",
-            "3D cylinder" => "tutorials/cylindrical_3d.md",
+            "Axis-crossing vortex" => "tutorials/axis_crossing_vortex.md",
             "3D sphere" => "tutorials/spherical_3d.md",
         ],
         "How-to guides" => [

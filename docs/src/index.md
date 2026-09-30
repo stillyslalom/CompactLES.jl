@@ -55,9 +55,10 @@ on the axis of a cylinder, and compares the shock trajectory with
 Guderley's self-similar law. [Advected bubbles](@ref) adds a refined level
 made of tiles, which follows three bubbles of different gases across the
 periodic faces of a box, and compares each with its exact, translated shape.
-The geometry
-sequence then resolves a full cylinder and, finally, a sphere with an origin
-and poles.
+[Axis-crossing vortex](@ref) resolves the angle of a cylinder, holds an exact
+solution on its outer boundary, and carries a vortex across the axis. The
+geometry sequence ends with a sphere resolved in all three directions, with
+an origin and poles.
 
 The tutorials give enough explanation to run and interpret each calculation.
 For the mathematical development, read [Governing equations](@ref) followed by
