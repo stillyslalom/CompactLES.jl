@@ -680,10 +680,12 @@ restriction's coincident samples are the plane's. The tile's fold, the box
 mirror and the ghost-flux divergence read the root fold's parities, which
 at the axis make the radial velocity, the swirl and the area factor A₁ = r
 odd. The metric takes nothing beyond the per-tile geometry: r, 1/r and the
-face areas at h/6 are the uniform run's, and the p/r source cancels the
-folded divergence of r·p on a uniform state: the folded operator
-differentiates the odd continuation of A₁ = r exactly, and the far end's
-one-sided rows differentiate a linear function exactly. The curvature terms
+face areas at h/6 are the uniform run's. The radial momentum takes its
+pressure term as ∂p/∂r, on the tile as on the root: through the divergence
+plans under `:closure` and through the gradient plans, from the pressure's
+ghosts, under `:ghost`, with p even across the fold, so a uniform state
+stays uniform without a cancellation between the divergence and the
+metric source. The curvature terms
 of the gradient ring are evaluated only at ring slots inside the domain,
 since the ring leaves out the slots beyond the fold. The covered mask treats
 the axis face as closed, so the root's node at h/2 is covered on both

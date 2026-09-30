@@ -91,10 +91,10 @@
 #   two levels at a symmetry plane C6 6.33 | three levels, the second at
 #   the plane (its plane window, filtered) C6 5.49
 #   a level at the r-z axis (fine axis window against the uniform run at the
-#   fine spacing, equal steps, filtered, t = 0.3): C6 6.93 | viscous 6.42 |
-#   the corner of the axis and a plane at z = 0, fold window, C6 6.97
+#   fine spacing, equal steps, filtered, t = 0.3): C6 6.43 | viscous 6.47 |
+#   the corner of the axis and a plane at z = 0, fold window, C6 7.11
 #   a level on an r-z annulus (fine interface window against the uniform run
-#   at the fine spacing, equal steps, t = 0.2): C6 5.83 | viscous 5.40
+#   at the fine spacing, equal steps, t = 0.2): C6 5.70 | viscous 5.41
 #   a level at an NSCBC outflow (fine face window against the uniform run at
 #   the fine spacing, equal steps, t = 0.35): C6 6.45
 #   a level across a periodic seam (fine interface window against the uniform
@@ -1027,8 +1027,8 @@ axis_level_reference(viscous, steps) = s -> begin
     NodeReference(fine, states)
 end
 for (name, viscous, steps, expect, recorded) in
-        (("two levels at the r-z axis, C6, filtered", false, N -> 3N, 6.9, 6.93),
-         ("two levels at the r-z axis, viscous", true, N -> 12N, 6.4, 6.42))
+        (("two levels at the r-z axis, C6, filtered", false, N -> 3N, 6.9, 6.43),
+         ("two levels at the r-z axis, viscous", true, N -> 12N, 6.4, 6.47))
     evolution_study(name, LEVEL_AXIS_NS, N -> axis_level_case(N; viscous=viscous),
                     axis_level_reference(viscous, steps);
                     primary=:wall, tfinal=0.3, steps=steps, patches=(2,),
@@ -1062,7 +1062,7 @@ function corner_study(name, Ns; tfinal, steps, expect, tol, recorded)
     p
 end
 corner_study("two levels at the r-z corner, C6, filtered", (24, 36, 48);
-             tfinal=0.3, steps=N -> 4N, expect=7.0, tol=1.0, recorded=6.97)
+             tfinal=0.3, steps=N -> 4N, expect=7.0, tol=1.0, recorded=7.11)
 
 # A level on the axisymmetric annulus: a cylindrical pulse leaves the refined
 # patch through both of its coarse-fine faces, and the patch's interface
@@ -1077,8 +1077,8 @@ annulus_level_reference(viscous, steps) = s -> begin
     NodeReference(fine, states)
 end
 for (name, viscous, steps, recorded) in
-        (("two levels on an r-z annulus, C6", false, N -> 3 * (N - 1), 5.83),
-         ("two levels on an r-z annulus, viscous", true, N -> 12 * (N - 1), 5.40))
+        (("two levels on an r-z annulus, C6", false, N -> 3 * (N - 1), 5.70),
+         ("two levels on an r-z annulus, viscous", true, N -> 12 * (N - 1), 5.41))
     evolution_study(name, ANNULUS_LEVEL_NS,
                     N -> annulus_level_case(N; viscous=viscous),
                     annulus_level_reference(viscous, steps);

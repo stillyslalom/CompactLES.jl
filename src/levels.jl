@@ -2196,10 +2196,9 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # the root fold's `sigvel` and `sigflux` carry these signs to the tile's fold
 # and to the box mirror. The metric needs nothing beyond the per-tile
 # geometry: `init_geometry!` evaluates r, 1/r and the face areas at the
-# tile's own nodes, and the p/r source cancels the folded divergence of r·p
-# on a uniform state, since the folded operator differentiates the odd
-# continuation of the linear A₁ exactly and the one-sided rows at the far end
-# differentiate a linear function exactly.
+# tile's own nodes. A uniform state stays uniform: the radial momentum takes
+# its pressure term as ∂p/∂r, which every row gives as zero on a constant,
+# and the rest of its flux vanishes at rest.
 
 "Whether a refined level may reach a domain face carrying `bc`."
 _level_boundary_condition(bc) =

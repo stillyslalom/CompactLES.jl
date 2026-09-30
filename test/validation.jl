@@ -59,7 +59,7 @@
 #   Woodward   L1 rho 3.153e-2, peak rho 6.638 at x = 0.7772
 #   Sedov      R_s 0.8083 vs 0.8000 analytic (+1.04%), peak rho 5.14 (jump 6)
 #   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
-#   Noh nu=2   plateau 15.010/16   shock 0.2091/0.2   wall deficit 57%
+#   Noh nu=2   plateau 15.010/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.565/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0050 / 1.0050, width 5 cells, 642 steps, TV - 1 0.0045
 #   Pulse lh   N=1600  R 0.3189/0.3290  T 1.3293/1.3290  energy 0.9937  err 7.9e-2
@@ -68,11 +68,11 @@
 #   Noh aligned N=100 AR=4    plateau 4.0030/4   deficit 33%   shock 0.2084   4925 steps
 #   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.895  745 steps
 #   Noh nu=2 on a level at the axis, N=256, against the uniform run on 767 nodes
-#   (plateau 15.6523, deficit 46.6%, shock 0.2033, mass -5.79e-7, 6636 steps):
-#     level over 85 nodes   plateau 15.6523  deficit 46.6%  shock 0.2033
-#                           mass -5.72e-7  max |rho - uniform| 8.4e-3  6638 steps
-#     level over 43 nodes   plateau 14.804   deficit 59.9%  shock 0.2094
-#                           mass -1.50e-3  6183 steps
+#   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass +1.68e-7, 6640 steps):
+#     level over 85 nodes   plateau 15.6523  deficit 50.9%  shock 0.2033
+#                           mass +1.74e-7  max |rho - uniform| 7.0e-3  6642 steps
+#     level over 43 nodes   plateau 14.798   deficit 60.9%  shock 0.2094
+#                           mass -1.52e-3  6168 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no
@@ -130,6 +130,15 @@
 # Brady-Livescu wall, the interface case and the two anisotropic Cartesian
 # rows. No guard moved; the deficit percentage above is the one printed
 # number that rounds differently.
+#
+# The four nu = 2 rows moved when the radial momentum of the r-z metric took
+# its pressure term as dp/dr instead of (1/r)D(r p) - p/r, the form that
+# amplified a grid-scale mode at the axis under the default filter. The axis
+# deficits moved: 57% to 55% on 256 nodes, 46.6% to 50.9% on the uniform 767
+# and on the level over 85 nodes, 59.9% to 60.9% on the level over 43, whose
+# plateau fell from 14.804. The
+# other plateaus and every shock position held to the digits printed, as did
+# every row off the r-z metric. No guard moved.
 #
 # The slip-wall rows moved when `SlipWallBC` took the
 # symmetry plane's flux contract: zero normal species and total-energy flux

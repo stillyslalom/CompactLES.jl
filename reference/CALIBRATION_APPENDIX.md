@@ -6180,9 +6180,11 @@ t = 0.2); in ρ alone it stays at 1e-9, and at a Cartesian plane the
 three-component sawtooth stays at 7e-10. The cylindrical divergence
 (1/r)D(r·) does not hold the π mode of ρu in its null space. Filtered at
 every step (αf = 0.45, the rows' filter), the axis window reads 4.6e-7,
-3.0e-9, 3.0e-11 at t = 0.3, the row's 6.93. Under the default αf = 0.47 the
-window at N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45. The
-growth belongs to the unrefined axis and is measured under
+3.0e-9, 3.0e-11 at t = 0.3. Under the default αf = 0.47 the window at
+N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45. These
+measurements carry the radial pressure term in the area form; the growth
+belongs to the unrefined axis, and it and the ∂p/∂r form that removes it
+are measured under
 [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis).
 
 **Levels placed on a face by tags.** The instrument is the `level_boundaries`
@@ -6275,7 +6277,8 @@ nodes against the uniform run on 767 nodes; the global-step rows at m = 85 and
 43 are guarded in `test/validation.jl`, whose header carries them. Scratch
 variants of the same case, and a planar control (folded Noh, N = 400, a tile
 at the symmetry plane over the same fractions of the line, against the
-uniform run on 1199 nodes):
+uniform run on 1199 nodes), the axis rows with the radial pressure term in
+the area form:
 
 | run | plateau | deficit | shock | mass drift | max \|ρ − uniform\| on the tile | steps |
 |---|---|---|---|---|---|---|
@@ -8054,28 +8057,33 @@ which attributes it to its own row) was not run.
 ## Grid-scale growth at the r-z axis
 
 The instruments are `bench/axisspectrum.jl`, the one-step map of an unrefined
-θ-collapsed line on (0, 2] linearized by central differences about ρ = p = 1
-in ρ, ρu_r and E at every node, and `bench/axisrunaway.jl`, runs of the
-converging pulse of `axis_level_case` and of cylindrical Noh with the
-grid-scale content of the first 16 nodes read after every step. The variants
-of the radial divergence are source terms and the near-axis filter a
-callback (`bench/axisvariant.jl`); the package is unchanged.
+line on (0, 2] linearized by central differences about ρ = p = 1 in ρ, ρu_r
+(and ρu_θ on a resolved θ) and E at every node, and `bench/axisrunaway.jl`,
+runs of the converging pulse of `axis_level_case` and of cylindrical Noh with
+the grid-scale content of the first 16 nodes read after every step. The
+package's form of the radial pressure term is ∂p/∂r on θ-collapsed r-z
+(`_radial_pressure_gradient`) and the area form elsewhere; the other forms
+are source terms and the near-axis filter a callback (`bench/axisvariant.jl`):
+`areap` restores the area form on θ-collapsed r-z, `gradp` takes ∂p/∂r on a
+resolved θ or at the spherical origin, `product` writes every radial
+divergence of the mass, radial momentum and energy fluxes as D(F) + F/r.
 
-**The mechanism.** The radial momentum carries the pressure as
-(1/r)D(r p) − p/r. On a mode of wavenumber ω under a slowly varying envelope
-it differs from D(p) by (1 − k'(ω)) p/r, k' being the derivative of the C6
-modified wavenumber, and 1 − k' is 0.00 at ω = 1, 0.05 at 1.5, 0.56 at 2π/3,
-2.0 at 2.5 and 16/3 at π. The leading eigenvector of the map peaks at node 1, is acoustic
-(δE/δρ = 3.5) and repeats every three nodes (+1.00, −0.33, −0.24, +0.35 in E
-at αf = 0.47); its smooth share is 0.47. The Cartesian line with a symmetry
-plane at x = 0 has no eigenvalue above 1 + 1e-8 in any configuration tried.
+**The mechanism.** In the area form the radial momentum carries the pressure
+as (1/r)D(r p) − p/r. On a mode of wavenumber ω under a slowly varying
+envelope it differs from D(p) by (1 − k'(ω)) p/r, k' being the derivative of
+the C6 modified wavenumber, and 1 − k' is 0.00 at ω = 1, 0.05 at 1.5, 0.56 at
+2π/3, 2.0 at 2.5 and 16/3 at π. The leading eigenvector of the area form's
+map peaks at node 1, is acoustic (δE/δρ = 3.5) and repeats every three nodes
+(+1.00, −0.33, −0.24, +0.35 in E at αf = 0.47); its smooth share is 0.47. The
+Cartesian line with a symmetry plane at x = 0 has no eigenvalue above
+1 + 1e-8 in any configuration tried.
 
 **The rate.** log|λ| per step of the leading eigenvalue; "neutral" is below
-1e-8. At αf = 0.47, cfl 0.18 under `filter_cfl = 0.35` it is 7.032e-3 at
-N = 64, 128 and 256, so the rate per unit time is proportional to N (1.47,
-2.95 and 5.90).
+1e-8. Under the area form at αf = 0.47, cfl 0.18 and `filter_cfl = 0.35` it
+is 7.032e-3 at N = 64, 128 and 256, so the rate per unit time is proportional
+to N (1.47, 2.95 and 5.90).
 
-| αf, `filter_cfl` 0.35 | cfl 0.1 | 0.15 | 0.18 | 0.3 | 0.5 |
+| area form, αf, `filter_cfl` 0.35 | cfl 0.1 | 0.15 | 0.18 | 0.3 | 0.5 |
 |---|---|---|---|---|---|
 | 0.45 | neutral | | neutral | neutral | 0.0104 |
 | 0.46 | neutral | neutral | neutral | neutral | 0.0292 |
@@ -8089,53 +8097,91 @@ At full strength (`filter_cfl = 0`) cfl 0.9 gives 0.089 under αf = 0.45 and
 0.142 under 0.47, and a rest state seeded at 1e-10 fails in 146 steps under
 0.47. Unfiltered, the rate is 1.34 and 1.51 per unit time at N = 64 and 128.
 
+Under ∂p/∂r the map is neutral at αf 0.47 and 0.48, cfl 0.18 and 0.5, on
+N = 64 and 128, and at full strength at cfl 0.9 under 0.45 and 0.47.
+Unfiltered it grows at 0.34 and 0.40 per unit time at N = 64 and 128 under
+cfl 0.18 and at 0.24 under cfl 0.9, from the axis node (smooth share 0.51 to
+0.74). `product` is neutral at 0.47, cfl 0.18. With viscosity 0.01 the map at
+0.47, cfl 0.18 is neutral in both forms, so the viscous hoop term τ_θθ/r was
+left in the area form without a measurement that separates it.
+
 **The runs.** The pulse at the axis rows' step, cfl 0.177, to t = 0.4, stopped
 where the grid-scale content reaches 5% (ρ − 1 at node 1 is 0.1161 on a
 completed run):
 
-| αf | nodes | end |
-|---|---|---|
-| 0.45, 0.46 | 6908 | complete, content 2.1e-6 |
-| 0.47 | 2303 | complete, content 5.3e-5 |
-| 0.47 | 3455, 4607, 6908 | stopped at t = 0.392, 0.300, 0.204 |
-| 0.48 | 1151, 1535, 2303, 3455 | stopped at t = 0.387, 0.308, 0.202, 0.139 |
+| form | αf | nodes | end |
+|---|---|---|---|
+| area | 0.45, 0.46 | 6908 | complete, content 2.1e-6 |
+| area | 0.47 | 2303 | complete, content 5.3e-5 |
+| area | 0.47 | 3455, 4607, 6908 | stopped at t = 0.392, 0.300, 0.204 |
+| area | 0.48 | 1151, 1535, 2303, 3455 | stopped at t = 0.387, 0.308, 0.202, 0.139 |
+| ∂p/∂r | 0.47 | 6908 | complete, content 2.1e-6 |
+| ∂p/∂r | 0.48 | 3455 | complete, content 1.6e-5 |
 
 The symmetry-plane line on 3455 nodes under 0.48 completes with 8.6e-6. At
-the solver's own step, cfl 0.9, the pulse on 767 nodes completes under 0.45
-and stops at t = 0.355 under 0.47. Cylindrical Noh (cfl 0.15) completes at
-every setting, with the plateau (15.6523, 15.8163, 15.8985 on 767, 1535 and
-3071 nodes) and the front unchanged by αf, while the axis deficit 1 − ρ₁/16
-moves:
+the solver's own step, cfl 0.9, the pulse on 767 nodes under 0.47 stops at
+t = 0.355 in the area form and completes under ∂p/∂r with 9.5e-4 (the area
+form completes under 0.45). Cylindrical Noh (cfl 0.15) completes at every
+setting, with the plateau (15.6523, 15.8163, 15.8985 on 767, 1535 and 3071
+nodes) and the front unchanged by αf and by the form, while the axis deficit
+1 − ρ₁/16 moves:
 
-| αf | 767 | 1535 | 3071 |
+| form, αf | 767 | 1535 | 3071 |
 |---|---|---|---|
-| 0.45 | 50.1% | 48.9% | 46.0% |
-| 0.47 | 46.6% | 41.0% | 40.1% |
-| 0.48 | 46.5% | 33.0% | 25.1% |
+| area, 0.45 | 50.1% | 48.9% | 46.0% |
+| area, 0.47 | 46.6% | 41.0% | 40.1% |
+| area, 0.48 | 46.5% | 33.0% | 25.1% |
+| ∂p/∂r, 0.45 | 51.3% | 48.9% | 46.5% |
+| ∂p/∂r, 0.47 | 50.9% | 48.4% | 46.0% |
+| ∂p/∂r, 0.48 | 50.5% | 48.0% | 45.7% |
 
-**The candidate remedies.** `gradp` replaces the pressure term by D(p);
-`product` writes every radial divergence of the mass, radial momentum and
-energy fluxes as D(F) + F/r; the near-axis filter takes αf = 0.45 over the
-first 8 nodes, tapering to the run's αf at node 16.
+**The remedies.** Measured as source terms before the package took ∂p/∂r;
+the near-axis filter takes αf = 0.45 over the first 8 nodes, tapering to the
+run's αf at node 16.
 
 | | map, filtered | map, unfiltered | pulse at cfl 0.177 |
 |---|---|---|---|
-| `gradp` | neutral at every αf and cfl above | 0.24 to 0.40 per unit time | 0.47 on 6908 and 0.48 on 3455 nodes complete, 0.1161 |
 | `product` | neutral at 0.47 and 0.48, cfl 0.18 | neutral at cfl 0.9, 0.19 per unit time at 0.18 | not run |
 | near-axis 0.45 | neutral under 0.47 and 0.48 at cfl 0.18; 0.0100 at cfl 0.5 | | 0.47 on 6908 nodes completes, 0.1161 |
 
-The axis convergence rows (errors at N = 96, 192, 384 and the order):
+The axis convergence rows (errors at N = 96, 192, 384 and the order); the
+annulus and corner rows moved with them, and `test/convergence.jl` carries
+the ∂p/∂r values:
 
 | | inviscid | viscous |
 |---|---|---|
-| present | 4.594e-7, 2.986e-9, 3.012e-11, 6.93 | 1.078e-6, 1.164e-8, 1.429e-10, 6.42 |
-| `gradp` | 3.693e-7, 1.555e-9, 4.816e-11, 6.43 | 9.873e-7, 1.034e-8, 1.229e-10, 6.47 |
+| area form | 4.594e-7, 2.986e-9, 3.012e-11, 6.93 | 1.078e-6, 1.164e-8, 1.429e-10, 6.42 |
+| ∂p/∂r | 3.693e-7, 1.555e-9, 4.821e-11, 6.43 | 9.873e-7, 1.034e-8, 1.229e-10, 6.47 |
 | `product` | 3.966e-7, 2.032e-9, 3.905e-11, 6.64 | 8.762e-7, 8.621e-9, 9.599e-11, 6.56 |
 
 The rows filter at αf = 0.45, so the near-axis filter leaves them unchanged.
-The Noh axis rows, present against `gradp`: `noh_case(2)` on 256 nodes reads
-plateau 15.0100 and 15.0099 and axis deficit 57.1% and 55.2%; the uniform run
-on 767 nodes 15.6523 in both and 46.6% and 50.9%; a level over N/3 root nodes
-46.6% and 50.9%; a level over N/6 + 1 plateau 14.8044 and 14.8034, deficit
-59.9% and 61.0%. Fronts move by at most 1e-4. The near-axis filter gives
-55.1% on 256 nodes and 50.2% on 767.
+The Noh axis rows of `test/validation.jl` moved from the area form's
+deficits, 57.1% on 256 nodes, 46.6% on the uniform 767 and on the level over
+N/3 root nodes, and 59.9% at plateau 14.8044 on the level over N/6 + 1, to the
+values its header carries; fronts moved by at most 1e-4. The near-axis filter
+in the area form gives 55.1% on 256 nodes and 50.2% on 767.
+
+**The resolved θ and the spherical origin.** The same map on a resolved θ
+(12 nodes over the full circle, N = 32 and 64) and on the spherical line with
+θ and φ collapsed, whose pressure term is (1/r²)D(r² p) − 2p/r in the
+package, against ∂p/∂r through `gradp`:
+
+| | area form | ∂p/∂r |
+|---|---|---|
+| resolved θ, unfiltered, cfl 0.18 | 1.41 per unit time | 0.34 per unit time |
+| resolved θ, 0.47, cfl 0.18 and 0.25 | neutral | neutral |
+| origin, unfiltered, cfl 0.18 | 2.2e-3 per step (N = 64), 2.0e-3 (128) | neutral |
+| origin, unfiltered, cfl 0.5 | 4.0e-3, 2.3e-3 | neutral |
+| origin, 0.45 / 0.47, cfl 0.18 | 0.144 / 0.174 per step | neutral |
+| origin, 0.45 / 0.47, cfl 0.5 | 0.501 / 0.571 | neutral |
+| origin, 0.45 / 0.47, cfl 0.9, full strength | 1.87 / 1.91 | neutral |
+
+The filtered rates at the origin are independent of N, peak at node 1 with
+smooth share 0.41, and exceed the r-z axis's by a factor of about 25. On the
+resolved θ the pass along θ runs at full strength at these steps (its rate
+reads the ring's spacing at the axis), and the filtered map is neutral in
+both forms; at cfl 0.5 the ring's θ step is beyond the scheme's limit and
+both forms grow at 0.8 per step. A seeded rest state at the origin (1e-10 in ρ, N = 64,
+αf = 0.47, the solver's own step) fails between 160 and 200 steps at cfl
+0.18 without the artificial properties and between 40 and 80 at 0.5; with them the density
+deviation at the origin saturates at 1e-2 to 4e-2.

@@ -302,6 +302,13 @@ end
     return nothing
 end
 
+# The same product with the pressure taken out of the flux, for the radial
+# momentum whose pressure term is ∂p/∂r.
+@inline function _area_flux_less_point!(tmp_b, Ad, F, p, i, j, k)
+    @inbounds tmp_b[i, j, k] = Ad[i, j, k] * (F[i, j, k] - p[i, j, k])
+    return nothing
+end
+
 # Antipodal signs of velocity and conserved components for the fold (if any)
 # on dimension d; scalars, partial densities, and energy are always +1.
 vel_parity(solver::SolverLike, d::Int, j::Int) =
@@ -516,9 +523,9 @@ end
 # inv_J·D(A_d F_d), and both parts carry the product: A_d(F − P) through the
 # divergence plans and A_d P through the gradient plans, each scaled by inv_J
 # at the interior points. The geometry arrays are analytic over the padded
-# extent, so A_d is exact on the ghost layers of an interface end, and a
-# uniform pressure still cancels the r-momentum source p/r to round-off, since
-# every closure row differentiates the linear A_1 = r exactly.
+# extent, so A_d is exact on the ghost layers of an interface end. The radial
+# momentum's pressure term is ∂p/∂r through the gradient plans, from the
+# pressure's own ghosts, and the flux it leaves carries no pressure.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline function _interface_dim(solver::SolverLike, d::Int)
@@ -567,15 +574,17 @@ end
 # those of `_fluxes_point!`, so on an inviscid run the remainder is exactly
 # zero. At an interface end `F`'s ghosts hold no data and neither does the
 # remainder there; the divergence rows that take it read none, and `G` is
-# zero there (`_molecular_flux_point!`).
+# zero there (`_molecular_flux_point!`). Under `less_p` the ghost-differenced
+# flux leaves out the pressure, which the radial momentum of the r-z metric
+# takes as ∂p/∂r (`_radial_pressure_gradient`); the remainder does not.
 @inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
                                        n_species, m1, m2, m3, i_energy,
-                                       remainder, viscous, i, j, k)
+                                       remainder, viscous, less_p, i, j, k)
     @inbounds begin
         I = CartesianIndex(i, j, k)
         f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
                                     m1, m2, m3, i_energy, viscous, I)
-        out[I] = _area_scaled(Ad, I, remainder ? F[I] - f : f)
+        out[I] = _area_scaled(Ad, I, remainder ? F[I] - f : ifelse(less_p, f - p[I], f))
     end
     return nothing
 end
@@ -583,14 +592,14 @@ end
 # Both fields of `_inviscid_flux_point!` in one pass: the remainder into
 # `rem` and the ghost-differenced flux into `out`.
 @inline function _split_flux_point!(rem, out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
-                                    n_species, m1, m2, m3, i_energy, viscous,
+                                    n_species, m1, m2, m3, i_energy, viscous, less_p,
                                     i, j, k)
     @inbounds begin
         I = CartesianIndex(i, j, k)
         f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
                                     m1, m2, m3, i_energy, viscous, I)
         rem[I] = _area_scaled(Ad, I, F[I] - f)
-        out[I] = _area_scaled(Ad, I, f)
+        out[I] = _area_scaled(Ad, I, ifelse(less_p, f - p[I], f))
     end
     return nothing
 end
@@ -762,43 +771,54 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     Ad, iJ = _ghost_geometry(solver, d)
     # The flux's sign across a fold at the dimension's other end (a refined
     # patch on a symmetry plane or the r-z axis); 1 without one.
-    σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
+    σ = _flux_sign(solver, d, c)
+    # The radial momentum's pressure term as ∂p/∂r, through the gradient
+    # plans, whose interface rows read the pressure's ghosts; p is even
+    # across the axis. Ahead of the early return below, since it is a line
+    # solve every rank of the patch takes.
+    less_p = _radial_pressure_gradient(solver) && d == 1 && c == m1
+    less_p && _ext_subtract_along!(dQ, c, solver.p, solver, d, solver.inv_h[d], 1)
     if viscous
         _flux_remainder(solver, d) || return dQ
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, true, true)
+                   eq.i_energy, true, true, less_p)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
     elseif !_flux_remainder(solver, d)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, false, viscous)
-        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
+                   eq.i_energy, false, viscous, less_p)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ, σ)
     elseif _host_line_solves(solver, d)
         # Both fields in one pass: the host line solves take no scratch, so
         # `tmp_a` holds the second until its solve.
         pointwise!(_split_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, solver.tmp_a, Fdc, Q, solver.rho, solver.u,
                    solver.v, solver.w, solver.p, Y, G, Ad, c, d, eq.n_species,
-                   m1, m2, m3, eq.i_energy, viscous)
+                   m1, m2, m3, eq.i_energy, viscous, less_p)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
-        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d, iJ)
+        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d, iJ, σ)
     else
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, true, viscous)
+                   eq.i_energy, true, viscous, less_p)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, false, viscous)
-        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
+                   eq.i_energy, false, viscous, less_p)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ, σ)
     end
     return dQ
 end
+
+# The sign of component `c`'s flux product across the fold on `d`; 1 without
+# one.
+_flux_sign(solver::SolverLike, d::Int, c::Int) =
+    solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
 
 # Whether both divergences along `d` run the fused host solves, which use no
 # scratch field: `div_subtract_along!` and `_ext_subtract_along!` otherwise
@@ -810,14 +830,15 @@ _host_line_solves(solver::SolverLike, d::Int) =
 # dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
 # interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit
 # geometry; a device plan or a fold takes the two-pass route through `tmp_a`,
-# the fold with the flux's sign of component `c`.
-function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J)
+# the fold with `f`'s sign `σf` across it.
+function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
+                              σf::Int)
     decomp = solver.decomp
     plan = _plan_at(solver.deriv_plans, d)
     fold = solver.folds[d]
     if fold !== nothing || plan isa DevicePlan
         fold === nothing ? apply_along!(solver.tmp_a, plan, f, decomp) :
-            fold_apply!(solver.tmp_a, f, solver, fold, fold.sigflux[c], Val(:deriv))
+            fold_apply!(solver.tmp_a, f, solver, fold, σf, Val(:deriv))
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
         if inv_J === nothing
@@ -1032,12 +1053,15 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
         G = solver.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
         Ad, iJ = _ghost_geometry(solver, d)
+        radial_p = _radial_pressure_gradient(solver) && d == 1
         for c in 1:n_cons
+            # The pressure's ∂p/∂r was subtracted in phase one.
             pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                        solver.tmp_b, solver.flux[d, c], Q, solver.rho, solver.u,
                        solver.v, solver.w, solver.p, ft.Y, G, Ad, c, d, eq.n_species,
-                       m1, m2, m3, eq.i_energy, false, true)
-            _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
+                       m1, m2, m3, eq.i_energy, false, true, radial_p && c == m1)
+            _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ,
+                                 _flux_sign(solver, d, c))
         end
     end
     return dQ
@@ -1421,6 +1445,9 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
     ghost = solver.interface_flux === :ghost
+    # The radial momentum's pressure term as ∂p/∂r (metric.jl says why).
+    radial_p = _radial_pressure_gradient(solver)
+    m1 = solver.equations.i_mom[1]
     for c in 1:solver.equations.n_cons
         pointwise!(_zero_component_point!, dQ, nx, ny, nz, dQ, c, o1, o2, o3)
         for d in 1:3
@@ -1439,10 +1466,20 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
                 # cylindrical axis (A₁ = r), flipping the flux parity.
                 Ad = solver.area_d[d]
                 n1f, n2f, n3f = padded_extent(decomp)
-                pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-                           solver.tmp_b, Ad, Fdc)
-                div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
-                                    solver.inv_J)
+                if radial_p && d == 1 && c == m1
+                    # (1/r)∂(r(F − p))/∂r + ∂p/∂r, p even across the axis.
+                    pointwise!(_area_flux_less_point!, solver.tmp_b, n1f, n2f, n3f,
+                               solver.tmp_b, Ad, Fdc, solver.p)
+                    div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
+                                        solver.inv_J)
+                    div_subtract_along!(dQ, c, solver.p, solver, d, 1,
+                                        solver.inv_h[d])
+                else
+                    pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                               solver.tmp_b, Ad, Fdc)
+                    div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
+                                        solver.inv_J)
+                end
             end
         end
     end

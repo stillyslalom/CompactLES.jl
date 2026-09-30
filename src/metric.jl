@@ -328,26 +328,49 @@ end
 add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 
 # The stress-tensor sample takes the field arrays, not the solver, so
-# the momentum-source bodies below stay launchable as device kernels.
-@inline function _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, a, b)
+# the momentum-source bodies below stay launchable as device kernels. The
+# pressure enters a diagonal component only under `with_p`.
+@inline function _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, a, b,
+                     with_p::Bool=true)
     μ = mu0 + mu_art[I]
     β = beta_art[I]
     divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
     τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
         (a == b ? (β - 2μ/3) * divu : zero(divu))
     uv = (u[I], v[I], w[I])
-    rho[I] * uv[a] * uv[b] + (a == b ? p[I] : zero(p[I])) - τ
+    rho[I] * uv[a] * uv[b] + (a == b && with_p ? p[I] : zero(p[I])) - τ
 end
 
+# Whether the radial momentum carries its pressure term as the radial
+# derivative ∂p/∂r rather than as the area-weighted divergence (1/r)∂(r p)/∂r
+# less the source p/r: on `CylindricalMetric` with θ collapsed. The two agree
+# analytically. Discretely, on a mode of wavenumber ω they differ by
+# (1 − k'(ω)) p/r, k' the derivative of the scheme's modified wavenumber, which
+# vanishes on resolved modes and is 16/3 at ω = π for the sixth-order rows. The
+# divergence of the mass and energy fluxes is then not the negative adjoint of
+# the pressure gradient, and under the default filter strength the one-step
+# map near the axis amplifies a grid-scale acoustic mode at a rate per step
+# independent of the spacing, so a run's growth per unit time rises with the
+# radial node count. The radial momentum has no conservation law in cylindrical
+# coordinates, so the gradient form gives up no conservation; mass and energy
+# keep the divergence form. The measurements are in
+# reference/CALIBRATION_APPENDIX.md under "Grid-scale growth at the r-z axis".
+# A setup constant, identical on every rank.
+_radial_pressure_gradient(solver) =
+    solver.metric isa CylindricalMetric && solver.decomp.active[1] &&
+    !solver.decomp.active[2]
+
 @inline function _metric_src_cyl_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
-                                        rho, u, v, w, p, inv_r, m1, m2,
+                                        rho, u, v, w, p, inv_r, m1, m2, with_p,
                                         o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir = inv_r[I]
-        # +Π_θθ / r on radial momentum, −Π_θr / r on the azimuthal one.
-        dQ[I, m1] += ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
+        # +Π_θθ / r on radial momentum, −Π_θr / r on the azimuthal one; Π_θθ
+        # without the pressure where the radial momentum takes ∂p/∂r.
+        dQ[I, m1] += ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2,
+                              with_p)
         dQ[I, m2] -= ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1)
     end
     return nothing
@@ -361,7 +384,8 @@ function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
                dQ, solver.field_tuples.grad_u, solver.transport, solver.eos,
                solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.inv_r, m[1], m[2], o1, o2, o3)
+               solver.p, solver.inv_r, m[1], m[2], !_radial_pressure_gradient(solver),
+               o1, o2, o3)
     return solver
 end
 

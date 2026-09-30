@@ -233,9 +233,9 @@ pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
 6.33 (the fine wall window against the uniform run at the fine spacing),
 three levels at a symmetry plane 5.49 (the second level's plane window,
 filtered), a
-level at the r-z axis 6.93 / 6.42 (inviscid / viscous, filtered, the fine
-axis window) and at the corner of the axis and a plane at z = 0 6.97 (the
-fold window), a level on an r-z annulus 5.83 / 5.40 (inviscid / viscous, the
+level at the r-z axis 6.43 / 6.47 (inviscid / viscous, filtered, the fine
+axis window) and at the corner of the axis and a plane at z = 0 7.11 (the
+fold window), a level on an r-z annulus 5.70 / 5.41 (inviscid / viscous, the
 fine interface window against the uniform run at the fine spacing), a level
 at an NSCBC outflow 6.45 (the fine face window against the uniform run at
 the fine spacing), a level across a periodic seam 6.24 (the fine interface
@@ -805,7 +805,10 @@ them.
   1e-8. `artificial_conductivity_scale` remains an EOS dispatch point.
 - **The spherical origin fold is much less forgiving than the cylindrical axis.**
   It needs initial data resolved over ≳3 cells and will not take Noh's singular
-  t = 0 start, both of which the axis handles. The cause remains unknown.
+  t = 0 start, both of which the axis handles. A candidate cause is measured
+  but not changed: the radial momentum's pressure term, in the area form
+  (1/r²)D(r² p) − 2p/r, makes the filtered one-step map at the origin grow
+  at rest, and ∂p/∂r makes it neutral. → `reference/CALIBRATION_APPENDIX.md`
 - **The compact filter, not the Cook artificial properties, holds this solver
   together, and its fit is joint with `C_mu`.** At 128³ TGV the filter
   supplies 37% of the energy sink yet removing it kills the run, while removing
@@ -834,11 +837,6 @@ them.
   aspect-ratio-16 Noh run with a wrong solution. A directional β\* was
   measured and rejected for making vorticity in cold gas on a curved front.
   → `reference/CALIBRATION_APPENDIX.md`
-- **An unrefined r-z axis run of a smooth converging pulse runs away at the
-  axis on about seven thousand radial nodes** under the default filter
-  strength αf = 0.47, and not under 0.45, because the axis divergence does not
-  annihilate the grid-scale sawtooth. The radial count at which this begins is
-  not measured (roadmap N24). → `reference/CALIBRATION_APPENDIX.md`
 - A timing difference under the 10–20% run-to-run spread is resolved with
   `bench/repeat.jl`, which takes medians over repeated *processes* and, given
   two commands, alternates them and reports the paired ratio.

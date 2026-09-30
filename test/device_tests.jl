@@ -718,7 +718,8 @@ end
 # must be added here deliberately. The scan below fails when this
 # list and the call sites disagree, in either direction.
 const POINTWISE_BODIES = (
-    :_area_flux_point!, :_blend_interior_point!, :_body_force_point!,
+    :_area_flux_less_point!, :_area_flux_point!, :_blend_interior_point!,
+    :_body_force_point!,
     :_bulk_flux_point!, :_coarse_fine_flux_point!, :_copy_component_point!,
     :_copy_interior_point!, :_delta4_point!, :_delta4_signed_point!,
     :_dilatation_point!, :_dilatation_switch_point!, :_extrapolation_point!, :_face_pick_point!,

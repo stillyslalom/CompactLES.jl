@@ -34,7 +34,7 @@
 # step is cfl 0.177), and 0 takes the solver's own step at cfl 0.9; `tstart`
 # is the time the measure starts (by default 0 for the pulse and 0.3 for Noh,
 # whose shock forms at the axis and has left the window by then); `variant` is
-# the patched divergence of `bench/axisspectrum.jl` (`none`, `gradp`,
+# the patched divergence of `bench/axisspectrum.jl` (`none`, `areap`,
 # `product`), and `near` > 0 filters the first `M` nodes at that αf, tapering
 # to the run's αf at node 2M, as there.
 #

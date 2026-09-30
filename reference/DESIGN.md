@@ -576,9 +576,14 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
    area-weighted flux `A_d F_d`, take its compact derivative, and accumulate
    `dQ[c] −= inv_J · ∂(A_d F_d)`. `J = h₁h₂h₃` and `A_d = J/h_d`, so the compact
    derivatives act on area-weighted fluxes and the divergence is exact for the
-   metric.
+   metric. On θ-collapsed r-z the radial momentum is the exception: its flux
+   enters without the pressure, and `inv_h₁ · ∂p` is subtracted instead,
+   because (1/r)D(r p) − p/r differs from D(p) at the grid scale and the
+   difference amplifies a grid-scale acoustic mode at the axis
+   (`_radial_pressure_gradient`).
 9. **Momentum sources** (`add_metric_sources!`) add the algebraic ∇·Π terms that
-   appear in curvilinear coordinates (e.g. +Π_θθ/r in cylindrical).
+   appear in curvilinear coordinates (e.g. +Π_θθ/r in cylindrical, without the
+   pressure where the radial momentum takes ∂p/∂r).
 10. **Boundary corrections.** For every face, `correct_rhs!` applies any
     characteristic (NSCBC) correction to the RHS.
 11. **Explicit sources.** `add_sources!` walks the concrete source tuple at the
