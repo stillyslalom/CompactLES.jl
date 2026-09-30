@@ -6218,9 +6218,31 @@ level against the uniform run on 9N nodes:
 | face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 |
 
 The second level's face window converges at 3.6 reaching the plane and 3.1
-held inside, so the order below the six of the two-level plane row is the
-nest's, at its coarse-fine face; the plane window reads 4.21. Not diagnosed
-further.
+held inside, and the plane window at 4.21. The loss is a growing mode of the
+unfiltered coupling under the ghost fluxes. `bench/couplingspectrum.jl`
+linearizes the map over one step of 0.4/(18N) about the state after the
+first and reads its eigenvalues of largest modulus; the uniform run's leading
+growth rate, 8.5e-4 per unit time, is that of the nonlinear base state. The
+nest carries a real eigenvalue above one, a mode that does not oscillate,
+whose eigenvector peaks on the first level's node beside the restriction
+window and carries an odd-even component on both levels, at 5.6, 9.6 and 17.9
+per unit time at N = 36, 72 and 144, an amplification of e^2.2 to e^7.2 by
+t = 0.4. One level at the plane (`plane_level_case`) carries an oscillating
+pair at 0.51 and 2.42 at N = 36 and 72 and a real eigenvalue at 9.7 at
+N = 144. Under the closure rows the leading rate is 0.33 (nest, N = 72) and
+0.28 (one level, N = 144), and a filter pass every step or every tenth step
+puts the nest at 8.6e-4. The interpolation order (6, 8 or 10) leaves the
+nest's real eigenvalue at 5.5 to 5.8 (N = 36), and a restriction margin of 4
+or 6 parent nodes for the second level (a patched build) at 4.1 or 3.6. In
+the convergence runs the second level's plane window reads 6.9e-12,
+1.3e-12 and 1.3e-13 (5.7) with the second level's restriction into the first
+switched off (a patched build), 5.6e-12, 1.2e-12 and 1.2e-13 (5.5) with both
+runs filtered at every step, and it degrades with the step count at fixed N:
+5.0 over N = 36 to 72 at 6N steps, 4.2 at 18N and 3.8 at 54N. The entropy
+wave through a nest of the same shape on a periodic line converges at 7.1 to
+7.7 with the second level's restriction on or off, although its map carries
+a real eigenvalue at 2.0 (N = 36): its error excites the mode too little to
+show it, as in the three-level entropy rows.
 
 **Levels across a periodic seam.** The convergence row's case
 (`seam_level_case`: the entropy wave on the periodic [0, 2π), a level over
