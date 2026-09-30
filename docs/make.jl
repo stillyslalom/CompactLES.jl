@@ -63,7 +63,7 @@ const TUTORIALS = [
     "imploding_shock.jl",
     "advected_bubbles.jl",
     "axis_crossing_vortex.jl",
-    "spherical_3d.jl",
+    "oscillating_sphere.jl",
 ]
 
 mkpath(TUTORIAL_DIR)
@@ -119,7 +119,7 @@ DocMeta.setdocmeta!(
             "Imploding shock" => "tutorials/imploding_shock.md",
             "Advected bubbles" => "tutorials/advected_bubbles.md",
             "Axis-crossing vortex" => "tutorials/axis_crossing_vortex.md",
-            "3D sphere" => "tutorials/spherical_3d.md",
+            "Oscillating sphere" => "tutorials/oscillating_sphere.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",
