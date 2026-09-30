@@ -1429,9 +1429,11 @@ end
 #     rank must end the first phase on the same step, or the second hangs.
 #     The continuation must match the one from a condition every rank
 #     evaluates for itself, and the checkpoint restart into the same next
-#     phase, bitwise. The tiled, regridded, subcycled Sod of the hierarchy
-#     checkpoint phase then changes its high wall the same way, against its
-#     own checkpoint restart.
+#     phase, bitwise. A phase switching the artificial properties on, and
+#     one switching them off, continue bitwise as the solver of that setting
+#     started from the carried state. The tiled, regridded, subcycled Sod of
+#     the hierarchy checkpoint phase then changes its high wall the same way,
+#     against its own checkpoint restart.
 # ---------------------------------------------------------------------------
 function test_phase_change()
     section("phase change: one decision, bitwise as a checkpoint restart")
@@ -1469,6 +1471,43 @@ function test_phase_change()
           gmax(gap(pq_glob, rq)), 1e-300)
     check("phase change vs checkpoint restart: clock",
           gmax(abs(p_glob.t - r.t)) + gmax(abs(p_glob.dt_prev - r.dt_prev)), 1e-300)
+
+    # The artificial properties switched on after a run without them, and off
+    # again. Switched on, the phase continues as a fresh art-on run of the
+    # carried state, whose coefficients `run!` computes before its first step
+    # (its step count left at 0 for that); switched off, as the art-off solver
+    # given the carried state.
+    num_off = Numerics(num; art=ArtificialProperties(enabled=false))
+    function start_from!(into, qi, from, qf; fresh)
+        parent(qi)[inner, :] .= parent(qf)[inner, :]
+        into.t, into.cfl = from.t, from.cfl
+        into.dt_prev, into.rate_prev = from.dt_prev, from.rate_prev
+        into.filter_rate_prev = from.filter_rate_prev
+        fresh || (into.step = from.step)
+        CL.refresh_primitives!(into, qi)
+        return into
+    end
+    s0, q0 = setup(tube(SlipWallBC()), num_off)
+    run!(s0, q0; tfinal=1e9, nmax=6)
+    a_on, aq_on = setup(s0, q0; numerics=num)
+    check("art switched on: coefficients computed at the phase change",
+          gmax(maximum(abs, CL.art_block(a_on))) > 0 ? 0.0 : 1.0, 0.5)
+    ref_on, rq_on = setup(tube(SlipWallBC()), num)
+    start_from!(ref_on, rq_on, s0, q0; fresh=true)
+    run!(a_on, aq_on; tfinal=1e9, nmax=14)
+    run!(ref_on, rq_on; tfinal=1e9, nmax=8)
+    check("art switched on vs a fresh art-on run: state difference",
+          gmax(gap(aq_on, rq_on)), 1e-300)
+    check("art switched on vs a fresh art-on run: clock",
+          gmax(abs(a_on.t - ref_on.t)) + gmax(abs(a_on.dt_prev - ref_on.dt_prev)),
+          1e-300)
+    a_off, aq_off = setup(a_on, aq_on; numerics=num_off)
+    ref_off, rq_off = setup(tube(SlipWallBC()), num_off)
+    start_from!(ref_off, rq_off, a_on, aq_on; fresh=false)
+    run!(a_off, aq_off; tfinal=1e9, nmax=20)
+    run!(ref_off, rq_off; tfinal=1e9, nmax=20)
+    check("art switched off vs the art-off solver: state difference",
+          gmax(gap(aq_off, rq_off)) + gmax(abs(a_off.t - ref_off.t)), 1e-300)
 
     # The hierarchy: the phase change rebuilds the tiles on their stored
     # owner ranges and continues, regrids and all, as the restart does.

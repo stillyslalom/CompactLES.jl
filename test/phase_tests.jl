@@ -74,8 +74,6 @@ end
     @test_throws "fold" setup(s, q; bcs=((SymmetryPlaneBC(), SlipWallBC()),
                                          ph_per, ph_per))
     @test_throws "n_global" setup(s, q; numerics=Numerics(num; n_global=(65, 1, 1)))
-    @test_throws "art.enabled" setup(s, q;
-        numerics=Numerics(num; art=ArtificialProperties(enabled=false)))
     @test_throws "refinement hierarchy" setup(s, q;
         numerics=Numerics(num; amr=AMR(initial=BlockRegion((24, 0, 0), (12, 1, 1)))))
     low = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls)
@@ -83,6 +81,57 @@ end
     # The wrapper the phase change replaces warns that it is deprecated.
     @test_logs (:warn, r"SwitchableBC is deprecated") SwitchableBC(SlipWallBC(),
                                                                    SlipWallBC())
+end
+
+# The run state a phase carries, set by hand on a solver built for the next
+# phase, which then continues as a run started from the carried state. The
+# step count is left at 0 on `into` when `fresh`, so that `run!` computes the
+# artificial coefficients before its first step, as for any new run.
+function ph_start_from!(into, qi, from, qf; fresh)
+    inner = CL.interior(from.decomp)
+    parent(qi)[inner, :] .= parent(qf)[inner, :]
+    into.t, into.cfl = from.t, from.cfl
+    into.dt_prev, into.rate_prev = from.dt_prev, from.rate_prev
+    into.filter_rate_prev = from.filter_rate_prev
+    fresh || (into.step = from.step)
+    CL.refresh_primitives!(into, qi)
+    return into
+end
+
+@testset "phase change: the artificial properties switched on and off" begin
+    # The pulse steepens between two walls without the artificial properties
+    # for 20 steps; a phase switches them on for 30, and another off again.
+    # Switched on, the next phase continues as a fresh run of the art-on
+    # solver from the carried state, whose coefficients `run!` computes before
+    # its first step. Switched off, it continues as the art-off solver given
+    # the carried state. Both comparisons are bitwise.
+    walls = ((SlipWallBC(), SlipWallBC()), ph_per, ph_per)
+    on = Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=true))
+    off = Numerics(on; art=ArtificialProperties(enabled=false))
+    s, q = setup(ph_tube(walls), off)
+    run!(s, q; tfinal=1e9, nmax=20)
+    p, pq = setup(s, q; numerics=on)
+    @test p.art.enabled && p.step == 20 && ph_same(pq, q, s.decomp)
+    @test any(!iszero, CL.art_block(p))
+    r, rq = setup(ph_tube(walls), on)
+    ph_start_from!(r, rq, s, q; fresh=true)
+    run!(p, pq; tfinal=1e9, nmax=50)
+    run!(r, rq; tfinal=1e9, nmax=30)
+    @test (p.t, p.dt_prev, p.rate_prev) == (r.t, r.dt_prev, r.rate_prev)
+    @test ph_same(pq, rq, p.decomp) && CL.art_block(p) == CL.art_block(r)
+    o, oq = setup(p, pq; numerics=off)
+    @test !o.art.enabled && isempty(CL.art_block(o)) && ph_same(oq, pq, p.decomp)
+    f, fq = setup(ph_tube(walls), off)
+    ph_start_from!(f, fq, p, pq; fresh=false)
+    run!(o, oq; tfinal=1e9, nmax=70)
+    run!(f, fq; tfinal=1e9, nmax=70)
+    @test (o.t, o.dt_prev) == (f.t, f.dt_prev) && ph_same(oq, fq, o.decomp)
+    # A checkpoint restart still refuses the change.
+    dir = mktempdir()
+    save_checkpoint(s, q, joinpath(dir, "off"))
+    @test_throws "artificial-property mismatch" load_checkpoint!(r, rq,
+        joinpath(dir, "off"); allow=CL.CONFIG_ALLOWABLE_GROUPS)
+    rm(dir; recursive=true)
 end
 
 @testset "phase change: a tiled, regridded, subcycled hierarchy" begin

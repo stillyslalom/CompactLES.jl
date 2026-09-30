@@ -144,7 +144,7 @@ surface; H8 for a magnetized target.
   independent of N
   ([grid-scale growth at the r-z axis](CALIBRATION_APPENDIX.md#grid-scale-growth-at-the-r-z-axis)).
   Delivered: the gradient form on θ-collapsed r-z (commit `17b0e44`) and on
-  the spherical radial and polar momenta; the axis runaway,
+  the spherical radial and polar momenta (commit `da0c733`); the axis runaway,
   the αf dependence of Noh's axis deficit and the origin's resolution
   requirement are gone, and Noh's origin ceiling rises from 0.3 to 0.5.
   Remaining: a strong blast through the origin still has a CFL ceiling of
@@ -234,9 +234,9 @@ promotion.
      A16.
   3. Done (commit `93f084c`): `level_boundaries` on by default, periodic
      seams included, a face a level cannot carry keeping the margin.
-  4. The phase change `setup(solver, Q; ...)` replaces `SwitchableBC`, now
-     deprecated (commit `f2d130a`). Remaining: remove `SwitchableBC` in the
-     next release, and decide whether a phase may change `art.enabled`.
+  4. Done: the phase change `setup(solver, Q; ...)` replaces `SwitchableBC`
+     (commit `f2d130a`), a phase may switch the artificial properties
+     (commit `ART`), and `SwitchableBC` is removed (commit `REM`).
   The axis's sawtooth response is N24, the cylindrical slip wall's order
   N25, and the shock-crossing mass loss A14.
   **Gate:** per remaining stage, the refined-versus-uniform rows of

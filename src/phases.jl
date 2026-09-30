@@ -56,15 +56,22 @@ ownership and regrid history, `t`, `step`, the step history `dt_prev`,
 positivity-floor tally and the wall-clock totals besides. The result is the
 same, bit for bit, as writing a checkpoint at the stop with
 [`save_checkpoint`](@ref) and loading it into the next phase's solver with
-[`load_checkpoint!`](@ref). `solver.cfl`, which a [`StepControl`](@ref) retry
-lowers, is carried as well unless `numerics` gives a different `cfl`, which
-then takes effect. The step control, the filter, the artificial-property
+[`load_checkpoint!`](@ref). `solver.cfl`, which a [`StepControl`](@ref)
+retry lowers, is carried as well unless `numerics` gives a different `cfl`,
+which then takes effect. The step control, the filter, the artificial-property
 parameters and the rest of `numerics` are the next phase's.
+
+A phase may also switch the artificial properties on or off through
+`numerics.art.enabled`, which a checkpoint restart refuses. Switched off,
+the previous phase's coefficients are dropped. Switched on, the coefficients
+are computed from the carried state by one right-hand-side evaluation before
+this method returns, as [`run!`](@ref) computes them before the first step
+of a run, so the next phase's first step is sized and dissipated as the
+first step of a run started from the carried state.
 
 The grid, the process grid and the conserved layout are kept, and a change
 that would alter them raises an `ArgumentError`: a different `n_global`,
-`n_halo`, `execution` (communicator, `dims`, backend, `patch_grid`), or
-`art.enabled`, which decides whether the artificial coefficients exist; and a
+`n_halo` or `execution` (communicator, `dims`, backend, `patch_grid`), and a
 boundary condition that changes a dimension's periodicity or its fold
 ([`AxisBC`](@ref), [`OriginBC`](@ref), [`PoleBC`](@ref),
 [`SymmetryPlaneBC`](@ref)), either of which moves the grid points. The
@@ -119,8 +126,7 @@ function _check_phase(prob0::Problem, num0::Numerics, prob::Problem, num::Numeri
                         "points and is kept between phases")
     end
     for (name, a, b) in (("n_global", num0.n_global, num.n_global),
-                         ("n_halo", num0.n_halo, num.n_halo),
-                         ("art.enabled", num0.art.enabled, num.art.enabled))
+                         ("n_halo", num0.n_halo, num.n_halo))
         a == b ||
             phase_error("numerics.$name is $b and the previous phase's is $a; " *
                         "a phase change keeps the grid and the fields it carries")
@@ -151,6 +157,7 @@ function _carry_phase!(next::Solver, Q_next, prev::Solver, Q)
     _read_checkpoint!(buf, next, Q_next, PHASE_SOURCE, CONFIG_ALLOWABLE_GROUPS;
                       phase=true)
     refresh_primitives!(next, Q_next)
+    _prime_phase!(next, Q_next, prev)
     _carry_accounts!(next, prev)
     return Q_next
 end
@@ -165,8 +172,20 @@ function _carry_phase!(next::Solver, states_next::Vector{<:ConservedState},
     # As `load_checkpoint!` leaves a loaded hierarchy; see the note there.
     _presync!(next, states_next, false)
     refresh_primitives!(next, states_next)
+    _prime_phase!(next, states_next, prev)
     _carry_accounts!(next, prev)
     return states_next
+end
+
+# The artificial coefficients of a phase that switches the properties on,
+# which the previous phase did not compute and the image does not carry.
+# `run!` computes them only at step 0, so they are computed here from the
+# carried state, by the evaluation `run!` makes there, into a scratch that is
+# dropped on return. Without it the first step is sized on the acoustic and
+# advective rates alone, the case the note on `_prime_coefficients!` describes.
+function _prime_phase!(next::Solver, Q, prev::Solver)
+    (next.art.enabled && !prev.art.enabled) || return next
+    return _prime_art!(next, Q, Workspace(Q))
 end
 
 # What a checkpoint leaves behind and a run in memory keeps: the failsafe's

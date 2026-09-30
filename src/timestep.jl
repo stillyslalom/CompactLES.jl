@@ -1450,9 +1450,14 @@ end
 # first step. So the first evaluation is made once more here, into the
 # workspace scratch the RK accumulator forgets (RKA[1] = 0), before the
 # savepoint is taken. A solver past step 0 carries its coefficients already,
-# from its last step or from a checkpoint's art block, and is left alone.
+# from its last step or from a checkpoint's art block, and is left alone; a
+# phase change that switches the properties on primes it through `_prime_art!`
+# (phases.jl).
 function _prime_coefficients!(solver::Solver, Q, workspace)
     (solver.art.enabled && solver.step == 0) || return solver
+    return _prime_art!(solver, Q, workspace)
+end
+function _prime_art!(solver::Solver, Q, workspace)
     _presync!(solver, Q)
     _prime_rhs!(solver, Q, workspace)
     return solver

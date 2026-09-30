@@ -899,7 +899,7 @@ end
 function _read_checkpoint!(io, solver::Solver, Q, source::AbstractString, allow;
                            phase::Bool=false)
     _read_ckpt_header!(io, solver, solver, Q, source, allow, phase)
-    _read_ckpt_block!(io, solver, Q, source)
+    _read_ckpt_block!(io, solver, Q, source, phase)
     return Q
 end
 
@@ -943,7 +943,7 @@ function _read_checkpoint!(io, solver::Solver, states::Vector{<:ConservedState},
     np = MPI.Comm_size(solver.comm)
     root = PatchSolver(solver, patches[1])
     _read_ckpt_header!(io, solver, root, states[1], path, allow, phase)
-    _read_ckpt_block!(io, root, states[1], path)
+    _read_ckpt_block!(io, root, states[1], path, phase)
     ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
     floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
     rec = _record_from_image(ints, floats)
@@ -968,7 +968,7 @@ function _read_checkpoint!(io, solver::Solver, states::Vector{<:ConservedState},
         stored == Int64[block.offset..., block.extent...] ||
             error("decomposition mismatch: level $ℓ tile $ti's block in " *
                   "$path is not this rank's")
-        _read_ckpt_block!(io, ps, states[li], path)
+        _read_ckpt_block!(io, ps, states[li], path, phase)
     end
     return states
 end
@@ -1058,16 +1058,22 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     return io
 end
 
-# One patch's blocks, as `_write_ckpt_block` laid them out.
-function _read_ckpt_block!(io, ps::SolverLike, Q, path::AbstractString)
+# One patch's blocks, as `_write_ckpt_block` laid them out. A phase change may
+# switch the artificial properties on or off (phases.jl): a block of the
+# previous phase's coefficients is then read past, and a solver expecting one
+# the previous phase did not compute is primed there instead.
+function _read_ckpt_block!(io, ps::SolverLike, Q, path::AbstractString,
+                           phase::Bool=false)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     buf = Array{eltype(Q)}(undef, nx, ny, nz, ps.equations.n_cons)
     read!(io, buf)
     Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
-    n_art = _check_art_count(Int(read(io, Int64)), ps, path)
-    set_art_block!(ps, read!(io, Array{eltype(Q)}(undef, nx, ny, nz, n_art)))
+    stored = Int(read(io, Int64))
+    phase || _check_art_count(stored, ps, path)
+    block = read!(io, Array{eltype(Q)}(undef, nx, ny, nz, stored))
+    stored == n_art_fields(ps) && set_art_block!(ps, block)
     return Q
 end
 
