@@ -41,6 +41,9 @@ in space, and follows a sound pulse through the interface between two gases.
 [Sound absorption](@ref) adds molecular viscosity and heat conduction.
 [Loschmidt cell](@ref) adds binary diffusion from tabulated coefficients and
 measures the coefficient back from the decay of a composition mode.
+[Richtmyer–Meshkov instability](@ref) adds a second grid dimension, symmetry
+planes and characteristic inflow and outflow faces, and compares the growth of
+a shocked interface with Richtmyer's model.
 [Follow a moving feature with refinement](@ref) shows how a
 physical-coordinate selector places fine cells. The geometry
 sequence starts with a collapsed radial calculation before resolving a full
