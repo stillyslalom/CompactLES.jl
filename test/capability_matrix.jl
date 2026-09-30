@@ -109,7 +109,7 @@ include("capability_cases.jl")
                                                    BlockRegion((60, 0, 0), (20, 1, 1))],
                                           regrid_interval=1, tile=4)))
         # A level reaching a symmetry plane, on the host backend at either
-        # precision, and a regridded level kept off one by default.
+        # precision, and a regridded level off it.
         plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
         for precision in (Float64, Float32)
             @test C.advances(plane, Numerics(n_global=(48, 1, 1),
@@ -139,6 +139,20 @@ include("capability_cases.jl")
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.0, 0, 0), (0.2, 1, 1)),
                                           level_boundaries=true)))
+        # A feature at a symmetry plane on the device backend or under the
+        # :filter restriction, where a level cannot reach the plane, is
+        # refined up to the margin by default rather than refused.
+        near_plane = (x, y, z, t) -> x < 0.15
+        for (backend, precision) in C.PAIRS
+            backend isa DeviceBackend || continue
+            @test C.advances(plane, Numerics(n_global=(49, 1, 1),
+                                             execution=Execution(; backend, precision),
+                                             amr=AMR(initial=near_plane,
+                                                     regrid_interval=1)))
+        end
+        @test C.advances(plane, Numerics(n_global=(49, 1, 1),
+                                         amr=AMR(initial=near_plane, regrid_interval=1,
+                                                 level_restriction=:filter)))
         # Tags place a regridded box and tiles on a symmetry plane, nested
         # shapes reach it, and three regridded levels reach the corner of the
         # axis and a symmetry plane at z = 0.

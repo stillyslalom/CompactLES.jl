@@ -142,8 +142,8 @@ implicit rows carry the whole treatment.
 With θ collapsed, a refined level may reach the axis, on the host backend
 under `level_restriction = :inject`: its patch then starts half its own
 spacing from r = 0, one node beyond the parent's lattice, and folds as the
-root does. An explicit region places it there, and under
-`level_boundaries = true` so do shapes and regridding tags.
+root does. An explicit region places it there, and so do shapes and
+regridding tags.
 """
 struct AxisBC <: BoundaryCondition end
 
@@ -202,8 +202,8 @@ The plane's dimension cannot be stretched, cannot also carry [`AxisBC`](@ref),
 is the condition there. A refined level may reach the plane, on the host
 backend under `level_restriction = :inject`: its patch then starts half its
 own spacing from the plane, one node beyond the parent's lattice, and folds as
-the root does. An explicit region places it there, and under
-`level_boundaries = true` so do shapes and regridding tags.
+the root does. An explicit region places it there, and so do shapes and
+regridding tags.
 """
 struct SymmetryPlaneBC <: BoundaryCondition end
 

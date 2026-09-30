@@ -292,7 +292,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance::Real=0,
                 rebalance_persist::Int=2,
                 max_levels::Union{Nothing,Int}=nothing,
-                level_boundaries::Bool=false,
+                level_boundaries::Bool=true,
                 implicit::Union{Nothing,ImplicitConduction}=nothing) where {T}
     bcs = _face_conditions(bcs)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
@@ -502,10 +502,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     tag_predicate === nothing || regrid_interval > 0 ||
         error("tag_predicate is a regrid tag criterion; it requires " *
               "regrid_interval > 0")
-    level_boundaries && regrid_interval == 0 &&
-        error("level_boundaries places regridded levels; it requires " *
-              "regrid_interval > 0 (an explicit region reaches a domain face " *
-              "without it)")
     tag_predicate === nothing || tag_predicate isa Function ||
         error("tag_predicate must be a function (patch, I) -> Bool or nothing")
     # A ratio of one holds nothing below the tag threshold, which is the

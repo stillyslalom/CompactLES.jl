@@ -479,8 +479,8 @@ or tiled `refine`, that reaches such a face; the regrid, the restart and
 the deep regrid carry the faces of whatever regions they are given
 (`_region_boundaries`).
 
-**Placement on a face.** Under the opt-in `level_boundaries` (the
-`RegridSpec.boundaries` flag, and `AMR`'s keyword for the shapes) the tag
+**Placement on a face.** Under `level_boundaries`, on by default (the
+`RegridSpec.boundaries` flag, and `AMR`'s keyword for the shapes), the tag
 clamp of the box regrid, the lattice clip of the tiled and the deep regrid
 and the frontend's shapes stop at a face `_placement_faces` names (the
 eligible faces of `_region_boundaries`, a symmetry plane or the r-z axis on
@@ -497,8 +497,10 @@ node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
-alike. The same keyword lets them cross a periodic seam ("Levels across a
-periodic seam").
+alike; a face the run's configuration leaves out (a `SwitchableBC`, a fold on
+the device backend or under `:filter`) keeps the margin this way rather than
+failing setup. The same keyword lets them cross a periodic seam ("Levels
+across a periodic seam"). With it off every face keeps the margin.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -633,8 +635,8 @@ tiled level may close the ring.
 
 An explicit region across the seam, which setup refused before, needs no
 keyword. The regrid and the frontend's shapes cross the seam under
-`level_boundaries` only, since without it they clamped a tag in the margin
-band of a periodic face, which runs relied on: the box regrid bounds the
+`level_boundaries`, and with it off clamp a tag in the margin band of a
+periodic face: the box regrid bounds the
 tagged set by the shortest arc of the period holding it (`_seam_arc`, one
 more Allreduce of the tag occupancy along the dimension) and caps the
 buffered arc at the period less the margins; the tiled and the deep regrid

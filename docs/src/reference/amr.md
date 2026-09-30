@@ -37,20 +37,21 @@ coarse-grid box or lattice tiles. If no node tags at setup, `setup` throws an
 `ArgumentError`: give a shape for a uniform state.
 
 A refined level stays at least `max(n_halo, 4)` of its parent's nodes inside
-its parent. By default this holds at the root's boundaries too, whether they
-are walls, open faces or periodic seams, and a shape or a tagged feature
-reaching into that band is refined only up to it, with a warning.
-`level_boundaries = true` lets shapes and tags place a level on a face
+its parent. At the root's boundaries shapes and tags place a level on a face
 carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or `NSCBCInflowBC`,
 which the level then carries at its own spacing, so a feature at a wall or an
-open face is refined up to it, and lets them place a level across a periodic
-seam, so a feature there is refined on both sides of it. Shapes and tags may
-also place a level, at any depth, on a `SymmetryPlaneBC` or the `AxisBC` of
-an r-z run, on the host backend under `:inject` restriction. Any other face
-keeps the band. A tiled level reaches a face only when the
+open face is refined up to it, and place a level across a periodic seam, so a
+feature there is refined on both sides of it. They also place a level, at any
+depth, on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host
+backend under `:inject` restriction. Any other face keeps the band: a
+`SwitchableBC` face, and a symmetry plane or the axis on the device backend
+or under `:filter` restriction. A tiled level reaches a face only when the
 tile next to the face's tile stays the margin inside the domain: the edge is
 at least `max(n_halo, 4)`, and a partial last lattice cell at the high face
-spans at least that many parent cells. Otherwise that face keeps the band.
+spans at least that many parent cells. Otherwise that face keeps the band. A
+shape or a tagged feature reaching into the band of a face that keeps it is
+refined only up to the band, with one warning. `level_boundaries = false`
+keeps the band at every face.
 
 `regrid_interval` defaults to zero, a fixed layout, for a shape, a region or a
 predicate of position alone. For `:sensor` and a time-dependent predicate it
@@ -80,7 +81,7 @@ a positive `tile`. A vector of shapes stays fixed.
 | `untag_ratio` | `2` | Hold threshold denominator for an existing tile; one removes hysteresis |
 | `tile_lifetime` | `1` | Minimum number of regrid checks before a tile may be removed |
 | `tile` | `0` | Zero makes one refined box; positive values at least three give a lattice tile edge in parent nodes |
-| `level_boundaries` | `false` | At `true`, shapes and tags place a level on a wall or NSCBC face and across a periodic seam, or on a symmetry plane or the r-z axis on the host backend under `:inject`; at `false` every level keeps the margin at every face |
+| `level_boundaries` | `true` | Shapes and tags place a level on a wall or NSCBC face and across a periodic seam, and on a symmetry plane or the r-z axis on the host backend under `:inject`; at `false` every level keeps the margin at every face |
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |
@@ -145,8 +146,9 @@ coincident node. An explicit region may also cross a periodic seam: its
 offset may lie anywhere, its nodes past the last node of the period are the
 first nodes again, and one box spans at most the period less the margin at
 either end. Explicit regions provide
-exact placement; sensor and predicate placement is clamped to that legal
-interior, and reaches those faces under `level_boundaries = true`.
+exact placement; sensor and predicate placement reaches those faces and
+crosses a seam as well, and is clamped to the margin at every face under
+`level_boundaries = false`.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags
 move. A positive `regrid_interval` allows tiled regions to enter and leave;
 `rebalance` may then move ownership among ranks after persistent measured

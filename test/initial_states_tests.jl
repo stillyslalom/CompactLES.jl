@@ -258,10 +258,15 @@ end
     @test r1.offset[1] * h <= 0.3 && (r1.offset[1] + r1.extent[1] - 1) * h >= 0.7
     @test r2.offset[1] * h / 3 <= 0.45 && (r2.offset[1] + r2.extent[1] - 1) * h / 3 >= 0.55
     @test getfield(solver, :regrid) === nothing
-    # A shape reaching the boundary is refined up to the margin, with a warning.
+    # A shape reaching the periodic boundary is refined up to it, the seam's
+    # margin taken by the periodic image; with `level_boundaries = false` it is
+    # refined up to the margin, with a warning.
     wide = AMR(initial=Box((0.0, 0, 0), (0.3, 1, 1)))
-    s2, _ = @test_logs (:warn, r"domain boundary") match_mode = :any setup(prob,
+    s2, _ = @test_logs min_level=Base.CoreLogging.Warn setup(prob,
         Numerics(; base..., amr=wide))
+    @test level_regions(s2, 1)[1] == BlockRegion((0, 0, 0), (30, 1, 1))
+    s2, _ = @test_logs (:warn, r"domain boundary") match_mode = :any setup(prob,
+        Numerics(; base..., amr=AMR(wide; level_boundaries=false)))
     @test level_regions(s2, 1)[1].offset[1] == 4
     # The sensor follows its feature by default, at an interval set by the CFL.
     step_prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),

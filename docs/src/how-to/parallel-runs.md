@@ -156,8 +156,8 @@ explains tags, tiling, restrictions, and restarts.
 
 AMR currently requires unstretched Cartesian coordinates, or axisymmetric
 cylindrical ones with θ collapsed. A level may reach a symmetry plane or the
-axis of an r-z run on the host backend, placed there by a `BlockRegion` or,
-under `level_boundaries = true`, by shapes and regridding tags. It does
+axis of an r-z run on the host backend, placed there by a `BlockRegion` or
+by shapes and regridding tags. It does
 not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
 budgets as diagnostics to check. A refined device configuration supports
 subcycling, tiling, and regridding, but not `level_restriction=:filter`.

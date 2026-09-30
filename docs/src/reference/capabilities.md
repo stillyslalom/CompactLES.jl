@@ -77,7 +77,7 @@ such as `(0, π)` places it on the pole.
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
 | subcycled levels | `AMR(subcycle = true)` | yes | any refined layout |
-| levels placed on a domain face | `AMR(level_boundaries = true)` with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face, across a periodic seam, or a symmetry plane or the r-z axis on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain |
+| levels placed on a domain face | default (`level_boundaries = true`) with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face, across a periodic seam, or a symmetry plane or the r-z axis on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain; any other face keeps the margin, with a warning when a tagged feature or a shape reaches it |
 
 `level_restriction = :filter` is accepted on the host backend of a serial
 run only, and not with a level reaching a symmetry plane or the axis; the default
@@ -129,11 +129,11 @@ text below.
 | `patch_grid` along a stretched dimension | `the patched dimension cannot be stretched` |
 | `AMR` with `patch_grid` | `AMR: cannot be combined with a patch_grid` |
 | `AMR` on a spherical metric or a resolved-θ cylindrical one | `AMR: requires CartesianMetric or CylindricalMetric with θ collapsed` |
-| a refined region reaching a face other than a slip, no-slip, NSCBC, symmetry-plane or axis one, a `SwitchableBC` included | `a refined level cannot carry` |
+| an explicit refined region reaching a face other than a slip, no-slip, NSCBC, symmetry-plane or axis one, a `SwitchableBC` included (a shape or a tag keeps the margin there) | `a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | one refined box closing on itself around a periodic dimension | `along periodic dimension` |
-| a level reaching a symmetry plane or the axis on a device | `a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the host backend only` |
-| a level reaching a symmetry plane or the axis with `level_restriction = :filter` | `a refined level reaching a SymmetryPlaneBC or an AxisBC takes level_restriction = :inject` |
+| an explicit region reaching a symmetry plane or the axis on a device | `a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the host backend only` |
+| an explicit region reaching a symmetry plane or the axis with `level_restriction = :filter` | `a refined level reaching a SymmetryPlaneBC or an AxisBC takes level_restriction = :inject` |
 | a region below the first level within the margin of a symmetry plane or the axis that does not start on its parent's first node there | `must be nested at least` |
 | `AMR` regridding a vector of shapes | `AMR: regridding moves one refined level` |
 | `max_levels > 2` without tiles and regridding | `requires tile > 0 and regridding` |

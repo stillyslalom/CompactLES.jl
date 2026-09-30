@@ -1204,22 +1204,21 @@ end
     @test r.extent[1] < 60
 
     # Predicate: a closure over the parent patch and a padded index, here
-    # x > 0.8, whose tagged set is that interval buffered and clamped to
-    # the margin; in union with the δ⁴ tag at the initial discontinuity
-    # the box spans both.
+    # x > 0.8, whose tagged set is that interval buffered and reaching the
+    # slip wall at x = 1; in union with the δ⁴ tag at the initial
+    # discontinuity the box spans both.
     predx = (p, I) -> xcoord(p, 1, interior_index(p, I)[1]) > 0.8
     sp = mk(regrid_interval=5, tag_predicate=predx)
     states = allocate_state(sp)
     initialize!(sp, states, (x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0,
                                              u=(0, 0, 0)))
     r = CL.tagged_region(sp, states[1])
-    margin = getfield(sp, :regrid).margin
     # The first node past x = 0.8, in the solver's own arithmetic.
     g1 = findfirst(g -> (g - 1) * (1.0 / (N - 1)) > 0.8, 1:N)
-    @test r == BlockRegion((g1 - 1 - 4, 0, 0), (N - margin - (g1 - 1 - 4), 1, 1))
+    @test r == BlockRegion((g1 - 1 - 4, 0, 0), (N - (g1 - 1 - 4), 1, 1))
     initialize!(sp, states, icS)
     r = CL.tagged_region(sp, states[1])
-    @test r.offset[1] < node(0.5) && r.offset[1] + r.extent[1] == N - margin
+    @test r.offset[1] < node(0.5) && r.offset[1] + r.extent[1] == N
 end
 
 @testset "tag hysteresis: hold band, lifetime and the creation record" begin
@@ -1379,9 +1378,10 @@ end
     per = (PeriodicBC(), PeriodicBC())
     N = 40
     edge = (p, I) -> interior_index(p, I)[1] == N
+    # The margin holds at every face with the placement on faces off.
     s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(wall2, per, per),
                regrid_interval=1, tag_buffer=0, tag_predicate=edge,
-               refine=BlockRegion((10, 0, 0), (8, 1, 1)))
+               refine=BlockRegion((10, 0, 0), (8, 1, 1)), level_boundaries=false)
     states = allocate_state(s)
     initialize!(s, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     margin = getfield(s, :regrid).margin
@@ -2689,10 +2689,14 @@ const PLACED_NSCBC_TOL = 5e-6
     end
     margin = CL.LEVEL_BUFFER
     reaches(r) = r.offset[1] + r.extent[1] == N
-    # The keyword places regridded levels; an explicit region needs none.
-    @test_throws "level_boundaries" Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                           bcs=(walls, per, per), level_boundaries=true,
-                                           refine=BlockRegion((16, 0, 0), (9, 1, 1)))
+    # The placement is on by default; without regridding the keyword
+    # leaves an explicit region as it is.
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, per, per),
+               refine=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=1)
+    @test getfield(s, :regrid).boundaries
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, per, per),
+               level_boundaries=true, refine=BlockRegion((16, 0, 0), (9, 1, 1)))
+    @test only(level_regions(s, 1)) == BlockRegion((16, 0, 0), (9, 1, 1))
 
     # --- The tag clamp of a box, off and on ----------------------------------
     cut[] = 0.85
@@ -2869,23 +2873,68 @@ const PLACED_NSCBC_TOL = 5e-6
                        amr=AMR(; initial=shape, kw...)))
     toward_wall = CL.Regions.Box((0.8, 0.0, 0.0), (1.0, 1.0, 1.0))
     s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any shape_run(
-        (walls, per, per), toward_wall)
+        (walls, per, per), toward_wall; level_boundaries=false)
     @test refined_region(s).offset[1] + refined_region(s).extent[1] == N - margin
     s, _ = @test_logs min_level=Base.CoreLogging.Warn shape_run(
-        (walls, per, per), toward_wall; level_boundaries=true)
+        (walls, per, per), toward_wall)
     @test reaches(refined_region(s))
     # A static shape's first level reaches a symmetry plane or the r-z axis,
-    # which it folds; without the keyword it keeps the margin and says so.
+    # which it folds; with the keyword off it keeps the margin and says so.
     toward_fold = CL.Regions.Box((0.0, 0.0, 0.0), (0.2, 1.0, 1.0))
     for (bcs, metric) in ((((SymmetryPlaneBC(), SlipWallBC()), per, per), CartesianMetric()),
                           (((AxisBC(), SlipWallBC()), per, per), CylindricalMetric()))
-        s, _ = shape_run(bcs, toward_fold; metric, level_boundaries=true)
+        s, _ = shape_run(bcs, toward_fold; metric)
         @test refined_region(s).offset[1] == 0 &&
               getfield(s, :levels)[2].transfers[1].folded[1] == (true, false)
         s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any shape_run(
-            bcs, toward_fold; metric)
+            bcs, toward_fold; metric, level_boundaries=false)
         @test refined_region(s).offset[1] == margin
     end
+end
+
+@testset "level_boundaries keeps the margin at a face a level cannot carry" begin
+    per = (PeriodicBC(), PeriodicBC())
+    N = 49
+    margin = CL.LEVEL_BUFFER
+    wave(x, y, z) = (rho = 1 + 0.05 * cos(pi * x);
+                     Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    high(p, I) = xcoord(p, 1, interior_index(p, I)[1]) > 0.85
+    low(p, I) = xcoord(p, 1, interior_index(p, I)[1]) < 0.15
+    function tagged(bcs, tag; kw...)
+        local s = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
+                         filter_interval=0, art=ArtificialProperties(enabled=false),
+                         refine=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=10^6,
+                         tag_threshold=Inf, tag_predicate=tag, tag_buffer=2, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    # A SwitchableBC face: the box, the tiles and a shape stop at the margin,
+    # and each path reports it by one warning instead of failing setup.
+    sw = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
+    switched = ((SlipWallBC(), sw), per, per)
+    s, q = tagged(switched, high)
+    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+    @test r.offset[1] + r.extent[1] == N - margin
+    s, q = tagged(switched, high; tile=8)
+    getfield(s, :regrid).checks += 1
+    @test_logs (:warn, r"does not reach") match_mode=:any CL.regrid!(s, q, CL.Workspace(q),
+                                                                      nothing)
+    @test !isempty(level_regions(s, 1))
+    @test all(r -> r.offset[1] + r.extent[1] <= N - margin, level_regions(s, 1))
+    s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any setup(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=switched, ic=wave),
+        Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                 amr=AMR(initial=CL.Regions.Box((0.8, 0.0, 0.0), (1.0, 1.0, 1.0)))))
+    @test refined_region(s).offset[1] + refined_region(s).extent[1] == N - margin
+    # A symmetry plane under the :filter restriction keeps the margin, and
+    # under :inject the level reaches it.
+    plane = ((SymmetryPlaneBC(), SlipWallBC()), per, per)
+    s, q = tagged(plane, low; level_restriction=:filter)
+    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+    @test r.offset[1] == margin
+    s, q = tagged(plane, low)
+    @test CL.tagged_region(s, q[1]).offset[1] == 0
 end
 
 # A level regridded onto the fold of the 1-D standing wave at step 0, against

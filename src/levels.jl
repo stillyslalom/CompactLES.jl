@@ -3276,10 +3276,11 @@ created (0 at setup): the tag history, derived from the reduced tag flags
 so that every rank holds the same record, and state that survives a regrid.
 `created` is level 1's record and `deep_created[ℓ - 1]` that of level ℓ ≥ 2.
 
-`boundaries` (the `level_boundaries` keyword) lets the tag clamp and the
-lattice clip place a level on a domain face whose condition a level carries,
-a symmetry plane excepted, and across a periodic seam; off, every level
-stays the nesting margin inside the domain (`_placement_faces`,
+`boundaries` (the `level_boundaries` keyword, on by default) lets the tag
+clamp and the lattice clip place a level on a domain face whose condition a
+level carries in the run's configuration (a fold only on the host backend
+under `:inject`) and across a periodic seam; any other face keeps the
+nesting margin, as every face does with it off (`_placement_faces`,
 `_placement_period`).
 
 The rebalance fields drive the repartition of a tiled level on measured
@@ -3337,7 +3338,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[], false)
+                  Dict{BlockRegion,Int}[], true)
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]

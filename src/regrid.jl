@@ -324,7 +324,7 @@ end
 
 # The periods along which automatic placement crosses a periodic seam of
 # level ℓ's node space: `_level_period` under `level_boundaries`, none
-# otherwise, every periodic face then keeping the nesting margin as before.
+# with it off, every periodic face then keeping the nesting margin.
 _placement_period(solver, spec::RegridSpec, ℓ::Int) =
     spec.boundaries ? _level_period(solver, ℓ) : (0, 0, 0)
 
@@ -430,16 +430,16 @@ the tagged cells (those at a criterion's threshold, and those inside the
 current refined regions at the hold threshold, `untag_ratio` below it),
 buffered by `RegridSpec.buffer` coarse cells per side, clamped to the
 nesting margin, and widened where necessary to the four-node minimum
-extent. Under `level_boundaries` the clamp stops at a domain face whose
-condition a level carries instead, and a region on such a face is widened
-until its box spans the interpolation order; along a periodic dimension the
-bounds are the shortest arc of the period holding the tagged cells, and the
-region may cross the seam, spanning at most the period less the margin at
-either end. Returns `nothing` when no cell qualifies. Collapsed dimensions
-keep offset 0 and extent 1. Collective over the coarse communicator (one
-Allreduce of the tag bounds, and one of their occupancy along a periodic
-dimension under `level_boundaries`), so every rank returns the identical
-region.
+extent. Under `level_boundaries`, the default, the clamp stops instead at a
+domain face whose condition a level carries, and a region on such a face is
+widened until its box spans the interpolation order; along a periodic
+dimension the bounds are the shortest arc of the period holding the tagged
+cells, and the region may cross the seam, spanning at most the period less
+the margin at either end. Returns `nothing` when no cell qualifies.
+Collapsed dimensions keep offset 0 and extent 1. Collective over the coarse
+communicator (one Allreduce of the tag bounds, and one of their occupancy
+along a periodic dimension under `level_boundaries`), so every rank returns
+the identical region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
@@ -577,9 +577,13 @@ function _warn_margin_band(solver, margin::Int, ℓ::Int)
     nodes = ℓ == 1 ? "root" : "level-$(ℓ - 1)"
     @warn "AMR: tagged cells lie within $margin $nodes nodes of a domain boundary " *
           "that a refined level does not reach; they stay at the parent " *
-          "resolution. Under level_boundaries = true a level reaches a wall or " *
-          "NSCBC face, and a symmetry plane or the r-z axis on the host backend " *
-          "under :inject restriction, and crosses a periodic seam." maxlog = 1
+          "resolution. A level reaches a SlipWallBC, NoSlipWallBC, NSCBCOutflowBC " *
+          "or NSCBCInflowBC face and crosses a periodic seam, and reaches a " *
+          "SymmetryPlaneBC or the AxisBC of an r-z run on the host backend under " *
+          ":inject restriction; any other face, a SwitchableBC included, keeps " *
+          "the margin, as every face does under level_boundaries = false. A tiled " *
+          "level reaches a face only where the tile next to it stays the margin " *
+          "inside the domain." maxlog = 1
     return nothing
 end
 

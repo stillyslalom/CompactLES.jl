@@ -17,14 +17,15 @@ refined at setup:
   each level's parent, for a layout given exactly.
 
 A refined level lies at least `max(n_halo, 4)` of its parent's nodes inside
-its parent, which is the room the coarse–fine transfer needs. By default this
-holds at the root's boundaries too, periodic or not, and a region asked for
-closer to a boundary is reduced to fit, with a warning naming the level. With
-`level_boundaries = true`, a shape or a tagged feature is refined up to a wall
-or NSCBC face instead, which the level then carries at its own spacing, and
-across a periodic seam (see the keyword below). An explicit `BlockRegion`
-may cross a periodic seam without the keyword: its offset may lie anywhere
-and its nodes past the last node of the period are the first nodes again.
+its parent, which is the room the coarse–fine transfer needs. At a wall or
+NSCBC face a shape or a tagged feature is refined up to the face, which the
+level then carries at its own spacing, and at a periodic seam the level
+crosses the seam (see `level_boundaries` below). At any other face the
+margin holds, and a region asked for closer to that face is reduced to fit,
+with a warning naming the level. An explicit `BlockRegion` reaches a face or
+crosses a seam whatever `level_boundaries` says: its offset may lie anywhere
+along a periodic dimension, and its nodes past the last node of the period
+are the first nodes again.
 
 `regrid_interval` defaults to 0 (a fixed region) for a shape, a region or a
 predicate of position alone, and for `:sensor` or a time-dependent predicate
@@ -111,18 +112,20 @@ copies `base` with the given keywords replaced.
   interface plane and coupled as root slabs are. Regridding then moves
   tiles in and out of the set, a surviving tile never changing its region,
   and the set may become empty.
-- `level_boundaries` (default `false`): at `true`, shapes and tags may place
-  a level on a domain face carrying `SlipWallBC`, `NoSlipWallBC`,
-  `NSCBCOutflowBC` or `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the
-  `AxisBC` of an r-z run on the host backend under `:inject` restriction.
-  The level carries the face's condition at its own spacing, so a feature at
-  a wall, an open face or a fold is refined up to the face. A level also
-  crosses a periodic seam, one box spanning at most the period less the
-  margin at either end. Other faces keep the margin. With `tile`, a face
-  keeps it also when the tile next to the face's tile would come within the
-  margin of the domain: an edge below `max(n_halo, 4)`, or a partial last lattice
-  cell at the high face spanning fewer parent cells than that. At `false`
-  every face keeps the margin.
+- `level_boundaries` (default `true`): shapes and tags may place a level on
+  a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or
+  `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run
+  on the host backend under `:inject` restriction. The level carries the
+  face's condition at its own spacing, so a feature at a wall, an open face
+  or a fold is refined up to the face. A level also crosses a periodic seam,
+  one box spanning at most the period less the margin at either end. Other
+  faces keep the margin: a `SwitchableBC` face, and a fold on the device
+  backend or under `:filter` restriction. With `tile`, a face keeps it also
+  when the tile next to the face's tile would come within the margin of the
+  domain: an edge below `max(n_halo, 4)`, or a partial last lattice cell at
+  the high face spanning fewer parent cells than that. A tagged feature
+  inside the margin of a face that keeps it is reported by one warning. At
+  `false` every face keeps the margin.
 - `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
   threshold on the ratio of the largest to the mean per-rank busy time over
   a regrid interval, above which a tiled level is repartitioned on those
@@ -147,7 +150,7 @@ Base.@kwdef struct AMR
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
     max_levels::Union{Nothing,Int} = nothing
-    level_boundaries::Bool = false
+    level_boundaries::Bool = true
 end
 
 AMR(base::AMR; kw...) = _with(base, kw)
@@ -192,7 +195,7 @@ function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
             tile_lifetime=amr.tile_lifetime, tile=amr.tile,
             rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist,
             max_levels=amr.max_levels,
-            level_boundaries=amr.level_boundaries && interval > 0)
+            level_boundaries=amr.level_boundaries)
 end
 
 _amr_callable(initial) = !(initial isa Symbol || initial isa BlockRegion ||
@@ -355,8 +358,9 @@ function _shape_regions(shapes, prob, num, amr::AMR)
         end
         clipped && MPI.Comm_rank(num.execution.comm) == 0 &&
             @warn "AMR: the level-$ℓ shape reaches within $margin level-$(ℓ - 1) " *
-                  "nodes of " * (ℓ == 1 ? "the domain boundary" : "its parent's edge") *
-                  ", which a refined level cannot; it is refined only up to that margin."
+                  "nodes of " * (ℓ == 1 ? "a domain boundary" : "its parent's edge") *
+                  " where a refined level keeps that margin; it is refined only up " *
+                  "to the margin."
         region = BlockRegion(Tuple(offset), Tuple(extent))
         push!(regions, region)
         # The next level nests inside this one's own nodes: the refined
@@ -379,8 +383,8 @@ function _shape_regions(shapes, prob, num, amr::AMR)
     return regions
 end
 
-# The domain faces a shape's level may reach: none, unless `level_boundaries`
-# is set, and then the faces whose condition a refined level carries
+# The domain faces a shape's level may reach: none under `level_boundaries =
+# false`, and otherwise the faces whose condition a refined level carries
 # (`_level_boundary_condition`), a fold (a symmetry plane, the r-z axis) only
 # where setup admits a level on one (the host backend with `:inject`
 # restriction; the shapes are static here).

@@ -81,7 +81,7 @@ slip wall's flux contract follows from the parities, with physical viscosity
 as without it. Use it in place of `SlipWallBC()` wherever the face is a true
 symmetry plane, the plane's dimension is unstretched and the run has no
 `patch_grid`. A refined level at any depth may reach the plane on the host
-backend, placed by an explicit region or, under `level_boundaries = true`, by
+backend under `:inject` restriction, placed by an explicit region or by
 shapes and regridding tags. The grid
 moves with it: the end node sits at `h/2` from the plane, with `h = L/(N − ½)`
 for one plane and `L/N` for two, and a wall-normal profile station shifts by
