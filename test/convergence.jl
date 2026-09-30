@@ -89,7 +89,7 @@
 #   a level at a wall (fine wall window against the uniform run at the fine
 #   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68 |
 #   two levels at a symmetry plane C6 6.33 | three levels, the second at
-#   the plane (its plane window) C6 4.21
+#   the plane (its plane window, filtered) C6 5.49
 #   a level at the r-z axis (fine axis window against the uniform run at the
 #   fine spacing, equal steps, filtered, t = 0.3): C6 6.93 | viscous 6.42 |
 #   the corner of the axis and a plane at z = 0, fold window, C6 6.97
@@ -1004,20 +1004,18 @@ evolution_study("two levels at a symmetry plane, C6", LEVEL_PLANE_NS,
 # A second level nested in the first at the same plane: its region starts on
 # level 1's node at h/6, one node outside the lattice coincident with the
 # root's, and its own first node lies at h/18 (`plane_nest_case`). Its plane
-# window against the uniform run at its spacing in equal steps. The rest of
-# the second level converges at the same rate and error with its region held
-# inside the first level instead, so the order is the nest's, the plane
-# adding no defect of its own.
+# window against the uniform run at its spacing in equal steps. Both runs are
+# filtered at every step; `plane_nest_case` says why.
 const NEST_PLANE_NS = (36, 48, 72)
 plane_nest_reference(s) = begin
     fine, states = plane_nest_case(s.n_global[1]; refined=false)
     fixed_step_run!(fine, states, 0.4, 18 * s.n_global[1])
     NodeReference(fine, states)
 end
-evolution_study("three levels at a symmetry plane, C6", NEST_PLANE_NS,
+evolution_study("three levels at a symmetry plane, C6, filtered", NEST_PLANE_NS,
                 N -> plane_nest_case(N), plane_nest_reference;
                 primary=:wall, tfinal=0.4, steps=N -> 18N, patches=(3,),
-                expect=4.2, tol=1.0, recorded=4.21)
+                expect=5.5, tol=1.0, recorded=5.49)
 # The same at the axis of an r-z run: a pulse converging on the axis crosses
 # the coarse-fine face into the tile, which folds at r = 0 as the uniform run
 # does, and the axis window is read against the uniform run at the fine

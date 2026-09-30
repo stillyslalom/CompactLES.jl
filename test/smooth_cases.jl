@@ -373,13 +373,19 @@ node outside the lattice coincident with the root's, so the second level's
 region starts there, at offset −1 of its parent's node space, and its own
 first node lies at 1/(18N), half its spacing from the plane. N must be a
 multiple of 3.
+
+Both runs are filtered at every step. Unfiltered, the ghost-flux coupling of
+the nest carries a real eigenvalue of its one-step map above one, whose mode
+peaks beside the second level's restriction window and grows with the step
+count at fixed N, and the plane window then reads that growth, not the
+coupling's order. A filter pass every step or every tenth step removes it.
 """
 function plane_nest_case(N; refined=true, opts...)
     N % 3 == 0 || error("N = $N: the nested plane level needs N divisible by 3")
     level = refined ? (refine=[BlockRegion((0, 0, 0), (N ÷ 3 + 1, 1, 1)),
                                BlockRegion((-1, 0, 0), (N ÷ 3, 1, 1))],) : (;)
     wall_case(refined ? N : 9N; folded=true, slip=true,
-              merge((cfl=0.9,), level, values(opts))...)
+              merge((cfl=0.9, filter_interval=1), level, values(opts))...)
 end
 
 """

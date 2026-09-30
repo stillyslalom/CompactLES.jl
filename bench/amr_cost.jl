@@ -126,7 +126,10 @@ end
 # improve where it refined, and lumping the two regimes together is how a
 # cost case gets misread.
 function split_metrics(sample, fine, region)
-    inr(i, d) = region.offset[d] < i <= region.offset[d] + region.extent[d]
+    # A box across a periodic seam keeps its offset in [0, N) and runs past
+    # N, so membership is taken modulo N. The blob starts a few cells from the
+    # low seam, and the tagged box crosses it at N = 24.
+    inr(i, d) = mod(i - 1 - region.offset[d], size(sample, d)) < region.extent[d]
     s_in = 0.0; n_in = 0; m_in = 0.0
     s_out = 0.0; n_out = 0; m_out = 0.0
     for k in axes(sample, 3), j in axes(sample, 2), i in axes(sample, 1)

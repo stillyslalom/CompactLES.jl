@@ -6205,10 +6205,10 @@ at the level's spacing. The standing wave at N = 49, a level placed on the low
 symmetry plane by a regrid at step 0, differs by 2.9e-8 as one box and 1.8e-7
 as two tiles at t = 0.2; on the r-z axis, filtered at every step, by 3.6e-11
 and 5.7e-11. A second level at either plane of the standing wave between two
-planes, N = 48, t = 0.1, differs by 4.5e-13 and 2.3e-13. The convergence row
-`plane_nest_case` (first level over N/3 + 1 root nodes at the plane, second
-over its parent's first N/3 nodes from offset −1, t = 0.4) reads the second
-level against the uniform run on 9N nodes:
+planes, N = 48, t = 0.1, differs by 4.5e-13 and 2.3e-13. The convergence
+row's case `plane_nest_case` (first level over N/3 + 1 root nodes at the
+plane, second over its parent's first N/3 nodes from offset −1, t = 0.4),
+unfiltered, reads the second level against the uniform run on 9N nodes:
 
 | N | 36 | 48 | 72 |
 |---|---|---|---|
@@ -6218,7 +6218,7 @@ level against the uniform run on 9N nodes:
 | face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 |
 
 The second level's face window converges at 3.6 reaching the plane and 3.1
-held inside, and the plane window at 4.21. The loss is a growing mode of the
+held inside, and the plane window at 4.2. The loss is a growing mode of the
 unfiltered coupling under the ghost fluxes. `bench/couplingspectrum.jl`
 linearizes the map over one step of 0.4/(18N) about the state after the
 first and reads its eigenvalues of largest modulus; the uniform run's leading
@@ -6234,11 +6234,13 @@ N = 144. Under the closure rows the leading rate is 0.33 (nest, N = 72) and
 puts the nest at 8.6e-4. The interpolation order (6, 8 or 10) leaves the
 nest's real eigenvalue at 5.5 to 5.8 (N = 36), and a restriction margin of 4
 or 6 parent nodes for the second level (a patched build) at 4.1 or 3.6. In
-the convergence runs the second level's plane window reads 6.9e-12,
-1.3e-12 and 1.3e-13 (5.7) with the second level's restriction into the first
-switched off (a patched build), 5.6e-12, 1.2e-12 and 1.2e-13 (5.5) with both
-runs filtered at every step, and it degrades with the step count at fixed N:
-5.0 over N = 36 to 72 at 6N steps, 4.2 at 18N and 3.8 at 54N. The entropy
+the unfiltered convergence runs the second level's plane window reads
+6.9e-12, 1.3e-12 and 1.3e-13 (5.7) with the second level's restriction into
+the first switched off (a patched build), and with it on the window degrades
+with the step count at fixed N: 5.0 over N = 36 to 72 at 6N steps, 4.2 at 18N
+and 3.8 at 54N. Filtered at every step, the convergence row's configuration,
+the plane window reads 5.6e-12, 1.2e-12 and 1.2e-13, and the face and
+interior windows converge at 6.24 and 6.08. The entropy
 wave through a nest of the same shape on a periodic line converges at 7.1 to
 7.7 with the second level's restriction on or off, although its map carries
 a real eigenvalue at 2.0 (N = 36): its error excites the mode too little to

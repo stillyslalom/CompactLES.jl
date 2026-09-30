@@ -21,9 +21,11 @@
 # planes: `uniform` (`wall_case(N; folded = true)`), `level`
 # (`plane_level_case`, one level at the plane) and `nest` (`plane_nest_case`,
 # two nested levels at the plane). The step is 0.4/(spn N), the one the nest's
-# convergence row takes at spn = 18. Each case keeps its own `filter_interval`
-# (0) unless `filt` is given; with a cadence above 1 pass `nmap` equal to it,
-# since a map over fewer steps than the cadence may contain no filter pass.
+# convergence row takes at spn = 18. Every case runs unfiltered unless `filt`
+# is given, although the nest's convergence row filters at every step;
+# `filt=-1` keeps each case's own `filter_interval`. With a cadence above 1
+# pass `nmap` equal to it, since a map over fewer steps than the cadence may
+# contain no filter pass.
 #
 # Cost: 2n·nmap steps, n being five times the number of interior nodes: about
 # 1 s at N = 36 and 5 s at N = 144 for the nest with nmap = 1, plus a dense
@@ -40,7 +42,7 @@ const CL = CompactLES
 MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run this study on one rank")
 include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
 
-const OPTS = CL.script_args(ARGS, (case="nest", N=36, spn=18, flux="ghost", filt=-1,
+const OPTS = CL.script_args(ARGS, (case="nest", N=36, spn=18, flux="ghost", filt=0,
                                    nmap=1, eps=1e-7, top=6))
 
 function build(o)

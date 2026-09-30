@@ -231,7 +231,8 @@ levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 `:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
 pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
 6.33 (the fine wall window against the uniform run at the fine spacing),
-three levels at a symmetry plane 4.21 (the second level's plane window), a
+three levels at a symmetry plane 5.49 (the second level's plane window,
+filtered), a
 level at the r-z axis 6.93 / 6.42 (inviscid / viscous, filtered, the fine
 axis window) and at the corner of the axis and a plane at z = 0 6.97 (the
 fold window), a level on an r-z annulus 5.83 / 5.40 (inviscid / viscous, the
