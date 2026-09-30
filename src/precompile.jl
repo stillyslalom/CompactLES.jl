@@ -109,9 +109,9 @@ if MPIPreferences.binary != "system"
                      p=1 + 0.2cos(x), rho=1 + 0.3sin(y)))
             compute_rhs!(s, Q, zero(Q))
         end
-        # Timestepping through run!: periodic, outflow, and a switchable outflow.
-        for xbc in (per, (SlipWallBC(), NSCBCOutflowBC(pinf=1.0)),
-                    (SlipWallBC(), SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0))))
+        # Timestepping through run!: periodic, a wall, and a phase change from
+        # the wall to an outflow.
+        for xbc in (per, walls)
             s, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
                                  bcs=(xbc, per, per),
                                  ic=(x, y, z) -> Prim(u=(0, 0, 0),
@@ -120,6 +120,9 @@ if MPIPreferences.binary != "system"
                          Numerics(n_global=(16, 12, 12)))
             run!(s, Q; tfinal=1e9, nmax=2)
             compute_dt(s, Q)
+            xbc === walls || continue
+            s, Q = setup(s, Q; bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per, per))
+            run!(s, Q; tfinal=1e9, nmax=4)
         end
         # A folded line between two face-centred symmetry planes, with the
         # artificial properties and the state filter on.

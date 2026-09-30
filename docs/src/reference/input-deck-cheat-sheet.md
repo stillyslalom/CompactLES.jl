@@ -131,9 +131,9 @@ faces or a `(low, high)` pair. For example, a triply periodic domain uses
 | Characteristic inflow | `NSCBCInflowBC(u=(1.0,0,0), T_ion=1.0, Y=[1.0])` | Subsonic inlet |
 | Coordinate fold | `AxisBC()`, `OriginBC()`, `PoleBC()` | Matching cylindrical/spherical singular geometry |
 
-`SwitchableBC(before, after)` allows the solver to switch from one boundary condition 
-(`before`) to another (`after`) mid-run; call `switch!` from
-a globally consistent callback. Fold conditions cannot be switched.
+To change a boundary condition mid-run, end the run with a `Callback` whose
+effect returns `true` and continue it with `solver, Q = setup(solver, Q; bcs)`.
+The new conditions keep each dimension's periodicity and folds.
 
 ICs can accept `(x,y,z,h)` and `DirichletBC` or NSCBC targets can accept
 `(x,y,z,t,h)`, where `h` is the minimum local physical spacing over resolved

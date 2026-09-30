@@ -99,8 +99,10 @@ boundary plane. Those derivatives are collective along a decomposed direction,
 so every rank must enter them even if only one rank owns the face. A boundary
 implementation that returns before the collective will deadlock.
 
-The same requirement explains why a `SwitchableBC` must change on every rank at
-one completed step. Use a callback trigger, never an unreduced local condition.
+The same requirement explains why a run that changes its boundary conditions
+must end at one completed step on every rank before the phase change,
+`setup(solver, Q; bcs)`, builds the next phase. End it with a callback trigger,
+never an unreduced local condition.
 
 ## Validation responsibility
 

@@ -10,7 +10,7 @@ The complete Literate source is
 [`docs/case_studies/shock_tube_2d.jl`](https://github.com/stillyslalom/CompactLES.jl/blob/main/docs/case_studies/shock_tube_2d.jl).
 It is intentionally excluded from the default documentation build.
 
-## Physical reason for switching
+## Physical reason for the change
 
 The incident shock is initialized inside the domain. Holding its post-shock
 state at the upstream face requires `NSCBCInflowBC`. When the shock crosses a
@@ -20,12 +20,12 @@ toward that face.
 An inflow condition continues to relax incoming characteristics toward the
 post-shock target. After the reflected wave arrives, that target no longer
 describes the boundary state. Retaining it returns a spurious disturbance to
-the interface. Switching to a weakly pressure-relaxed `NSCBCOutflowBC` allows
+the interface. Changing to a weakly pressure-relaxed `NSCBCOutflowBC` allows
 the reflected wave to leave.
 
 ## Event definition
 
-The switch is triggered when density anywhere on the upstream plane exceeds
+The first phase ends when density anywhere on the upstream plane exceeds
 the post-shock density by six percent. The threshold lies above a smaller
 startup acoustic transient and below the reflected-shock jump.
 
@@ -40,24 +40,30 @@ arrived = WhenState((solver, Q) -> begin
     maximum(I -> mixture_density(solver, Q, I), plane) > threshold
 end)
 
-change = Callback(arrived, (solver, Q) -> switch!(upstream))
+run!(solver, Q; tfinal, callback = Callback(arrived, Returns(true)))
+solver, Q = setup(solver, Q; bcs = faces(outflow))
+run!(solver, Q; tfinal)
 ```
 
-Global agreement is required because the outflow correction enters collective
+The phase change, `setup(solver, Q; bcs)`, builds a solver with the outflow
+condition and carries the state, the clock and the step history into it, so
+the second phase continues from the step on which the first ended.
+
+The ranks must agree on that step because the outflow correction enters collective
 compact derivatives that the inflow path does not. Rank disagreement would
 cause a deadlock, a more severe failure than differing boundary values.
 
 ## Control calculation
 
 The case repeats the calculation with the original inflow retained. Both runs
-are identical until the switch, so their subsequent density difference
+are identical until the change, so their subsequent density difference
 isolates the disturbance returned by the inappropriate boundary. The error
 propagates to the material interface; it is not confined to a few boundary
 cells.
 
 ## Evidence and limits
 
-The switch behavior is also compared in `test/runtests.jl` with a domain long
+The change of condition is also compared in `test/runtests.jl` with a domain long
 enough that the upstream face cannot influence the interaction during the
 measurement interval. That provides stronger evidence than visual smoothness
 at the truncated boundary.
@@ -69,7 +75,7 @@ with a longer domain or an independent boundary treatment.
 
 ## Regeneration policy
 
-The extended script should be rerun manually after changes to NSCBC,
-`SwitchableBC`, callbacks, artificial properties, filtering, or time
+The extended script should be rerun manually after changes to NSCBC, the
+phase change, callbacks, artificial properties, filtering, or time
 integration. Published outputs should record the source commit, Julia version,
 grid, CFL, artificial coefficients, filter settings, and runtime environment.

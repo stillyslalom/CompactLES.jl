@@ -18,9 +18,7 @@ bcs = (
 
 The first entry above is an asymmetric streamwise pair; the second and third
 use the same object at both faces. A periodic or collapsed direction must be
-periodic at both ends. If a mutable [`SwitchableBC`](@ref) is used bare or on
-both sides of a pair, both faces share its state: one `switch!` changes both.
-Construct two wrappers when the two faces must switch independently.
+periodic at both ends.
 
 | Physical boundary | Condition | Required information |
 |:--|:--|:--|
@@ -179,27 +177,41 @@ limitations.
 
 ## Change a boundary during a run
 
-Wrap two compatible conditions in [`SwitchableBC`](@ref), then switch from a
-globally consistent callback:
+End the run where the condition changes, then continue it in a second phase
+built with the new condition. [`setup`](@ref)`(solver, Q; bcs)` builds that
+phase's solver and carries the state, the refinement hierarchy and the step
+history into it:
 
 ```julia
-face = SwitchableBC(
-    SlipWallBC(),
-    NSCBCOutflowBC(pinf = 1.0),
-)
+solver, Q = setup(problem, numerics)          # the face is a SlipWallBC
 
-change = Callback(AtTime(0.2), (solver, Q) -> switch!(face))
-run!(solver, Q; tfinal = 1.0, callback = change)
+# End the first phase on the step that lands on t = 0.2.
+run!(solver, Q; tfinal = 1.0, callback = Callback(AtTime(0.2), Returns(true)))
+
+solver, Q = setup(solver, Q;
+                  bcs = ((SlipWallBC(), NSCBCOutflowBC(pinf = 1.0)),
+                         PeriodicBC(), PeriodicBC()))
+run!(solver, Q; tfinal = 1.0)
 ```
 
-Every rank must switch at the same completed step because one condition may
-enter MPI collectives that the other does not. `AtTime`, `EveryTime`, and
-`WhenState` supply consistent trigger decisions. Do not call `switch!` from an
-unreduced rank-local test.
+A [`Callback`](@ref) whose effect returns `true` ends the run after that step.
+Pair the effect with [`AtTime`](@ref) to end at a known time, as above, or with
+[`WhenState`](@ref) to end when a condition on the state is first met. Either
+trigger reaches the same decision on every rank. That agreement is necessary
+because the new condition may enter MPI collectives that the old one does
+not, so do not end a run from an unreduced rank-local test. The same call
+changes the sources, the transport model or the [`Numerics`](@ref) through its
+`sources`, `transport` and `numerics` keywords.
 
-Both wrapped conditions must agree on periodicity. Coordinate-fold conditions
-cannot be wrapped because setup must identify them before constructing the
-operator plans.
+The continuation is the one a checkpoint written at the stop and loaded into
+the new solver would give, bit for bit. It keeps the grid, so the new
+conditions must keep each dimension's periodicity and its coordinate folds.
+Rebind both `solver` and `Q`, since the state of the new phase is new
+storage. Callbacks passed to both calls of `run!`, such as a
+[`FieldWriter`](@ref), carry their own schedules across the change.
+
+[`SwitchableBC`](@ref), which wrapped the two conditions in one face and
+switched between them within a run, is deprecated.
 
 ## Divide one face among conditions
 

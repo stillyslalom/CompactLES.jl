@@ -265,6 +265,20 @@ isperiodic(::PeriodicBC) = true
 """
     SwitchableBC(before, after; at = nothing)
 
+!!! warning "Deprecated"
+    `SwitchableBC` is deprecated and will be removed in the next release. End
+    the run where the condition changes, at `tfinal` or on a
+    [`Callback`](@ref) whose effect returns `true`, and continue it under the
+    new condition with the phase change [`setup`](@ref)`(solver, Q; bcs)`,
+    which carries the state, the hierarchy and the step history into a solver
+    built with `after` in place of `before`:
+
+    ```julia
+    run!(solver, Q; tfinal, callback = Callback(AtTime(t_switch), Returns(true)))
+    solver, Q = setup(solver, Q; bcs = bcs_after)
+    run!(solver, Q; tfinal)
+    ```
+
 One face that behaves as `before` until it switches, then as `after`. This
 supports calculations that require one boundary condition during an interaction
 and another afterwards: a wall that becomes an outflow once the waves of interest
@@ -309,6 +323,10 @@ _is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC ||
 
 function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition;
                       at::Union{Nothing,Real}=nothing)
+    Base.depwarn("SwitchableBC is deprecated. End the run where the condition " *
+                 "changes, with tfinal or a Callback whose effect returns true, and " *
+                 "continue it under the new condition with the phase change " *
+                 "setup(solver, Q; bcs = ...).", :SwitchableBC; force=true)
     isperiodic(before) == isperiodic(after) ||
         throw(ArgumentError("SwitchableBC: both conditions must agree on periodicity"))
     (_is_fold_bc(before) || _is_fold_bc(after)) &&
@@ -368,7 +386,8 @@ end
     switch!(bc)
 
 Select the `after` condition of a [`SwitchableBC`](@ref). Repeated calls have no
-additional effect.
+additional effect. Deprecated with `SwitchableBC`; a phase change,
+[`setup`](@ref)`(solver, Q; bcs)`, replaces it.
 """
 switch!(bc::SwitchableBC) = (bc.switched = true; bc)
 

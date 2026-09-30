@@ -580,10 +580,11 @@ function _warn_margin_band(solver, margin::Int, ℓ::Int)
           "resolution. A level reaches a SlipWallBC, NoSlipWallBC, NSCBCOutflowBC " *
           "or NSCBCInflowBC face and crosses a periodic seam, and reaches a " *
           "SymmetryPlaneBC or the AxisBC of an r-z run on the host backend under " *
-          ":inject restriction; any other face, a SwitchableBC included, keeps " *
-          "the margin, as every face does under level_boundaries = false. A tiled " *
-          "level reaches a face only where the tile next to it stays the margin " *
-          "inside the domain." maxlog = 1
+          ":inject restriction; any other face keeps the margin, as every face " *
+          "does under level_boundaries = false. A tiled level reaches a face " *
+          "only where the tile next to it stays the margin inside the domain. A " *
+          "face under the deprecated SwitchableBC keeps the margin; a phase " *
+          "change, setup(solver, Q; bcs), gives it a plain condition instead." maxlog = 1
     return nothing
 end
 

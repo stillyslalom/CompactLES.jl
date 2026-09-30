@@ -610,7 +610,8 @@ end
 # existed) with `solver`'s, accept the groups `allow` names, and raise on
 # every rank when any rank refuses. Collective over the solver's communicator.
 function _verify_configuration(stored::Union{Nothing,ConfigurationRecord},
-                               solver::Solver, allow, source::AbstractString)
+                               solver::Solver, allow, source::AbstractString,
+                               report::Bool=true)
     allowed = _allowed_groups(allow)
     comm = getfield(solver, :comm)
     message = nothing
@@ -646,7 +647,7 @@ function _verify_configuration(stored::Union{Nothing,ConfigurationRecord},
             @warn "$source carries no configuration record (an earlier format); " *
                   "the thermodynamics, numerics, transport, boundary conditions " *
                   "and sources it was written under are not checked"
-        isempty(accepted) ||
+        isempty(accepted) || !report ||
             @info "Checkpoint $source: continuing under an allowed configuration " *
                   "change" * _describe_differences(accepted)
     end
@@ -728,11 +729,16 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
               "vector allocate_state returned")
     rank = MPI.Comm_rank(solver.comm)
     ensure_output_dir(prefix, solver.comm)
-    open(_ckpt_name(prefix, rank), "w") do io
-        _write_ckpt_header(io, solver, solver, Q)
-        _write_ckpt_block(io, solver, Q)
-    end
+    open(io -> _write_checkpoint(io, solver, Q), _ckpt_name(prefix, rank), "w")
     return prefix
+end
+
+# This rank's checkpoint image, onto any stream: the file of `save_checkpoint`,
+# or the buffer through which a phase change carries the run (phases.jl).
+function _write_checkpoint(io, solver::Solver, Q)
+    _write_ckpt_header(io, solver, solver, Q)
+    _write_ckpt_block(io, solver, Q)
+    return io
 end
 
 """
@@ -751,30 +757,34 @@ same-level `patch_grid` layout has no checkpoint.
 function save_checkpoint(solver::Solver, states::Vector{<:ConservedState},
                          prefix::AbstractString)
     _check_hierarchy_layout(solver, "save_checkpoint")
-    patches = getfield(solver, :patches)
-    root = PatchSolver(solver, patches[1])
     rec = hierarchy_record(solver)
     rank = MPI.Comm_rank(solver.comm)
     ensure_output_dir(prefix, solver.comm)
-    open(_ckpt_name(prefix, rank), "w") do io
-        _write_ckpt_header(io, solver, root, states[1])
-        _write_ckpt_block(io, root, states[1])
-        ints, floats = _record_image(rec)
-        write(io, Int64(length(ints)))
-        write(io, ints)
-        write(io, Int64(length(floats)))
-        write(io, floats)
-        held = _held_tiles(solver)
-        write(io, Int64(length(held)))
-        for (ℓ, ti, li) in held
-            ps = PatchSolver(solver, patches[li])
-            block = owned_region(ps.decomp)
-            write(io, Int64(ℓ), Int64(ti))
-            write(io, Int64[block.offset..., block.extent...])
-            _write_ckpt_block(io, ps, states[li])
-        end
-    end
+    open(io -> _write_checkpoint(io, solver, states, rec), _ckpt_name(prefix, rank), "w")
     return prefix
+end
+
+# `rec` is `hierarchy_record(solver)`, formed by the caller: it is collective.
+function _write_checkpoint(io, solver::Solver, states::Vector{<:ConservedState}, rec)
+    patches = getfield(solver, :patches)
+    root = PatchSolver(solver, patches[1])
+    _write_ckpt_header(io, solver, root, states[1])
+    _write_ckpt_block(io, root, states[1])
+    ints, floats = _record_image(rec)
+    write(io, Int64(length(ints)))
+    write(io, ints)
+    write(io, Int64(length(floats)))
+    write(io, floats)
+    held = _held_tiles(solver)
+    write(io, Int64(length(held)))
+    for (ℓ, ti, li) in held
+        ps = PatchSolver(solver, patches[li])
+        block = owned_region(ps.decomp)
+        write(io, Int64(ℓ), Int64(ti))
+        write(io, Int64[block.offset..., block.extent...])
+        _write_ckpt_block(io, ps, states[li])
+    end
+    return io
 end
 
 # The header, describing the state of the root patch `root` (the solver
@@ -878,11 +888,18 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString; allow=())
         error("load_checkpoint!: this solver holds a patch layout; pass the state " *
               "vector allocate_state returned")
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
-    open(path, "r") do io
-        _read_ckpt_header!(io, solver, solver, Q, path, allow)
-        _read_ckpt_block!(io, solver, Q, path)
-    end
+    open(io -> _read_checkpoint!(io, solver, Q, path, allow), path, "r")
     refresh_primitives!(solver, Q)
+    return Q
+end
+
+# The reverse of `_write_checkpoint`. `phase` marks the buffer of a phase
+# change (phases.jl), whose differences in the allowed groups are its purpose
+# and are not reported, and whose boundary conditions are its own.
+function _read_checkpoint!(io, solver::Solver, Q, source::AbstractString, allow;
+                           phase::Bool=false)
+    _read_ckpt_header!(io, solver, solver, Q, source, allow, phase)
+    _read_ckpt_block!(io, solver, Q, source)
     return Q
 end
 
@@ -909,41 +926,8 @@ built with the recorded regions.
 function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
                           prefix::AbstractString; allow=())
     _check_hierarchy_layout(solver, "load_checkpoint!")
-    patches = getfield(solver, :patches)
-    levels = getfield(solver, :levels)
-    np = MPI.Comm_size(solver.comm)
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
-    open(path, "r") do io
-        root = PatchSolver(solver, patches[1])
-        _read_ckpt_header!(io, solver, root, states[1], path, allow)
-        _read_ckpt_block!(io, root, states[1], path)
-        ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
-        floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
-        rec = _record_from_image(ints, floats)
-        rec.np == np ||
-            error("rank count mismatch: $path was written by $(rec.np) rank(s) " *
-                  "and this run has $np; the per-rank checkpoint restores onto " *
-                  "the rank count that wrote it, and load_checkpoint_hdf5! " *
-                  "restores onto any")
-        restore_hierarchy!(solver, states, rec, path)
-        n_blocks = Int(read(io, Int64))
-        held = _held_tiles(solver)
-        n_blocks == length(held) ||
-            error("decomposition mismatch: $path holds $n_blocks tile block(s) " *
-                  "and this rank holds $(length(held)) tile(s) after the rebuild")
-        for (ℓ, ti, li) in held
-            ps = PatchSolver(solver, patches[li])
-            (Int(read(io, Int64)), Int(read(io, Int64))) == (ℓ, ti) ||
-                error("decomposition mismatch: the tile blocks of $path are not " *
-                      "the tiles this rank holds")
-            stored = read!(io, Vector{Int64}(undef, 6))
-            block = owned_region(ps.decomp)
-            stored == Int64[block.offset..., block.extent...] ||
-                error("decomposition mismatch: level $ℓ tile $ti's block in " *
-                      "$path is not this rank's")
-            _read_ckpt_block!(io, ps, states[li], path)
-        end
-    end
+    open(io -> _read_checkpoint!(io, solver, states, path, allow), path, "r")
     # A block is a patch's interior. The ghost rings of the refined tiles are
     # rebuilt here as the post-step synchronization left them, since the
     # first regrid check after the load tags on those rings, before the step
@@ -953,10 +937,46 @@ function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
     return states
 end
 
+function _read_checkpoint!(io, solver::Solver, states::Vector{<:ConservedState},
+                           path::AbstractString, allow; phase::Bool=false)
+    patches = getfield(solver, :patches)
+    np = MPI.Comm_size(solver.comm)
+    root = PatchSolver(solver, patches[1])
+    _read_ckpt_header!(io, solver, root, states[1], path, allow, phase)
+    _read_ckpt_block!(io, root, states[1], path)
+    ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
+    floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
+    rec = _record_from_image(ints, floats)
+    rec.np == np ||
+        error("rank count mismatch: $path was written by $(rec.np) rank(s) " *
+              "and this run has $np; the per-rank checkpoint restores onto " *
+              "the rank count that wrote it, and load_checkpoint_hdf5! " *
+              "restores onto any")
+    restore_hierarchy!(solver, states, rec, path)
+    n_blocks = Int(read(io, Int64))
+    held = _held_tiles(solver)
+    n_blocks == length(held) ||
+        error("decomposition mismatch: $path holds $n_blocks tile block(s) " *
+              "and this rank holds $(length(held)) tile(s) after the rebuild")
+    for (ℓ, ti, li) in held
+        ps = PatchSolver(solver, patches[li])
+        (Int(read(io, Int64)), Int(read(io, Int64))) == (ℓ, ti) ||
+            error("decomposition mismatch: the tile blocks of $path are not " *
+                  "the tiles this rank holds")
+        stored = read!(io, Vector{Int64}(undef, 6))
+        block = owned_region(ps.decomp)
+        stored == Int64[block.offset..., block.extent...] ||
+            error("decomposition mismatch: level $ℓ tile $ti's block in " *
+                  "$path is not this rank's")
+        _read_ckpt_block!(io, ps, states[li], path)
+    end
+    return states
+end
+
 # The header checks, each against the root patch `root`, then the mutable run
 # state onto `solver`.
 function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
-                            path::AbstractString, allow)
+                            path::AbstractString, allow, phase::Bool=false)
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     magic = read(io, UInt64)
@@ -1022,7 +1042,7 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     # Version 5 is version 6 without the record; it loads unchecked, with a
     # warning. The comparison precedes every write to the solver.
     stored = version == CKPT_VERSION ? _read_configuration(io) : nothing
-    _verify_configuration(stored, solver, allow, path)
+    _verify_configuration(stored, solver, allow, path, !phase)
     solver.t = read(io, Float64)
     solver.step = Int(read(io, Int64))
     solver.cfl = read(io, Float64)
@@ -1030,7 +1050,11 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     solver.rate_prev = read(io, Float64)
     solver.filter_rate_prev =
         ntuple(_ -> oftype(solver.dt_prev, read(io, Float64)), 3)
-    restore_switches!(root, read!(io, Vector{Int64}(undef, 6)), path)
+    # A phase change brings its own conditions. A `SwitchableBC` it keeps is
+    # the same object, whose flag needs no restoring, and one it supplies anew
+    # starts unswitched.
+    codes = read!(io, Vector{Int64}(undef, 6))
+    phase || restore_switches!(root, codes, path)
     return io
 end
 

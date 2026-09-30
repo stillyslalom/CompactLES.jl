@@ -10,10 +10,11 @@
 # shock: a Dirichlet face holds the jet state and then the post-shock state
 # through a `Ramp`, which spreads the change over the time the shock takes to
 # cross three cells, so the shock enters resolved rather than as a jump on the
-# boundary plane. Once the shock is in, a scheduled `SwitchableBC` hands the
-# face to a characteristic inflow of the post-shock state, which lets the shock
-# reflected from the interface leave rather than reflecting it back. The
-# transmitted shock reflects from the end wall below and reshocks the layer.
+# boundary plane. Once the shock is in, the run ends and continues in a second
+# phase whose top face is a characteristic inflow of the post-shock state,
+# which lets the shock reflected from the interface leave rather than
+# reflecting it back. The transmitted shock reflects from the end wall below and
+# reshocks the layer.
 #
 # The experiment's jet runs at about 1.5 m/s (Mach 0.004). Its ring then takes
 # about 0.2 s to cross the 15 cm, which is some 3e5 acoustic steps at the
@@ -67,15 +68,15 @@ mpi_main() do
     fire = Ramp(eos, jet, incident.post; start=t_shock, duration=Cells(3), speed=W)
     # Ten cells after firing, the ramp is long complete and the face can open.
     t_open = t_shock + 10 * (H / opt.nz) / W
-    top = SwitchableBC(DirichletBC(fire), NSCBCInflowBC(incident.post); at=t_open)
     tfinal = t_shock + gap / W + opt.t_after
+    faces(top) = ((AxisBC(), SlipWallBC()), PeriodicBC(), (SlipWallBC(), top))
 
     problem = Problem(
         name="vortex ring and shock through an air/SF6 interface",
         eos=eos,
         metric=CylindricalMetric(),
         domain=((0.0, R), (0.0, 2π), (0.0, H)),
-        bcs=((AxisBC(), SlipWallBC()), PeriodicBC(), (SlipWallBC(), top)),
+        bcs=faces(DirichletBC(fire)),
         ic=Layers(air, Slab(3, hi=z_interface) => sf6; width=Cells(2)),
     )
     numerics = Numerics(n_global=(opt.nr, 1, opt.nz), art=ArtificialProperties(enabled=true),
@@ -89,12 +90,21 @@ mpi_main() do
                 "$(round(abs(incident.shock_speed), digits=1)) m/s, post-shock p = ",
                 "$(round(s.p / 1e3, digits=1)) kPa; tfinal $(round(tfinal * 1e3, digits=2)) ms")
     end
+    # The output callbacks live outside the solver and serve both phases, so
+    # the frame sequence runs on through the change.
+    output = (ProgressLog(every=opt.every, tfinal=tfinal),
+              Callback(EveryTime(tfinal / opt.frames),
+                       FieldWriter(joinpath(opt.output, "field");
+                                   fields=(:rho, :p, :velocity, :X,
+                                           :vorticity_magnitude, :schlieren))))
+    # The first phase ends on the step that lands on t_open, and the second
+    # continues from it with the top face open to a characteristic inflow.
     run!(solver, Q; tfinal=tfinal, nmax=opt.nmax,
-         callback=(ProgressLog(every=opt.every, tfinal=tfinal),
-                   Callback(EveryTime(tfinal / opt.frames),
-                            FieldWriter(joinpath(opt.output, "field");
-                                        fields=(:rho, :p, :velocity, :X,
-                                                :vorticity_magnitude, :schlieren)))))
+         callback=(output..., Callback(AtTime(t_open), Returns(true))))
+    if solver.t < tfinal && solver.step < opt.nmax
+        solver, Q = setup(solver, Q; bcs=faces(NSCBCInflowBC(incident.post)))
+        run!(solver, Q; tfinal=tfinal, nmax=opt.nmax, callback=output)
+    end
     MPI.Comm_rank(solver.comm) == 0 &&
         println(solver.t >= tfinal * (1 - 1e-9) ? "reached tfinal" :
                 "stopped at t = $(solver.t) after nmax = $(opt.nmax)")

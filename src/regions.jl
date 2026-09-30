@@ -622,9 +622,10 @@ fire = Ramp(eos, jet, jump.post; start = t_shock, duration = Cells(3),
 top = DirichletBC(fire)
 ```
 
-When the condition itself changes at `start`, pair the ramp with a scheduled
-[`SwitchableBC`](@ref), such as `SwitchableBC(SlipWallBC(), DirichletBC(fire);
-at = t_shock)`, so that the change happens between steps.
+When the condition itself changes at `start`, from a wall to the ramped
+inflow, end the run on the step that lands there, with
+`Callback(AtTime(t_shock), Returns(true))`, and continue it with the phase
+change [`setup`](@ref)`(solver, Q; bcs)` whose face carries `DirichletBC(fire)`.
 """
 struct Ramp{E,A,B,D}
     eos::E

@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,level at a symmetry plane,level on the axis,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels,folded regrid,seam levels"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,level at a symmetry plane,level on the axis,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels,folded regrid,seam levels,phase change"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -376,7 +376,12 @@ Names are spelled out in full. Current vocabulary:
   `:missing`)
 - `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
-  `switch!`/`switched` (a `SwitchableBC`)
+  `switch!`/`switched` (a `SwitchableBC`, deprecated)
+- the phase change `setup(solver, Q; bcs, sources, transport, numerics)`
+  (phases.jl), `inputs` (the `Solver` field holding the `Problem` and
+  `Numerics` that `setup` built it from), `_check_phase`, `_carry_phase!`
+  (the checkpoint image written to memory by `_write_checkpoint` and read
+  back by `_read_checkpoint!`), `_carry_accounts!`
 - `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`,
   `piece` (one patch's block of one rank in a VTK dump; the multiblock
   writer names it `_patch_piece_name` and lists it in the `.vtm` through
@@ -640,15 +645,18 @@ adding a boundary condition. The symptom is zero CPU on every rank, not a
 crash, so it presents as a hang.
 
 **A boundary condition that changes mid-run must change on every rank at the
-same step.** This is the same collective trap from the other side: `SwitchableBC`
-forwards to `after` only once switched. If `after` runs collectives that
-`before` does not, as `NSCBCOutflowBC` does, then ranks disagreeing about the
+same step.** This is the same collective trap from the other side: a phase
+change (`setup(solver, Q; bcs)`) takes the new conditions from the step the
+first `run!` ended on, and the deprecated `SwitchableBC` forwards to `after`
+only once switched. If the new condition runs collectives the old one does
+not, as `NSCBCOutflowBC` does, then ranks disagreeing about the stop or the
 switch is a deadlock, not a wrong answer. `WhenState` therefore reduces its
-condition across the communicator; drive a switch from a `Callback` and never
-from a rank-local test. `AtTime` and `EveryStep` are safe without a reduction
-because `t` and `step` advance identically everywhere. The MPI suite pins this
-with a condition that is true on one rank only; removing the reduction turns
-that test into a hang, not a failure.
+condition across the communicator; end a run or drive a switch from a
+`Callback` and never from a rank-local test. `AtTime` and `EveryStep` are safe
+without a reduction because `t` and `step` advance identically everywhere. The
+MPI suite pins this with a condition that is true on one rank only, in the
+`callback consistency` and `phase change` phases; removing the reduction turns
+those tests into a hang, not a failure.
 
 **Minimum local extent per dimension.** `plan_direction` errors when a rank's
 block is too small for the scheme: C6 needs 5 points, C10 needs 7, and the C8

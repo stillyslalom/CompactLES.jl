@@ -119,9 +119,9 @@ include("capability_cases.jl")
                 cyl, Numerics(n_global=(48, 16, 1), amr=box))
         rejects("AMR: requires CartesianMetric or CylindricalMetric with θ collapsed",
                 sph, Numerics(n_global=(16, 16, 1), amr=box))
-        switched = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0); at=1.0)
+        held = DirichletBC(Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
         rejects("a refined level cannot carry",
-                C.problem(bcs=((SlipWallBC(), switched), per, per)),
+                C.problem(bcs=((SlipWallBC(), held), per, per)),
                 Numerics(n_global=n1, amr=AMR(initial=BlockRegion((38, 0, 0), (10, 1, 1)))))
         rejects("along periodic dimension 1", gas,
                 Numerics(n_global=n1, amr=AMR(initial=BlockRegion((0, 0, 0), (42, 1, 1)))))

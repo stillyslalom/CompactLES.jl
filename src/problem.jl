@@ -664,9 +664,8 @@ Physical specification independent of grid resolution and process count. A
 - `bcs`: three entries, one per direction. Each is a [`BoundaryCondition`](@ref)
   for both faces, or a `(low, high)` pair. For example,
   `(SlipWallBC(), PeriodicBC(), PeriodicBC())`. A singleton `(condition,)` is
-  also accepted and expanded to a pair.
-  Sharing a mutable `SwitchableBC` also shares its switch state. A periodic or
-  collapsed direction must be periodic at both ends.
+  also accepted and expanded to a pair. A periodic or collapsed direction
+  must be periodic at both ends.
 - `ic`: pointwise function `(x1, x2, x3) -> Prim` or
   `(x1, x2, x3, h) -> Prim`, with `h` the minimum local physical spacing over
   resolved directions. It should be pure because setup can call it on threads.
@@ -1109,6 +1108,14 @@ that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
+    solver, Q = _setup(prob, num)
+    # The deck as given, before the default control is filled in, so a phase
+    # change to other boundary conditions derives that default again.
+    setfield!(solver, :inputs, (problem=prob, numerics=num))
+    return solver, Q
+end
+
+function _setup(prob::Problem, num::Numerics)
     num.control === nothing && (num = Numerics(num; control=_default_control(prob)))
     legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing

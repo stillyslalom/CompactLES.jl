@@ -1,4 +1,4 @@
-# # Two-dimensional shock tube with a switchable boundary
+# # Two-dimensional shock tube with a boundary that changes type
 #
 # This tutorial computes the interaction of a planar shock with a perturbed
 # interface separating a light gas from a heavy one — the Richtmyer–Meshkov
@@ -16,11 +16,13 @@
 # problem. The boundary must cease to impose a state and begin to absorb one at
 # the time the reflected wave arrives.
 #
-# [`SwitchableBC`](@ref) provides that change of condition and
-# [`WhenState`](@ref) supplies the criterion. The sections below construct the
-# case, record the instant at which the switch occurs, and compare the result
-# against an otherwise identical calculation in which the inflow condition is
-# retained throughout.
+# The calculation is therefore run in two phases. [`WhenState`](@ref) ends the
+# first when the reflected wave arrives, and the phase change
+# [`setup`](@ref)`(solver, Q; bcs)` continues the run from that step with an
+# outflow condition in place of the inflow. The sections below construct the
+# case, record the instant at which the condition changes, and compare the
+# result against an otherwise identical calculation in which the inflow
+# condition is retained throughout.
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -102,7 +104,7 @@ end;
 # inappropriate once the reflected shock has arrived and the state there has
 # changed.
 #
-# `NSCBCOutflowBC` serves as the `after` condition. Its relaxation parameter
+# `NSCBCOutflowBC` serves as the second phase's condition. Its relaxation parameter
 # `sigma` is deliberately small. The pressure at this face following passage of
 # the reflected shock forms part of the solution of the interaction and is not
 # known in advance; relaxing strongly toward a prescribed `pinf` would impose a
@@ -110,9 +112,8 @@ end;
 # weak relaxation transmits the outgoing wave while leaving the pressure
 # largely unconstrained.
 
-upstream = SwitchableBC(NSCBCInflowBC(u = (u2 + U, 0.0, 0.0), T_ion = T2,
-                                      Y = [1.0, 0.0]),
-                        NSCBCOutflowBC(pinf = p2, sigma = 0.05))
+inflow = NSCBCInflowBC(u = (u2 + U, 0.0, 0.0), T_ion = T2, Y = [1.0, 0.0])
+outflow = NSCBCOutflowBC(pinf = p2, sigma = 0.05)
 
 # No wave reaches the downstream face during the calculation — the transmitted
 # shock advances only to approximately `x = 0.75` — so prescribing the
@@ -122,21 +123,23 @@ upstream = SwitchableBC(NSCBCInflowBC(u = (u2 + U, 0.0, 0.0), T_ion = T2,
 downstream = DirichletBC((x, y, z, t) -> Prim(Y = (0.0, 1.0), u = (U, 0.0, 0.0),
                                               p = p1, T_ion = T1))
 
-problem(xlo_bc) = Problem(
+faces(xlo_bc) = ((xlo_bc, downstream),
+                 (PeriodicBC(), PeriodicBC()),
+                 (PeriodicBC(), PeriodicBC()))
+
+problem = Problem(
     name = "2-D shock/interface interaction",
     eos = eos,
     transport = ConstantTransport(mu0 = 0.0),          # Euler + artificial regularization
     domain = ((0.0, Lx), (0.0, Ly), (0.0, hx)),
-    bcs = ((xlo_bc, downstream),
-           (PeriodicBC(), PeriodicBC()),
-           (PeriodicBC(), PeriodicBC())),
+    bcs = faces(inflow),
     ic = ic,
 )
 
 numerics = Numerics(n_global = (nx, ny, 1), art = ArtificialProperties(enabled = true),
                     cfl = 0.4)
 
-solver, Q = setup(problem(upstream), numerics)
+solver, Q = setup(problem, numerics)
 
 # ## Field extraction
 #
@@ -154,7 +157,7 @@ end
 xs = [xcoord(solver, 1, i) for i in 1:nx]
 ys = [xcoord(solver, 2, j) for j in 1:ny];
 
-# ## Switching criterion
+# ## Criterion for the change
 #
 # The reflected shock is taken to have arrived when the density at any point on
 # the upstream plane exceeds that of state 2. [`boundary_plane`](@ref) returns
@@ -164,11 +167,11 @@ ys = [xcoord(solver, 2, j) for j in 1:ny];
 #
 # The reduction is required for correctness rather than for convenience.
 # `NSCBCOutflowBC` performs collective operations that `NSCBCInflowBC` does
-# not. Were the ranks to disagree as to whether the switch had occurred, some
-# would enter a collective that the others never reach, and the calculation
-# would stall at zero CPU utilization rather than raise an error. A switch must
-# therefore be driven by a [`Callback`](@ref), and never from an unreduced
-# rank-local predicate.
+# not. Were the ranks to disagree as to the step on which the first phase
+# ended, some would enter a collective that the others never reach, and the
+# calculation would stall at zero CPU utilization rather than raise an error.
+# The first phase must therefore be ended by a [`Callback`](@ref), and never by
+# an unreduced rank-local predicate.
 #
 # The maximum over the plane is used in preference to a centreline value
 # because the perturbed interface renders the reflected shock non-planar: it
@@ -192,13 +195,14 @@ reflected_wave_arrived(solver, Q) = upstream_density(solver, Q) > 1.06ρ2
 
 # ## Time integration
 #
-# Two callbacks are supplied: the first records the upstream density at regular
-# intervals, so that the switch may be located afterwards, and the second
-# performs the switch and records the time at which it occurs.
+# Two callbacks are supplied to the first phase: the first records the upstream
+# density at regular intervals, so that the change may be located afterwards,
+# and the second records the time at which the reflected wave arrives and ends
+# the phase by returning `true`.
 
 tfinal = 0.85
 history = (t = Float64[], ρ = Float64[])
-switch_time = Ref(NaN)
+change_time = Ref(NaN)
 
 record! = Callback(EveryStep(5), function (solver, Q)
     push!(history.t, solver.t)
@@ -206,10 +210,9 @@ record! = Callback(EveryStep(5), function (solver, Q)
     nothing
 end)
 
-absorb! = Callback(WhenState(reflected_wave_arrived), function (solver, Q)
-    switch!(upstream)
-    switch_time[] = solver.t
-    nothing
+arrival! = Callback(WhenState(reflected_wave_arrived), function (solver, Q)
+    change_time[] = solver.t
+    true
 end)
 
 # Fields are stored at prescribed instants using [`AtTime`](@ref). `run!` clips
@@ -223,12 +226,18 @@ snapshot! = Callback(AtTime([0.10, 0.30, 0.85]), function (solver, Q)
 end)
 
 run!(solver, Q; tfinal, nmax = 100_000,
-     callback = (record!, absorb!, snapshot!))
+     callback = (record!, arrival!, snapshot!))
 
-switched(upstream), switch_time[]
+change_time[]
 
-# The switch occurred during the calculation, on the step at which the
-# reflected shock reached the upstream plane.
+# The first phase ended on the step at which the reflected shock reached the
+# upstream plane. The second continues from that step with the outflow
+# condition. The phase change carries the state, the clock and the step history
+# into a solver built with the new condition, and the two callbacks that are
+# still wanted carry their own schedules into the second `run!`.
+
+solver, Q = setup(solver, Q; bcs = faces(outflow))
+run!(solver, Q; tfinal, nmax = 100_000, callback = (record!, snapshot!))
 
 # ## Evolution of the interaction
 #
@@ -263,8 +272,7 @@ fig
 #
 # The calculation is repeated with the upstream condition held fixed.
 
-solver_h, Q_h = setup(problem(NSCBCInflowBC(u = (u2 + U, 0.0, 0.0), T_ion = T2,
-                                            Y = [1.0, 0.0])), numerics)
+solver_h, Q_h = setup(problem, numerics)
 history_h = (t = Float64[], ρ = Float64[])
 
 record_h! = Callback(EveryStep(5), function (solver, Q)
@@ -276,24 +284,24 @@ end)
 run!(solver_h, Q_h; tfinal, nmax = 100_000, callback = record_h!)
 ρ_held = density(solver_h, Q_h);
 
-# ## Effect of the switch
+# ## Effect of the change
 #
 # The density on the upstream plane is sufficient to characterize the
-# difference. The two calculations employ the same condition until the switch
+# difference. The two calculations employ the same condition until the change
 # and are therefore identical up to that step, including through the startup
 # transient at `t ≈ 0.19`, which both treat in the same way. Thereafter the
 # retained inflow condition continues to relax toward state 2, which no longer
 # describes the gas at the face, and the resulting mismatch propagates back
-# into the domain; the switched boundary transmits the wave and settles at a
+# into the domain; the outflow boundary transmits the wave and settles at a
 # lower level.
 
 fig2 = Figure(size = (760, 340))
 ax = Axis(fig2[1, 1], xlabel = "t", ylabel = "max ρ on the upstream plane")
-vlines!(ax, switch_time[], color = :gray, linestyle = :dash)
-text!(ax, switch_time[], 1.88, text = " switch", align = (:left, :bottom),
+vlines!(ax, change_time[], color = :gray, linestyle = :dash)
+text!(ax, change_time[], 1.88, text = " change", align = (:left, :bottom),
       color = :gray)
 lines!(ax, history_h.t, history_h.ρ, label = "inflow held", linewidth = 2)
-lines!(ax, history.t, history.ρ, label = "switched to outflow", linewidth = 2)
+lines!(ax, history.t, history.ρ, label = "changed to outflow", linewidth = 2)
 axislegend(ax, position = :lt)
 fig2
 
@@ -303,7 +311,7 @@ fig2
 
 fig3 = Figure(size = (620, 300))
 ax = Axis(fig3[1, 1], xlabel = "x", ylabel = "y", aspect = DataAspect(),
-          title = "ρ (held) − ρ (switched)")
+          title = "ρ (held) − ρ (changed)")
 Δ = ρ_held .- last(snaps).second
 m = maximum(abs, Δ)
 heatmap!(ax, xs, ys, Δ, colormap = :balance, colorrange = (-m, m))
@@ -317,11 +325,12 @@ fig3
 
 # ## Remarks
 #
-# * Both conditions in a [`SwitchableBC`](@ref) must agree on periodicity, and
-#   neither may be a fold condition (`AxisBC`, `OriginBC`, `PoleBC`); `setup`
-#   identifies those by type, and a wrapped fold would not be constructed.
-# * Prior to switching, the wrapper is bit-identical to the condition it wraps,
-#   so it may be left in a problem specification that never switches.
+# * The conditions of the two phases must agree on periodicity and on the
+#   coordinate folds (`AxisBC`, `OriginBC`, `PoleBC`, `SymmetryPlaneBC`),
+#   which fix the grid; the phase change keeps the grid and refuses a change
+#   to either.
+# * The second phase continues exactly as a checkpoint written at the end of
+#   the first and loaded into the second phase's solver would.
 # * `density` and `upstream_density` above are rank-local. This suffices for
 #   `WhenState`, which reduces the verdict itself, but a diagnostic gathered in
 #   this manner is correct only in serial. [`save_vtk`](@ref) is appropriate for
@@ -330,4 +339,4 @@ fig3
 #   reduce across the communicator.
 # * The behaviour illustrated here is verified against a calculation on a domain
 #   long enough that the upstream boundary cannot influence the result; see the
-#   `SwitchableBC` testsets in `test/runtests.jl`.
+#   testset on opening the upstream face in `test/serial_suite.jl`.

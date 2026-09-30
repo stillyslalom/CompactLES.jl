@@ -5008,12 +5008,12 @@ end
     @test switch!(sw2[1]) === sw2[1]      # idempotent
 end
 
-@testset "SwitchableBC: switching upstream lets the reflected wave leave" begin
+@testset "phase change: opening the upstream face lets the reflected wave leave" begin
     # A shock/interface interaction in a translating frame, with the upstream
-    # boundary switching from inflow to outflow when the interface-reflected
-    # wave reaches it. This is the case SwitchableBC was built for, and the one
-    # a finiteness check says nothing about: whether the switched boundary
-    # actually lets the wave out.
+    # boundary changing from inflow to outflow, by a phase change, when the
+    # interface-reflected wave reaches it. A finiteness check says nothing
+    # about the question this case asks: whether the opened boundary lets the
+    # wave out.
     #
     #        shocked driven | driven |    heavy
     #      ---------------->|        |
@@ -5032,9 +5032,9 @@ end
     # It becomes inappropriate when the interface-reflected shock arrives.
     # Behind that shock the state is no longer region 2, so an inflow condition
     # still relaxing toward region-2 targets is over-constraining the boundary,
-    # and the mismatch radiates back inward onto the interface. The fix is to
-    # stop imposing and start absorbing — switch to NSCBCOutflowBC — which is
-    # the whole point of the wrapper.
+    # and the mismatch radiates back inward onto the interface. The remedy is
+    # to stop imposing and start absorbing: the second phase takes
+    # NSCBCOutflowBC there.
     #
     # The frame translation U is chosen so the SHOCKED interface is nearly at
     # rest (it drifts ~0.04 once the shock has passed it), the standard frame for a
@@ -5099,9 +5099,9 @@ end
                                                     T_ion=T1))
 
     # "The reflected shock has reached the upstream plane." A rank-local verdict
-    # on the plane this rank owns, left to WhenState to reduce — the shape the
-    # WhenState docstring asks for, and the reason a switch must never be driven
-    # from an unreduced rank-local test.
+    # on the plane this rank owns, left to WhenState to reduce, as the
+    # WhenState docstring describes: a run that ends for a phase change must
+    # never be ended by an unreduced rank-local test.
     arrived(solver, Q) = begin
         plane = CL.wallplane(solver.decomp, 1, 1)
         plane === nothing && return false
@@ -5125,20 +5125,20 @@ end
         x[i-1] + (0.5 - Y[i-1]) / (Y[i] - Y[i-1]) * (x[i] - x[i-1])
     end
 
-    # (1) Switched on arrival.
-    sw = SwitchableBC(inflow(), outflow())
-    s_sw, Q_sw = build((sw, downstream()))
-    fired_step = Ref(0)
-    Q_fired = Ref{Any}(nothing)
+    # (1) Opened on arrival: the first phase ends on the step the wave
+    #     arrives, and the second continues from it under the outflow.
+    s_sw, Q_sw = build((inflow(), downstream()))
     run!(s_sw, Q_sw; tfinal=TEND, nmax=100_000,
-         callback=Callback(WhenState(arrived),
-                           (s, Q) -> (switch!(sw); fired_step[] = s.step;
-                                      Q_fired[] = copy(Q); nothing)))
-    @test switched(sw)
-    @test 0 < fired_step[] < 100_000          # it really did fire
+         callback=Callback(WhenState(arrived), Returns(true)))
+    fired_step = Ref(s_sw.step)
+    Q_fired = Ref{Any}(copy(Q_sw))
+    @test 0 < fired_step[] && s_sw.t < TEND    # the first phase ended early
+    s_sw, Q_sw = setup(s_sw, Q_sw; bcs=((outflow(), downstream()), per3[2], per3[3]))
+    run!(s_sw, Q_sw; tfinal=TEND, nmax=100_000)
+    @test s_sw.t == TEND
 
-    # (2) Inflow held throughout — the control, and the same run bit-for-bit up
-    #     to the switch. WhenState does not clip dt, so the step sequences agree
+    # (2) Inflow held throughout: the control, and the same run bit-for-bit up
+    #     to the change. WhenState does not clip dt, so the step sequences agree
     #     and this is an equality, not an approximation.
     s_h, Q_h = build((inflow(), downstream()))
     run!(s_h, Q_h; tfinal=TEND, nmax=fired_step[])
@@ -5168,9 +5168,9 @@ end
 
     # The measurement. Held, the inflow condition keeps imposing region 2 after
     # the reflected shock has arrived and the error radiates back over the
-    # interface; switched, the wave leaves. Measured against the reference:
-    # pressure 0.112 held vs 0.017 switched, velocity 0.0289 vs 0.0027,
-    # interface displacement 0.0031 vs 0.0006 (about a tenth of a cell).
+    # interface; opened, the wave leaves. Measured against the reference:
+    # pressure 0.104 held vs 0.011 opened, velocity 0.0279 vs 0.0031,
+    # interface displacement 0.0024 vs 0.00016 (about a fortieth of a cell).
     # Guards are ratios plus loose absolute bounds: this is a nonlinear run
     # through the artificial-property sensor, so it is not bit-reproducible and
     # only the order of magnitude is being asserted.
@@ -5183,14 +5183,13 @@ end
     @test abs(ipos(xs, Ys) - ref_i) < 0.0015
     @test abs(ipos(xh, Yh) - ref_i) > 2.5 * abs(ipos(xs, Ys) - ref_i)
 
-    # After the switch the wrapper must not merely resemble `after` but *be* it.
-    # Compared at the RHS rather than by restarting a run, because compute_dt
-    # reads the previous step's artificial coefficients, so a fresh solver takes
-    # a different first step from the same state and the two step sequences part
-    # company for reasons that have nothing to do with the boundary. One
-    # evaluation on a shared, richly non-uniform state isolates the forwarding
-    # itself — both enforce! and correct_rhs!.
-    s_p, Q_p = build((outflow(), downstream()))
+    # The deprecated SwitchableBC, switched, must not merely resemble its
+    # `after` condition but be it: compared with the second phase's solver
+    # at the RHS, on its richly non-uniform final state, both enforce! and
+    # correct_rhs!.
+    sw = SwitchableBC(inflow(), outflow())
+    switch!(sw)
+    s_p, Q_p = build((sw, downstream()))
     copyto!(Q_p, Q_sw)
     s_p.t = s_sw.t
     s_p.step = s_sw.step
@@ -5571,6 +5570,7 @@ include("sharpening_tests.jl")
 include("seam_tests.jl")
 include("io_tests.jl")
 include("runloop_tests.jl")
+include("phase_tests.jl")
 include("docrefs_tests.jl")
 include("reference_tests.jl")
 include("api_surface_tests.jl")

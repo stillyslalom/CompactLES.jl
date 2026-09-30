@@ -146,8 +146,7 @@ problem = Problem(
 
 Each `bcs` entry describes one coordinate direction. A bare condition such as
 `PeriodicBC()` or `SlipWallBC()` applies to both faces; use `(low, high)` when
-the faces differ. The same object is shared between symmetric faces, including
-the switch state if it is a mutable `SwitchableBC`.
+the faces differ. The same object is shared between symmetric faces.
 
 Coordinates and physical velocity components follow the selected metric. For
 cylindrical coordinates they are ``(r,\theta,z)`` and ``(u_r, u_\theta, u_z)``;

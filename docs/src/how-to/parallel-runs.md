@@ -128,7 +128,8 @@ Directional compact derivatives are collective along their MPI
 subcommunicator. Every rank must enter them in the same order. In particular:
 
 - do not return from boundary code before collective derivatives have run;
-- switch a [`SwitchableBC`](@ref) from a globally consistent callback; and
+- end a run before a phase change ([`setup`](@ref)`(solver, Q; bcs)`) from a
+  globally consistent callback; and
 - call collective diagnostics on every rank, even if only rank zero prints.
 
 A collective-ordering error usually appears as a zero-CPU hang, not an

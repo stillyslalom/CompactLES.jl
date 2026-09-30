@@ -1423,6 +1423,93 @@ function test_hierarchy_checkpoint()
 end
 
 # ---------------------------------------------------------------------------
+# 7a''. The phase change, decomposed. A run ended by a WhenState condition
+#     that is true on one rank only (the owner of the high-x plane) continues
+#     under an NSCBC outflow there, whose correction is collective: every
+#     rank must end the first phase on the same step, or the second hangs.
+#     The continuation must match the one from a condition every rank
+#     evaluates for itself, and the checkpoint restart into the same next
+#     phase, bitwise. The tiled, regridded, subcycled Sod of the hierarchy
+#     checkpoint phase then changes its high wall the same way, against its
+#     own checkpoint restart.
+# ---------------------------------------------------------------------------
+function test_phase_change()
+    section("phase change: one decision, bitwise as a checkpoint restart")
+    pulse = (x, y, z) -> Prim(u=(0, 0, 0), p=1 + 4exp(-200(x - 0.3)^2),
+                              rho=1 + exp(-200(x - 0.3)^2))
+    faces(high) = ((SlipWallBC(), high), per3[2], per3[3])
+    tube(high) = Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                         bcs=faces(high), ic=pulse)
+    num = Numerics(n_global=(SPLITN, 16, 16), execution=Execution(dims=splitdims(1)))
+    opened = faces(NSCBCOutflowBC(pinf=1.0))
+    first_phase(condition) = begin
+        s, Q = setup(tube(SlipWallBC()), num)
+        run!(s, Q; tfinal=1e9, nmax=12,
+             callback=Callback(WhenState(condition), Returns(true)))
+        s, Q
+    end
+    s_local, Q_local = first_phase((s, _) -> rank == np - 1 && s.step >= 5)
+    s_glob, Q_glob = first_phase((s, _) -> s.step >= 5)
+    check("rank-local stop: the step every rank ended on",
+          gmax(abs(s_local.step - 5)), 0.5)
+    save_checkpoint(s_glob, Q_glob, "mpi_phase")
+    MPI.Barrier(comm)
+    p_local, pq_local = setup(s_local, Q_local; bcs=opened)
+    p_glob, pq_glob = setup(s_glob, Q_glob; bcs=opened)
+    r, rq = setup(tube(NSCBCOutflowBC(pinf=1.0)), num)
+    load_checkpoint!(r, rq, "mpi_phase"; allow=(:boundaries,))
+    for (s, Q) in ((p_local, pq_local), (p_glob, pq_glob), (r, rq))
+        run!(s, Q; tfinal=1e9, nmax=12)
+    end
+    inner = CL.interior(r.decomp)
+    gap(a, b) = maximum(abs.(parent(a)[inner, :] .- parent(b)[inner, :]))
+    check("rank-local vs global stop: state difference",
+          gmax(gap(pq_local, pq_glob)), 1e-300)
+    check("phase change vs checkpoint restart: state difference",
+          gmax(gap(pq_glob, rq)), 1e-300)
+    check("phase change vs checkpoint restart: clock",
+          gmax(abs(p_glob.t - r.t)) + gmax(abs(p_glob.dt_prev - r.dt_prev)), 1e-300)
+
+    # The hierarchy: the phase change rebuilds the tiles on their stored
+    # owner ranges and continues, regrids and all, as the restart does.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    sod = (x, y, z) -> x < 0.45 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                  Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    shock_tube(xbc) = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                              bcs=(xbc, per3[2], per3[3]), ic=sod)
+    amr_num = Numerics(n_global=(400, 1, 1), cfl=0.2,
+                       amr=AMR(initial=BlockRegion((176, 0, 0), (16, 1, 1)), tile=8,
+                               regrid_interval=5, tag_buffer=2, subcycle=true))
+    open_end = (SlipWallBC(), NSCBCOutflowBC(pinf=0.1))
+    s, states = setup(shock_tube(wall2), amr_num)
+    run!(s, states; tfinal=0.03, nmax=21)
+    regs, owners = level_regions(s, 1), copy(s.levels[2].owners)
+    save_checkpoint(s, states, "mpi_phase_hier")
+    MPI.Barrier(comm)
+    p, ps = setup(s, states; bcs=(open_end, per3[2], per3[3]))
+    check("hierarchy phase: tile set and ownership carried",
+          level_regions(p, 1) == regs && p.levels[2].owners == owners ? 0.0 : 1.0, 0.5)
+    r, rs = setup(shock_tube(open_end), amr_num)
+    load_checkpoint!(r, rs, "mpi_phase_hier"; allow=(:boundaries,))
+    run!(p, ps; tfinal=0.03, nmax=41)
+    run!(r, rs; tfinal=0.03, nmax=41)
+    check("hierarchy phase: tile set tracks the restart",
+          level_regions(p, 1) == level_regions(r, 1) &&
+          p.levels[2].owners == r.levels[2].owners ? 0.0 : 1.0, 0.5)
+    check("hierarchy phase: clock matches the restart", gmax(abs(p.t - r.t)), 1e-300)
+    d = length(ps) == length(rs) ? 0.0 : Inf
+    for i in eachindex(ps)
+        d == Inf && break
+        inner = CL.interior(p.patches[i].decomp)
+        d = max(d, maximum(abs.(parent(ps[i])[inner, :] .- parent(rs[i])[inner, :])))
+    end
+    check("hierarchy phase: every block matches the restart", gmax(d), 1e-300)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_phase"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # 7b'. The unrefined start, decomposed: the tiled, regridded level of the
 #     serial case holds no tile on any rank at setup, the shock fired from a
 #     Dirichlet inflow creates tiles that some ranks hold none of, the tiles
@@ -4185,6 +4272,7 @@ const SUITE = (
     ("line sample", test_line_sample),
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
+    ("phase change", test_phase_change),
     ("unrefined start", test_unrefined_start),
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),

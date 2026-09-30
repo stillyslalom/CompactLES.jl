@@ -129,7 +129,7 @@ text below.
 | `patch_grid` along a stretched dimension | `the patched dimension cannot be stretched` |
 | `AMR` with `patch_grid` | `AMR: cannot be combined with a patch_grid` |
 | `AMR` on a spherical metric or a resolved-θ cylindrical one | `AMR: requires CartesianMetric or CylindricalMetric with θ collapsed` |
-| an explicit refined region reaching a face other than a slip, no-slip, NSCBC, symmetry-plane or axis one, a `SwitchableBC` included (a shape or a tag keeps the margin there) | `a refined level cannot carry` |
+| an explicit refined region reaching a face other than a slip, no-slip, NSCBC, symmetry-plane or axis one, such as a `DirichletBC` or a deprecated `SwitchableBC` (a shape or a tag keeps the margin there) | `a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | one refined box closing on itself around a periodic dimension | `along periodic dimension` |
 | an explicit region reaching a symmetry plane or the axis on a device | `a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the host backend only` |

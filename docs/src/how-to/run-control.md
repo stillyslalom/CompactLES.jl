@@ -91,7 +91,8 @@ On a recoverable failure, `run!` restores its savepoint, reduces the CFL, and
 retries. An exhausted retry budget or timestep floor raises
 [`SolverFailure`](@ref) with the step, time, timestep, CFL, and reason.
 The rollback restores the conserved state, the artificial coefficients,
-`solver.t`, `solver.step` and every [`SwitchableBC`](@ref) to the savepoint,
+`solver.t`, `solver.step` and every (deprecated) [`SwitchableBC`](@ref) to the
+savepoint,
 and re-arms the built-in triggers. Callback effects that keep their own state
 are not reversed unless they implement [`rewind!`](@ref).
 

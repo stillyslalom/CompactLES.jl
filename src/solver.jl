@@ -108,6 +108,11 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # The implicit half of the additive Runge–Kutta integrator (imex.jl), or
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
+    # The `Problem` and `Numerics` that `setup` built this solver from, as
+    # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by
+    # `Solver(; ...)`. Read only by the phase change, `setup(solver, Q; ...)`
+    # (phases.jl), which builds the next phase's solver from them.
+    inputs::Any
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every

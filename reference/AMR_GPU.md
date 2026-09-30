@@ -497,7 +497,7 @@ node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
-alike; a face the run's configuration leaves out (a `SwitchableBC`, a fold on
+alike; a face the run's configuration leaves out (a deprecated `SwitchableBC`, a fold on
 the device backend or under `:filter`) keeps the margin this way rather than
 failing setup. The same keyword lets them cross a periodic seam ("Levels
 across a periodic seam"). With it off every face keeps the margin.
@@ -1349,6 +1349,18 @@ slot, tag history included, serially and at np = 2, 4 and 8; a twelve-tile
 wave written on half the ranks and restored on all of them, rebuilt from a
 six-tile initial region, continues to the round-off tier
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
+
+### Phase change
+
+`setup(solver, Q; bcs, sources, transport, numerics)` (`src/phases.jl`)
+continues a run under other conditions or numerics: it builds the next
+phase's solver through `setup(problem, numerics)` from the `Problem` and
+`Numerics` the first solver recorded, then writes this rank's per-rank
+checkpoint image to memory and reads it back into the new solver, so the
+hierarchy is rebuilt on its stored owners as the restart above rebuilds it,
+and the continuation is the per-rank restart's, bit for bit. It replaces the
+`SwitchableBC` wrapper, which could not reach a level face; a face a phase
+supplies is a plain condition the placement rules treat as any other.
 
 ### Field output
 
