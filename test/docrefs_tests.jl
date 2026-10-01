@@ -35,7 +35,9 @@ using CompactLES
 
 const DOCS_SRC = normpath(joinpath(@__DIR__, "..", "docs", "src"))
 const TUTORIALS = joinpath(DOCS_SRC, "tutorials")   # generated; not scanned
+const EXAMPLE_PAGES = joinpath(DOCS_SRC, "examples")  # generated; not scanned
 const LITERATE = normpath(joinpath(@__DIR__, "..", "docs", "literate"))
+const EXAMPLES = normpath(joinpath(@__DIR__, "..", "examples"))
 
 # The identifier a `@docs` entry or a code reference names: the last
 # component of a possibly qualified name, with any call signature dropped.
@@ -48,11 +50,11 @@ function base_name(code::AbstractString)
 end
 
 # Pages Documenter renders: every markdown file under docs/src except the
-# generated tutorials, which only exist after Literate runs.
+# generated tutorials and examples, which only exist after Literate runs.
 function pages()
     out = String[]
     for (root, _, files) in walkdir(DOCS_SRC)
-        startswith(root, TUTORIALS) && continue
+        (startswith(root, TUTORIALS) || startswith(root, EXAMPLE_PAGES)) && continue
         for f in files
             endswith(f, ".md") && push!(out, joinpath(root, f))
         end
@@ -73,8 +75,14 @@ function literate_markdown(script)
     return join(lines, "\n")
 end
 
+# Whether a script in examples/ is a Literate page: one opens with its
+# `# # Title` line, where a plain driver opens with an ordinary comment.
+is_example_page(script) =
+    endswith(script, ".jl") && startswith(readline(script), "# # ")
+
 # Every rendered page's markdown, keyed by a path to report: the pages under
-# docs/src as they are, and each tutorial as the markdown of its script.
+# docs/src as they are, and each tutorial and example as the markdown of its
+# script.
 function page_texts()
     texts = Pair{String,String}[]
     for page in pages()
@@ -82,6 +90,9 @@ function page_texts()
     end
     for f in sort(readdir(LITERATE; join=true))
         endswith(f, ".jl") && push!(texts, f => literate_markdown(f))
+    end
+    for f in sort(readdir(EXAMPLES; join=true))
+        is_example_page(f) && push!(texts, f => literate_markdown(f))
     end
     return texts
 end

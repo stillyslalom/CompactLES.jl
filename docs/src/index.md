@@ -18,6 +18,9 @@ therefore be studied at several resolutions without rewriting its physics.
 - **Learn by running a calculation.** Begin with
   [Coalescing shock](@ref), a one-dimensional sound wave that steepens into
   a shock, checked against its exact solution.
+- **See longer calculations against references.** The examples, starting
+  with [Shock-capturing tests](@ref), show figures computed once and stamped
+  with the commit and settings that produced them.
 - **Build an input deck quickly.** Use the [Cheat sheet](@ref) for
   the complete constructor vocabulary, defaults, and common recipes.
 - **Complete a specific task.** Use the how-to guides to

@@ -1,0 +1,13 @@
+command = "julia --project=docs examples/shock_capturing.jl"
+commit = "f31fff9b16c63bc207889f18ef539f0491de7524"
+date = "2026-09-30"
+dirty = false
+grid = "one-dimensional lines of 128 to 1600 nodes"
+hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
+julia = "1.11.4"
+ranks = 1
+threads = 1
+wall_seconds = 177.4
+
+[settings]
+smoke = false

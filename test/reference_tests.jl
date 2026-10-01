@@ -37,8 +37,8 @@ rel(path) = replace(relpath(path, ROOT), '\\' => '/')
 
 # The prose files the layout rules apply to: the reference files other than
 # the appendix and the archived bug reports, the agent orientation, the
-# README, and the hand-written documentation pages (the tutorials are
-# generated from docs/literate and hold code).
+# README, and the hand-written documentation pages (the tutorials and examples
+# are generated from docs/literate and examples/ and hold code).
 function prose_files()
     out = String[]
     for f in readdir(REFERENCE; join=true)
@@ -48,7 +48,8 @@ function prose_files()
     push!(out, joinpath(ROOT, "README.md"))
     docs = joinpath(ROOT, "docs", "src")
     for (dir, _, files) in walkdir(docs)
-        startswith(dir, joinpath(docs, "tutorials")) && continue
+        any(g -> startswith(dir, joinpath(docs, g)), ("tutorials", "examples")) &&
+            continue
         for f in files
             endswith(f, ".md") && push!(out, joinpath(dir, f))
         end

@@ -4,6 +4,7 @@ using CompactLES
 using Documenter
 using Literate
 using Printf
+using TOML
 
 const T_LOADED = time()
 
@@ -66,17 +67,74 @@ const TUTORIALS = [
     "oscillating_sphere.jl",
 ]
 
-mkpath(TUTORIAL_DIR)
-for page in readdir(TUTORIAL_DIR; join=true)
-    isfile(page) || continue
-    endswith(page, ".md") || continue
-    rm(page)
+# Examples are longer calculations whose figures are computed once and
+# committed. Each script in `examples/` listed here is both the driver and the
+# page: a full run writes its figures and a `provenance.toml` into
+# `src/assets/examples/<name>/`, and this build converts the script to
+# markdown without executing it (plain `julia` fences, no `@example`), with a
+# note built from the provenance file after the title. The weekly validation
+# workflow runs every listed example with `smoke=true`.
+const EXAMPLE_SCRIPTS = joinpath(@__DIR__, "..", "examples")
+const EXAMPLE_DIR = joinpath(@__DIR__, "src", "examples")
+const EXAMPLES = [
+    "shock_capturing.jl",
+]
+
+"The provenance note of an example, from the record its full run committed."
+function provenance_note(name)
+    stamp = joinpath(@__DIR__, "src", "assets", "examples", name, "provenance.toml")
+    isfile(stamp) || error("examples/$name.jl has no committed figures: $stamp is " *
+                           "missing; run the example to produce them")
+    r = TOML.parsefile(stamp)
+    commit = r["commit"]
+    url = "https://github.com/stillyslalom/CompactLES.jl/commit/$commit"
+    link = "[`$(first(commit, 7))`]($url)"
+    dirty = r["dirty"] ? " with uncommitted changes to the package" : ""
+    threads = r["threads"] == 1 ? "1 thread" : "$(r["threads"]) threads"
+    ranks = r["ranks"] == 1 ? "1 rank" : "$(r["ranks"]) ranks"
+    minutes = r["wall_seconds"] / 60
+    wall = minutes < 2 ? @sprintf("%.0f s", r["wall_seconds"]) : @sprintf("%.0f min", minutes)
+    return """
+           !!! note "Provenance"
+               The figures on this page were computed on $(r["date"]) at commit
+               $link$dirty, with Julia $(r["julia"]) on $ranks × $threads of
+               a $(r["hardware"]), on $(r["grid"]), in $wall. They are
+               reproduced by `$(r["command"])`.
+           """
 end
 
-@phase "Literate conversion" for name in TUTORIALS
-    script = joinpath(LITERATE_DIR, name)
-    Literate.markdown(script, TUTORIAL_DIR; documenter=true,
-                      postprocess=time_tutorial(first(splitext(name))))
+"Give a converted example its edit link and provenance note."
+function example_page(name)
+    return function (markdown)
+        lines = split(markdown, '\n')
+        title = findfirst(l -> startswith(l, "# "), lines)
+        title === nothing && error("examples/$name.jl has no `# # Title` line")
+        edit = "```@meta\nEditURL = \"../../../examples/$name.jl\"\n```\n"
+        return edit * join(lines[1:title], '\n') * "\n\n" * provenance_note(name) *
+               join(lines[title+1:end], '\n')
+    end
+end
+
+for dir in (TUTORIAL_DIR, EXAMPLE_DIR)
+    mkpath(dir)
+    for page in readdir(dir; join=true)
+        isfile(page) || continue
+        endswith(page, ".md") || continue
+        rm(page)
+    end
+end
+
+@phase "Literate conversion" begin
+    for name in TUTORIALS
+        script = joinpath(LITERATE_DIR, name)
+        Literate.markdown(script, TUTORIAL_DIR; documenter=true,
+                          postprocess=time_tutorial(first(splitext(name))))
+    end
+    for name in EXAMPLES
+        script = joinpath(EXAMPLE_SCRIPTS, name)
+        Literate.markdown(script, EXAMPLE_DIR; documenter=false,
+                          postprocess=example_page(first(splitext(name))))
+    end
 end
 
 DocMeta.setdocmeta!(
@@ -120,6 +178,9 @@ DocMeta.setdocmeta!(
             "Advected bubbles" => "tutorials/advected_bubbles.md",
             "Axis-crossing vortex" => "tutorials/axis_crossing_vortex.md",
             "Oscillating sphere" => "tutorials/oscillating_sphere.md",
+        ],
+        "Examples" => [
+            "Shock-capturing tests" => "examples/shock_capturing.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",

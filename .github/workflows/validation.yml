@@ -38,3 +38,26 @@ jobs:
       - name: Run the validation battery
         if: ${{ !cancelled() }}
         run: julia --project=. --color=yes test/validation.jl
+      # The documentation shows the examples' committed figures without running
+      # them, so nothing else notices an example that an API change has broken.
+      # Each one listed in docs/make.jl runs here for a few steps (smoke=true),
+      # writing its figures to a temporary directory; they plot with CairoMakie,
+      # which only the docs environment carries.
+      - name: Configure the documentation environment
+        if: ${{ !cancelled() }}
+        shell: julia --project=docs --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.develop(PackageSpec(path=pwd()))
+          Pkg.instantiate()
+      - name: Smoke-run the examples
+        if: ${{ !cancelled() }}
+        shell: julia --project=docs --color=yes {0}
+        run: |
+          listing = match(r"const EXAMPLES = \[(.*?)\]"s, read("docs/make.jl", String))
+          names = [m.captures[1] for m in eachmatch(r"\"([^\"]+\.jl)\"", listing.captures[1])]
+          isempty(names) && error("no examples listed in docs/make.jl")
+          julia = Base.julia_cmd()
+          for name in names
+              run(`$julia --project=docs -O1 -t 1 --color=yes examples/$name smoke=true`)
+          end

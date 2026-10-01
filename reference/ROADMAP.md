@@ -173,11 +173,18 @@ surface; H8 for a magnetized target.
   captured shock, at every ambient temperature tried over three decades and
   with the artificial properties off as well. The run completes under
   `validity = :permissive`, which the Sedov case of `test/cases.jl` also
-  carries. Find whether the oscillation comes from the scheme's response at
-  the shock foot, the filter, or the recovery of pressure from a small
-  internal energy, and whether the positivity floor should apply there.
-  **Gate:** the Sedov case of `test/cases.jl` and the tutorial under the
-  default strict validity, their errors unchanged.
+  carries. The other strong-shock cases of the validation battery show the
+  same defect (the Shock-capturing tests example,
+  `examples/shock_capturing.jl`): the three Noh cases end with six to ten such
+  cells, and Woodward–Colella carries nine to fourteen at the two blast fronts
+  until they meet, as low as −28 against an ambient 0.025, and passes the
+  strict check only because none remain at the final time. Find whether the
+  oscillation comes from the scheme's response at the shock foot, the filter,
+  or the recovery of pressure from a small internal energy, and whether the
+  positivity floor should apply there.
+  **Gate:** the Sedov and Noh cases of `test/cases.jl` and the tutorial under
+  the default strict validity, their errors unchanged, and no inadmissible
+  cell during the Woodward–Colella run.
 
 - [ ] **N27 — Decide the artificial species diffusivity's scale in slow flows.**
   The artificial species diffusivity scales with the sound speed times the
