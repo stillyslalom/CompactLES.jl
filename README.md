@@ -100,10 +100,15 @@ The launch rules and the measured penalties are in
 ## Running
 
 ```
-julia --project=. -t auto examples/taylor_green.jl              # threaded
-mpiexec -n 8 julia --project=. -t 1 examples/taylor_green.jl    # MPI × threads
-srun -N 2 -n 64 julia --project=. -t 1 examples/taylor_green.jl # Slurm, Flux, etc.
+julia --project=. -t 16 bench/tgv_energy.jl 64                   # threaded
+mpiexec -n 8 julia --project=. -t 1 bench/tgv_energy.jl 64       # MPI ranks
+srun -N 2 -n 64 julia --project=. -t 1 bench/tgv_energy.jl 128   # Slurm, Flux, etc.
 ```
+
+The scripts in `examples/` plot with CairoMakie, which the `docs` environment
+carries: `julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'`
+prepares it, and `mpiexec -n 8 julia --project=docs -t 1 examples/taylor_green.jl`
+runs the Taylor–Green example.
 
 If `mpiexec` is not on `PATH`, get the launcher `MPI.jl` is configured against
 with `julia --project=. -e 'using MPI; print(MPI.mpiexec(f -> f))'`.
@@ -232,7 +237,7 @@ See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraint
 
 | File | Demonstrates |
 |------|--------------|
-| `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600; periodic box, kinetic-energy diagnostic |
+| `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600 on 64³ and 32³ nodes against a 512³ spectral reference, with the kinetic-energy budget by mechanism; the "Taylor–Green vortex" example page |
 | `examples/shock_tube.jl`       | Multimode air/SF6 Richtmyer–Meshkov layer at Mach 1.5 with reshock from the end wall, in 2-D; the "Reshocked mixing layer" example page |
 | `examples/piston_driver.jl`    | Oscillating full-state Dirichlet driver with non-reflecting NSCBC outflow |
 | `examples/converging_shock.jl` | Cylindrically converging shock; 1-D radial run on the regularized axis |

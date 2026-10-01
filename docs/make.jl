@@ -80,6 +80,7 @@ const EXAMPLES = [
     "shock_capturing.jl",
     "shock_bubble.jl",
     "shock_tube.jl",
+    "taylor_green.jl",
 ]
 
 "The provenance note of an example, from the record its full run committed."
@@ -185,6 +186,7 @@ DocMeta.setdocmeta!(
             "Shock-capturing tests" => "examples/shock_capturing.md",
             "Shock–bubble interaction" => "examples/shock_bubble.md",
             "Reshocked mixing layer" => "examples/shock_tube.md",
+            "Taylor–Green vortex" => "examples/taylor_green.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",
