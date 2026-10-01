@@ -11,6 +11,31 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 Defects found while building the Examples pages, filed here as found; each
 example they block is held until the item closes.
 
+- [ ] **N29 — Find the vorticity that grows at an NSCBC inflow face beside
+  the r-z axis.** In the vortex ring and shock configuration
+  (`examples/vortex_ring_shock.jl`: axisymmetric tube, a Mach 1.36 shock
+  fired from a Dirichlet top face through a `Ramp`, the face then switched to
+  an `NSCBCInflowBC` whose target follows the waves that leave), azimuthal
+  vorticity appears at the top face 1–1.6 mm from the axis just after the
+  shock reflected from the interface leaves through the face and the target
+  switches, and grows until it holds more circulation than the vortex ring
+  (1.1 m²/s within 10 mm of the axis, peak |ω| near 27 000 1/s, half a
+  millisecond after it forms). It forms on 112 × 384 nodes and not on
+  56 × 192. Continued 0.3 ms further, the 112 × 384 run loses positivity,
+  after the shock transmitted at reshock leaves through the same face;
+  whether the two are connected is not known. A plane shock leaving through an inflow face with
+  the same target switch, and a front curved by 5 mm near the axis, leave no
+  vorticity (`CompactLES_tutorial_protos/evidence/ex6_bug_axis_inflow.jl`),
+  so no reduced reproducer exists yet; the example page held in
+  `CompactLES_tutorial_protos/held/vortex_ring_shock/`, run at 1f841bc with
+  `mpiexec -n 8 julia --project=docs -t 1` from `examples/`, shows it. A
+  steady offset of 0.4% of the shock's pressure jump at the same face after
+  the switch, on every grid, may be a separate matter. Holds the Vortex ring
+  and shock example.
+  **Gate:** the held example to its original end time, 1.6 ms after the
+  shock reaches the interface, on 112 × 384 without the vorticity at the
+  face.
+
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
   converging shock.** A spherical shock converging on an r-z quadrant (axis
   and a symmetry plane at z = 0, 64² root, one level placed by the
