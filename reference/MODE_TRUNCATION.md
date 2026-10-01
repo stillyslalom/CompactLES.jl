@@ -32,10 +32,13 @@ problems. In spherical coordinates the φ spacing r·sinθ·Δφ goes to
 zero at both the origin and the poles simultaneously.
 
 The physics does not require this. Analytic regularity at the axis forces
-azimuthal mode m to vanish like r^m, so at r₁ every mode above m ≈ 1–2 has
-no resolvable content: the grid near the axis carries N_θ/2 modes of which
-only about πr/Δr can exist in a smooth solution. The timestep is being paid
-almost entirely for modes the continuous problem excludes.
+azimuthal mode m of a scalar to vanish like r^m, so at r₁ every mode above
+m ≈ 1–2 has no resolvable content: the grid near the axis carries N_θ/2 modes
+of which only about πr/Δr can exist in a smooth solution. The timestep is
+being paid almost entirely for modes the continuous problem excludes. The
+radial and azimuthal components of a vector are the exception: they are the
+Cartesian components rotated by θ, so their mode m comes from Cartesian modes
+m ± 1 and vanishes only like r^(m−1).
 
 Two consequences fix the shape of the fix:
 
@@ -103,22 +106,35 @@ Each is structural or follows from a repo convention; none is a preference.
    in a per-step loop).
 2. **The mode limit.** Per radial index,
 
-       mode_limit(r) = max(1, floor(π·r / (κ·Δr)))
+       mode_limit(r) = max(2, floor(π·r / (κ·Δr)))
 
    with Δr the physical radial spacing (`solver.h[1]`; uniform, since a
    stretched dimension cannot carry a fold) and κ ≥ 1 the safety margin
    exposed as the enabling keyword. This targets an effective azimuthal
-   spacing of κ·Δr. The floor of 1 is essential: the m = 0 coefficient is
-   untouched, so ring sums of every conserved component, and hence mass and
-   energy, are conserved exactly (uniform θ quadrature weights, metric
-   factors independent of θ), and the Cartesian momentum components live in
-   the m = ±1 modes of the physical-component momenta, so mode_limit ≥ 1
-   preserves them exactly. A discretely sampled m = 1 field is projected
-   without aliasing error for any N_θ ≥ 4, so uniform freestream (u_r =
-   U·cosθ, u_θ = −U·sinθ) is preserved to roundoff.
-3. **Active set.** Rings with mode_limit < N_θ/2, i.e. r ≲ κ·N_θ·Δr/(2π):
-   about ten radial indices at N_θ = 64. Precomputed at setup as an index
-   range plus the per-index limits.
+   spacing of κ·Δr. The density, the axial momentum and the energy, which
+   are scalars under rotation about the axis, keep m ≤ mode_limit; the radial
+   and azimuthal momenta keep m ≤ mode_limit + 1, since their mode m is
+   Cartesian content of order r^(m−1). The deletion on a ring is then
+   O(r^(mode_limit + 1)) in every component. The floor of 2 makes it O(Δr³)
+   on the first ring, r = Δr/2, the order of the axis closure. A floor of 1
+   deletes the O(Δr²) curvature of every scalar there, and one limit for
+   every component deletes the m = 2 content of u_r and u_θ, which a uniform
+   strain carries at O(r); the vortex of `bench/axisvortex.jl` loses
+   positivity under the artificial properties with both, and its density
+   error at the axis is far above the untruncated run's with either
+   ([measurements](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
+   Any floor of at least 1 keeps the invariants: the
+   m = 0 coefficient is untouched, so ring sums of every conserved
+   component, and hence mass and energy, are conserved exactly (uniform θ
+   quadrature weights, metric factors independent of θ), and the Cartesian
+   momentum components live in the m = ±1 modes of the physical-component
+   momenta, which are always kept. A discretely sampled m = 1 field is
+   projected without aliasing error for any N_θ ≥ 4, so uniform freestream
+   (u_r = U·cosθ, u_θ = −U·sinθ) is preserved to roundoff.
+3. **Active set.** Rings with mode_limit + 1 < N_θ/2, so that no component
+   reaches the Nyquist mode, i.e. r ≲ κ·N_θ·Δr/(2π): about ten radial
+   indices at N_θ = 64. Precomputed at setup as an index range plus the
+   per-index limits.
 4. **Placement: once per step in `run!`**, after `filter_state!` (when it
    fires) and before `apply_positivity_floor!`, writing the interior only.
    Halos are left stale by the same convention the floor uses; `max_rate`
@@ -129,10 +145,11 @@ Each is structural or follows from a repo convention; none is a preference.
    and the margin κ absorbs that (measured in Stage 3, see Risks).
 5. **The rate cap.** In `max_rate` (and mirrored in `dt_report`, which
    duplicates the loop), the angular direction's inverse physical spacing is
-   capped at `mode_limit(r) / (π·r)` at active rings, in both the acoustic
-   term and the squared diffusive sum. The cap and the projection read the
-   same table. The cap applies only when the feature is enabled; disabled,
-   both loops are bit-identical to today's.
+   capped at `(mode_limit(r) + 1) / (π·r)` at active rings, the spacing of
+   the highest mode the momenta keep, in both the acoustic term and the
+   squared diffusive sum. The cap and the projection read the same table. The
+   cap applies only when the feature is enabled; disabled, both loops are
+   bit-identical to today's.
 6. **Reproducibility over cheapness in the MPI path.** When θ is decomposed,
    the ring is gathered in global θ order (`Allgatherv` over
    `decomp.sub[2]`) and the projection evaluated redundantly on every rank

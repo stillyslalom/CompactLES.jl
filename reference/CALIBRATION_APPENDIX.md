@@ -7162,28 +7162,92 @@ conda-forge `nompi` libhdf5, which selects the serialized relay, at one and two 
 
 ## Azimuthal mode truncation
 
-```julia
-Solver(n_global=(64, 64, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
-       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), polar_truncation=κ)
+```text
+julia --project=. -t 1 bench/axisvortex.jl
+julia --project=. -t 1 bench/axisvortex.jl N=32,64 configs=1:on:0.5,1:off:0.5,0:on:0.5
 ```
 
-The first measurement of the Stage 1 truncation, one run per κ on a disk at rest under the
-default artificial properties and CFL, with a pressure pulse p = 1 + 0.2 exp(−|x − x₀|²/0.01)
-centred at r = 0.3, ρ = 1; the mean step is over steps 3 to 40 of `run!`, at `-t 8` on the
-workstation with other jobs running, so the wall times are indicative only.
+The isentropic vortex of the Axis-crossing vortex tutorial (β = 3, core radius 0.15, carried
+by U = 0.5 straight through the axis of the unit disk, from x = −0.4 at t = 0 to x = 0.4 at
+t = 1.6), on 48 × 96 nodes with θ over 2π and z collapsed, a `DirichletBC` at r = 1 holding the
+exact translation, and the default numerics but for `polar_truncation`, the artificial
+properties and the CFL number. The errors are the largest |ρ − exact| and |u − exact| at any
+node over samples every 0.05 time units to t = 1.6; on every truncated run the largest
+difference lies on the first two rings. Measured at `-t 1` on the workstation.
 
-```
-κ     active rings   limiter at t = 0   mean dt     vs κ = 0   wall/step   truncate_modes!
-0     0              θ, ring 1          3.262e-4    1          5.43 ms     -
-1     10             r, ring 11         4.552e-3    13.95      5.66 ms     72 µs
-2     20             r, ring 19         5.394e-3    16.53      5.58 ms     146 µs
+### The mode-count rule
+
+Three rules, each with one limit table: the original, mode_limit = max(1, ⌊πr/(κΔr)⌋) for
+every component with the θ rate capped at that mode; the momenta's limit raised by one (u_r
+and u_θ carry Cartesian mode m ± 1 in their mode m, so their mode m is O(r^(m−1))) and the
+cap at the momenta's mode; and that rule with the floor raised to 2, which the package takes.
+Under each, `failed` is a `SolverFailure` on positivity.
+
+```text
+rule                 κ  art  CFL  ends at   steps   max ρ err   max u err
+one limit, floor 1   1  on   0.3  t = 0.29    155     1.12e-2     3.75e-2
+                     1  on   0.5  t = 0.21     64     9.56e-3     2.73e-2
+                     1  off  0.3  1.6         756     2.13e-2     5.46e-2
+                     1  off  0.5  1.6         465     1.89e-2     4.96e-2
+                     2  on   0.3  t = 0.34    148     1.57e-2     6.44e-2
+                     2  on   0.5  t = 0.29     84     1.27e-2     4.97e-2
+                     2  off  0.3  1.6         596     2.20e-2     7.79e-2
+                     2  off  0.5  1.6         370     1.88e-2     6.95e-2
+momenta +1, floor 1  1  on   0.3  1.6         768     1.04e-3     2.20e-3
+                     1  on   0.5  1.6         468     9.07e-4     1.84e-3
+                     1  off  0.3  1.6         766     1.09e-3     2.35e-3
+                     1  off  0.5  1.6         468     9.24e-4     1.92e-3
+                     2  on   0.3  1.6         762     2.07e-3     3.86e-3
+                     2  on   0.5  1.6         465     1.82e-3     3.31e-3
+                     2  off  0.3  1.6         744     2.18e-3     4.10e-3
+                     2  off  0.5  1.6         456     1.83e-3     3.43e-3
+momenta +1, floor 2  1  on   0.3  1.6         988     7.41e-5     1.03e-4
+                     1  on   0.5  1.6         601     4.60e-5     6.30e-5
+                     1  off  0.3  1.6         985     7.59e-5     1.05e-4
+                     1  off  0.5  1.6         601     4.62e-5     6.38e-5
+                     2  on   0.3  1.6        1047     1.84e-3     4.16e-3
+                     2  on   0.5  1.6         626     1.57e-3     3.28e-3
+                     2  off  0.3  1.6         986     1.91e-3     4.47e-3
+                     2  off  0.5  1.6         601     1.56e-3     3.36e-3
+untruncated          0  on   0.5  1.6        8292     3.45e-5     1.49e-4
+                     0  off  0.5  1.6        8264     3.42e-5     1.50e-4
 ```
 
-At κ = 1 the step is already limited by the radial spacing, so doubling κ adds 18%. The
-projection costs 1.3% of a step at κ = 1 and 2.6% at κ = 2. The truncated runs end at t =
-0.18 and 0.22, before the pulse reaches the axis; 40 steps record the rate and the cost but not the
-stability margin, which is left to Stage 3 of [MODE_TRUNCATION.md](MODE_TRUNCATION.md) on a
-converging shock.
+Under one limit the first ring (limit 1) deletes the m = 2 content of u_r and u_θ, which the
+vortex's strain carries at O(r), and of every scalar, which its curvature carries at O(r²).
+Without the artificial properties the run completes with the density error 550 times the
+untruncated run's; with them it loses positivity. The extra momentum mode alone makes every
+run complete, with or without the artificial properties, and leaves the density error 26 times
+the untruncated run's, set by the scalars' m = 2 on the first ring: a run with every limit
+raised by one at κ = 1 reaches 4.52e-5 in 601 steps, as the floor of 2 does. The floor of 2
+brings κ = 1 within 1.33 of the untruncated error in 601 steps against 8292, the θ rate of the
+first ring then exceeding the radial one; the step is 22% shorter than at floor 1. Raising the
+momenta by a second mode instead (momenta +2, floor 1) changes the density error at κ = 1 by
+under 7%. At κ = 2 the second ring also has limit 2, and its O(r³) deletion holds the error
+near 1.6e-3 under every rule with the momenta raised; raising every limit by one there gives
+2.21e-4.
+
+The deleted content is regenerated by the flow and removed again every step, so the error of a
+truncated run grows with the number of projections: CFL 0.3 takes 1.64 times the steps of 0.5
+and has 1.61 times the density error at κ = 1. Under the floor of 2 the density error with the
+artificial properties is at or below the error without them in every row but κ = 2 at CFL 0.5,
+where it is 0.6% above in 4% more steps.
+
+### Cost and the coarser grid
+
+On the 48 × 96 grid one `truncate_modes!` call costs 409 µs at κ = 1 (15 active rings) and
+813 µs at κ = 2 (30), 3% and 6% of a step of 13 ms with the artificial properties on. On the
+tutorial's 32 × 64 grid at CFL 0.5:
+
+```text
+κ  art  steps   max ρ err   max u err
+1  on     402     1.80e-4     3.34e-4
+1  off    402     1.83e-4     3.41e-4
+0  on    3747     3.13e-4     1.34e-3
+```
+
+The truncated run is the more accurate there: the untruncated error is set by the azimuthal
+resolution of the core away from the axis, which the tutorial describes, and not by the axis.
 
 ## Stiff diffusion
 

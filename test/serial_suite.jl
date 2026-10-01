@@ -1798,8 +1798,9 @@ end
 
 @testset "azimuthal mode truncation: table, projection, rate cap" begin
     # N_θ = 32 over 24 radial nodes at κ = 1: mode_limit(r_i) =
-    # max(1, ⌊π(i − ½)⌋) is 1, 4, 7, 10, 14 on the first five rings, and
-    # ring 6 (17 ≥ N_θ/2) is the first to keep every mode.
+    # max(2, ⌊π(i − ½)⌋) is 2, 4, 7, 10, 14 on the first five rings, and
+    # ring 6 (17 ≥ N_θ/2) is the first to keep every mode. The radial and
+    # azimuthal momenta keep one mode more, and the θ rate is capped at it.
     mk(κ; kw...) = Solver(; n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0),
                           metric=CylindricalMetric(),
                           bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
@@ -1808,10 +1809,13 @@ end
     solver = mk(1.0)
     tr = solver.truncation
     o1 = solver.decomp.n_halo_d[1]
-    @test tr.mode_limit == [1, 4, 7, 10, 14]
+    @test tr.mode_limit == [2, 4, 7, 10, 14]
     @test tr.rings == (o1 + 1):(o1 + 5)
+    @test tr.vector == solver.equations.i_mom[1]:solver.equations.i_mom[2]
+    @test tr.theta_cap ≈ [(m + 1) / (π * xcoord(solver, 1, i))
+                          for (i, m) in enumerate(tr.mode_limit)] rtol = 1e-14
     @test isempty(mk(0.0).truncation.rings)
-    @test mk(2.0).truncation.mode_limit == [1, 2, 3, 5, 7, 8, 10, 11, 13, 14]
+    @test mk(2.0).truncation.mode_limit == [2, 2, 3, 5, 7, 8, 10, 11, 13, 14]
     @test_throws ArgumentError mk(0.5)
     @test_throws ErrorException mk(1.0; n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0))
     @test_throws ErrorException Solver(n_global=(24, 32, 1),
@@ -1829,6 +1833,7 @@ end
     amp(Q, i, c, m) = (v = ring(Q, i, c); θ = [xcoord(solver, 2, j) for j in 1:nθ];
                        hypot(sum(v .* cos.(m .* θ)), sum(v .* sin.(m .* θ))) * 2 / nθ)
     maxdiff(A, B) = maximum(abs, parent(A) .- parent(B))
+    im = solver.equations.i_mom
     U = 0.3
     stream(r, θ, z) = Prim(u=(U * cos(θ), -U * sin(θ), 0.0), p=1.0, rho=1.0)
 
@@ -1838,6 +1843,30 @@ end
     Q0 = deepcopy(Q)
     CL.truncate_modes!(solver, Q)
     @test maxdiff(Q, Q0) < 1e-14
+
+    # A quadratic field is Cartesian mode 2 at O(r²): mode 2 of a density
+    # and, through the rotation to u_r and u_θ, mode 3 of the physical
+    # momenta. Ring 1 (limit 2) keeps both. The density varies in one field
+    # and the velocity in the other, so that neither momentum carries their
+    # product; the energy, quartic in r through the kinetic energy, is not
+    # compared.
+    r1 = xcoord(solver, 1, 1)
+    for (a, b) in ((0.3, 0.0), (0.0, 1.0))
+        function quadratic(r, θ, z)
+            s, c = sincos(θ)
+            x, y = r * c, r * s
+            ux = U + b * (0.2x + 0.1y + 0.5(x^2 - y^2))
+            uy = b * (0.3x - 0.2y + 0.4x * y)
+            return Prim(u=(c * ux + s * uy, -s * ux + c * uy, 0.0), p=1.0,
+                        rho=1.0 + a * x * y)
+        end
+        initialize!(solver, Q, quadratic)
+        Q0 = deepcopy(Q)
+        @test amp(Q0, 1, a > 0 ? 1 : im[1], a > 0 ? 2 : 3) > 0.1r1^2
+        CL.truncate_modes!(solver, Q)
+        @test all(c -> maximum(abs, ring(Q, 1, c) .- ring(Q0, 1, c)) < 1e-14,
+                  (1, im...))
+    end
 
     # Rigid rotation over a radially varying state is m = 0 on every ring.
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.4r, 0.0), p=1 + r^2,
@@ -1875,7 +1904,6 @@ end
     Q0 = deepcopy(Q)
     CL.truncate_modes!(solver, Q)
     @test maxdiff(Q, Q0) > 1e-2
-    im = solver.equations.i_mom
     for i in 1:6
         θ = [xcoord(solver, 2, j) for j in 1:nθ]
         for S in (Q -> sum(ring(Q, i, 1)), Q -> sum(ring(Q, i, 5)),
@@ -1895,13 +1923,19 @@ end
     @test dt_report(solver, Q).dt ≈ compute_dt(solver, Q) rtol = 1e-12
     @test dt_report(off, Qoff).dt ≈ compute_dt(off, Qoff) rtol = 1e-12
 
-    # run! applies the projection after every step: a seeded m = 2 on ring 1
-    # (limit 1) is gone after one step.
+    # run! applies the projection after every step: on ring 1 (limit 2) a
+    # seeded pressure in modes 3 and 4 leaves no mode above 2 in the scalars
+    # and none above 3 in the radial and azimuthal momenta after one step,
+    # while the momenta's mode 3, which the pressure gradient drives, stays.
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(U * cos(θ), -U * sin(θ), 0.0),
-                                             p=1.0 + 0.01cos(2θ) * exp(-20r^2),
+                                             p=1.0 + 0.01(cos(3θ) + sin(4θ)) *
+                                                     exp(-20r^2),
                                              rho=1.0))
     run!(solver, Q; tfinal=1.0, nmax=1)
-    @test all(c -> amp(Q, 1, c, 2) < 1e-14, 1:solver.equations.n_cons)
+    scalars = setdiff(1:solver.equations.n_cons, tr.vector)
+    @test all(c -> amp(Q, 1, c, 3) < 1e-14 && amp(Q, 1, c, 4) < 1e-14, scalars)
+    @test all(c -> amp(Q, 1, c, 4) < 1e-14, tr.vector)
+    @test all(c -> amp(Q, 1, c, 3) > 1e-6, tr.vector)
 end
 
 @testset "spherical poles + origin: derivative of a smooth 3-D Gaussian" begin

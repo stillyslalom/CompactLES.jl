@@ -2,7 +2,7 @@
 #
 # On a resolved-θ grid the azimuthal spacing r·Δθ at the first radial nodes
 # is tighter than Δr by about N_θ/π, and `max_rate` charges the acoustic
-# rate at that spacing and the diffusive rate at its square. A field that is
+# rate at that spacing and the diffusive rate at its square. A scalar that is
 # smooth through the axis carries azimuthal mode m only as r^m, so the rings
 # near the axis resolve few of the N_θ/2 modes the grid carries. The
 # truncation projects each such ring (fixed r and z) onto its modes
@@ -10,14 +10,28 @@
 # θ direction at the spacing of the highest retained mode. Both read the
 # one table built here, so the charged and the removed sets cannot differ.
 #
+# The radial and azimuthal momenta are not scalars. u_r and u_θ are the
+# Cartesian components rotated by θ, so their mode m is assembled from
+# Cartesian modes m − 1 and m + 1 and vanishes only as r^(m−1): a uniform
+# strain, Cartesian mode 1 at O(r), is mode 2 of u_r and u_θ at O(r). These
+# two components therefore keep mode_limit + 1 on every ring, which deletes
+# from them content of the same order in r as from the scalars, and the θ
+# rate is charged at that highest mode. The axial momentum is a scalar.
+#
+# What the projection deletes from a smooth field on a ring of radius r is
+# then O(r^(mode_limit + 1)) in every component. The limit is at least 2, so
+# on the first ring, r = Δr/2, the deletion is O(Δr³), the order of the axis
+# closure; a floor of 1 deletes the O(Δr²) curvature of every scalar there
+# once per step, an order below it.
+#
 # The projection is direct, against cos/sin tables of the N_θ ring angles,
 # O(N_θ · mode_limit) per ring and component: the limits are small wherever
 # the truncation is active, so no FFT is warranted, and the projection is
 # exact, not an approximation of one. The m = 0 coefficient is kept, so ring
 # sums of every conserved component (hence mass and energy, the θ quadrature
 # weights being uniform and the metric factors independent of θ) are
-# preserved, and mode_limit ≥ 1 keeps the m = ±1 content of the physical
-# momenta, which carries the Cartesian momentum and a uniform freestream.
+# preserved, and the m = ±1 content of the physical momenta, which carries
+# the Cartesian momentum and a uniform freestream, is always kept.
 # Fourier modes have parity (−1)^m under θ → θ + π, so the projection
 # commutes with the antipodal fold (folds.jl), which pairs radial lines and
 # is never touched by a ring at r > 0.
@@ -38,10 +52,12 @@ The azimuthal truncation table of a cylindrical solver with resolved θ,
 built at setup from `Numerics(polar_truncation = κ)`. `rings` are the padded
 radial indices of this rank's active rings, those whose limit
 
-    mode_limit(r) = max(1, floor(π r / (κ Δr)))
+    mode_limit(r) = max(2, floor(π r / (κ Δr)))
 
-falls below N_θ/2, and `mode_limit` and `theta_cap = mode_limit / (π r)`
-hold the limit and the capped inverse θ spacing of each. `cosines` and
+satisfies mode_limit + 1 < N_θ/2. `mode_limit` holds the limit of each ring
+for the scalar components; the components in `vector`, the radial and
+azimuthal momenta, keep one mode more, and `theta_cap = (mode_limit + 1) / (π r)`
+is the capped inverse θ spacing of that highest mode. `cosines` and
 `sines` tabulate cos(2πn/N_θ) and sin(2πn/N_θ), `coef` is the host scratch
 of one ring's coefficients. `ring_buf` holds every active ring of this rank's
 radial and z block over the whole circle, indexed `[ring, k, component, j]`
@@ -52,8 +68,9 @@ every table is empty and the feature is off; see `truncate_modes!`.
 struct ModeTruncation{T}
     kappa::T                        # 0 = off
     rings::UnitRange{Int}           # padded radial indices of the active rings
-    mode_limit::Vector{Int}         # per active ring: the highest retained mode
-    theta_cap::Vector{T}            # per active ring: mode_limit / (π r)
+    mode_limit::Vector{Int}         # per active ring: the highest scalar mode
+    theta_cap::Vector{T}            # per active ring: (mode_limit + 1) / (π r)
+    vector::UnitRange{Int}          # the u_r and u_θ momenta: one mode more
     cosines::Vector{T}              # cos(2π n / N_θ), n = 0 … N_θ − 1
     sines::Vector{T}
     coef::Vector{T}                 # one ring's a₀, (a_m, b_m) …; host scratch
@@ -63,14 +80,16 @@ struct ModeTruncation{T}
 end
 
 ModeTruncation{T}() where {T} =
-    ModeTruncation{T}(zero(T), 1:0, Int[], T[], T[], T[], T[],
+    ModeTruncation{T}(zero(T), 1:0, Int[], T[], 1:0, T[], T[], T[],
                       zeros(T, 0, 0, 0, 0), Cint[], Cint[])
 
 # The table over this rank's radial block. `r0` is the physical radius of
-# global radial node 1 and `Δr` the uniform radial spacing; the limit is
-# evaluated in Float64 once here, and every consumer reads the integers.
+# global radial node 1, `Δr` the uniform radial spacing and `vector` the
+# indices of the radial and azimuthal momenta; the limit is evaluated in
+# Float64 once here, and every consumer reads the integers.
 function mode_truncation(::Type{T}, kappa, decomp::Decomp, r0, Δr,
-                         n_theta::Int, n_cons::Int) where {T}
+                         n_theta::Int, n_cons::Int,
+                         vector::UnitRange{Int}) where {T}
     kappa > 0 || return ModeTruncation{T}()
     κ = Float64(kappa)
     o1 = decomp.n_halo_d[1]
@@ -78,16 +97,19 @@ function mode_truncation(::Type{T}, kappa, decomp::Decomp, r0, Δr,
     caps = T[]
     for i in 1:decomp.n_local[1]
         r = Float64(r0) + (decomp.offset[1] + i - 1) * Float64(Δr)
-        m = max(1, floor(Int, π * r / (κ * Float64(Δr))))
-        2m < n_theta || break          # the limit grows with r: the rest keep all
+        m = max(2, floor(Int, π * r / (κ * Float64(Δr))))
+        # The limit grows with r, so the rest keep every mode. The momenta's
+        # mode_limit + 1 stays below the Nyquist mode N_θ/2, whose
+        # coefficient the projection's factor 2/N_θ would double.
+        2(m + 1) < n_theta || break
         push!(limits, m)
-        push!(caps, T(m / (π * r)))
+        push!(caps, T((m + 1) / (π * r)))
     end
     rings = (o1 + 1):(o1 + length(limits))
     n = 0:(n_theta - 1)
     cosines = T[cospi(2k / n_theta) for k in n]
     sines = T[sinpi(2k / n_theta) for k in n]
-    mmax = isempty(limits) ? 0 : maximum(limits)
+    mmax = isempty(limits) ? 0 : maximum(limits) + 1
     # The θ blocks of the sub-communicator in rank order, which is θ order
     # (`sub_rank[2] == coords[2]`, see `Decomp`); a rank's slab of ring_buf
     # is contiguous because j is its outermost index.
@@ -96,7 +118,7 @@ function mode_truncation(::Type{T}, kappa, decomp::Decomp, r0, Δr,
     counts = Cint[slab * local_range(n_theta, decomp.sub_size[2], p)[1]
                   for p in 0:(decomp.sub_size[2] - 1)]
     displs = Cint[sum(counts[1:p]; init=Cint(0)) for p in 0:(length(counts) - 1)]
-    return ModeTruncation{T}(T(kappa), rings, limits, caps, cosines, sines,
+    return ModeTruncation{T}(T(kappa), rings, limits, caps, vector, cosines, sines,
                              zeros(T, 2mmax + 1),
                              zeros(T, length(limits), nz, n_cons, n_theta),
                              counts, displs)
@@ -118,7 +140,8 @@ end
 
 Project every conserved component of `Q` on each active ring of the
 solver's azimuthal truncation table onto the ring's Fourier modes
-`m ≤ mode_limit`, over the interior only. A no-op unless the solver was
+`m ≤ mode_limit`, and the radial and azimuthal momenta onto
+`m ≤ mode_limit + 1`, over the interior only. A no-op unless the solver was
 built with `polar_truncation > 0`. [`run!`](@ref) calls it once per step,
 after the state filter and before the positivity failsafe; halos are left
 stale, as they are after the failsafe, and the next `max_rate` exchanges
@@ -131,8 +154,8 @@ and projects them in global θ order, so the result is the same bit for bit
 on every process grid.
 
 The projection is idempotent to round-off, preserves the ring sum of every
-component, and keeps modes 0 and 1, hence a uniform freestream and the
-Cartesian momentum of each ring.
+component, and keeps modes 0 to 2 of every component, hence a uniform
+freestream and the Cartesian momentum of each ring.
 """
 function truncate_modes!(solver, Q::ConservedState)
     tr = solver.truncation
@@ -186,7 +209,7 @@ function _project_rings!(buf::Array{T,4}, tr::ModeTruncation{T}) where {T}
     a = tr.coef
     invN = one(T) / N
     @inbounds for comp in axes(buf, 3), k in axes(buf, 2), slot in axes(buf, 1)
-        M = tr.mode_limit[slot]
+        M = tr.mode_limit[slot] + (comp in tr.vector)
         s = zero(T)
         for j in 1:N
             s += buf[slot, k, comp, j]

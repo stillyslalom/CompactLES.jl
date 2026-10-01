@@ -926,14 +926,16 @@ keywords the ones given after it override.
 - `polar_truncation`: azimuthal mode truncation near a cylindrical axis with
   resolved θ. `0.0`, the default, disables it. A value κ ≥ 1 projects each
   ring of fixed r and z, once per step, onto its azimuthal Fourier modes
-  m ≤ max(1, ⌊πr/(κΔr)⌋), and the timestep charges the θ direction at the
-  spacing of the highest mode kept, about κΔr, instead of rΔθ. A field that is
-  smooth through the axis carries mode m only as r^m, so the modes removed are
-  ones the inner rings cannot resolve, and without the truncation the step is
-  sized by their spacing. Use it when [`dt_report`](@ref) names θ at the innermost rings as
-  the limiting direction; a larger κ removes more modes and allows a longer
-  step. Modes 0 and 1 are always kept, so the ring sums of the conserved
-  variables and a uniform freestream are unchanged. The cost is one
+  m ≤ M = max(2, ⌊πr/(κΔr)⌋), and the radial and azimuthal momenta onto
+  m ≤ M + 1; the timestep charges the θ direction at the spacing of the
+  highest mode kept, about κΔr, instead of rΔθ. A scalar that is smooth
+  through the axis carries mode m only as r^m, and the radial and azimuthal
+  velocity components carry it as r^(m−1), so the modes removed are ones the
+  inner rings cannot resolve, and without the truncation the step is sized by
+  their spacing. Use it when [`dt_report`](@ref) names θ at the innermost
+  rings as the limiting direction; a larger κ removes more modes and allows a
+  longer step. Modes 0 to 2 are always kept, so the ring sums of the
+  conserved variables and a uniform freestream are unchanged. The cost is one
   projection per step over the rings below the threshold radius, small against
   a filter pass; when θ is split across ranks, the ranks sharing a ring also
   gather it once per step. Requires `CylindricalMetric`, θ periodic over 2π,

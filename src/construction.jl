@@ -787,7 +787,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     truncation = mode_truncation(T, polar_truncation, decomp,
                                  T(origin[1]) + coord_shift[1], h[1], n_global[2],
-                                 n_cons)
+                                 n_cons, equations.i_mom[1]:equations.i_mom[2])
     # The per-rank extent check in `plan_direction` would raise on some ranks
     # only when the blocks differ in size; this one is replicated.
     check_block_extents(n_global, decomp.dims,
