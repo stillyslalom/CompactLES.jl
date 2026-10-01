@@ -1,0 +1,15 @@
+command = "julia --project=docs -t 8 examples/shock_bubble.jl"
+commit = "ec9361fead6d8c2fa792248534943ea8f457ef60"
+date = "2026-09-30"
+dirty = false
+grid = "585 × 100, 293 × 50 and 147 × 25 nodes"
+hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
+julia = "1.11.4"
+ranks = 1
+threads = 8
+wall_seconds = 708.0
+
+[settings]
+ny = 100
+smoke = false
+tend = 0.001
