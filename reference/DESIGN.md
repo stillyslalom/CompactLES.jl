@@ -1604,7 +1604,18 @@ components.
   φ = ∂(ρe)/∂p|_{ρ,Y}, which is cv_m/R_m for an ideal mixture). It optionally
   carries a β_t-weighted share of the transverse terms (Yoo & Im 2007), with
   the default using the local Mach number. Supersonic
-  points get no correction (all waves leave).
+  points get no correction (all waves leave). At the outer radial face of a
+  cylindrical or spherical grid, with n_c = 1 or 2 transverse scale factors
+  proportional to r, the imposed amplitude is
+  `L* = max(K, n_c c/2r)(p − p∞) − ρc² n_c u_r/r − β_t 𝒯`: the first-order
+  radiation condition of Bayliss and Turkel, (∂_t + c∂_r + n_c c/2r) p′ = 0,
+  with the curvature source of the velocity divergence taken out of the
+  incoming wave and out of 𝒯. It reflects a wave of wavenumber k by a
+  second-order 1/(2(kr)²) where the plane form reflects 1/(2kr), and its own
+  relaxation toward p∞ replaces σ's wherever it is the faster; the inner face
+  of an annulus keeps the plane form. The derivation is in the header of
+  `nscbc.jl` and the measurement in
+  [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-outflow-face-on-a-radial-grid).
 - **Inflow** (`NSCBCInflowBC(u=..., T_ion=..., Y=...)`) replaces every incoming wave
   (acoustic, entropy, transverse, species) with a relaxation toward the targets
   while keeping the single outgoing acoustic wave as computed. Targets may be

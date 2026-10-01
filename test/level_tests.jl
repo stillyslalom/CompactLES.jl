@@ -2450,6 +2450,54 @@ const NSCBC_REFLECTION_TOL = 1e-6
                                           refine=BlockRegion((40, 0, 0), (9, 1, 1)))
 end
 
+# The tile at the outer face of the r-z annulus against the uniform run at its
+# spacing, N = 49, t = 0.5, halfway through the pulse's exit: measured 6.6e-7
+# over the five components and the whole tile. The same uniform run under the
+# plane form of the outflow differs from it by 1.0e-3, so a tile that took
+# the face's curvature term at a wrong radius, or not at all, fails here.
+const RADIAL_NSCBC_LEVEL_TOL = 5e-6
+
+@testset "a level at a radial NSCBC face carries the curvature term" begin
+    per = (PeriodicBC(), PeriodicBC())
+    c = sqrt(1.4)
+    # An outgoing cylindrical pulse on the axisymmetric annulus r ∈ [1/2, 3/2],
+    # gas at rest, leaving through the outflow at r = 3/2, with a level over
+    # the outer N ÷ 6 + 1 root nodes; `refined = false` gives the uniform run
+    # at the level's spacing, 3(N − 1) + 1 nodes.
+    function radial_level(N; refined=true)
+        m = (N - 1) ÷ 6 + 1
+        solver = Solver(n_global=(refined ? N : 3 * (N - 1) + 1, 1, 1),
+                        L_domain=(1.0, 1.0, 1.0), origin=(0.5, 0.0, 0.0),
+                        metric=CylindricalMetric(),
+                        bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per, per),
+                        filter_interval=0, cfl=0.9,
+                        art=ArtificialProperties(enabled=false),
+                        refine=refined ? BlockRegion((N - m, 0, 0), (m, 1, 1)) : nothing)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> begin
+            a = 0.01 * exp(-((x - 1) / 0.1)^2)
+            Prim(rho=1 + a / c^2, u=(a / c, 0.0, 0.0), p=1 + a)
+        end)
+        return solver, states
+    end
+    run_to!(s, q, t, steps) = for n in 1:steps
+        run!(s, q; tfinal=t * n / steps)
+    end
+    s, q = radial_level(49)
+    f, fq = radial_level(49; refined=false)
+    run_to!(s, q, 0.5, 411)
+    run_to!(f, fq, 0.5, 411)
+    @test s.step == f.step == 411
+    pf = PatchSolver(f, f.patches[1])
+    ps = PatchSolver(s, s.patches[2])
+    off = ps.patch.region.offset[1]
+    e = maximum(abs(q[2][padded_index(ps, i, 1, 1), k] -
+                    fq[padded_index(pf, off + i, 1, 1), k])
+                for i in 1:ps.decomp.n_local[1], k in 1:5)
+    @info "radial NSCBC level against the uniform run" e
+    @test e < RADIAL_NSCBC_LEVEL_TOL
+end
+
 # The axis tile against the uniform run at its spacing, a pulse converging on
 # the axis, N = 96, t = 0.3: measured 1.6e-7 over the five components and the
 # whole tile. The corner tile of the axis and a plane at z = 0, a spherical

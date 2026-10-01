@@ -2311,6 +2311,49 @@ end
     @test m < 1e-8
 end
 
+@testset "NSCBC outflow: a radial face relaxes at the curvature rate" begin
+    # Gas at rest at the uniform pressure p∞ + δ: every term of the right-hand
+    # side vanishes but the face's relaxation, ΔL = K δ, which enters the mass
+    # as −ΔL/(2c²). On the outer radial face of r ∈ [1/2, 3/2], K is the
+    # larger of σc/L and n_c c/(2r), n_c = 1 on a cylinder and 2 on a sphere;
+    # on a Cartesian face it is σc/L.
+    δ = 1e-3
+    c = sqrt(1.4 * (1 + δ))
+    for (metric, origin, nc) in ((CartesianMetric(), (0.5, 0.0, 0.0), 0),
+                                 (CylindricalMetric(), (0.5, 0.0, 0.0), 1),
+                                 (SphericalMetric(), (0.5, π / 2 - 0.5, 0.0), 2)),
+        sigma in (0.0, 0.25, 4.0)
+        solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=origin,
+                        metric=metric,
+                        bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0, sigma=sigma)),
+                             per3[2], per3[3]),
+                        art=ArtificialProperties(enabled=false))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(rho=1.0, p=1.0 + δ))
+        dQ = zero(Q)
+        compute_rhs!(solver, Q, dQ)
+        nx = solver.decomp.n_local[1]
+        K = max(sigma * c, nc * c / 3)
+        face = dQ[padded_index(solver, nx, 1, 1), 1]
+        @test isapprox(face, -K * δ / (2c^2); rtol=1e-8, atol=1e-14)
+        @test maximum(abs(dQ[padded_index(solver, i, 1, 1), 1]) for i in 2:nx-1) < 1e-12
+    end
+end
+
+# The Oscillating sphere tutorial's dipole on its radial grid with half its
+# polar nodes, at the default relaxation: the plane form of the outflow
+# reflects it by 1/(2kR), and with the curvature term the reflection is the
+# second-order remainder 1/(2(kR)²) and the discretization's share.
+include("sphere_dipole.jl")
+
+@testset "NSCBC outflow: a spherical wave leaves a radial face" begin
+    m = sphere_dipole_reflection(2.1; n=128)
+    plane = 1 / (2m.kR)
+    @info "spherical outflow reflection" m.reflection plane m.amplitude
+    @test m.reflection < plane / 10
+    @test abs(m.amplitude - 1) < 0.03
+end
+
 @testset "NoSlipWallBC: adiabatic zeroes velocity, isothermal sets T_ion" begin
     for Twall in (NaN, 2.5)
         solver = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),

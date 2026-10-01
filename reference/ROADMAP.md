@@ -192,7 +192,12 @@ surface; H8 for a magnetized target.
   speed rises at fixed flow: in the Rayleigh–Taylor tutorial's setup
   (`docs/literate/rayleigh_taylor.jl`) on 73 × 12 nodes the growth rate
   falls by about 1.5% between ambient pressures 20 and 160, and turning the
-  artificial diffusivity off removes the fall. Decide whether the species
+  artificial diffusivity off removes the fall. A related effect at a shock:
+  in the Richtmyer–Meshkov tutorial (`docs/literate/richtmyer_meshkov.jl`)
+  the diffusivity widens an interface the shock has compressed below about
+  three cells, the 5 mm layer compressed to 3.1 mm spreading to 4.5–4.9 mm
+  on 24 rows and staying at 3.5 mm on 36, which lowers the growth rate by
+  2%. Decide whether the species
   channel's scale should follow the flow speed where the flow is slow, or
   whether the dependence stays and is documented with its size.
   **Gate:** the tutorial's growth rate on the coarse grid independent of the
@@ -978,37 +983,13 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `4fa1a55`); calibration/defaults and the spherical azimuth remain. The rate
   cap also caps the θ rate that `filter_weight` reads, so the θ filter pass
   weakens wherever the inner rings set that rate; the calibration measures it.
+  On the axis-crossing vortex (`bench/axisvortex.jl`) the error grows with the
+  number of truncated steps, and at κ = 2 the second ring's limit of 2 holds
+  the density error near 45 times the untruncated run's where κ = 1 comes
+  within a factor 1.33 ([the measurement](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.
-
-- [ ] **S16 — Keep mode truncation stable under the artificial properties.**
-  An isentropic vortex carried across the axis of a resolved (r, θ) grid
-  (48 × 96, θ over 2π, z collapsed, a Dirichlet outer face holding the exact
-  translation) loses positivity near t = 0.28 with the default
-  `ArtificialProperties` under `polar_truncation = 1` (CFL 0.3 and 0.5) and
-  2 (CFL 0.5). With the artificial properties off the same run completes to
-  t = 1.6, and without truncation it runs past t = 0.4 with them on. Find the
-  coupling that fails (the sensors or their smoothing on projected rings, the
-  artificial rate against the capped θ rate, or the weakened θ filter pass S9
-  notes) before S9's calibration sets defaults.
-  On the current code the run fails near t = 0.19, and the Axis-crossing
-  vortex tutorial's measurements point at the cause. The mode limit on the
-  innermost ring is 1, but the physical velocity components carry
-  azimuthal mode m at order r^(m−1), so the
-  vortex's strain (m = 2 in u_r and u_θ at O(r)) is deleted there every
-  step; after one truncated step the first ring's velocity error equals the
-  exact field's m = 2 content. Truncation is also inaccurate with the
-  artificial properties off, its density error at the axis about 150 times
-  the untruncated run's. Raising the first ring's limit to 2, with its θ rate
-  cap, brings the error within a factor five of the untruncated run and
-  lets the run with the artificial properties complete; the remaining gap
-  suggests one more mode for the velocity components on every ring. The fix
-  is in `mode_truncation` / `truncate_modes!` and the mode-count rule of
-  [MODE_TRUNCATION.md](MODE_TRUNCATION.md).
-  **Gate:** the vortex to t = 1.6 under truncation and the default artificial
-  properties, its density error no larger than with them off; the mode
-  truncation rows of the MPI suite unchanged.
 
 - [ ] **S10 — Add immersed boundaries on demand.**
   Follow [IMMERSED.md](IMMERSED.md): level-set geometry and graded post-stage
@@ -1230,3 +1211,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   of cond(A)·eps as every other operator's, and is recorded as such
   ([the measurement](CALIBRATION_APPENDIX.md#the-decomposed-line-solve-against-serial))
   (commit `1723ea3`).
+- [x] **S16** — Mode truncation keeps one more mode in the radial and
+  azimuthal momenta than in the scalars, with a floor of 2 and the θ cap at
+  the momenta's mode, and is stable under the artificial properties (commit
+  `f1171de`).

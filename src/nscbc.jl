@@ -32,6 +32,38 @@
 # grad_u[d,d] carries curvature contributions and the wave analysis would need
 # the metric terms. `validate_bc` at the foot of this file enforces that at
 # setup.
+#
+# Curvature of the outflow face. At the outer radial face of a cylindrical or
+# spherical grid the face is curved, with n_c = 1 or 2 transverse scale
+# factors proportional to r. The pressure equation then carries the
+# curvature source ρc² n_c u_r / r of the velocity divergence, so the
+# computed incoming characteristic reads, for gas at rest and inviscid,
+#
+#   ∂(p − ρc u_r)/∂t = −L₁ − ρc² n_c u_r / r − 𝒯,
+#
+# and the plane form L₁* = 0 leaves the curvature source in the incoming
+# wave. An outgoing wave whose front is parallel to the face spreads its
+# energy over an area growing as r^n_c, so its amplitude falls as
+# r^(−n_c/2): (∂_t + c ∂_r + n_c c / 2r) p′ = 0 with p′ = p − p∞, the
+# first-order radiation condition of Bayliss and Turkel (exact for the
+# spherical monopole). With ∂u_r/∂t = −∂p/∂r/ρ it is
+# ∂(p − ρc u_r)/∂t = −(n_c c / 2r) p′, which the imposed amplitude
+#
+#   L₁* = (n_c c / 2r)(p − p∞) − ρc² n_c u_r / r − β_t 𝒯
+#
+# realizes. The plane form reflects a wave of wavenumber k by 1/(2kr) on a
+# sphere; this one by 1/(2(kr)²). It also preserves a steady radial outflow
+# whose face pressure is p∞, where the plane form holds the face off p∞ by
+# the curvature source over the relaxation rate. The term is itself a
+# relaxation toward p∞ at the rate κ = n_c c / 2r, and the face relaxes at
+# max(K, κ): σ adds the part of its rate K that κ does not supply, since
+# each addition is a reflection K/(2ω) of a wave of frequency ω, and σ's
+# purpose, holding the mean pressure, is already served by κ. On a curved
+# transverse direction grad_u[t,t] carries u_r/r (metric.jl), which is part
+# of the curvature source above and not of the transverse flow, so the
+# transverse term 𝒯 drops it there. The inner radial face of an annulus,
+# where the outgoing wave converges and the same condition would relax at a
+# negative rate, keeps the plane form, as does every Cartesian face.
 
 """
     NSCBCOutflowBC(; pinf, sigma=0.25, Lref=0.0, beta_t=-1.0)
@@ -40,6 +72,19 @@ Subsonic characteristic outflow. The single incoming acoustic amplitude is
 relaxed toward far-field pressure `pinf`; pressure is not imposed pointwise.
 `sigma` sets relaxation strength, `Lref <= 0` selects the domain length normal
 to the face, and negative `beta_t` selects local-Mach transverse coupling.
+
+At the outer radial face of a cylindrical or spherical grid the incoming
+amplitude also carries the curvature term of a cylindrical or spherical wave
+(the first-order radiation condition of Bayliss and Turkel). A wave of
+wavenumber k radiated from near the origin then leaves with a reflection of
+order 1/(kr)² instead of 1/(kr), and a steady radial outflow keeps the
+pressure `pinf` at the face. The term relaxes the pressure toward `pinf` at
+the rate c/(2r) on a cylinder and c/r on a sphere, and the face relaxes at
+the larger of that rate and `sigma`'s, σ(1 − M²)c/`Lref`. At a radius
+below `Lref`/σ on a sphere, or `Lref`/(2σ) on a cylinder, `sigma` therefore
+has no effect; a larger `sigma` reflects a wave of frequency ω by about the
+excess of its rate over the curvature rate, divided by 2ω. The inner face of
+an annulus and every Cartesian face take the plane form.
 
 Supersonic outflow points receive no correction. The LODI formulation covers
 Cartesian faces and radial or axial curvilinear faces, whose normal metric scale
@@ -103,6 +148,8 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
     m = solver.equations.i_mom
     ft = solver.field_tuples
+    # The curved transverse directions of a high radial face (header).
+    curv = side == 2 ? _curved_transverse(solver.metric, d) : (false, false)
     # Scalars ride in tuples: a splatted kernel-argument tuple longer than 32
     # elements lowers through the dynamic apply and is an InvalidIRError on
     # device (measured on the first NSCBC device run). The bc carries its own
@@ -114,20 +161,28 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
                      solver.p, solver.c, solver.T_ion, solver.cp_mix, ft.Y,
                      ft.grad_u, solver.tmp_a, solver.tmp_b, solver.sensor_sp,
                      solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
-                     (T(bc.pinf), T(bc.sigma), T(bc.beta_t)), Lref,
-                     side == 2, (act1, act2), (d, t1, t2), m,
+                     solver.inv_r, (T(bc.pinf), T(bc.sigma), T(bc.beta_t)), Lref,
+                     side == 2, (act1, act2, curv...), (d, t1, t2), m,
                      solver.equations.i_energy, solver.equations.n_species)
     return nothing
 end
 
+# Whether each transverse direction (t1, t2) of a face normal to `d`, in the
+# order `correct_rhs!` takes them, has a scale factor proportional to the
+# face's coordinate: the cylindrical θ and the spherical θ and φ at a radial
+# face. Their count is the n_c of the curvature term (header).
+_curved_transverse(::CartesianMetric, d::Int) = (false, false)
+_curved_transverse(::CylindricalMetric, d::Int) = (d == 1, false)
+_curved_transverse(::SphericalMetric, d::Int) = (d == 1, d == 1)
+
 @inline function _nscbc_outflow_point!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
                                        cp_a, Y, grad_u, dp_n, dp_t1, dp_t2,
-                                       ih_d, ih_t1, ih_t2, bcp, Lref, hiface,
-                                       acts, dts, m, i_energy, n_species,
-                                       o1, o2, o3, i, j, k)
+                                       ih_d, ih_t1, ih_t2, inv_r, bcp, Lref,
+                                       hiface, acts, dts, m, i_energy,
+                                       n_species, o1, o2, o3, i, j, k)
     @inbounds begin
         pinf, sigma, beta_t = bcp
-        act1, act2 = acts
+        act1, act2, curv1, curv2 = acts
         d, t1, t2 = dts
         I = CartesianIndex(i + o1, j + o2, k + o3)
         T = eltype(rho)
@@ -153,20 +208,39 @@ end
         # i.e. a coefficient of sgn·ρc in the code's sign convention.
         # β_t blends between plain LODI (0) and full accounting (1); the
         # local Mach number is the recommended damping.
+        # On a curved face, 1/r and the divergences of the transverse
+        # velocities less the curvature part u_r/r, which the curvature term
+        # below carries in full.
+        ir = zero(T)
+        (curv1 | curv2) && (ir = inv_r[I])
         transverse_in = zero(T)
         if act1
             ut = uv[t1]
+            div1 = grad_u[t1, t1][I]
+            curv1 && (div1 -= un * ir)
             transverse_in += ut * ih_t1[I] * dp_t1[I] +
-                  ρ * c * c * grad_u[t1, t1][I] + sgn * ρ * c * ut * grad_u[t1, d][I]
+                  ρ * c * c * div1 + sgn * ρ * c * ut * grad_u[t1, d][I]
         end
         if act2
             ut = uv[t2]
+            div2 = grad_u[t2, t2][I]
+            curv2 && (div2 -= un * ir)
             transverse_in += ut * ih_t2[I] * dp_t2[I] +
-                  ρ * c * c * grad_u[t2, t2][I] + sgn * ρ * c * ut * grad_u[t2, d][I]
+                  ρ * c * c * div2 + sgn * ρ * c * ut * grad_u[t2, d][I]
         end
         βt = beta_t < 0 ? Ma : beta_t
         K = sigma * (1 - Ma * Ma) * c / Lref
-        ΔL = K * (p - pinf) - βt * transverse_in - Lcomp
+        if curv1 | curv2
+            # The radiation condition of a curved face (header): relaxation
+            # at the larger of K and κ = n_c c / 2r, less the curvature
+            # source ρc² n_c u_r / r.
+            nc = T(curv1 + curv2)
+            K = max(K, nc * c * ir / 2)
+            ΔL = K * (p - pinf) - nc * ρ * c * c * un * ir - βt * transverse_in -
+                 Lcomp
+        else
+            ΔL = K * (p - pinf) - βt * transverse_in - Lcomp
+        end
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)

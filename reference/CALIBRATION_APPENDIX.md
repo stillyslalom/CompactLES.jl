@@ -63,6 +63,8 @@ section that moved it says so in one sentence and the older figure is gone.
     `test/sharpening_tests.jl`)
 31. [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis)
     (`bench/axisspectrum.jl`, `bench/axisrunaway.jl`)
+32. [The outflow face on a radial grid](#the-outflow-face-on-a-radial-grid)
+    (`bench/sphereoutflow.jl`, `test/sphere_dipole.jl`)
 
 ## The shock battery
 
@@ -8295,3 +8297,55 @@ both forms grow at 0.8 per step. In the area form a seeded rest state at the ori
 deviation at the origin saturates at 1e-2 to 4e-2. The consequences for runs at the origin
 are under [the CFL restriction](#the-cfl-restriction-and-the-symmetry-cell) and [fold order
 and geometry limits](#fold-order-and-geometry-limits).
+
+## The outflow face on a radial grid
+
+```text
+julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1,4.1 sigmas=0,0.25,1
+julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1 sigmas=0 ns=64,128,256
+```
+
+The dipole of the Oscillating sphere tutorial (sphere radius 0.1, k = ω = 4π,
+U = 1e-3, 16 polar nodes, the radial spacing of 128 nodes over [0.1, 2.1] at
+every outer radius R) leaves through `NSCBCOutflowBC(pinf = 1/γ)`, and the
+reflection coefficient is the ratio of the incoming to the outgoing spherical
+Hankel coefficient fitted to the pressure amplitude over the last period
+(`test/sphere_dipole.jl`). A linear model of the boundary relation for the
+exact field (the l = 1 mode, gas at rest, the angular divergence left in the
+right-hand side as `beta_t` ≈ M ≈ 1e-3 leaves it) gives 0.01903 and 0.02399
+for the plane form at R = 2.1 under `sigma` = 0 and 0.25, 7.21e-4 and
+1.89e-4 for the curvature term at R = 2.1 and 4.1, and 1.44e-3 at R = 2.1 for
+the curvature term written on u_r, −n_c ρc² u_r/2r, instead of on p′.
+
+| R | kR | `sigma` | plane form | curvature term | 1/(2kR) | 1/(2(kR)²) |
+|---|---|---|---|---|---|---|
+| 2.1 | 26.4 | 0 | 1.901e-2 | 1.002e-3 | 1.895e-2 | 7.18e-4 |
+| 2.1 | 26.4 | 0.25 (default) | 2.395e-2 | 1.002e-3 | | |
+| 2.1 | 26.4 | 1 | | 1.327e-3 | | |
+| 4.1 | 51.5 | 0 | 9.718e-3 | 3.489e-4 | 9.705e-3 | 1.88e-4 |
+| 4.1 | 51.5 | 0.25 (default) | 1.220e-2 | 3.489e-4 | | |
+| 4.1 | 51.5 | 1 | | 4.135e-4 | | |
+
+At R = 2.1 and `sigma` = 0 the curvature term reads 3.601e-3, 1.002e-3 and
+7.54e-4 with 64, 128 and 256 radial nodes (the plane form 1.905e-2 with 64),
+approaching the model's 7.21e-4, so about a quarter of the remainder at 128
+nodes is discretization. The fitted outgoing amplitude is within 0.3% of the
+exact one at 128 nodes under either form and 2% high at 64. The default `sigma` adds
+nothing under the curvature term, whose relaxation rate c/R (0.476 and 0.244
+at the two radii) exceeds σc/L_ref (0.125 and 0.0625); at `sigma` = 1 the
+excess, 0.024 and 0.006, adds the reflection (K − κ)/(2ω) in some phase. The
+plane form's relaxation adds σc/(2ωL_ref), 4.97e-3 and 2.49e-3, in phase.
+
+The tutorial's own grid (32 polar nodes) and default relaxation, to t = 2:
+the amplitude along the line nearest the axis is 0.999 to 1.004 of the exact
+one against 0.98 to 1.03 under the plane form, the phase within −0.003 to
++0.001 rad, and the largest pressure error settles at 1.0e-3 U from t = 0.5
+on, the value the tutorial reports with the exact solution held at the outer
+boundary.
+
+The same term at the outer face of the r-z annulus r ∈ [1/2, 3/2], n_c = 1,
+with a level over the outer sixth: an outgoing pulse of amplitude 1e-2 on
+the tile against the uniform run at the tile's spacing (49 root nodes, 411
+equal steps to t = 0.5, halfway through the exit) differs by 6.6e-7, while
+the uniform run under the plane form differs from it by 1.0e-3
+(`test/level_tests.jl`).
