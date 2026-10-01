@@ -79,6 +79,7 @@ const EXAMPLE_DIR = joinpath(@__DIR__, "src", "examples")
 const EXAMPLES = [
     "shock_capturing.jl",
     "shock_bubble.jl",
+    "shock_tube.jl",
 ]
 
 "The provenance note of an example, from the record its full run committed."
@@ -183,6 +184,7 @@ DocMeta.setdocmeta!(
         "Examples" => [
             "Shock-capturing tests" => "examples/shock_capturing.md",
             "Shock–bubble interaction" => "examples/shock_bubble.md",
+            "Reshocked mixing layer" => "examples/shock_tube.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",

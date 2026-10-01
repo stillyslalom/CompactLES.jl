@@ -1,9 +1,6 @@
 # He-driven shock tube with a perturbed He/CO2 contact on a calorically perfect
 # mixture: the deck behind a like-for-like comparison with Pyranda, which
-# carries no NASA-9 thermodynamics. examples/shock_tube.jl is the same case on
-# `Nasa9Mixture`; everything else (geometry, states, perturbation, blends,
-# boundaries, artificial properties, filter) is kept identical here so that a
-# difference between the two codes is not a difference between the two decks.
+# carries no NASA-9 thermodynamics.
 #
 #   julia --project=. -t 16 bench/he_co2_shock_tube.jl                # 768 48 2.5e-3
 #   julia --project=. -t 16 bench/he_co2_shock_tube.jl 192 12 3e-4    # smoke run

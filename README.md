@@ -233,7 +233,7 @@ See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraint
 | File | Demonstrates |
 |------|--------------|
 | `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600; periodic box, kinetic-energy diagnostic |
-| `examples/shock_tube.jl`       | He-driven Richtmyer–Meshkov shock tube; multicomponent EOS, artificial properties, optional NSCBC outflow |
+| `examples/shock_tube.jl`       | Multimode air/SF6 Richtmyer–Meshkov layer at Mach 1.5 with reshock from the end wall, in 2-D; the "Reshocked mixing layer" example page |
 | `examples/piston_driver.jl`    | Oscillating full-state Dirichlet driver with non-reflecting NSCBC outflow |
 | `examples/converging_shock.jl` | Cylindrically converging shock; 1-D radial run on the regularized axis |
 

@@ -6,6 +6,31 @@ line each with the commit that delivered them; the measurements behind them are
 in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 [DESIGN.md](DESIGN.md).
 
+## Found by the examples
+
+Defects found while building the Examples pages, filed here as found; each
+example they block is held until the item closes.
+
+- [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
+  converging shock.** A spherical shock converging on an r-z quadrant (axis
+  and a symmetry plane at z = 0, 64² root, one level placed by the
+  artificial-diffusivity tag, run to R ≈ 0.17) leaves a checkerboard in the
+  density of the shocked gas that the uniform grid at the level's spacing
+  does not have. The mean undivided fourth difference of ρ, over ρ, in the
+  shell behind the shock, against the uniform 192² run: one fixed box 1.0×,
+  fixed tiles of edge 8 1.6×, tiles placed by regridding 2.6×. So the tile
+  interfaces and the regrids each contribute; A18's moving-box disturbance
+  ahead of a shock is a separate measurement. At 128² root the refined run's
+  mass changes by about ninety times the uniform 384² run's, and at R = 0.03
+  its shock radius ranges from −1.9% to +1.7% of the mean around the
+  quadrant, against +1.3% on the two fold rays alone on the uniform grid.
+  Not checked on a Cartesian grid.
+  Reproducer: `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`
+  (argument `static` for fixed tiles), at d8c451a. Holds the Spherical
+  implosion example (`CompactLES_tutorial_protos/held/spherical_implosion/`).
+  **Gate:** the three layouts within a small factor of the uniform grid on
+  that measure, and the example's refined run consistent with uniform 384².
+
 ## How to use this plan
 
 - Unchecked boxes are open deliverables. IDs are stable and name
@@ -25,30 +50,28 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 
 ## Order of work
 
-V4 comes first: it sets the cost of every later commit. The next four are
+V4 comes first: it sets the cost of every later commit. The next three are
 independent and may proceed together, subject to one heavy run at a time.
 
 1. **V4** trims the gate and the test suite, so that a commit pays only for
    the checks its change can affect.
-2. **N23** finishes refining the r-z capsule, the production configuration:
-   levels reach its axis and its symmetry plane, and three stages remain.
-3. **N4** settles `C_mu` before any external comparison: the filter fits
+2. **N4** settles `C_mu` before any external comparison: the filter fits
    behind the α = 0.47 default were made at `C_mu = 0.002`, and V1 compares
    the defaults.
-4. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
+3. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
    It supplies N18's remaining reference and V2's use case.
-5. **H2** integrates the existing molecular conduction implicitly with the ARK
+4. **H2** integrates the existing molecular conduction implicitly with the ARK
    pair, which verifies the IMEX contract on a known equation before any new
    physics depends on it. The serial pair is delivered; an MPI phase remains.
-6. **A7** draws the material boundary and the per-component field declaration
+5. **A7** draws the material boundary and the per-component field declaration
    before H3 adds the first new evolved field.
-7. **H3**, then **H4**: two temperatures with an ionization closure and the
+6. **H3**, then **H4**: two temperatures with an ionization closure and the
    electron–ion exchange, then electron and ion conduction through the implicit
    stage. H5's table readers are delivered; its adapters follow A7.
-8. **N22** sharpens the species channel's interfaces. The flux is delivered
+7. **N22** sharpens the species channel's interfaces. The flux is delivered
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
-9. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+8. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
@@ -294,31 +317,6 @@ instruments for a new interface or boundary closure are the N6 matrix
 `bench/wallfilter.jl`, `bench/wallclosure.jl` and `bench/leveltransfer.jl`; a
 candidate is qualified on the N10 budgets and the N11 shock crossings before
 promotion.
-
-- [ ] **N23 — Refine axisymmetric r-z runs (high priority).** An ICF capsule
-  in r-z with a symmetry plane at z = 0 is the production configuration, with
-  the hot spot on the axis. Delivered: a level at a slip or no-slip wall
-  (`99a7fcf`), levels on θ-collapsed r-z off the axis (`153430e`), the first
-  level at a Cartesian symmetry plane (`0e92d7c`), at an NSCBC face
-  (`9aed6e7`), on the axis and at the axis/z = 0 corner (`c2e7a39`), the opt-in
-  `level_boundaries` placing regridded levels on wall and NSCBC faces
-  (`1e15700`), and cylindrical Noh refined onto the axis as a validation row
-  (`7c629b0`); no tutorial wall stands for a mirror plane. Remaining:
-  1. Done: the `:filter` restriction folds at the plane and the axis
-     (commit `ec9361f`), and so do stacked device tiles. Regridding and
-     nesting at a fold are delivered (commit `56993d0`).
-  2. Done (commit `8b2f20e`): the nested-level convergence row takes the
-     filter, as the axis rows do; the unfiltered coupling's growing mode is
-     A16.
-  3. Done (commit `93f084c`): `level_boundaries` on by default, periodic
-     seams included, a face a level cannot carry keeping the margin.
-  4. Done: the phase change `setup(solver, Q; ...)` replaces `SwitchableBC`
-     (commit `f2d130a`), a phase may switch the artificial properties
-     (commit `bd59d6d`), and `SwitchableBC` is removed (commit `07ed3ac`).
-  The axis's sawtooth response is N24, the cylindrical slip wall's order
-  N25, and the shock-crossing mass loss A14.
-  **Gate:** per remaining stage, the refined-versus-uniform rows of
-  `test/convergence.jl` and the Noh axis rows of `test/validation.jl`.
 
 - [ ] **S15 — Run a refined hierarchy across many nodes.**
   The target is a mixing layer or a plane shock resolved by a tiled level, or
@@ -1141,6 +1139,11 @@ under [the refinement track](#refinement-for-the-production-geometry).
 
 ### AMR numerics
 
+- [x] **N23** — Refined levels reach the r-z axis, the axis/z = 0 corner, a
+  symmetry plane, walls and NSCBC faces, regrid and nest there under
+  `level_boundaries` (on by default), restrict through either `:inject` or
+  `:filter`, and run on stacked device tiles (commits `c2e7a39`, `56993d0`,
+  `ec9361f`, `2306e87`).
 - [x] **N10** — Composite conservation budgets were measured on long
   passive-species mixing and moving-refinement runs across rank counts,
   refinement depths and subcycling, and every layout is inside its
