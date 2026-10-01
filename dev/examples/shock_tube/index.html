@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Reshocked mixing layer · CompactLES.jl</title><meta name="title" content="Reshocked mixing layer · CompactLES.jl"/><meta property="og:title" content="Reshocked mixing layer · CompactLES.jl"/><meta property="twitter:title" content="Reshocked mixing layer · CompactLES.jl"/><meta name="description" content="Documentation for CompactLES.jl."/><meta property="og:description" content="Documentation for CompactLES.jl."/><meta property="twitter:description" content="Documentation for CompactLES.jl."/><meta property="og:url" content="https://stillyslalom.github.io/CompactLES.jl/examples/shock_tube/"/><meta property="twitter:url" content="https://stillyslalom.github.io/CompactLES.jl/examples/shock_tube/"/><link rel="canonical" href="https://stillyslalom.github.io/CompactLES.jl/examples/shock_tube/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">CompactLES.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../reference/input-deck-cheat-sheet/">Cheat sheet</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../tutorials/coalescing_shock/">Coalescing shock</a></li><li><a class="tocitem" href="../../tutorials/shock_tube/">Shock tube</a></li><li><a class="tocitem" href="../../tutorials/acoustic_interface/">Acoustic interface</a></li><li><a class="tocitem" href="../../tutorials/sound_absorption/">Sound absorption</a></li><li><a class="tocitem" href="../../tutorials/loschmidt_cell/">Loschmidt cell</a></li><li><a class="tocitem" href="../../tutorials/richtmyer_meshkov/">Richtmyer–Meshkov instability</a></li><li><a class="tocitem" href="../../tutorials/rayleigh_taylor/">Rayleigh–Taylor instability</a></li><li><a class="tocitem" href="../../tutorials/supernova_remnant/">Supernova remnant</a></li><li><a class="tocitem" href="../../tutorials/imploding_shock/">Imploding shock</a></li><li><a class="tocitem" href="../../tutorials/advected_bubbles/">Advected bubbles</a></li><li><a class="tocitem" href="../../tutorials/axis_crossing_vortex/">Axis-crossing vortex</a></li><li><a class="tocitem" href="../../tutorials/oscillating_sphere/">Oscillating sphere</a></li></ul></li><li><span class="tocitem">Examples</span><ul><li><a class="tocitem" href="../shock_capturing/">Shock-capturing tests</a></li><li><a class="tocitem" href="../shock_bubble/">Shock–bubble interaction</a></li><li class="is-active"><a class="tocitem" href>Reshocked mixing layer</a><ul class="internal"><li><a class="tocitem" href="#Gases-and-waves"><span>Gases and waves</span></a></li><li><a class="tocitem" href="#Tube"><span>Tube</span></a></li><li><a class="tocitem" href="#Run"><span>Run</span></a></li><li><a class="tocitem" href="#Waves"><span>Waves</span></a></li><li><a class="tocitem" href="#Width-and-mixing"><span>Width and mixing</span></a></li><li><a class="tocitem" href="#Images"><span>Images</span></a></li><li><a class="tocitem" href="#What-this-checks"><span>What this checks</span></a></li></ul></li><li><a class="tocitem" href="../taylor_green/">Taylor–Green vortex</a></li></ul></li><li><span class="tocitem">How-to guides</span><ul><li><a class="tocitem" href="../../how-to/problem-setup/">Define a problem</a></li><li><a class="tocitem" href="../../how-to/boundary-conditions/">Choose boundary conditions</a></li><li><a class="tocitem" href="../../how-to/numerics-choices/">Choose numerics</a></li><li><a class="tocitem" href="../../how-to/run-control/">Control a run</a></li><li><a class="tocitem" href="../../how-to/output-restart/">Write output and restart</a></li><li><a class="tocitem" href="../../how-to/parallel-runs/">Run in parallel</a></li></ul></li><li><span class="tocitem">Explanation</span><ul><li><a class="tocitem" href="../../explanation/governing-equations/">Governing equations</a></li><li><a class="tocitem" href="../../explanation/discretization/">Discretization</a></li><li><a class="tocitem" href="../../explanation/regularization/">Filtering and artificial properties</a></li><li><a class="tocitem" href="../../explanation/thermodynamics/">Thermodynamics and transport</a></li><li><a class="tocitem" href="../../explanation/geometry/">Curvilinear coordinates</a></li><li><a class="tocitem" href="../../explanation/open-boundaries/">Open boundaries</a></li><li><a class="tocitem" href="../../explanation/parallel-compact-solve/">Parallel compact solve</a></li><li><a class="tocitem" href="../../explanation/verification-validation/">Verification and validation</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../../reference/capabilities/">Supported combinations</a></li><li><input class="collapse-toggle" id="menuitem-7-2" type="checkbox"/><label class="tocitem" for="menuitem-7-2"><span class="docs-label">Input and runtime API</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../reference/frontend/">Problem setup</a></li><li><a class="tocitem" href="../../reference/physics/">Physics models</a></li><li><a class="tocitem" href="../../reference/geometry-boundaries/">Geometry and boundaries</a></li><li><a class="tocitem" href="../../reference/runtime/">Runtime and output</a></li><li><a class="tocitem" href="../../reference/diagnostics/">Diagnostics</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-7-3" type="checkbox"/><label class="tocitem" for="menuitem-7-3"><span class="docs-label">Advanced and extension API</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../reference/amr/">Adaptive mesh refinement</a></li><li><a class="tocitem" href="../../reference/operators/">Operators and decomposition</a></li><li><a class="tocitem" href="../../reference/extensions/">Extending CompactLES</a></li></ul></li><li><a class="tocitem" href="../../reference/">Public API index</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Reshocked mixing layer</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Reshocked mixing layer</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/stillyslalom/CompactLES.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/stillyslalom/CompactLES.jl/blob/main/examples/shock_tube.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Reshocked-mixing-layer"><a class="docs-heading-anchor" href="#Reshocked-mixing-layer">Reshocked mixing layer</a><a id="Reshocked-mixing-layer-1"></a><a class="docs-heading-anchor-permalink" href="#Reshocked-mixing-layer" title="Permalink"></a></h1><div class="admonition is-info" id="Provenance-171abb7def663621"><header class="admonition-header">Provenance<a class="admonition-anchor" href="#Provenance-171abb7def663621" title="Permalink"></a></header><div class="admonition-body"><p>The figures on this page were computed on 2026-10-01 at commit <a href="https://github.com/stillyslalom/CompactLES.jl/commit/d8c451ac97b1599f14fbcf8441e861366758d4dd"><code>d8c451a</code></a>, with Julia 1.11.4 on 1 rank × 8 threads of a 12th Gen Intel(R) Core(TM) i9-12900K, on 640 × 128 and 320 × 64 nodes, in 13 min. They are reproduced by <code>julia --project=docs -t 8 examples/shock_tube.jl</code>.</p></div></div><p>A shock that crosses a perturbed interface between two gases leaves the perturbation growing, and Richtmyer–Meshkov instability follows a single mode of it from air into SF6 through its linear stage. In a shock tube closed at the far end, the shock transmitted into the heavy gas reflects from the end wall and crosses the interface a second time, now from the heavy gas into the light one. This reshock gives the layer a second and larger velocity jump at a time when its perturbations have grown to a finite amplitude. Vetter and Sturtevant (1995) studied an air/SF6 interface in a shock tube at Mach 1.5 with reshock from the end wall.</p><p>This page calculates a layer between the same two gases, struck by a shock of the same strength, in two dimensions and with a band of modes on the interface. It follows the layer through the first shock, through reshock, and through the waves that pass between the layer and the end wall afterwards, and asks how the layer grows in each of these stages. The waves are compared with the exact solution in one dimension, and the width of the layer and its molecular mixing with a second calculation on a grid twice as coarse, to show what the calculation settles and what it does not.</p><p>The script takes five settings: <code>ny</code>, the rows of nodes across the tube in the main run, which a second run halves; <code>Mach</code>, the Mach number of the incident shock; <code>tfinal</code>, the time at which the runs end; <code>seed</code>, which draws the phases of the interface&#39;s modes; and <code>smoke</code>. With <code>smoke=true</code> the runs have 16 and 10 rows, which checks that the page still runs; the figures come from the full run.</p><pre><code class="language-julia hljs">using CompactLES   # re-exports MPI
+using CompactLES.Regions
+MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+
+using CairoMakie
+using Printf
+CairoMakie.activate!(type = &quot;png&quot;)
+
+
+opt = CompactLES.script_args(ARGS, (ny = 128, Mach = 1.5, tfinal = 3e-3, seed = 1,
+                                    smoke = false))
+grids = opt.smoke ? (16, 10) : (opt.ny, opt.ny ÷ 2)</code></pre><h2 id="Gases-and-waves"><a class="docs-heading-anchor" href="#Gases-and-waves">Gases and waves</a><a id="Gases-and-waves-1"></a><a class="docs-heading-anchor-permalink" href="#Gases-and-waves" title="Permalink"></a></h2><p>The air and the SF6 start at 295 K and atmospheric pressure. The incident shock heats the air to 390 K, and the shock reflected from the end wall heats the SF6 to 374 K. <code>IdealMixture</code> holds each species at its room-temperature heat capacities. With the temperature-dependent heat capacities of <code>Nasa9Mixture</code>, the one-dimensional wave speeds below change by at most 2.4 m/s, and by at most 1.7%, for the slow shock reflected from the end wall; the velocity jumps and Atwood numbers change by less than 0.3%.</p><p>For a plane, sharp interface the waves follow from three Riemann problems, each solved by <code>riemann_interface</code>. When the incident shock arrives, the shocked air meets SF6 at rest: a shock is transmitted into the SF6, another is reflected into the air, and the interface moves off at the contact velocity, the velocity jump <span>$\Delta u$</span> of the first shock. When the transmitted shock reaches the end wall, the shocked SF6 meets its own mirror image, whose velocity is reversed, and a shock is reflected that brings the gas to rest. When that shock reaches the interface, the gas at rest behind it meets the shocked air: a shock is transmitted into the air, a rarefaction is reflected into the SF6, and the interface takes a new velocity. The difference between the two interface velocities is the velocity jump of reshock. The Atwood number <span>$A = (\rho_2 - \rho_1)/(\rho_2 + \rho_1)$</span>, with <span>$\rho_2$</span> the density of the SF6 and <span>$\rho_1$</span> that of the air, is printed for the gases at rest and for the gases either side of the interface after each shock.</p><pre><code class="language-julia hljs">eos = IdealMixture([&quot;Air&quot;, &quot;SF6&quot;])
+p0, T0 = 101_325.0, 295.0
+air = Prim(Y = mass_fractions(eos, &quot;Air&quot; =&gt; 1.0; basis = :mole), p = p0, T_ion = T0)
+sf6 = Prim(Y = mass_fractions(eos, &quot;SF6&quot; =&gt; 1.0; basis = :mole), p = p0, T_ion = T0)
+density(state) = thermodynamic_state(eos, state).rho
+atwood(light, heavy) = (density(heavy) - density(light)) / (density(heavy) + density(light))
+
+Lx, Ly = 0.5, 0.1
+x_shock, x_interface = 0.20, 0.25
+incident = shock_jump(eos, air, opt.Mach)
+impact = riemann_interface(eos, incident.post, sf6)
+t_impact = (x_interface - x_shock) / incident.shock_speed
+t_wall = t_impact + (Lx - x_interface) / impact.right_speed
+gas = impact.right
+wall = riemann_interface(eos, gas, Prim(u = (-gas.u[1], 0.0, 0.0), p = gas.p,
+                                        T_ion = gas.T_ion, Y = gas.Y))
+x_wall_meet = x_interface + impact.u_star * (t_wall - t_impact)
+t_reshock = t_wall + (Lx - x_wall_meet) / (impact.u_star - wall.left_speed)
+x_reshock = x_wall_meet + impact.u_star * (t_reshock - t_wall)
+reshock = riemann_interface(eos, impact.left, wall.left)
+
+@printf(&quot;incident shock %.1f m/s; behind it %.1f m/s, %.1f kPa, %.1f K\n&quot;,
+        incident.shock_speed, incident.velocity, incident.post.p / 1e3,
+        incident.post.T_ion)
+@printf(&quot;first shock at %.3f ms: transmitted shock %.1f m/s, reflected %s %.1f m/s, \
+        interface %.1f m/s, A = %.3f before, %.3f after\n&quot;, 1e3t_impact,
+        impact.right_speed, impact.left_wave, impact.left_speed, impact.u_star,
+        atwood(air, sf6), atwood(impact.left, impact.right))
+@printf(&quot;end wall at %.3f ms: reflected shock %.1f m/s\n&quot;, 1e3t_wall, wall.left_speed)
+@printf(&quot;reshock at %.3f ms, %.1f mm from the wall: transmitted %s %.1f m/s, \
+        reflected %s %.1f m/s, interface %.1f m/s, Δu = %.1f m/s, A = %.3f\n&quot;,
+        1e3t_reshock, 1e3(Lx - x_reshock), reshock.left_wave, reshock.left_speed,
+        reshock.right_wave, reshock.right_speed, reshock.u_star,
+        impact.u_star - reshock.u_star, atwood(reshock.left, reshock.right))</code></pre><p>The interface and the reflected shock meet 32 mm from the end wall, and the interface then moves back toward the inflow. The velocity jump of reshock, 216 m/s, is larger than that of the first shock, 157.5 m/s. The Atwood number is 0.67 for the gases at rest, 0.73 for the gases either side of the interface after the first shock and 0.76 after reshock.</p><h2 id="Tube"><a class="docs-heading-anchor" href="#Tube">Tube</a><a id="Tube-1"></a><a class="docs-heading-anchor-permalink" href="#Tube" title="Permalink"></a></h2><p>The tube is 0.5 m long and 0.1 m wide, and the third dimension is collapsed. The shock starts 0.20 m from the inflow end and travels toward increasing <span>$x$</span>; the mean position of the interface is at 0.25 m and the end wall, a <code>SlipWallBC</code>, at 0.5 m. Across the tube the faces are periodic, so the calculation has no side walls and no boundary layers on them.</p><p>The shocked air enters at <span>$x = 0$</span> through an <code>NSCBCInflowBC</code>, which relaxes the velocity, temperature and composition of the entering gas toward a target state and lets waves traveling upstream leave. The gas behind each wave that leaves through the face differs from the target before it, so the target, a function of position and time, switches as each one leaves: to the air behind the reflected shock at 1.30 ms, and to the air behind the shock transmitted at reshock at 2.64 ms. The times come from the one-dimensional solution. In the Richtmyer–Meshkov instability tutorial, the interface speeds up when the target does not switch.</p><p><code>Multimode</code> displaces the interface by a sum of the modes with 4 to 12 waves across the tube, wavelengths from 8.3 to 25 mm, of equal amplitude and with phases drawn from <code>seed</code>; the root-mean-square displacement is 0.5 mm. The <code>1</code> in <code>Slab</code> is the first coordinate, along the tube. Across the displaced interface the two gases blend by volume along an error function, through a <code>Layer</code> whose <code>width</code> makes the thickness of the blend, the difference in composition divided by its largest gradient, 5 mm. That is the thickness of the layer in the experiment of Collins and Jacobs that the tutorial repeats. The thickness is set in meters rather than in cells, so both grids start from the same layer. The incident shock is spread over the default three cells.</p><pre><code class="language-julia hljs">t_reflected = t_impact + x_interface / abs(impact.left_speed)
+t_retransmitted = t_reshock + x_reshock / abs(reshock.left_speed)
+inflow_state(x, y, z, t) = t &lt; t_reflected ? incident.post :
+                           t &lt; t_retransmitted ? impact.left : reshock.left
+
+modes, rms, delta = 4:12, 5e-4, 5e-3
+eta = Multimode(lengths = (Ly,), modes = modes, rms = rms, seed = opt.seed,
+                mean = x_interface)
+problem = Problem(
+    name = &quot;air/SF6 Richtmyer–Meshkov with reshock&quot;,
+    eos = eos,
+    domain = ((0.0, Lx), (0.0, Ly), (0.0, 1.0)),
+    bcs = ((NSCBCInflowBC(incident.post; target = inflow_state), SlipWallBC()),
+           PeriodicBC(), PeriodicBC()),
+    ic = Layers(air,
+                Slab(1, hi = x_shock) =&gt; incident.post,
+                Layer(Slab(1, lo = eta), sf6; width = delta / sqrt(pi));
+                profile = :erf),
+)</code></pre><h2 id="Run"><a class="docs-heading-anchor" href="#Run">Run</a><a id="Run-1"></a><a class="docs-heading-anchor-permalink" href="#Run" title="Permalink"></a></h2><p>The main run has 128 rows of nodes across the tube and square cells, 640 columns at a spacing of 0.78 mm: 10.7 cells per shortest wavelength and 6.4 across the initial blend. The second run has 64 rows. The numerics are the defaults. Every 5 µs each run records three averages over the planes of constant <span>$x$</span>: the pressure, the mole fraction <span>$X$</span> of the SF6, and <span>$X(1 - X)$</span>. At seven times it also keeps the mole fraction field.</p><pre><code class="language-julia hljs">frame_times = [0.0, 0.7, 1.45, 1.6, 2.0, 2.5, 3.0] .* 1e-3
+frame_times = filter(&lt;=(opt.tfinal), frame_times)
+
+function simulate(ny)
+    nx = round(Int, Lx / Ly * ny)
+    solver, Q = setup(problem, Numerics(n_global = (nx, ny, 1)))
+    t = Float64[]
+    p_mean, X_mean, XX_mean = Vector{Float64}[], Vector{Float64}[], Vector{Float64}[]
+    frames = []
+    x = Ref(Float64[])
+    y = Ref(Float64[])
+    sample = Callback(EveryTime(5e-6), function (solver, Q)
+        snap = field_snapshot(solver, Q; fields = (:X, :p))
+        X = snap[:X][:, :, 1, 2]                 # SF6 mole fraction
+        x[], y[] = snap.coords[1], snap.coords[2]
+        push!(t, solver.t)
+        push!(p_mean, vec(sum(snap[:p][:, :, 1], dims = 2)) ./ ny)
+        push!(X_mean, vec(sum(X, dims = 2)) ./ ny)
+        push!(XX_mean, vec(sum(X .* (1 .- X), dims = 2)) ./ ny)
+        if any(tf -&gt; abs(solver.t - tf) &lt; 2.5e-6, frame_times) &amp;&amp;
+           all(f -&gt; abs(f.t - solver.t) &gt; 2.5e-6, frames)
+            push!(frames, (t = solver.t, X = X))
+        end
+        nothing
+    end)
+    wall_time = @elapsed run!(solver, Q; tfinal = opt.tfinal, callback = sample)
+    @printf(&quot;%d × %d nodes, h = %.2f mm: %d steps in %.0f s\n&quot;, nx, ny, 1e3Ly / ny,
+            solver.step, wall_time)
+    return (; nx, ny, h = Ly / ny, x = x[], y = y[], t, p_mean, X_mean, XX_mean, frames)
+end
+runs = [simulate(ny) for ny in grids]</code></pre><h2 id="Waves"><a class="docs-heading-anchor" href="#Waves">Waves</a><a id="Waves-1"></a><a class="docs-heading-anchor-permalink" href="#Waves" title="Permalink"></a></h2><p>The waves are found in the plane-averaged pressure. A shock is where the pressure crosses the middle of its one-dimensional jump, searching from the side the shock moves toward; the interface is where the plane-averaged mole fraction <span>$\langle X \rangle$</span> of SF6 first rises through one half, a position the figures call <span>$x_{50}$</span>. Each velocity is the slope of a straight line fitted to the positions over a window of time, chosen so that no other wave crosses the feature in it.</p><pre><code class="language-julia hljs">function crossing(x, v, level; from = :left, above = true)
+    test = above ? (&gt;(level)) : (&lt;(level))
+    i = from === :left ? findfirst(test, v) : findlast(test, v)
+    i === nothing &amp;&amp; return NaN
+    j = from === :left ? i - 1 : i + 1
+    (j &lt; 1 || j &gt; length(v)) &amp;&amp; return x[i]
+    return x[j] + (level - v[j]) / (v[i] - v[j]) * (x[i] - x[j])
+end
+
+function slope(t, x, window)
+    s = findall(k -&gt; window[1] &lt;= t[k] &lt;= window[2] &amp;&amp; isfinite(x[k]), eachindex(t))
+    length(s) &lt; 3 &amp;&amp; return NaN
+    a, b = t[s], x[s]
+    am, bm = sum(a) / length(a), sum(b) / length(b)
+    return sum((a .- am) .* (b .- bm)) / sum((a .- am) .^ 2)
+end
+
+p_star, p_wall, p_reshock = impact.p_star, wall.p_star, reshock.p_star
+midway(a, b) = (a + b) / 2
+function tracks(run)
+    x = run.x
+    return (
+        incident = [crossing(x, p, midway(p0, incident.post.p); from = :right)
+                    for p in run.p_mean],
+        transmitted = [crossing(x, p, midway(p0, p_star); from = :right)
+                       for p in run.p_mean],
+        wall_reflected = [crossing(x, p, midway(p_star, p_wall); from = :right,
+                                   above = false) for p in run.p_mean],
+        retransmitted = [crossing(x, p, midway(p_star, p_reshock)) for p in run.p_mean],
+        interface = [crossing(x, X, 0.5) for X in run.X_mean],
+    )
+end
+
+windows = [
+    (&quot;incident shock&quot;, :incident, (10e-6, t_impact - 10e-6), incident.shock_speed),
+    (&quot;transmitted shock&quot;, :transmitted, (t_impact + 100e-6, t_wall - 100e-6),
+     impact.right_speed),
+    (&quot;interface&quot;, :interface, (t_impact + 100e-6, t_reshock - 100e-6), impact.u_star),
+    (&quot;reflected shock&quot;, :wall_reflected, (t_wall + 50e-6, t_reshock - 100e-6),
+     wall.left_speed),
+    (&quot;shock into the air&quot;, :retransmitted, (t_reshock + 100e-6, t_reshock + 400e-6),
+     reshock.left_speed),
+    (&quot;interface after reshock&quot;, :interface, (t_reshock + 50e-6, t_reshock + 300e-6),
+     reshock.u_star),
+]
+trs = [tracks(run) for run in runs]
+@printf(&quot;%-26s %8s %8s %8s\n&quot;, &quot;velocity (m/s), rows:&quot;, grids..., &quot;1-D&quot;)
+for (label, f, w, exact) in windows
+    @printf(&quot;%-26s %8.1f %8.1f %8.1f\n&quot;, label,
+            (slope(run.t, getfield(tr, f), w) for (run, tr) in zip(runs, trs))..., exact)
+end
+
+fig = Figure(size = (760, 520))
+ax = Axis(fig[1, 1], xlabel = &quot;x (m)&quot;, ylabel = &quot;t (ms)&quot;)
+fine = runs[1]
+hm = heatmap!(ax, fine.x, 1e3 .* fine.t, log10.(reduce(hcat, fine.p_mean) ./ p0),
+              colormap = :grays)
+Colorbar(fig[1, 2], hm, label = &quot;log₁₀(p / p₀), plane average&quot;)
+seg(x1, t1, speed, t2) = ([x1, x1 + speed * (t2 - t1)], 1e3 .* [t1, t2])
+oned = [
+    seg(x_shock, 0.0, incident.shock_speed, t_impact),
+    seg(x_interface, t_impact, impact.left_speed, t_reflected),
+    seg(x_interface, t_impact, impact.right_speed, t_wall),
+    seg(Lx, t_wall, wall.left_speed, t_reshock),
+    seg(x_reshock, t_reshock, reshock.left_speed, min(t_retransmitted, opt.tfinal)),
+    seg(x_reshock, t_reshock, reshock.right_speed,
+        t_reshock + (Lx - x_reshock) / reshock.right_speed),
+]
+for (xs, ts) in oned
+    lines!(ax, xs, ts, color = :orange, linewidth = 1.5)
+end
+interface_1d = [seg(x_interface, t_impact, impact.u_star, t_reshock),
+                seg(x_reshock, t_reshock, reshock.u_star, opt.tfinal)]
+for (xs, ts) in interface_1d
+    lines!(ax, xs, ts, color = :orange, linestyle = :dash, linewidth = 1.5)
+end
+lines!(ax, trs[1].interface, 1e3 .* fine.t, color = :dodgerblue, linewidth = 1)
+limits!(ax, 0, Lx, 0, 1e3opt.tfinal)
+Legend(fig[2, 1:2], [LineElement(color = :orange), LineElement(color = :orange,
+                     linestyle = :dash), LineElement(color = :dodgerblue)],
+       [&quot;1-D waves, sharp interface&quot;, &quot;1-D interface&quot;, &quot;mean mole fraction 0.5&quot;],
+       orientation = :horizontal, framevisible = false)</code></pre><p><img src="../../assets/examples/shock_tube/xt.png" alt="Plane-averaged pressure against position and time"/></p><p>The figure shows the 128-row run, with the waves of the one-dimensional solution drawn over it. The fitted velocities are</p><table><tr><th style="text-align: left">velocity (m/s)</th><th style="text-align: right">128 rows</th><th style="text-align: right">64 rows</th><th style="text-align: right">1-D</th></tr><tr><td style="text-align: left">incident shock</td><td style="text-align: right">515.4</td><td style="text-align: right">511.3</td><td style="text-align: right">516.5</td></tr><tr><td style="text-align: left">shock transmitted into the SF6</td><td style="text-align: right">241.0</td><td style="text-align: right">240.9</td><td style="text-align: right">241.1</td></tr><tr><td style="text-align: left">interface after the first shock</td><td style="text-align: right">158.7</td><td style="text-align: right">157.6</td><td style="text-align: right">157.5</td></tr><tr><td style="text-align: left">shock reflected from the end wall</td><td style="text-align: right">−90.8</td><td style="text-align: right">−90.8</td><td style="text-align: right">−90.9</td></tr><tr><td style="text-align: left">shock transmitted into the air at reshock</td><td style="text-align: right">−403.8</td><td style="text-align: right">−405.3</td><td style="text-align: right">−404.2</td></tr><tr><td style="text-align: left">interface after reshock</td><td style="text-align: right">−64.2</td><td style="text-align: right">−60.9</td><td style="text-align: right">−58.7</td></tr></table><p>The shocks travel at their one-dimensional speeds to within 1% on both grids, and the reflected shock meets the layer where and when it meets the sharp interface. After the first shock, <span>$x_{50}$</span> moves at the contact velocity to within 0.8%. After reshock it moves faster than the one-dimensional interface, by 4% on 64 rows and 9% on 128.</p><p>The plane <span>$x_{50}$</span> is not a material surface. After reshock the layer grows faster toward the air than toward the SF6: on 64 rows, the plane where <span>$\langle X \rangle = 0.05$</span> moves at −78 m/s and the plane where it is 0.95 at −45 m/s. A position that follows the SF6 as a whole is that of a sharp interface holding the same volume of it, the end wall less <span>$\int \langle X \rangle\, dx$</span>; on 64 rows it moves at −58.4 m/s after reshock, within 0.5% of the one-dimensional interface.</p><p>From 1.9 ms the layer leaves the dashed line, which continues the interface velocity of reshock and leaves out the waves that follow it. The rarefaction reflected into the SF6 at reshock reaches the end wall, 32 mm away, after 0.2 ms, is reflected there, and returns to the layer; the layer decelerates, comes to rest near 2.3 ms and then moves slowly toward the end wall.</p><h2 id="Width-and-mixing"><a class="docs-heading-anchor" href="#Width-and-mixing">Width and mixing</a><a id="Width-and-mixing-1"></a><a class="docs-heading-anchor-permalink" href="#Width-and-mixing" title="Permalink"></a></h2><p>The width <span>$h$</span> of the layer is the distance between the planes where <span>$\langle X \rangle$</span> is 0.05 and 0.95. The molecular mixing fraction</p><p class="math-container">\[\Theta = \frac{\int \langle X (1 - X) \rangle\, dx}
+              {\int \langle X \rangle \left(1 - \langle X \rangle\right) dx}\]</p><p>compares the mixed gas in the layer with the amount its mean profile would hold if every plane had a uniform composition: it is 1 for a layer mixed across each plane and 0 for gases interleaved without mixing. Both measures use the mole fraction, which for gases at a common pressure and temperature is the fraction of the volume each occupies. <code>mix_width</code> and <code>molecular_mixing</code> form the same kind of measure from the mass fractions, which differ for these gases, whose molar masses differ by a factor of five: a mass fraction of one half is a mole fraction of 0.17. Every node of a plane has the same weight in the average, since the grid is uniform and periodic across the tube.</p><pre><code class="language-julia hljs">function mixing(run)
+    h = [crossing(run.x, X, 0.95; from = :right, above = false) -
+         crossing(run.x, X, 0.05) for X in run.X_mean]
+    theta = [sum(XX) / sum(X .* (1 .- X)) for (X, XX) in zip(run.X_mean, run.XX_mean)]
+    return (; h, theta)
+end
+layers = [mixing(run) for run in runs]
+at(run, series, t) = series[argmin(abs.(run.t .- t))]
+
+fig = Figure(size = (760, 520))
+panels = [Axis(fig[i, 1], ylabel = l) for (i, l) in enumerate((&quot;h (mm)&quot;, &quot;Θ&quot;))]
+for (run, layer, color) in zip(runs, layers, Makie.wong_colors())
+    lines!(panels[1], 1e3 .* run.t, 1e3 .* layer.h; color, label = &quot;$(run.ny) rows&quot;)
+    lines!(panels[2], 1e3 .* run.t, layer.theta; color)
+end
+for panel in panels
+    vlines!(panel, 1e3 .* [t_impact, t_reshock], color = :gray, linestyle = :dot)
+end
+panels[2].xlabel = &quot;t (ms)&quot;
+linkxaxes!(panels...)
+hidexdecorations!(panels[1], grid = false)
+Legend(fig[0, 1], panels[1], orientation = :horizontal, framevisible = false)</code></pre><p><img src="../../assets/examples/shock_tube/mixing.png" alt="Width and molecular mixing fraction of the layer"/></p><p>The dotted lines mark the arrival of the incident shock and the reshock time of the one-dimensional solution. Each shock first compresses the layer, and its perturbations then grow. The calculation carries no molecular viscosity or diffusion: the gases mix through the artificial diffusivity and the filter, which act at the scale of the grid. The run prints the width at the start and just before the incident shock arrives,</p><pre><code class="language-julia hljs">for (run, layer) in zip(runs, layers)
+    @printf(&quot;%3d rows: h = %.1f mm at the start, %.1f mm just before the shock arrives\n&quot;,
+            run.ny, 1e3at(run, layer.h, 0.0), 1e3at(run, layer.h, t_impact - 5e-6))
+end</code></pre><p>6.8 and 6.7 mm on 128 rows and 7.1 and 7.3 mm on 64, so neither grid spreads the initial blend before the shock arrives. It also prints the growth rate of the width and the velocity of <span>$x_{50}$</span> over four windows, and the width and <span>$\Theta$</span> at four times:</p><pre><code class="language-julia hljs">phases = [(&quot;before reshock&quot;, (t_reshock - 500e-6, t_reshock - 100e-6)),
+          (&quot;after reshock&quot;, (t_reshock + 100e-6, t_reshock + 400e-6)),
+          (&quot;deceleration&quot;, (t_reshock + 500e-6, t_reshock + 800e-6)),
+          (&quot;late&quot;, (t_reshock + 900e-6, opt.tfinal))]
+println(&quot;                                  dh/dt (m/s)        interface (m/s)&quot;)
+@printf(&quot;%-16s %-14s %8d %8d %8d %8d\n&quot;, &quot;&quot;, &quot;window (ms)&quot;, grids..., grids...)
+for (label, w) in phases
+    @printf(&quot;%-16s %5.2f–%5.2f   %8.1f %8.1f %8.1f %8.1f\n&quot;, label, 1e3w[1], 1e3w[2],
+            (slope(run.t, layer.h, w) for (run, layer) in zip(runs, layers))...,
+            (slope(run.t, tr.interface, w) for (run, tr) in zip(runs, trs))...)
+end
+for (run, layer) in zip(runs, layers)
+    for t in (t_reshock - 50e-6, t_reshock + 100e-6, t_reshock + 500e-6, opt.tfinal)
+        @printf(&quot;%3d rows, %.2f ms: h = %5.1f mm, Θ = %.2f\n&quot;, run.ny, 1e3t,
+                1e3at(run, layer.h, t), at(run, layer.theta, t))
+    end
+end</code></pre><p>Before reshock the two grids give the same width: 22.3 mm on both at 1.43 ms, growing at 9.6 and 8.8 m/s over the 0.4 ms before reshock. The sawtooth on the 64-row curve, about 0.1 mm root mean square, has the period, about 10 µs, in which the layer moves one cell along the grid.</p><p>Over the 0.3 ms after reshock the layer grows at 43.7 m/s on 128 rows and 36.2 m/s on 64, four to five times its rate before reshock. With the velocity jump and the Atwood number of reshock, <span>$(dh/dt)/(A \Delta u)$</span> is 0.27 and 0.22. The grids then differ more in when the layer grows than in how far: the finer grid leads by 2 mm (7%) at 2.0 ms, and at 3 ms the widths are 60.3 and 61.6 mm, within 2%. A growth rate fitted over a fixed window after reshock differs between the grids by up to 17% of the fine grid&#39;s rate, and these grids do not settle it.</p><p>Of the four windows, the layer grows fastest between 2.0 and 2.3 ms, at 51 and 56 m/s, while it decelerates. The run prints the plane-averaged pressure on either side of the layer during the deceleration and after it:</p><pre><code class="language-julia hljs">for t in (t_reshock + 650e-6, t_reshock + 1.2e-3)
+    run, layer = runs[1], layers[1]
+    k = argmin(abs.(run.t .- t))
+    X = run.X_mean[k]
+    lo, hi = crossing(run.x, X, 0.05), crossing(run.x, X, 0.95; from = :right,
+                                                    above = false)
+    p_at(x) = run.p_mean[k][argmin(abs.(run.x .- x))]
+    @printf(&quot;%.2f ms: plane-mean pressure %.0f kPa 5 mm on the air side, \
+            %.0f kPa 5 mm on the SF6 side\n&quot;, 1e3t, p_at(lo - 5e-3) / 1e3,
+            p_at(hi + 5e-3) / 1e3)
+end</code></pre><p>At 2.13 ms the pressure is 590 kPa 5 mm on the air side of the layer and 479 kPa 5 mm on the SF6 side. The pressure falls from the light gas to the heavy one, so the deceleration is in the sense that is Rayleigh–Taylor unstable. At 2.68 ms the difference has reversed, 505 against 559 kPa, and from 2.4 ms the layer grows at 17 to 20 m/s.</p><p>The molecular mixing fraction is not settled. The first shock lowers <span>$\Theta$</span> as the perturbations grow, to 0.65 by 0.4 ms on 128 rows and more slowly to about 0.85 on 64; on 128 rows it then recovers to 0.78 by reshock. Reshock raises it on both grids for a short time before it falls again. It is lower on 128 rows than on 64 at every time after the first shock, by as much as 0.2 at 0.4 ms, and at 3 ms it is 0.57 against 0.70.</p><h2 id="Images"><a class="docs-heading-anchor" href="#Images">Images</a><a id="Images-1"></a><a class="docs-heading-anchor-permalink" href="#Images" title="Permalink"></a></h2><p>The SF6 mole fraction on both grids at seven times, in a window 100 mm long centered on <span>$x_{50}$</span>; gray is beyond the end wall.</p><pre><code class="language-julia hljs">fig = Figure()
+for (row, run) in enumerate(runs), (col, frame) in enumerate(run.frames)
+    center = at(run, trs[row].interface, frame.t)
+    center = isfinite(center) ? center : x_interface
+    panel = Axis(fig[row, col], width = 92, height = 92, xticks = [-40, 0, 40],
+                 backgroundcolor = :gray60,
+                 title = row == 1 ? @sprintf(&quot;%.2f ms&quot;, 1e3frame.t) : &quot;&quot;,
+                 xlabel = row == length(runs) &amp;&amp; col == 1 ? &quot;x − x₅₀ (mm)&quot; : &quot;&quot;,
+                 ylabel = col == 1 ? &quot;$(run.ny) rows\ny (mm)&quot; : &quot;&quot;)
+    heatmap!(panel, 1e3 .* (run.x .- center), 1e3 .* run.y, frame.X, colormap = :viridis,
+             colorrange = (0, 1))
+    limits!(panel, -50, 50, 0, 1e3Ly)
+    col &gt; 1 &amp;&amp; hideydecorations!(panel)
+    row &lt; length(runs) &amp;&amp; hidexdecorations!(panel)
+end
+Colorbar(fig[1:length(runs), end + 1], colormap = :viridis, limits = (0, 1),
+         label = &quot;SF6 mole fraction&quot;)
+colgap!(fig.layout, 6)
+resize_to_layout!(fig)</code></pre><p><img src="../../assets/examples/shock_tube/mole_fraction.png" alt="SF6 mole fraction"/></p><p>By 0.70 ms the modes have grown into spikes of SF6 in the air, rolled up at their tips. At 1.60 ms, just after reshock, the layer is compressed. From 2.0 ms it grows toward both gases, with rolled-up structures on the SF6 side as well as on the air side, and the structures merge into fewer and larger ones. The two grids show the same arrangement of structures through 1.60 ms and different ones from 2.0 ms. At 3 ms the 128-row run holds filaments of each gas a few cells thick that the 64-row run does not have.</p><h2 id="What-this-checks"><a class="docs-heading-anchor" href="#What-this-checks">What this checks</a><a id="What-this-checks-1"></a><a class="docs-heading-anchor-permalink" href="#What-this-checks" title="Permalink"></a></h2><ul><li>The shocks of the first impact, of the reflection from the end wall and of reshock travel at the speeds of the one-dimensional Riemann solutions to within 1% on 64 and 128 rows.</li><li>The layer moves at the contact velocity after the first shock. After reshock the plane where the mean mole fraction is one half drifts as the layer grows unevenly, and on 64 rows the volume of SF6 moves at the contact velocity to within 0.5%.</li><li>Before reshock the width of the layer is the same on both grids. After reshock the width differs by up to 7% between them, and the growth rate over a fixed window by up to 17%; the widths at the end of the run agree to 2%.</li><li>The molecular mixing fraction is lower on the finer grid at every time after the first shock, by as much as 0.2, and is not settled on these grids.</li><li>The layer grows fastest while the waves reflected from the end wall decelerate it with the pressure higher on the air side.</li></ul><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../shock_bubble/">« Shock–bubble interaction</a><a class="docs-footer-nextpage" href="../taylor_green/">Taylor–Green vortex »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 1 October 2026 13:58">Thursday 1 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

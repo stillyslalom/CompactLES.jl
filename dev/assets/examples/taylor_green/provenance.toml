@@ -1,0 +1,15 @@
+command = "mpiexec -n 8 julia --project=docs -t 1 examples/taylor_green.jl"
+commit = "3acb4e2e05cbca13518344638b761ff94df629af"
+date = "2026-10-01"
+dirty = false
+grid = "64³ and 32³ nodes"
+hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
+julia = "1.11.4"
+ranks = 8
+threads = 1
+wall_seconds = 1288.2
+
+[settings]
+N = 64
+smoke = false
+tfinal = 12.0
