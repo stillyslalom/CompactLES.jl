@@ -137,9 +137,6 @@ include("capability_cases.jl")
                 "host backend only",
                 plane, Numerics(n_global=n1, execution=Execution(backend=C.device()),
                                 amr=AMR(initial=at_plane)))
-        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC takes " *
-                "level_restriction = :inject", axis_rz,
-                Numerics(n_global=n1, amr=AMR(initial=at_plane, level_restriction=:filter)))
         # A second level reaching the axis starts on its parent's first node,
         # offset -1; one at offset 0 stops short of it inside the margin.
         rejects("offset -1 reaches the AxisBC of dimension 1",

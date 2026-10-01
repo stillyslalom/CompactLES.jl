@@ -484,7 +484,7 @@ the deep regrid carry the faces of whatever regions they are given
 clamp of the box regrid, the lattice clip of the tiled and the deep regrid
 and the frontend's shapes stop at a face `_placement_faces` names (the
 eligible faces of `_region_boundaries`, a symmetry plane or the r-z axis on
-the host backend under `:inject`) instead of the margin. A box on a face
+the host backend) instead of the margin. A box on a face
 that takes no box buffer widens until its box spans the interpolation order
 (`_placement_extent`); a fold keeps its buffer (`_unbuffered_faces`). A lattice
 reaches a face only where the tile next to the face's tile stays the margin
@@ -497,8 +497,8 @@ node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
-alike; a face the run's configuration leaves out (a fold on the device backend
-or under `:filter`) keeps the margin this way rather than failing setup. The
+alike; a face the run's configuration leaves out (a fold on the device
+backend) keeps the margin this way rather than failing setup. The
 same keyword lets them cross a periodic seam ("Levels across a periodic
 seam"). With it off every face keeps the margin.
 
@@ -536,16 +536,23 @@ the fold's mirror. The covered mask treats the face as closed, so the root's
 node at h/2, whose cell spans [0, h], is covered on both halves, and the
 tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
 Setup accepts an explicit region, box or tiled `refine` reaching a plane, of
-a Cartesian run or at z of an r-z run, on the host backend under
-`level_restriction = :inject`, and the regrid places one there under
-`level_boundaries`. A tile built by a regrid or a restart takes its folded
-faces from its region (`_region_folds`), and the carries count the extra
+a Cartesian run or at z of an r-z run, on the host backend, and the regrid
+places one there under `level_boundaries`. A tile built by a regrid or a
+restart takes its folded faces from its region (`_region_folds`), and the
+carries count the extra
 node: `_carry_over!` maps parent node g to fine node 3(g − offset) − 2 +
 lead on either tile and copies the node beyond a kept plane, and the
 migration, the replicated gather (`_gather_replicated`) and the HDF5
 checkpoint's tile datasets (`_tile_fine_extent`) take the folded extent.
-Stacked device tiles and the `:filter` restriction are refused by name; a run
-whose levels stay the margin off its planes is unrestricted.
+Under `:filter` the restriction chain runs over the tile's folded extent,
+and each stage along a folded dimension folds its filter at the plane with
+the component's parity (`plan_transfer`'s `lo_fold` / `hi_fold`), then
+subsamples one node past the lead: the filter there is the interior
+stencil on the even or odd continuation, so a corner tile between two
+planes reproduces its periodic image, a level across both seams of the
+doubled domain, to round-off (`test/level_tests.jl`). A tile on the device
+backend is refused by name; a run whose levels stay the margin off its
+planes is unrestricted.
 
 **A nested level at a fold.** Level ℓ's node n lies n − 1 level spacings
 h/3^ℓ from the root's first node, so the nodes coincident with the root's
@@ -691,9 +698,10 @@ the axis face as closed, so the root's node at h/2 is covered on both
 halves of its cell [0, h], and the tile's node at h/6 carries the weight
 (h/6)(h/3), the exact r-weighted measure of [0, h/3]. A corner tile at the
 axis and a symmetry plane at z = 0, the capsule's layout, folds on both
-dimensions; the box mirror takes them in turn. The restrictions are the
-plane's: the host backend and `:inject`; a regridded level and a nested one
-reach the axis as they reach a plane. The resolved-θ axis, an antipodal
+dimensions; the box mirror takes them in turn. The restriction is the
+plane's: the host backend; a regridded level and a nested one reach the
+axis as they reach a plane, and the `:filter` restriction folds there with
+the axis parities. The resolved-θ axis, an antipodal
 butterfly, stays forbidden.
 Unfiltered, the grid-scale waves a coarse-fine face emits reach the axis,
 where the cylindrical divergence does not hold the π mode of the radial
@@ -1710,7 +1718,7 @@ Configurations rejected at setup, and the reason:
   the patches of the level above at every parent-fed face and span ≥ 4
   parent nodes per active dimension; it may reach a slip, no-slip or NSCBC
   face of the domain instead, or a symmetry plane or the r-z axis (host
-  backend, `:inject`), and no other domain face, and it may cross a periodic
+  backend), and no other domain face, and it may cross a periodic
   seam, one box spanning at most the period less the margin at either end. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`
   reaches that wall or `level_boundaries` places them there, and must still

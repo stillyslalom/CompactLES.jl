@@ -88,8 +88,9 @@
 #   pentadiagonal filter 6.01
 #   a level at a wall (fine wall window against the uniform run at the fine
 #   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68 |
-#   two levels at a symmetry plane C6 6.33 | three levels, the second at
-#   the plane (its plane window, filtered) C6 5.49
+#   two levels at a symmetry plane C6 6.33 | the same under the :filter
+#   restriction 1.55 | three levels, the second at the plane (its plane
+#   window, filtered) C6 5.49
 #   a level at the r-z axis (fine axis window against the uniform run at the
 #   fine spacing, equal steps, filtered, t = 0.3): C6 6.43 | viscous 6.47 |
 #   the corner of the axis and a plane at z = 0, fold window, C6 7.11
@@ -1001,6 +1002,15 @@ evolution_study("two levels at a symmetry plane, C6", LEVEL_PLANE_NS,
                 N -> plane_level_case(N), plane_level_reference;
                 primary=:wall, tfinal=0.4, steps=N -> 6N, patches=(2,),
                 expect=6.3, tol=0.8, recorded=6.33)
+# The same under the :filter restriction, whose filter folds at the plane:
+# the attenuation it writes into the covered nodes at every step sets the
+# order, as it does away from a plane (the two-level entropy wave of
+# test/level_tests.jl), and the plane adds nothing to it.
+evolution_study("two levels at a symmetry plane, :filter", LEVEL_PLANE_NS,
+                N -> plane_level_case(N; level_restriction=:filter),
+                plane_level_reference;
+                primary=:wall, tfinal=0.4, steps=N -> 6N, patches=(2,),
+                expect=1.5, tol=0.5, recorded=1.55)
 # A second level nested in the first at the same plane: its region starts on
 # level 1's node at h/6, one node outside the lattice coincident with the
 # root's, and its own first node lies at h/18 (`plane_nest_case`). Its plane

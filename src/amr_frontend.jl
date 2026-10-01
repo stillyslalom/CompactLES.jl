@@ -115,12 +115,12 @@ copies `base` with the given keywords replaced.
 - `level_boundaries` (default `true`): shapes and tags may place a level on
   a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or
   `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run
-  on the host backend under `:inject` restriction. The level carries the
+  on the host backend. The level carries the
   face's condition at its own spacing, so a feature at a wall, an open face
   or a fold is refined up to the face. A level also crosses a periodic seam,
   one box spanning at most the period less the margin at either end. Other
-  faces keep the margin, among them a fold on the device backend or under
-  `:filter` restriction. With `tile`, a face keeps it also when the tile
+  faces keep the margin, among them a fold on the device backend. With
+  `tile`, a face keeps it also when the tile
   next to the face's tile would come within the margin of the
   domain: an edge below `max(n_halo, 4)`, or a partial last lattice cell at
   the high face spanning fewer parent cells than that. A tagged feature
@@ -386,12 +386,12 @@ end
 # The domain faces a shape's level may reach: none under `level_boundaries =
 # false`, and otherwise the faces whose condition a refined level carries
 # (`_level_boundary_condition`), a fold (a symmetry plane, the r-z axis) only
-# where setup admits a level on one (the host backend with `:inject`
-# restriction; the shapes are static here).
+# where setup admits a level on one (the host backend; the shapes are static
+# here).
 function _shape_faces(prob, num, amr::AMR)
     amr.level_boundaries || return _NO_BOUNDARY
     active = ntuple(d -> num.n_global[d] > 1, 3)
-    folds = !(num.execution.backend isa DeviceBackend) && amr.level_restriction === :inject
+    folds = !(num.execution.backend isa DeviceBackend)
     return ntuple(d -> ntuple(side -> begin
         bc = prob.bcs[d][side]
         active[d] && !isperiodic(bc) && _level_boundary_condition(bc) &&

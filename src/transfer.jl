@@ -39,11 +39,13 @@
 # one closure set serves both a physical edge and a patch-interface edge. The
 # symmetric variants ±1 are built by lower_symm_weights/upper_symm_weights,
 # the same ghost-folding algebra `plan_direction` performs for `lo_fold` /
-# `hi_fold`, so a folded end needs no tabulated rows here. `plan_transfer`
-# itself never builds fold plans: refinement across a fold's singular region
-# is forbidden (constraint 4 of reference/AMR_GPU.md), so a transfer
-# dimension is closed
-# or periodic. The source's row 3 per end is the interior stencil, so each
+# `hi_fold`, so a folded end needs no tabulated rows here. Refinement across
+# a fold's singular region is forbidden (constraint 4 of
+# reference/AMR_GPU.md); the one fold a transfer meets is the self-paired
+# mirror a level reaching a symmetry plane or the r-z axis folds on, where
+# the fine line starts half a fine cell from the plane, one node before the
+# coincident lattice. `plan_transfer` folds the restriction there and
+# nowhere else. The source's row 3 per end is the interior stencil, so each
 # scheme carries two closure rows, not three.
 
 # Interior coefficients of the transfer pair. Its two zero-wavenumber symbols
@@ -183,10 +185,13 @@ struct TransferPlan{T}
     interp_order::Int
     weights::Array{T,3}    # (point, sub-node, edge class); amr_interpolation_weights
     tmp::Array{T,3}        # fine-grid scratch: the filtered / interpolated field
+    folds::NTuple{2,Bool}  # mirror fold at the low / high end of the fine line
+    restrict_odd::DirPlan{T} # restriction of an odd field at a fold; else restrict_plan
 end
 
 """
-    plan_transfer(fine, coarse, dim, T=Float64; interp_order=6)
+    plan_transfer(fine, coarse, dim, T=Float64; interp_order=6,
+                  lo_fold=false, hi_fold=false)
 
 Build a [`TransferPlan`](@ref) between a fine and a coarse [`Decomp`](@ref)
 along dimension `dim`. The grids are node-centered at refinement ratio 3, so
@@ -200,17 +205,25 @@ and interpolation would require per-rank 3:1 alignment. The level machinery
 sidesteps this by running its transfer chains replicated on single-rank
 communicators (levels.jl); a rank-partitioned transfer would have to own
 that alignment. Transverse dimensions may be decomposed freely, and the
-compact solves themselves remain collective over them. Folds are excluded on
-a transfer dimension (refinement across a fold's singular region is
-forbidden); the schemes accept `lo_fold`/`hi_fold` through
-[`plan_direction`](@ref) directly should future work lift that.
+compact solves themselves remain collective over them.
+
+`lo_fold` and `hi_fold` declare a parity mirror half a fine cell beyond that
+end of the fine line, the fold of a level at a symmetry plane or the r-z
+axis. The fine line then carries one node before the coincident lattice at
+that end, so a folded end adds one to `n_fine`, and coarse node `m` is fine
+node `3m − 2 + lo_fold`. The restriction filter runs its interior stencil
+to the folded end on the mirror image of the line, one plan per field
+parity, which [`restrict!`](@ref) selects. A folded plan restricts only:
+the interpolation and the deconvolution are planned on the coincident
+lattice and refuse it.
 
 `interp_order` (even, 2–10, default 6) sets the Lagrange stencil width of the
 coarse-to-fine interpolation and therefore the measured order of the
 fine → coarse → fine round trip on smooth data.
 """
 function plan_transfer(fine::Decomp, coarse::Decomp, dim::Int,
-                       ::Type{T}=Float64; interp_order::Int=6) where {T}
+                       ::Type{T}=Float64; interp_order::Int=6, lo_fold::Bool=false,
+                       hi_fold::Bool=false) where {T}
     fine.active[dim] || error("transfer dimension $dim is collapsed")
     fine.active == coarse.active ||
         error("fine and coarse decompositions disagree on active dimensions")
@@ -227,7 +240,9 @@ function plan_transfer(fine::Decomp, coarse::Decomp, dim::Int,
             error("transverse dimension $d does not match between fine and coarse")
     end
     nc = coarse.n_global[dim]
-    nf_expected = fine.periodic[dim] ? 3nc : 3nc - 2
+    fine.periodic[dim] && (lo_fold || hi_fold) &&
+        error("a periodic transfer dimension $dim cannot fold")
+    nf_expected = fine.periodic[dim] ? 3nc : 3nc - 2 + lo_fold + hi_fold
     fine.n_global[dim] == nf_expected ||
         error("fine extent $(fine.n_global[dim]) along dim $dim does not match " *
               "3:1 refinement of $nc coarse nodes (expected $nf_expected)")
@@ -240,12 +255,18 @@ function plan_transfer(fine::Decomp, coarse::Decomp, dim::Int,
             error("coarse extent $nc along dim $dim is below interpolation " *
                   "order $interp_order")
     end
-    restrict_plan = plan_direction(fine, amr_restriction_scheme(T), dim, 1)
+    restriction = amr_restriction_scheme(T)
+    restrict_plan = plan_direction(fine, restriction, dim, 1;
+                                   lo_fold=lo_fold ? 1 : nothing,
+                                   hi_fold=hi_fold ? 1 : nothing)
+    restrict_odd = lo_fold || hi_fold ?
+        plan_direction(fine, restriction, dim, 1; lo_fold=lo_fold ? -1 : nothing,
+                       hi_fold=hi_fold ? -1 : nothing) : restrict_plan
     prolong_plan = plan_direction(fine, amr_prolongation_scheme(T), dim, 1)
     weights = amr_interpolation_weights(T, interp_order)
     tmp = zeros(T, ntuple(d -> fine.n_local[d] + 2 * fine.n_halo_d[d], 3))
     TransferPlan{T}(dim, fine, coarse, restrict_plan, prolong_plan,
-                    interp_order, weights, tmp)
+                    interp_order, weights, tmp, (lo_fold, hi_fold), restrict_odd)
 end
 
 function _subsample!(coarse_field, filtered, plan::TransferPlan{T},
@@ -253,6 +274,7 @@ function _subsample!(coarse_field, filtered, plan::TransferPlan{T},
     padf = plan.fine.n_halo_d
     padc = plan.coarse.n_halo_d
     nc = plan.coarse.n_local[D]
+    lead = Int(plan.folds[1])
     o1, o2 = _odims(Val(D))
     n1 = plan.coarse.n_local[o1]
     n2 = plan.coarse.n_local[o2]
@@ -260,7 +282,7 @@ function _subsample!(coarse_field, filtered, plan::TransferPlan{T},
         j, k = Tuple(jk)
         @inbounds for m in 1:nc
             coarse_field[_gidx(Val(D), m, j, k, padc)] =
-                filtered[_gidx(Val(D), 3m - 2, j, k, padf)]
+                filtered[_gidx(Val(D), 3m - 2 + lead, j, k, padf)]
         end
     end
     return coarse_field
@@ -304,17 +326,25 @@ function _inject_interpolate!(tmp, coarse_field, plan::TransferPlan{T},
 end
 
 """
-    restrict!(coarse_field, plan, fine_field)
+    restrict!(coarse_field, plan, fine_field, σ=1)
 
 Level restriction along `plan.dim`: exchange the fine field's halos along that
 dimension, apply the fine-to-coarse transfer filter, and copy the coincident
 nodes into the interior of `coarse_field`, returning it. `plan.tmp` is scratch
 and is overwritten. Collective over ranks sharing transverse decompositions,
 like any compact solve.
+
+On a plan with a folded end, `σ` is the field's parity across the fold: the
+halo beyond that end of `fine_field` is overwritten with the mirror image of
+its interior signed by `σ`, and the plan of that parity filters the line.
+`σ` is ignored elsewhere.
 """
-function restrict!(coarse_field, plan::TransferPlan, fine_field)
+function restrict!(coarse_field, plan::TransferPlan, fine_field, σ::Int=1)
     exchange_dim!(fine_field, plan.fine, plan.dim)
-    apply_along!(plan.tmp, plan.restrict_plan, fine_field, plan.fine)
+    lo, hi = plan.folds
+    (lo || hi) && fold_fill!(fine_field, plan.fine, plan.dim, lo, hi, σ)
+    apply_along!(plan.tmp, σ < 0 ? plan.restrict_odd : plan.restrict_plan, fine_field,
+                 plan.fine)
     d = plan.dim
     if d == 1
         _subsample!(coarse_field, plan.tmp, plan, Val(1))
@@ -361,6 +391,7 @@ is how the live level-ghost fill measured at order ≈ 1.7 before this split
 (see levels.jl). On point samples this interpolation is O(h^interp_order) instead.
 """
 function interpolate!(fine_field, plan::TransferPlan, coarse_field)
+    any(plan.folds) && _folded_interpolation_error(plan.dim)
     exchange_dim!(coarse_field, plan.coarse, plan.dim)
     d = plan.dim
     if d == 1
@@ -372,3 +403,7 @@ function interpolate!(fine_field, plan::TransferPlan, coarse_field)
     end
     return fine_field
 end
+
+@noinline _folded_interpolation_error(dim::Int) =
+    error("the transfer plan along dimension $dim folds, which only restriction " *
+          "supports; plan the interpolation on the coincident lattice")

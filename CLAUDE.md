@@ -230,11 +230,11 @@ interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
 levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 `:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
 pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
-6.33 (the fine wall window against the uniform run at the fine spacing),
-three levels at a symmetry plane 5.49 (the second level's plane window,
-filtered), a
-level at the r-z axis 6.43 / 6.47 (inviscid / viscous, filtered, the fine
-axis window) and at the corner of the axis and a plane at z = 0 7.11 (the
+6.33 (the fine wall window against the uniform run at the fine spacing;
+1.55 under the `:filter` restriction), three levels at a symmetry plane
+5.49 (the second level's plane window, filtered), a level at the r-z axis
+6.43 / 6.47 (inviscid / viscous, filtered, the fine axis window) and at the
+corner of the axis and a plane at z = 0 7.11 (the
 fold window), a level on an r-z annulus 5.70 / 5.41 (inviscid / viscous, the
 fine interface window against the uniform run at the fine spacing), a level
 at an NSCBC outflow 6.45 (the fine face window against the uniform run at

@@ -627,14 +627,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             folded = _level_fold_faces(bnd, bcs)
             if any(any, folded)
                 # The fold of a tile at a symmetry plane or the r-z axis rests
-                # on the host line solves of its own plans and on coincident
-                # injection.
+                # on the host line solves of its own plans.
                 backend isa DeviceBackend &&
                     error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
                           "runs on the host backend only")
-                level_restriction === :inject ||
-                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
-                          "takes level_restriction = :inject")
             end
             # The box stops at a wall face, where the interpolation takes
             # one-sided stencils of the order's width over the box.

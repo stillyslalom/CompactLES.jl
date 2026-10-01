@@ -139,9 +139,10 @@ include("capability_cases.jl")
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.0, 0, 0), (0.2, 1, 1)),
                                           level_boundaries=true)))
-        # A feature at a symmetry plane on the device backend or under the
-        # :filter restriction, where a level cannot reach the plane, is
-        # refined up to the margin by default rather than refused.
+        # A feature at a symmetry plane on the device backend, where a level
+        # cannot reach the plane, is refined up to the margin by default
+        # rather than refused; under the :filter restriction the level
+        # reaches it.
         near_plane = (x, y, z, t) -> x < 0.15
         for (backend, precision) in C.PAIRS
             backend isa DeviceBackend || continue

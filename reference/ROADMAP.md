@@ -25,28 +25,30 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 
 ## Order of work
 
-The first four are independent and may proceed together, subject to one heavy
-run at a time.
+V4 comes first: it sets the cost of every later commit. The next four are
+independent and may proceed together, subject to one heavy run at a time.
 
-1. **N23** finishes refining the r-z capsule, the production configuration:
+1. **V4** trims the gate and the test suite, so that a commit pays only for
+   the checks its change can affect.
+2. **N23** finishes refining the r-z capsule, the production configuration:
    levels reach its axis and its symmetry plane, and three stages remain.
-2. **N4** settles `C_mu` before any external comparison: the filter fits
+3. **N4** settles `C_mu` before any external comparison: the filter fits
    behind the α = 0.47 default were made at `C_mu = 0.002`, and V1 compares
    the defaults.
-3. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
+4. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
    It supplies N18's remaining reference and V2's use case.
-4. **H2** integrates the existing molecular conduction implicitly with the ARK
+5. **H2** integrates the existing molecular conduction implicitly with the ARK
    pair, which verifies the IMEX contract on a known equation before any new
    physics depends on it. The serial pair is delivered; an MPI phase remains.
-5. **A7** draws the material boundary and the per-component field declaration
+6. **A7** draws the material boundary and the per-component field declaration
    before H3 adds the first new evolved field.
-6. **H3**, then **H4**: two temperatures with an ionization closure and the
+7. **H3**, then **H4**: two temperatures with an ionization closure and the
    electron–ion exchange, then electron and ion conduction through the implicit
    stage. H5's table readers are delivered; its adapters follow A7.
-7. **N22** sharpens the species channel's interfaces. The flux is delivered
+8. **N22** sharpens the species channel's interfaces. The flux is delivered
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
-8. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+9. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
@@ -204,18 +206,38 @@ surface; H8 for a magnetized target.
   ambient pressure to within its resolved-grid value, or the decision
   recorded with its measurement.
 
-- [ ] **N28 — Correct the characteristic outflow face for spherical waves.**
-  `NSCBCOutflowBC` treats the wave at the face as plane. The dipole of the
-  Oscillating sphere tutorial (`docs/literate/oscillating_sphere.jl`)
-  reflects from the face by 1/(2kR) without pressure relaxation, to three
-  digits at two outer radii, and the relaxation adds about σc/(2ωL). A
-  curvature term in the incoming-wave relation, of the kind the far-field
-  radiation conditions of Bayliss and Turkel carry, would remove the leading
-  term.
-  **Gate:** the reflection on the tutorial configuration below a tenth of
-  1/(2kR); the planar NSCBC rows of the test suite unchanged.
-
 ## Validation and verification
+
+- [ ] **V4 — Cut the gate's wall time.**
+  The core gate takes about 36 minutes on the workstation with nothing
+  queued: `runtests.jl -O1` 15 min (12,772 assertions in 159 testsets),
+  the full MPI suite at two ranks 8 min, the eight-rank selection 6 min,
+  `test/convergence.jl` 4 min and `test/validation.jl` 3 min. The serial
+  suite and the MPI legs are compile-bound, and a package image evicted from
+  the depot, which holds ten images across every checkout and flag set, adds
+  about 3.5 min to the leg that rebuilds it. Most commits touch neither the
+  core numerics nor the communication, yet the gate runs the convergence
+  study and the MPI suite for every solver-side change. Stages, in order:
+  1. Measure first: a per-testset breakdown of compile and run time for the
+     serial suite and the MPI phases, and the wall of the serial suite split
+     into concurrent shards (`runtests.jl shard=k/n`) at n = 2, 4 and 8 on
+     this machine, where compilation is mostly single-threaded per process.
+  2. Trim the suite: merge or delete testsets whose coverage another
+     testset already gives, and keep the configuration count, which sets the
+     compile cost, as low as the coverage allows. A testset over a minute
+     indicates a cause to find, not a test to move: a case larger or longer
+     than its check needs, or a compile path that specializes on parts of the
+     solver type the code it compiles does not use, or lacks an inference
+     barrier.
+  3. Relax the gate in CLAUDE.md by change category: the convergence study
+     and the MPI suite only for changes to the numerics and the
+     communication they verify, an affected-suite run while iterating, and
+     one gate per commit. Decide the depot's image limit
+     (`JULIA_MAX_NUM_PRECOMPILE_FILES`) and whether the two-rank leg runs
+     the full suite.
+  **Gate:** the measured wall of the core gate and of the gate for a
+  change outside the numerics, before and after, and the coverage of
+  `bench/coverage.jl` held or any loss listed.
 
 - [ ] **V1 — Complete independent solver and experiment comparisons.**
   Run CompactLES against Pyranda on Re = 1600 Taylor–Green and one
@@ -1034,6 +1056,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **R5** — `correct_flux!` imposes the adiabatic impermeable no-slip wall's
   species and energy flux contract on the assembled flux before divergence
   (commit `51d7b2a`).
+- [x] **N28** — `NSCBCOutflowBC` carries the first-order Bayliss–Turkel
+  curvature term at an outer radial face, and the oscillating-sphere dipole
+  reflects 0.05 of the plane form's 1/(2kR) (commit `6c97f4f`).
 
 ### Filtering, regularization, boundaries and species
 

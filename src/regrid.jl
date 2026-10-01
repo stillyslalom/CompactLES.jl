@@ -502,13 +502,13 @@ end
 # The domain faces automatic placement may reach, per dimension and side:
 # under `level_boundaries` those whose root condition a level carries, the
 # faces `_region_boundaries` gives, a fold (a symmetry plane, the axis) where
-# setup admits a level on one (the host backend under `:inject`); none
-# otherwise, every face then keeping the nesting margin.
+# setup admits a level on one (the host backend); none otherwise, every face
+# then keeping the nesting margin.
 function _placement_faces(solver, spec::RegridSpec)
     spec.boundaries || return _NO_BOUNDARY
     root = getfield(solver, :patches)[1]
     active = ntuple(d -> solver.n_global[d] > 1, 3)
-    folds = !(spec.backend isa DeviceBackend) && spec.restriction === :inject
+    folds = !(spec.backend isa DeviceBackend)
     return _level_boundary_eligible(root.bcs, active, root.decomp.periodic, folds)
 end
 
@@ -579,9 +579,9 @@ function _warn_margin_band(solver, margin::Int, ℓ::Int)
           "that a refined level does not reach; they stay at the parent " *
           "resolution. A level reaches a SlipWallBC, NoSlipWallBC, NSCBCOutflowBC " *
           "or NSCBCInflowBC face and crosses a periodic seam, and reaches a " *
-          "SymmetryPlaneBC or the AxisBC of an r-z run on the host backend under " *
-          ":inject restriction; any other face keeps the margin, as every face " *
-          "does under level_boundaries = false. A tiled level reaches a face " *
+          "SymmetryPlaneBC or the AxisBC of an r-z run on the host backend; any " *
+          "other face keeps the margin, as every face does under " *
+          "level_boundaries = false. A tiled level reaches a face " *
           "only where the tile next to it stays the margin inside the domain." maxlog = 1
     return nothing
 end

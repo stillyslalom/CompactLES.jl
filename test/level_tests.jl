@@ -2220,9 +2220,61 @@ const PLANE_LEVEL_TOL = 1e-10
         @info "plane level against the uniform run" side e
         @test e < PLANE_LEVEL_TOL
     end
-    # The configurations the fold does not carry are refused by name, and a
-    # second level stopping short of the plane is told the offset reaching it.
-    @test_throws ":inject" plane_level(N; level_restriction=:filter)
+    # A corner tile between planes at x = 0 and y = 0 against the periodic
+    # image of the run: [0, 2)² on 2N × 2N nodes, the root's node i at
+    # (i − ½)h along both as in the folded run, and the level across both
+    # seams over the image of the folded region and the region itself, so
+    # the tile's node (i, j) is the image's node (3m − 1 + i, 3m − 1 + j).
+    # The image's restriction filters the tile's lines through each plane
+    # with the interior stencil, so a restriction that folds its filter at
+    # both planes, stage by stage, reproduces it to round-off, the odd
+    # momenta included; one that closed or mis-signed the filter at a plane
+    # differs by the filter's own defect, measured 1.0e-4 on the root with
+    # every component taken even.
+    ic2(x, y, z) = begin
+        rho = 1 + 0.05 * cos(pi * x) * cos(pi * y)
+        Prim(rho=rho, u=(0.05 * sin(pi * x) * cos(pi * y),
+                         0.03 * cos(pi * x) * sin(pi * y), 0.0), p=rho^1.4)
+    end
+    function corner_level(N; image=false, kw...)
+        m = N ÷ 6 + 1
+        solver = image ?
+            Solver(n_global=(2N, 2N, 1), L_domain=(2.0, 2.0, 1.0),
+                   origin=(0.5 / N, 0.5 / N, 0.0), bcs=(per, per, per),
+                   filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
+                   refine=BlockRegion((2N - m, 2N - m, 0), (2m, 2m, 1)); kw...) :
+            Solver(n_global=(N, N, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((plane, plane), (plane, plane), per), filter_interval=0,
+                   cfl=0.9, art=ArtificialProperties(enabled=false),
+                   refine=BlockRegion((0, 0, 0), (m, m, 1)); kw...)
+        states = allocate_state(solver)
+        initialize!(solver, states, ic2)
+        return solver, states
+    end
+    N = 24
+    m = N ÷ 6 + 1
+    for mode in (:inject, :filter)
+        s, q = corner_level(N; level_restriction=mode)
+        r, rq = corner_level(N; image=true, level_restriction=mode)
+        for n in 1:2N
+            run!(s, q; tfinal=0.2n / 2N)
+            run!(r, rq; tfinal=0.2n / 2N)
+        end
+        @test s.step == r.step == 2N
+        fine, image = PatchSolver(s, s.patches[2]), PatchSolver(r, r.patches[2])
+        nl = fine.decomp.n_local
+        e = maximum(abs(q[2][padded_index(fine, i, j, 1), c] -
+                        rq[2][padded_index(image, 3m - 1 + i, 3m - 1 + j, 1), c])
+                    for i in 1:nl[1], j in 1:nl[2], c in 1:4)
+        root, rimage = PatchSolver(s, s.patches[1]), PatchSolver(r, r.patches[1])
+        e = max(e, maximum(abs(q[1][padded_index(root, i, j, 1), c] -
+                               rq[1][padded_index(rimage, i, j, 1), c])
+                           for i in 1:N, j in 1:N, c in 1:4))
+        @info "corner level against its periodic image" mode e
+        @test e < 1e-13
+    end
+    # A second level stopping short of the plane is told the offset reaching
+    # it.
     @test_throws "offset -1 reaches the SymmetryPlaneBC" plane_level(N;
         nest=BlockRegion((0, 0, 0), (10, 1, 1)))
 end
@@ -2501,9 +2553,12 @@ end
 # The axis tile against the uniform run at its spacing, a pulse converging on
 # the axis, N = 96, t = 0.3: measured 1.6e-7 over the five components and the
 # whole tile. The corner tile of the axis and a plane at z = 0, a spherical
-# pulse, N = 36, t = 0.3: measured 2.0e-5.
+# pulse, N = 36, t = 0.3: measured 2.0e-5. The axis tile under the :filter
+# restriction: measured 7.3e-6, the attenuation the filter writes into the
+# covered nodes at every step.
 const AXIS_LEVEL_TOL = 5e-7
 const CORNER_LEVEL_TOL = 5e-5
+const AXIS_FILTER_TOL = 2e-5
 
 @testset "a level reaching the r-z axis folds on that face" begin
     per = (PeriodicBC(), PeriodicBC())
@@ -2593,9 +2648,22 @@ const CORNER_LEVEL_TOL = 5e-5
                 for i in 1:fine.decomp.n_local[1], c in 1:5)
     @info "axis level against the uniform run" e
     @test e < AXIS_LEVEL_TOL
-    # The configurations the fold does not carry are refused by name, and a
-    # second level stopping short of the axis is told the offset reaching it.
-    @test_throws ":inject" axis_level(N; level_restriction=:filter)
+    # The :filter restriction folds its filter at the axis with each
+    # component's parity; its attenuation of the covered nodes, not the axis,
+    # sets the difference from the uniform run.
+    sf, qf = axis_level(N; level_restriction=:filter)
+    for k in 1:n
+        run!(sf, qf; tfinal=0.3k / n)
+    end
+    @test sf.step == n
+    finef = PatchSolver(sf, sf.patches[2])
+    ef = maximum(abs(qf[2][padded_index(finef, i, 1, 1), c] -
+                     fq[padded_index(pf, i, 1, 1), c])
+                 for i in 1:finef.decomp.n_local[1], c in 1:5)
+    @info "axis level under :filter against the uniform run" ef
+    @test ef < AXIS_FILTER_TOL
+    # A second level stopping short of the axis is told the offset reaching
+    # it.
     @test_throws "offset -1 reaches the AxisBC" axis_level(N;
         nest=BlockRegion((0, 0, 0), (10, 1, 1)))
 
@@ -2973,14 +3041,12 @@ end
         Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=CL.Regions.Box((0.8, 0.0, 0.0), (1.0, 1.0, 1.0)))))
     @test refined_region(s).offset[1] + refined_region(s).extent[1] == N - margin
-    # A symmetry plane under the :filter restriction keeps the margin, and
-    # under :inject the level reaches it.
+    # A symmetry plane is reached under either restriction.
     plane = ((SymmetryPlaneBC(), SlipWallBC()), per, per)
-    s, q = tagged(plane, low; level_restriction=:filter)
-    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
-    @test r.offset[1] == margin
-    s, q = tagged(plane, low)
-    @test CL.tagged_region(s, q[1]).offset[1] == 0
+    for mode in (:inject, :filter)
+        s, q = tagged(plane, low; level_restriction=mode)
+        @test CL.tagged_region(s, q[1]).offset[1] == 0
+    end
 end
 
 # A level regridded onto the fold of the 1-D standing wave at step 0, against

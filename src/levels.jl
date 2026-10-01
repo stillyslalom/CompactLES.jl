@@ -1600,27 +1600,37 @@ end
 # coarse extents. Every stage runs replicated per rank (COMM_SELF, so the
 # chain operators are the serial ones whatever the rank count) and is
 # non-periodic along active dimensions; collapsed dimensions stay collapsed.
+# `folded` marks the faces of a restriction chain's fine patch on a fold,
+# where the fine extent carries the node beyond the coincident lattice and
+# each stage's restriction folds (`plan_transfer`); an interpolation chain
+# runs on the coincident lattice of a mirror-filled box and takes none.
 function _refine_chain(::Type{T}, ext0::NTuple{3,Int}, active::NTuple{3,Bool},
                        dims_to_refine::Vector{Int}, n_halo::Int,
-                       interp_order::Int) where {T}
+                       interp_order::Int,
+                       folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     pper = ntuple(d -> !active[d], 3)
-    exts = _chain_extents(ext0, dims_to_refine)
+    exts = _chain_extents(ext0, dims_to_refine, folded)
     decomps = [Decomp{T}(e, pper; dims=(1, 1, 1), n_halo=n_halo,
                          comm=MPI.COMM_SELF) for e in exts]
     plans = [plan_transfer(decomps[k+1], decomps[k], dims_to_refine[k], T;
-                           interp_order=interp_order)
+                           interp_order=interp_order,
+                           lo_fold=folded[dims_to_refine[k]][1],
+                           hi_fold=folded[dims_to_refine[k]][2])
              for k in eachindex(dims_to_refine)]
     stages = [zeros(T, _padded_extent(e, active, n_halo)) for e in exts]
     return decomps, plans, stages
 end
 
 # The unpadded extents of a chain's stages 0 .. K from the stage-0 extent,
-# refining one dimension per stage, and a stage's padded array size.
-function _chain_extents(ext0::NTuple{3,Int}, dims_to_refine::Vector{Int})
+# refining one dimension per stage, each folded face adding its node
+# (`_fold_lead`), and a stage's padded array size.
+function _chain_extents(ext0::NTuple{3,Int}, dims_to_refine::Vector{Int},
+                        folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
     exts = [ext0]
     for dk in dims_to_refine
         prev = exts[end]
-        push!(exts, ntuple(d -> d == dk ? 3 * prev[d] - 2 : prev[d], 3))
+        lead = _fold_lead(folded, dk, 1) + _fold_lead(folded, dk, 2)
+        push!(exts, ntuple(d -> d == dk ? 3 * prev[d] - 2 + lead : prev[d], 3))
     end
     return exts
 end
@@ -1962,9 +1972,11 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     # The restriction chain never interpolates (that half of each TransferPlan
     # goes unused), so it is built at interpolation order 2, which admits the
     # smallest legal regions. Only `:filter` restriction applies it; `:inject`
-    # is realized directly as the coincident-node exchange.
+    # is realized directly as the coincident-node exchange. At a folded face
+    # the chain's fine end is the patch's, the node beyond the lattice
+    # included, and its filter folds there.
     rdecomps, rplans, rstage = held && restriction === :filter ?
-        _refine_chain(T, region.extent, active, dims_to_refine, n_halo, 2) :
+        _refine_chain(T, region.extent, active, dims_to_refine, n_halo, 2, folded) :
         (Decomp{T}[], TransferPlan{T}[], Array{T,3}[])
     boxsize = held ? (size(pstage[1])..., n_cons) : (0, 0, 0, 0)
     hermite = subcycle ? boxsize : (0, 0, 0, 0)
@@ -3139,9 +3151,12 @@ function _restrict_tiles!(solver, states, lev::Level, tiles=nothing)
 end
 
 # `:filter` restriction, serial only (rejected at setup under MPI), so the
-# one rank holds the refined patch and `lt.fine_index` is set.
+# one rank holds the refined patch and `lt.fine_index` is set. A stage along
+# a folded dimension filters component `c` with its parity across the fold,
+# the root fold's on that dimension, as the patch's own fold does.
 function _restrict_filtered!(solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
+    root_folds = patches[1].folds
     Qf = states[lt.fine_index]
     K = length(lt.rplans)
     padb = lt.rdecomps[1].n_halo_d
@@ -3151,7 +3166,10 @@ function _restrict_filtered!(solver, states, lt::LevelTransfer)
         for k in K:-1:1
             dst = lt.rstage[k]
             input = k == K ? src : lt.rstage[k+1]
-            restrict!(dst, lt.rplans[k], input)
+            plan = lt.rplans[k]
+            σ = any(plan.folds) ?
+                conserved_parity(solver.equations, root_folds[plan.dim].sigvel, c) : 1
+            restrict!(dst, plan, input, σ)
         end
         # The chain's output is padded region-shaped scratch; the write-back
         # takes the unpadded region form (serial-only, so the copy is one

@@ -138,11 +138,10 @@ restrictions.
 There is no wall-plane state enforcement: the parity fill and the folded
 implicit rows carry the whole treatment.
 
-With θ collapsed, a refined level may reach the axis, on the host backend
-under `level_restriction = :inject`: its patch then starts half its own
-spacing from r = 0, one node beyond the parent's lattice, and folds as the
-root does. An explicit region places it there, and so do shapes and
-regridding tags.
+With θ collapsed, a refined level may reach the axis, on the host backend:
+its patch then starts half its own spacing from r = 0, one node beyond the
+parent's lattice, and folds as the root does. An explicit region places it
+there, and so do shapes and regridding tags.
 """
 struct AxisBC <: BoundaryCondition end
 
@@ -198,10 +197,9 @@ on it: every dimension of `CartesianMetric` and z (dimension 3) of
 The plane's dimension cannot be stretched, cannot also carry [`AxisBC`](@ref),
 [`OriginBC`](@ref) or [`PoleBC`](@ref). A patched run does not take it; [`SlipWallBC`](@ref)
 is the condition there. A refined level may reach the plane, on the host
-backend under `level_restriction = :inject`: its patch then starts half its
-own spacing from the plane, one node beyond the parent's lattice, and folds as
-the root does. An explicit region places it there, and so do shapes and
-regridding tags.
+backend: its patch then starts half its own spacing from the plane, one node
+beyond the parent's lattice, and folds as the root does. An explicit region
+places it there, and so do shapes and regridding tags.
 """
 struct SymmetryPlaneBC <: BoundaryCondition end
 
