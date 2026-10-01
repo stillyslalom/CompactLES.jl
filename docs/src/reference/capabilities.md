@@ -72,16 +72,15 @@ such as `(0, π)` places it on the pole.
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
 | same-level slabs | `patch_grid` | yes | uniform Cartesian or a θ-collapsed cylindrical annulus, or a resolved-θ annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
-| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; a level may reach a symmetry plane or the axis on the host backend under `:inject`, a level below the first from a region starting on its parent's first node there |
+| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; a level may reach a symmetry plane or the axis, a level below the first from a region starting on its parent's first node there |
 | one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
 | subcycled levels | `AMR(subcycle = true)` | yes | any refined layout |
-| levels placed on a domain face | default (`level_boundaries = true`) with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face, across a periodic seam, or a symmetry plane or the r-z axis on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain; any other face keeps the margin, with a warning when a tagged feature or a shape reaches it |
+| levels placed on a domain face | default (`level_boundaries = true`) with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face, across a periodic seam, or a symmetry plane or the r-z axis; a tiled level only where the lattice keeps its tiles the margin inside the domain; any other face keeps the margin, with a warning when a tagged feature or a shape reaches it |
 
 `level_restriction = :filter` is accepted on the host backend of a serial
-run only, and not with a level reaching a symmetry plane or the axis; the default
-`:inject` has no restriction. At a patch or level
+run only; the default `:inject` has no restriction. At a patch or level
 interface the default `PatchInterfaces(flux = :ghost)` requires
 `rhs = :extended` and a uniform Cartesian grid or a uniform cylindrical grid
 with θ collapsed, and with molecular
@@ -132,8 +131,6 @@ text below.
 | an explicit refined region reaching a face other than a slip, no-slip, NSCBC, symmetry-plane or axis one, such as a `DirichletBC` or an `ExtrapolationBC` (a shape or a tag keeps the margin there) | `a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | one refined box closing on itself around a periodic dimension | `along periodic dimension` |
-| an explicit region reaching a symmetry plane or the axis on a device | `a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the host backend only` |
-| an explicit region reaching a symmetry plane or the axis with `level_restriction = :filter` | `a refined level reaching a SymmetryPlaneBC or an AxisBC takes level_restriction = :inject` |
 | a region below the first level within the margin of a symmetry plane or the axis that does not start on its parent's first node there | `must be nested at least` |
 | `AMR` regridding a vector of shapes | `AMR: regridding moves one refined level` |
 | `max_levels > 2` without tiles and regridding | `requires tile > 0 and regridding` |

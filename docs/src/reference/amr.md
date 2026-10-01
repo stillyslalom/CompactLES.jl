@@ -42,10 +42,8 @@ carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or `NSCBCInflowBC`,
 which the level then carries at its own spacing, so a feature at a wall or an
 open face is refined up to it, and place a level across a periodic seam, so a
 feature there is refined on both sides of it. They also place a level, at any
-depth, on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host
-backend under `:inject` restriction. Any other face keeps the band, among
-them a symmetry plane or the axis on the device backend or under `:filter`
-restriction. A tiled level reaches a face only when the tile next to the
+depth, on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run. Any other face
+keeps the band. A tiled level reaches a face only when the tile next to the
 face's tile stays the margin inside the domain: the edge is at least
 `max(n_halo, 4)`, and a partial last lattice cell at the high face spans at
 least that many parent cells. Otherwise that face keeps the band. A
@@ -81,7 +79,7 @@ a positive `tile`. A vector of shapes stays fixed.
 | `untag_ratio` | `2` | Hold threshold denominator for an existing tile; one removes hysteresis |
 | `tile_lifetime` | `1` | Minimum number of regrid checks before a tile may be removed |
 | `tile` | `0` | Zero makes one refined box; positive values at least three give a lattice tile edge in parent nodes |
-| `level_boundaries` | `true` | Shapes and tags place a level on a wall or NSCBC face and across a periodic seam, and on a symmetry plane or the r-z axis on the host backend under `:inject`; at `false` every level keeps the margin at every face |
+| `level_boundaries` | `true` | Shapes and tags place a level on a wall or NSCBC face and across a periodic seam, and on a symmetry plane or the r-z axis; at `false` every level keeps the margin at every face |
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |

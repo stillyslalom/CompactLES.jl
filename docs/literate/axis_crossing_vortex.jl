@@ -129,7 +129,8 @@ report = dt_report(solver, Q)
 # Dimension 2 is ``\theta``, and the node is on the innermost ring. Refining
 # both directions twofold therefore quarters the step as well as quadrupling
 # the number of nodes: the cost of a resolved azimuth grows as
-# ``n_r^2 n_\theta^2``.
+# ``n_r^2 n_\theta^2``. Mode truncation, below, lifts this limit by
+# discarding the azimuthal modes the inner rings cannot resolve.
 #
 # ## Run
 #
@@ -263,6 +264,39 @@ end
 # largest difference changes by less than 2%. Turning off the artificial
 # properties also changes it by less than 2%.
 
+# ## Mode truncation
+#
+# The innermost rings cannot carry the short azimuthal waves their spacing
+# admits: a field smooth through the axis varies around a ring of radius ``r``
+# only in modes up to about ``\pi r/\Delta r``, the number of radial spacings
+# that fit around half the ring. `Numerics(polar_truncation = κ)` projects each
+# ring onto the modes it can carry, ``m \le \max(2, \lfloor \pi r/(\kappa
+# \Delta r) \rfloor)``, once per step, keeping one mode more for the radial and
+# azimuthal momenta, and sizes the step by the spacing of the highest mode kept
+# instead of ``r\Delta\theta``. The same calculation with ``\kappa = 1``:
+
+solver, Q = setup(problem, Numerics(n_global = (32, 64, 1), polar_truncation = 1.0))
+report = dt_report(solver, Q)
+@printf("dt = %.2e, set by the %s rate along dimension %d at r = %.4f\n",
+        report.dt, report.kind, report.dim, report.coords[1])
+truncated = (rho = 0.0, u = 0.0)
+check = Callback(EveryTime(0.05), function (solver, Q)
+    rho_error, u_error = errors(solver, Q)
+    global truncated = (rho = max(truncated.rho, rho_error), u = max(truncated.u, u_error))
+    nothing
+end)
+run!(solver, Q; tfinal = 1.6, nmax = 10_000, callback = check)
+@printf("%d steps to t = %.1f\n", solver.step, solver.t)
+@printf("largest difference: density %.1e (%.1e without truncation), velocity %.1e (%.1e)\n",
+        truncated.rho, maximum(history.rho), truncated.u, maximum(history.u))
+
+# The innermost ring still sets the step, now at the spacing of the highest
+# mode it keeps, and the step is 9.5 times longer. The largest differences from
+# the exact solution are smaller as well. They come with the longer step, not
+# with the projection: run at the untruncated step, the truncated calculation
+# reaches ``7 \times 10^{-4}`` in density and ``1.1 \times 10^{-3}`` in
+# velocity.
+
 # ## What this checks
 #
 # - An exact vortex carried straight across the axis of a resolved
@@ -275,3 +309,5 @@ end
 #   moving exact solution at the outer boundary.
 # - On a resolved azimuth the innermost ring sets the step, and away from the
 #   axis the azimuthal spacing sets the error.
+# - Mode truncation lengthens the step ninefold on the same grid and keeps the
+#   vortex as close to the exact solution.

@@ -218,21 +218,25 @@ fig
 @printf("phase − exact: %+.3f to %+.3f rad\n",
         extrema(angle.(Phat[:, j] ./ P.(r, theta[j])))...)
 
-# The amplitude follows the exact one from the sphere to the outer boundary.
-# Beyond ``r = 0.5`` the ratio ripples between 0.98 and 1.03 with a period of
-# half a wavelength, the pattern of a weak wave traveling inward on top of the
-# outgoing one: the outflow face reflects about 2% of the wave that reaches
-# it. Inside ``r = 0.5`` the ripple fades, since the reflected wave reaches
-# there only during the last period, over which the amplitude is sampled.
+# The amplitude follows the exact one from the sphere to the outer boundary,
+# within 0.4% at every radius, and the phase to within a few thousandths of a
+# radian.
 #
-# The characteristic analysis at the face treats the wave as plane, and a
-# spherical wave departs from a plane one by a relative amount of order
-# ``1/kr``: without the pressure relaxation (`sigma = 0`) the reflection is
-# ``1/(2kr)`` at ``r = 2.1``, and it halves when the outer radius is doubled.
-# Holding the exact solution at the outer boundary removes the ripple, and the
-# ratio then stays within 0.4% of one. That remainder is the resolution at the
-# sphere, whose radius spans six radial spacings: with 64 radial nodes instead
-# of 128 the radiated amplitude is 2% high.
+# A wave that reaches the outflow face is partly reflected unless the face
+# lets it leave unchanged. The characteristic analysis of the face treats the
+# wave as plane, and a spherical wave departs from a plane one by a relative
+# amount of order ``1/kr``. A face that ignored the difference would reflect
+# ``1/(2kr)`` of the wave, 2% here, and the amplitude would ripple about the
+# exact one with a period of half a wavelength. On the outer radial face of a
+# spherical or cylindrical grid, [`NSCBCOutflowBC`](@ref) carries the
+# curvature term of the radiation condition of Bayliss and Turkel (1980),
+# which leaves a reflection of order ``1/(kr)^2``, a tenth of a percent at
+# ``r = 2.1``.
+#
+# The remaining 0.4% is the resolution at the sphere, whose radius spans six
+# radial spacings: holding the exact solution at the outer boundary leaves the
+# ratio the same, and with 64 radial nodes instead of 128 the radiated
+# amplitude is 2% high.
 #
 # ## Pattern
 #
@@ -272,11 +276,9 @@ for (t, e) in zip(history.t, history.error)
     @printf("%5.2f %12.1e\n", t, e / U)
 end
 
-# The difference appears first next to the sphere, then at the outer face as
-# the face begins to reflect, and it grows as the reflected wave converges on
-# the sphere, since the amplitude of a converging wave rises as ``1/r``. With
-# the exact solution held at the outer boundary it settles near
-# ``10^{-3}\,U`` next to the sphere.
+# The difference appears first next to the sphere and settles by
+# ``t = 0.5`` near ``10^{-3}\,U``, the value it reaches with the exact
+# solution held at the outer boundary as well.
 #
 # At ten times and at a tenth of the amplitude of the motion, the ratios to
 # the exact amplitude are the same to three digits. Turning off the
@@ -285,11 +287,12 @@ end
 # ## What this checks
 #
 # - A sphere oscillating on a grid resolved in radius and polar angle radiates
-#   the dipole field: along the axis the amplitude is within 3% of the exact
-#   one at every radius, and the pattern is ``|\cos\theta|``.
+#   the dipole field: along the axis the amplitude is within 0.4% of the
+#   exact one at every radius, and the pattern is ``|\cos\theta|``.
 # - The pole condition carries the field through the polar axis without
 #   disturbing the pattern there.
 # - A [`DirichletBC`](@ref) given a function of position and time drives the
 #   wave at the sphere.
-# - A characteristic outflow condition at a finite radius reflects a small
-#   part of a spherical wave, about ``1/(2kr)`` of it.
+# - A characteristic outflow condition at the outer radius of a spherical
+#   grid lets the spherical wave leave, reflecting about a tenth of a percent
+#   of it.

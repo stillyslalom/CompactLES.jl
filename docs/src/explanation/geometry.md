@@ -98,12 +98,15 @@ diffusive rates with inverse spacing squared.
 For a resolved cylindrical angle, `Numerics(polar_truncation = κ)` lifts this
 restriction at the inner rings. Each ring of fixed ``r`` and ``z`` is projected
 once per step onto its azimuthal Fourier modes
-``m \le \max(1, \lfloor \pi r / (\kappa \Delta r) \rfloor)``, which are the
-modes a field smooth through the axis can carry there, and the timestep
-charges the azimuthal direction at the spacing of the highest mode kept
-instead of ``r\Delta\theta``. Modes 0 and 1 are always kept, so ring sums and
-a uniform freestream are unchanged. The truncation is off by default, and the
-spherical form is not implemented.
+``m \le \max(2, \lfloor \pi r / (\kappa \Delta r) \rfloor)``, which are the
+modes a field smooth through the axis can carry there. The radial and
+azimuthal momenta keep one mode more on every ring, since a velocity
+component of a smooth field carries mode ``m`` at order ``r^{m-1}`` rather
+than ``r^m``. The timestep charges the azimuthal direction at the spacing of
+the highest mode kept, that of the momenta, instead of ``r\Delta\theta``.
+Modes 0 to 2 are always kept, so ring sums and a uniform freestream are
+unchanged. The truncation is off by default, and the spherical form is not
+implemented.
 
 When an angular dimension is collapsed, its derivative and small-cell
 restriction disappear. Geometric source terms remain, and `compute_dt` adds a
