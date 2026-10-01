@@ -128,15 +128,8 @@ include("capability_cases.jl")
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))
-        # The symmetry plane and the r-z axis are refused alike; each row
-        # takes the fold the other rows do not.
-        plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
         axis_rz = C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial)
         at_plane = BlockRegion((0, 0, 0), (12, 1, 1))
-        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the " *
-                "host backend only",
-                plane, Numerics(n_global=n1, execution=Execution(backend=C.device()),
-                                amr=AMR(initial=at_plane)))
         # A second level reaching the axis starts on its parent's first node,
         # offset -1; one at offset 0 stops short of it inside the margin.
         rejects("offset -1 reaches the AxisBC of dimension 1",

@@ -294,6 +294,76 @@ end
         level_restriction=:filter, backend=DeviceBackend(cpu_ka))
 end
 
+@testset "device-resident refinement at a fold" begin
+    # A level reaching a symmetry plane or the r-z axis on the device backend:
+    # the folded box mirror uploaded to the device chain and the Hermite
+    # boxes, the tile's fold plans as device plans, and on a tiled level the
+    # fold's batched plans over the stack, whose mirror fill runs per tile.
+    # The r-z case tiles a strip along the plane at z = 0 from the axis
+    # outward: the corner tile folds on both dimensions and stacks alone,
+    # and the two tiles beside it share a stack along the active z, the
+    # plane's own dimension, so its mirror fill reads the stacked launch's
+    # third index modulo the tile's extent. It is viscous under the default
+    # ghost fluxes, so the gradient ring of the folded box runs through the
+    # scratch's device plans.
+    # Bitwise against the CPUBackend under FORCE_KA and
+    # FORCE_DEVICE_EXCHANGE, as every device gate is.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function plane(backend)
+        N = 48
+        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), per, per), cfl=0.9,
+                   filter_interval=1, subcycle=true,
+                   refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)), backend=backend)
+        q = allocate_state(s)
+        initialize!(s, q, (x, y, z) -> begin
+            rho = 1 + 0.05 * cos(pi * x)
+            Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4)
+        end)
+        run!(s, q; tfinal=0.05)
+        return s, q
+    end
+    function corner(backend)
+        N = 24
+        s = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                   metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
+                   transport=ConstantTransport(mu0=1e-3),
+                   refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
+        q = allocate_state(s)
+        initialize!(s, q, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
+            Prim(rho=rho, u=(0.02 * r, 0.0, 0.01 * z), p=rho^1.4)
+        end)
+        run!(s, q; tfinal=0.05, nmax=4)
+        return s, q
+    end
+    for build in (plane, corner)
+        s1, q1 = build(CPUBackend())
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s2, q2 = try
+            build(DeviceBackend(cpu_ka))
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        @test s1.step == s2.step
+        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+        lt = getfield(s2, :levels)[2].transfers[1]
+        @test lt.folded[1][1]
+    end
+    # The corner tile stacks alone and folds on r and z; its two neighbours
+    # share a stack along z that folds on z only.
+    s, _ = corner(DeviceBackend(cpu_ka))
+    stacks = getfield(s, :levels)[2].stacks
+    @test [length(st.members) for st in stacks] == [1, 2]
+    @test stacks[2].patch.rho.stride > 1
+    @test stacks[1].patch.folds[1].lo && stacks[1].patch.folds[3].lo
+    @test stacks[2].patch.folds[1] === nothing && stacks[2].patch.folds[3].lo
+end
+
 @testset "device-resident tiled level: regridding Sod reproduces the CPU solver" begin
     # A tiled, subcycled, regridding level on the device backend: the
     # tile records stage through the backend, the transfer chain runs on
@@ -724,7 +794,7 @@ const POINTWISE_BODIES = (
     :_copy_interior_point!, :_delta4_point!, :_delta4_signed_point!,
     :_dilatation_point!, :_dilatation_switch_point!, :_extrapolation_point!, :_face_pick_point!,
     :_face_put_point!, :_face_save_point!,
-    :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!,
+    :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!, :_fold_fill_z_point!,
     :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
     :_internal_energy_point!, :_interp_point!, :_inviscid_flux_point!,

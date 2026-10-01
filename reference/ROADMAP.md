@@ -304,9 +304,9 @@ promotion.
   `level_boundaries` placing regridded levels on wall and NSCBC faces
   (`1e15700`), and cylindrical Noh refined onto the axis as a validation row
   (`7c629b0`); no tutorial wall stands for a mirror plane. Remaining:
-  1. Fold faces (the plane and the axis) on stacked device tiles and with
-     `:filter` restriction. Regridding and nesting at a fold are delivered
-     (commit `56993d0`).
+  1. Done: the `:filter` restriction folds at the plane and the axis
+     (commit `ec9361f`), and so do stacked device tiles. Regridding and
+     nesting at a fold are delivered (commit `56993d0`).
   2. Done (commit `8b2f20e`): the nested-level convergence row takes the
      filter, as the axis rows do; the unfiltered coupling's growing mode is
      A16.

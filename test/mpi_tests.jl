@@ -2598,9 +2598,31 @@ function test_staged_exchange()
         run!(s, states; tfinal=0.3, nmax=6)
         return s, states
     end
+    # A tiled level along the plane z = 0 of an r-z run from the axis
+    # outward, decomposed with the root: the corner tile folds on both
+    # dimensions and its neighbours on z alone, each fold's mirror fill on
+    # the tile's edge rank and on every member of a stack, and the box
+    # mirror across both folds on every owner.
+    function folded_level(backend)
+        s = Solver(n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2],
+                        (SymmetryPlaneBC(), SlipWallBC())),
+                   metric=CylindricalMetric(), filter_interval=1, cfl=0.5,
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=1e-3),
+                   refine=BlockRegion((0, 0, 0), (25, 1, 9)), tile=8, backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
+            Prim(rho=rho, u=(0.02 * r, 0.0, 0.01 * z), p=rho^1.4)
+        end)
+        run!(s, states; tfinal=0.05, nmax=4)
+        return s, states
+    end
     for (label, build) in (("two viscous slabs", slabs),
                            ("tiled regridding Sod", tiled),
-                           ("ghost-flux viscous level", ghost_level))
+                           ("ghost-flux viscous level", ghost_level),
+                           ("tiled level at the r-z folds", folded_level))
         s5, q5 = build(CPUBackend())
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true

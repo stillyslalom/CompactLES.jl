@@ -582,7 +582,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         for (ℓ, rg) in enumerate(refines)
             span = _level_span(n_global, active_g, ℓ - 1, bcs)
             period = _level_period(n_global, periodic, ℓ - 1)
-            eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
+            eligible = _level_boundary_eligible(bcs, active_g, periodic)
             # Along a periodic dimension a region may run across the seam but
             # not around it: one patch keeps the margin clear of its own other
             # end, so its box and its covered window each meet a parent node
@@ -625,13 +625,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             end
             bnd = _boundary_faces(rg, span, eligible)
             folded = _level_fold_faces(bnd, bcs)
-            if any(any, folded)
-                # The fold of a tile at a symmetry plane or the r-z axis rests
-                # on the host line solves of its own plans.
-                backend isa DeviceBackend &&
-                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
-                          "runs on the host backend only")
-            end
             # The box stops at a wall face, where the interpolation takes
             # one-sided stencils of the order's width over the box.
             for d in 1:3
@@ -989,7 +982,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         extent = _level_extent(n_global, active_g, ℓ - 1)
         span = _level_span(n_global, active_g, ℓ - 1, bcs)
         period = _level_period(n_global, periodic, ℓ - 1)
-        eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
+        eligible = _level_boundary_eligible(bcs, active_g, periodic)
         if tile == 0
             tregions = [rg]
         else
@@ -1216,7 +1209,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm);
                              gradient_deriv=ghost_viscous ? deriv : nothing,
-                             backend, fine_decomp=decomp_f, hf, boundary)
+                             backend, fine_decomp=decomp_f, hf, boundary, folded)
     # Every face of a refined patch but one on the domain boundary is an
     # interface end, a coarse-fine or a same-level one, so each dimension
     # with such an end takes a ghost-flux array.
@@ -1478,7 +1471,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         interface_rhs, backend, n_species, n_cons,
                                         bulk, level; interface_divergence,
                                         ghost_viscous, ring, boundary=key[2], bcs,
-                                        smoother)
+                                        smoother, root_folds)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1497,15 +1490,22 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            ghost_viscous::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                           bcs=nothing, smoother::Symbol=:gaussian) where {T}
+                           bcs=nothing, smoother::Symbol=:gaussian,
+                           root_folds=nothing) where {T}
     ntiles = length(tregions)
-    region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
+    # The members share their boundary faces and so fold alike: at a symmetry
+    # plane or the r-z axis the spanning patch holds the fold with batched
+    # plans, and each member holds it with its own, as a host tile does.
+    folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundary, bcs)
+    region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm,
+                                        folded)
     npad = padded_extent(decomp1)
     stride = npad[3]
     wall_faces = _sensor_wall_faces(_fine_bcs(active_g, faces[1], boundary, bcs))
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
                              ntiles, stride, interface_divergence, ring, boundary,
-                             wall_faces, gaussian=smoother === :gaussian)
+                             wall_faces, gaussian=smoother === :gaussian, folded,
+                             root_folds)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1534,7 +1534,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     tiles = Patch[]
     for (slot, refine) in enumerate(tregions)
         region_t, decomp_t, _ = slot == 1 ? (region1, decomp1, hf) :
-                                _fine_decomp(T, refine, active_g, h, n_halo, comm)
+                                _fine_decomp(T, refine, active_g, h, n_halo, comm,
+                                             folded)
         # Every member sits in the span's slots the way the first tile does:
         # same extent, same process grid, same block of it on this rank.
         (padded_extent(decomp_t) == npad && decomp_t.dims == decomp1.dims &&
@@ -1554,11 +1555,11 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, ring, boundary, wall_faces,
-                              gaussian=smoother === :gaussian)
+                              gaussian=smoother === :gaussian, folded, root_folds)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
                                  gradient_deriv=ghost_viscous ? deriv : nothing,
-                                 backend, fine_decomp=decomp_t, hf, boundary)
+                                 backend, fine_decomp=decomp_t, hf, boundary, folded)
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
                                      faces[slot],
                                      _fine_bcs(active_g, faces[slot], boundary, bcs),

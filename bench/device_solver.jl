@@ -188,6 +188,52 @@ function main(opt)
                 s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
     end
 
+    # --- A level at a symmetry plane and at the r-z axis -------------------
+    # The tile folds at the fine spacing: the mirrored box uploads to the
+    # device chain and the Hermite boxes, and the fold's plans run as device
+    # plans. On the tiled r-z strip along z = 0 the corner tile folds on both
+    # dimensions and stacks alone, and its two neighbours share a stack along
+    # z, the plane's own dimension, whose mirror fill reduces the stacked
+    # launch's third index modulo the tile's extent.
+    function plane_level(backend)
+        N = 48
+        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), per, per), cfl=0.9,
+                   filter_interval=1, subcycle=true,
+                   refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)), backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> begin
+            rho = 1 + 0.05 * cos(pi * x)
+            Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4)
+        end)
+        run!(s, states; tfinal=0.05)
+        return s, states
+    end
+    function rz_folds(backend)
+        N = 24
+        s = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                   metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
+                   transport=ConstantTransport(mu0=1e-3),
+                   refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
+            Prim(rho=rho, u=(0.02 * r, 0.0, 0.01 * z), p=rho^1.4)
+        end)
+        run!(s, states; tfinal=0.05, nmax=8)
+        return s, states
+    end
+    for (label, build) in (("level at a symmetry plane", plane_level),
+                           ("tiled level at the r-z folds", rz_folds))
+        s1, q1 = build(CPUBackend())
+        s2, q2 = build(DeviceBackend(ka_backend))
+        dmax = maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
+                       for i in eachindex(q1))
+        @printf("%-34s steps %3d/%3d  max|dev-cpu| = %g%s\n", label,
+                s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
+    end
+
     # --- Patch layout and tiled level on device ---------------------------
     # The interface records stage through the backend, the transfer chain
     # runs on the fine patches' device scratch, the tag sweep evaluates on

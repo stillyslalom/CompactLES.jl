@@ -124,41 +124,62 @@ which ends of `d` carry a fold.
 `f` is written in place on the ranks owning the corresponding global edge and
 left unchanged on the others; it is returned either way. No communication takes
 place here, so this is not a collective call.
+
+On a stacked level's storage (`StackedArray`) every tile's block is filled,
+each over the padded extent of `decomp`, one tile's.
 """
 function fold_fill!(f, decomp::Decomp, d::Int, lo::Bool, hi::Bool, σ::Int)
     pad = decomp.n_halo_d[d]
     n = decomp.n_local[d]
     sgn = eltype(f)(σ)
-    o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
-    no1, no2 = size(f, o1), size(f, o2)
-    if lo && decomp.sub_rank[d] == 0
-        pointwise!(_fold_fill_point!, f, pad, no1, no2, f, sgn, d, pad, n, true)
-    end
-    if hi && decomp.sub_rank[d] == decomp.sub_size[d] - 1
-        pointwise!(_fold_fill_point!, f, pad, no1, no2, f, sgn, d, pad, n, false)
+    # The padded extent of one tile: `size(f)` spans every tile of a stack.
+    np = _stack_of(f) === nothing ? size(f) : padded_extent(decomp)
+    for (end_lo, owns) in ((true, lo && decomp.sub_rank[d] == 0),
+                           (false, hi && decomp.sub_rank[d] == decomp.sub_size[d] - 1))
+        owns || continue
+        if d == 3
+            # The halo layer rides the launch's third index, which a stacked
+            # launch offsets by whole tiles; the body recovers the layer
+            # modulo the tile's padded extent.
+            pointwise!(_fold_fill_z_point!, f, np[1], np[2], pad,
+                       f, sgn, pad, n, np[3], end_lo)
+        else
+            pointwise!(_fold_fill_point!, f, pad, np[d == 1 ? 2 : 1], np[3],
+                       f, sgn, d, pad, n, end_lo)
+        end
     end
     return f
 end
 
-# One mirrored ghost write: `i` indexes the halo layer 1:pad, `j`/`k` the two
-# orthogonal FULL axes in ascending dimension order (matching `_odims`).
+# One mirrored ghost write along dimension 1 or 2: `i` indexes the halo layer
+# 1:pad, `j` the other of the two and `k` the third dimension, full axes.
 @inline function _fold_fill_point!(f, sgn, d, pad, n, lo, i, j, k)
     @inbounds if lo
         if d == 1
             f[pad-i+1, j, k] = sgn * f[pad+i, j, k]
-        elseif d == 2
-            f[j, pad-i+1, k] = sgn * f[j, pad+i, k]
         else
-            f[j, k, pad-i+1] = sgn * f[j, k, pad+i]
+            f[j, pad-i+1, k] = sgn * f[j, pad+i, k]
         end
     else
         if d == 1
             f[pad+n+i, j, k] = sgn * f[pad+n-i+1, j, k]
-        elseif d == 2
-            f[j, pad+n+i, k] = sgn * f[j, pad+n-i+1, k]
         else
-            f[j, k, pad+n+i] = sgn * f[j, k, pad+n-i+1]
+            f[j, pad+n+i, k] = sgn * f[j, pad+n-i+1, k]
         end
+    end
+    return nothing
+end
+
+# The same along dimension 3: `i` and `j` the full axes of dimensions 1 and 2,
+# `k` the halo layer plus a stacked launch's tile offset, a multiple of the
+# padded extent `n3` (zero on ordinary storage).
+@inline function _fold_fill_z_point!(f, sgn, pad, n, n3, lo, i, j, k)
+    layer = (k - 1) % n3 + 1
+    base = k - layer
+    @inbounds if lo
+        f[i, j, base+pad-layer+1] = sgn * f[i, j, base+pad+layer]
+    else
+        f[i, j, base+pad+n+layer] = sgn * f[i, j, base+pad+n-layer+1]
     end
     return nothing
 end

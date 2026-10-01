@@ -1174,13 +1174,18 @@ The conserved state of a whole `TileStack`: the array every member's state in
 `states` is a view of, wrapped as a `StackedArray` so a launch on it runs
 every tile. The members are checked to be the views `allocate_state` hands
 out, in slot order; a state vector assembled any other way is refused rather
-than advanced tile by tile.
+than advanced tile by tile. A stack of one tile accepts any state of the
+stack's extent: its view spans the whole stacked array, which a GPU array
+package returns as a contiguous array rather than a `SubArray`.
 """
 function _stack_state(stack::TileStack, states)
     field = stack.patch.rho
     ntiles, stride = field.ntiles, field.stride
     first_view = parent(states[stack.members[1]])
-    first_view isa SubArray || _unstacked_state_error()
+    if !(first_view isa SubArray)
+        ntiles == 1 && size(first_view, 3) == stride || _unstacked_state_error()
+        return ConservedState(StackedArray(first_view, ntiles, stride))
+    end
     raw = parent(first_view)
     for (slot, li) in enumerate(stack.members)
         v = parent(states[li])
@@ -1692,17 +1697,19 @@ end
 # `gradient_deriv` adds the gradient ring's storage on `backend`, whatever
 # the patch's faces: a tile kept at a regrid keeps its scratch while its
 # faces change. `fine_decomp` and `hf` are the patch's decomposition and
-# spacing.
+# spacing; `folded` marks its boundary faces on a fold, where the box keeps
+# its buffer, as `build_level_transfer` builds the host chain.
 function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
                         active::NTuple{3,Bool}, n_halo::Int, n_cons::Int,
                         np::Int, me::Int; gradient_deriv=nothing,
                         backend::AbstractBackend=CPUBackend(),
                         fine_decomp::Union{Nothing,Decomp}=nothing,
                         hf=nothing,
-                        boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                        boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                        folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     _device_path(f) || return _empty_level_scratch(f)
     dims = [d for d in 1:3 if active[d]]
-    buffer = _box_buffer(active, boundary)
+    buffer = _box_buffer(active, boundary, folded)
     boxext = _box_extent(region, buffer)
     exts = _chain_extents(boxext, dims)
     n_owned = length((me+1):np:n_cons)
@@ -1722,12 +1729,12 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
                                                fine_decomp.n_halo_d,
                                                ntuple(d -> (!boundary[d][1],
                                                             !boundary[d][2]), 3),
-                                               buffer)
+                                               buffer, folded)
         gplans = Any[p === nothing ? nothing : backend_plan(backend, p) for p in hplans]
         gtmp = fill!(similar(f, T, _padded_extent(exts[end], active, n_halo)), 0)
         _, ringlen = _slab_table(_ring_slabs(region,
                                              ntuple(d -> fine_decomp.active[d], 3),
-                                             fine_decomp.n_halo_d, boundary))
+                                             fine_decomp.n_halo_d, boundary, folded))
         gring = fill!(similar(f, T, ringlen, 3 * n_cons), 0)
     end
     return LevelScratch(similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
@@ -2222,13 +2229,10 @@ _level_boundary_condition(bc) =
 _level_fold_condition(bc) = bc isa Union{SymmetryPlaneBC,AxisBC}
 
 # Per dimension and side, whether a level may reach that domain face: a
-# non-periodic active dimension whose root condition there qualifies, a
-# fold only where `folds` admits one.
-_level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool},
-                         folds::Bool=false) =
+# non-periodic active dimension whose root condition there qualifies.
+_level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool}) =
     ntuple(d -> ntuple(s -> active[d] && !periodic[d] &&
-                            _level_boundary_condition(bcs[d][s]) &&
-                            (folds || !_level_fold_condition(bcs[d][s])), 2), 3)
+                            _level_boundary_condition(bcs[d][s]), 2), 3)
 
 # The boundary faces among `boundary` whose root condition is a fold.
 _level_fold_faces(boundary::NTuple{3,NTuple{2,Bool}}, bcs) =
@@ -2383,7 +2387,7 @@ function _region_boundaries(solver, regions::AbstractVector{BlockRegion}, ℓ::I
     root = getfield(solver, :patches)[1]
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic, true)
+    eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
     span = _level_span(n_global, active, ℓ - 1, root.bcs)
     return [_boundary_faces(r, span, eligible) for r in regions]
 end
