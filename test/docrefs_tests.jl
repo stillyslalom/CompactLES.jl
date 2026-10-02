@@ -10,8 +10,15 @@
 # Three things are checked, each a Documenter failure mode that needs no
 # build to detect:
 #   1. every `@ref` in a rendered docstring or a page resolves to a `@docs`
-#      entry or to a page header, and an unqualified one in a docstring names
-#      a binding of the docstring's own module, where Documenter looks it up;
+#      entry or to a page heading, and an unqualified one in a docstring names
+#      a binding of the docstring's own module, where Documenter looks it up.
+#      Documenter looks a link up among the heading anchors of every page
+#      first, a code link such as [`Sphere`](@ref) included, and fails the
+#      build when its slug is the anchor of more than one heading; a second
+#      `## Sphere` anywhere in the docs therefore breaks every such link.
+#      A code link whose slug is the anchor of a single heading builds, but
+#      is linked to that heading rather than to the docstring; it is reported
+#      as a warning only;
 #   2. every `@docs` entry names a documented binding of CompactLES or of one
 #      of its submodules;
 #   3. every exported or public name CompactLES or a submodule owns has a
@@ -69,8 +76,10 @@ function literate_markdown(script)
     lines = String[]
     for line in eachline(script)
         m = match(r"^#(?: (.*))?$", line)
-        m === nothing && continue
-        push!(lines, m.captures[1] === nothing ? "" : String(m.captures[1]))
+        # A code line becomes a blank line, so that a line of this text is the
+        # same line of the script in a report.
+        push!(lines, m === nothing || m.captures[1] === nothing ? "" :
+                     String(m.captures[1]))
     end
     return join(lines, "\n")
 end
@@ -117,42 +126,63 @@ function docs_entries(page_paths)
     return entries
 end
 
-# Section headers of every page, as Documenter slugifies them for `@ref`:
-# lowercase, with the punctuation it strips removed and runs of whitespace
-# collapsed to one hyphen. Header refs compare on this form.
-slug(text) = replace(lowercase(strip(text)), r"[^\w\s-]" => "",
-                     r"\s+" => "-")
+# Documenter's `slugify` (utilities.jl in Documenter 1.x), copied verbatim
+# so that a heading anchor here is the string Documenter stores. It keeps
+# case and punctuation and drops symbols such as backticks and `$`.
+function slugify(s::AbstractString)
+    s = replace(s, r"\s+" => "-")
+    s = replace(s, r"&" => "-and-")
+    s = replace(s, r"[^\p{L}\p{P}\d\-]+" => "")
+    return String(strip(replace(s, r"\-\-+" => "-"), '-'))
+end
 
+# The heading anchors of every page, as Documenter's `TrackHeaders` records
+# them: the slug of each top-level heading, mapped to every place it occurs,
+# as "page:line `heading`". Documenter tracks only the headings at the top
+# level of a page, so a heading inside an admonition (indented) or inside a
+# docstring makes no anchor. A slug occurring more than once is legal; it
+# fails the build only when an `@ref` names it.
 function headers(texts)
-    slugs = Set{String}()
-    for (_, text) in texts
+    anchors = Dict{String,Vector{String}}()
+    for (page, text) in texts
         infence = false
-        for line in split(text, '\n')
+        for (n, line) in enumerate(split(text, '\n'))
             s = rstrip(line)
             startswith(s, "```") && (infence = !infence; continue)
             infence && continue
             m = match(r"^#{1,6}\s+(.*?)\s*$", s)
-            m === nothing || push!(slugs, slug(m.captures[1]))
+            m === nothing && continue
+            push!(get!(anchors, slugify(m.captures[1]), String[]),
+                  "$(relpath(page)):$n `$(s)`")
         end
     end
-    return slugs
+    return anchors
 end
 
-# Every `@ref` link in `text`: (target, is_code). `[`x`](@ref)` and
-# `[text](@ref x)` both give target `x`; a bare `[Some header](@ref)` is a
-# header reference.
+# Every `@ref` link in `text`, as (link, slug, code). `slug` is the string
+# Documenter's `xref` looks up among the heading anchors before it tries a
+# docstring: the code of a `[`x`](@ref)` label as written, the slugified text
+# of a plain label, an explicit `@ref x` target as written, and a quoted
+# `@ref "Some heading"` target slugified. `code` is the name a docstring
+# lookup takes, `nothing` for a link that can only reach a heading.
 function refs(text::AbstractString)
-    out = Tuple{String,Bool}[]
-    for m in eachmatch(r"\[([^\[\]]*)\]\(@ref(?:\s+([^)\s]+))?\s*\)", text)
+    out = Tuple{String,String,Union{String,Nothing}}[]
+    for m in eachmatch(r"\[([^\[\]]*)\]\(@ref(?:\s+([^)]*?))?\s*\)", text)
         label, target = m.captures
+        link = replace(m.match, r"\s+" => " ")
         if target !== nothing
-            push!(out, (String(target), true))
+            quoted = match(r"\"(.+)\"", target)
+            if quoted === nothing
+                push!(out, (link, String(target), String(target)))
+            else
+                push!(out, (link, slugify(quoted.captures[1]), nothing))
+            end
         else
             code = match(r"^`([^`]*)`$", strip(label))
             if code === nothing
-                push!(out, (String(label), false))
+                push!(out, (link, slugify(strip(label)), nothing))
             else
-                push!(out, (String(code.captures[1]), true))
+                push!(out, (link, String(code.captures[1]), String(code.captures[1])))
             end
         end
     end
@@ -198,11 +228,13 @@ function exported_names()
 end
 
 """
-    check() -> (unresolved, unknown_entries, undocumented_exports)
+    check() -> (unresolved, unknown_entries, undocumented_exports, captured)
 
 Run the three checks and return the offenders, each as a vector of
-human-readable lines; all three empty means the docs cross-references are
-sound.
+human-readable lines; the first three empty means the docs cross-references
+are sound. `captured` lists the code links to a rendered docstring whose slug
+is also the anchor of a single heading: Documenter builds them without error
+and links them to the heading.
 """
 function check()
     page_paths = pages()
@@ -220,11 +252,9 @@ function check()
         end
     end
     texts_by_page = page_texts()
-    header_slugs = headers(texts_by_page)
+    anchors = headers(texts_by_page)
     unresolved = String[]
-    resolves(target, is_code) =
-        is_code ? (n = base_name(target); n !== nothing && n in rendered) :
-                  slug(target) in header_slugs
+    captured = String[]
     # Documenter resolves an unqualified name in a docstring's `@ref` in the
     # module the docstring belongs to, and falls back to `Main` only for a
     # fully qualified name.
@@ -233,19 +263,41 @@ function check()
         n = base_name(target)
         return n !== nothing && isdefined(owner, Symbol(n))
     end
+    # Documenter tries the heading anchors before the docstrings, for a code
+    # link as for a text link. A slug naming one heading resolves to it; a
+    # slug naming several is an error, and no docstring of that name is
+    # tried. `owner` is the module of the docstring holding the link, or
+    # `nothing` on a page.
+    function resolve!(where, link, slug, code, owner)
+        places = get(anchors, slug, String[])
+        if length(places) > 1
+            push!(unresolved, "$where: $link is ambiguous: its slug `$slug` is " *
+                              "the anchor of $(length(places)) headings, " *
+                              join(places, ", "))
+        elseif length(places) == 1
+            n = code === nothing ? nothing : base_name(code)
+            n !== nothing && n in rendered &&
+                push!(captured, "$where: $link resolves to the heading " *
+                                "$(only(places)), not to the docstring of `$n`")
+        elseif code === nothing
+            push!(unresolved, "$where: $link names no heading")
+        else
+            n = base_name(code)
+            n !== nothing && n in rendered ||
+                push!(unresolved, "$where: $link names no rendered docstring")
+            owner === nothing || binds(owner, code) ||
+                push!(unresolved, "$where in $owner: $link is not bound there; " *
+                                  "qualify it")
+        end
+    end
     for name in sort(collect(rendered))
-        for (target, is_code) in refs(texts[name])
-            resolves(target, is_code) ||
-                push!(unresolved, "docstring of `$name`: @ref `$target`")
-            !is_code || binds(owners[name], target) ||
-                push!(unresolved, "docstring of `$name` in $(owners[name]): @ref " *
-                                  "`$target` is not bound there; qualify it")
+        for (link, slug, code) in refs(texts[name])
+            resolve!("docstring of `$name`", link, slug, code, owners[name])
         end
     end
     for (page, text) in texts_by_page
-        for (target, is_code) in refs(text)
-            resolves(target, is_code) ||
-                push!(unresolved, "$(relpath(page)): @ref `$target`")
+        for (link, slug, code) in refs(text)
+            resolve!(relpath(page), link, slug, code, nothing)
         end
     end
     undocumented_exports = String[]
@@ -257,13 +309,16 @@ function check()
         name in rendered ||
             push!(undocumented_exports, "exported `$name` has a docstring no @docs block renders")
     end
-    return unresolved, unknown_entries, undocumented_exports
+    return unresolved, unknown_entries, undocumented_exports, captured
 end
 
 end # module DocRefs
 
 @testset "docs cross-references resolve" begin
-    unresolved, unknown_entries, undocumented_exports = DocRefs.check()
+    unresolved, unknown_entries, undocumented_exports, captured = DocRefs.check()
+    for line in captured
+        @warn "@ref linked to a heading: $line"
+    end
     for line in unresolved
         @warn "unresolved @ref: $line"
     end
