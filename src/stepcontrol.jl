@@ -62,8 +62,9 @@
 # steps and returns a plateau of 3.997 against the exact 4, the state carries
 # 24991 cell-steps of e < 0, peaking at 8 cells at once and reaching -718 e0.
 # Total energy density and mixture density stay positive at every cell of every
-# step. The wall region runs as a pressureless layer, and the scheme remains
-# stable there for the whole run.
+# step. The cells sit ahead of the shock front in an odd-even pattern that
+# travels with it (bench/shockfoot.jl), and the scheme remains stable there for
+# the whole run.
 #
 # Raising e above zero requires 5% velocity damping on the worst cell after
 # a single step (-337 e0; the next four need 0.7%, 0.08%, 0.05%, 0.02%). Applied
