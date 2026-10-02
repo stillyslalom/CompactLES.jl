@@ -58,12 +58,14 @@ jobs:
       # test target, so this job expects that suite to run: `require=hdf5`
       # fails the job on the skip instead. Makie is expected to skip here
       # (CairoMakie is not in the test target) and runs in the docs job.
+      # `timing=true` prints each testset's wall and compile time after the
+      # summary tree (see test/runtests.jl).
       - name: Run the serial suite at -O1
         shell: julia --project=. --color=yes {0}
         run: |
           using Pkg
           Pkg.test(; coverage=false, julia_args=["-O1"],
-                   test_args=["require=hdf5"])
+                   test_args=["require=hdf5", "timing=true"])
 
   numerics:
     name: Convergence and MPI

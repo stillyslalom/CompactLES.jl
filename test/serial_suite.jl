@@ -5593,8 +5593,8 @@ include("capability_tests.jl")
 # rather than as a pass, and `require=hdf5,makie` (a test argument:
 # `Pkg.test(test_args=["require=hdf5"])`, or on the command line) turns the
 # skip of a named suite into a failure, for a job that expects the suite to
-# run.
-const SUITE_OPTS = script_args(ARGS, (require = "",))
+# run. `timing` is read by runtests.jl and listed here so that it parses.
+const SUITE_OPTS = script_args(ARGS, (require = "", timing = false))
 const REQUIRED_SUITES = Symbol.(filter(!isempty, split(SUITE_OPTS.require, ',')))
 
 # HDF5 is a weak dependency and is not loadable from the package environment
