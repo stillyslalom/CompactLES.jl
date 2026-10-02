@@ -36,10 +36,15 @@ jobs:
       - uses: julia-actions/cache@v3
       # The device testsets and the MPI device phases run here, so the
       # workload's device block earns its precompile cost in this job and
-      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Set before
-      # buildpkg, which is what builds the image the preference keys.
-      - name: Precompile the device path
+      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Neither
+      # this step nor buildpkg precompiles: an image Pkg.instantiate built
+      # here would predate the preference and be rebuilt by the first `using`
+      # (measured 330 s of every job), and the serial suite builds its own at
+      # -O1 with bounds checks in any case.
+      - name: Set the device precompile preference
         shell: julia --project=. --color=yes {0}
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: "0"
         run: |
           using Pkg
           Pkg.instantiate()
@@ -83,10 +88,15 @@ jobs:
       - uses: julia-actions/cache@v3
       # The device testsets and the MPI device phases run here, so the
       # workload's device block earns its precompile cost in this job and
-      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Set before
-      # buildpkg, which is what builds the image the preference keys.
-      - name: Precompile the device path
+      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Neither
+      # this step nor buildpkg precompiles: an image Pkg.instantiate built
+      # here would predate the preference and be rebuilt by the first `using`
+      # (measured 330 s of every job), and the serial suite builds its own at
+      # -O1 with bounds checks in any case.
+      - name: Set the device precompile preference
         shell: julia --project=. --color=yes {0}
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: "0"
         run: |
           using Pkg
           Pkg.instantiate()
