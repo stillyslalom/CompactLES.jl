@@ -463,6 +463,13 @@ Names are spelled out in full. Current vocabulary:
   swap for the sends), `_gather_tile`/`_carry_over!` (the box regrid's
   replicated carry, kept as the migration's reference), `MIGRATION_AUDIT`
   / `MIGRATION_AUDIT_RESULT` (the test hook comparing the two bitwise)
+- `_level_artificial!` (the artificial coefficients of a tiled level with a
+  shared face, computed over the whole level in stages separated by exchanges
+  over the level's records, `src/level_sensors.jl`), `sensed_fields` (a
+  `Patch` field: a tile's strain magnitude and dilatation between those
+  stages), `InterfaceSmoothPlans` (a refined patch's smoother plans, `ghost`
+  reading the interface ghost layers the pass fills, `closed` the scheme's
+  rows), `coefficients_current` (`compute_rhs!`'s second trailing flag)
 - `interface_flux` (`:closure` or `:ghost`), `_ghost_viscous` (whether the
   ghost path carries the molecular flux), `ghost_flux` (a `Patch` field: the
   molecular flux of each interface dimension, interior values from the

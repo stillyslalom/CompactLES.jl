@@ -67,7 +67,9 @@ mutable struct FoldSpec{P,D,F,S,R,V}
     deriv_plans::D                         # derivative plans, σg = (+1, −1)
     filter_plans::F                        # filter plans,     σg = (+1, −1)
     smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1);
-                                           # the far end's wall rows are built in
+                                           # the far end's wall rows are built in.
+                                           # A refined patch holds a
+                                           # `FoldRingPlans` of two such pairs
     ring_plans::R                          # d8 detector plans, σg = (+1, −1) outer,
                                            # wall sign σw = (+1, −1) inner (both
                                            # slots one plan where the far end is no
@@ -89,11 +91,13 @@ FoldSpec(dim, lo, hi, pair, sigvel, sigflux, dp, fp, sp, rp) =
 """
     FoldRingPlans(ghost, closed)
 
-The `:d8` detector plans of a refined patch's fold, the fold's counterpart of
-`InterfaceRingPlans`: the far end of the folded dimension is an
-interface end, which `ghost` closes with rows reading the ghost layers and
-`closed` with the scheme's own rows. Each is indexed like a root fold's
-`ring_plans`, by ghost parity and then by wall sign.
+The `:d8` detector plans or the sensor-smoother plans of a refined patch's
+fold, the fold's counterpart of `InterfaceRingPlans` and
+`InterfaceSmoothPlans`: the far end of the folded dimension is an interface
+end, which `ghost` closes with rows reading the ghost layers and `closed`
+with the scheme's own rows. Each is indexed like a root fold's `ring_plans`,
+by ghost parity and then by wall sign, or like its `smooth_plans`, by ghost
+parity alone.
 """
 struct FoldRingPlans{R}
     ghost::R
@@ -108,7 +112,8 @@ fold_vplan(fold::FoldSpec, σg::Int) = _fold_div(fold.div_plans, fold, σg)
 @inline _fold_div(::Nothing, fold::FoldSpec, σg::Int) = fold_dplan(fold, σg)
 @inline _fold_div(plans, fold::FoldSpec, σg::Int) = plans[σg > 0 ? 1 : 2]
 fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
-fold_splan(fold::FoldSpec, σg::Int) = fold.smooth_plans[σg > 0 ? 1 : 2]
+fold_splan(fold::FoldSpec, σg::Int, ghosts::Bool=false) =
+    _fold_ring(fold.smooth_plans, ghosts)[σg > 0 ? 1 : 2]
 fold_rplan(fold::FoldSpec, σg::Int, σw::Int, ghosts::Bool=false) =
     _fold_ring(fold.ring_plans, ghosts)[σg > 0 ? 1 : 2][σw > 0 ? 1 : 2]
 
@@ -377,8 +382,8 @@ end
 # `σw` is the field's sign across a reflecting wall at the fold's far end,
 # which the detector's wall closure rows carry (`wall_closures`). Only the
 # ring role reads it; the other three are even at a wall wherever they run.
-# `ghosts` selects a refined patch's ring plans (`FoldRingPlans`) and is
-# ignored elsewhere. `:div` is the derivative through the divergence plans.
+# `ghosts` selects a refined patch's ring and smoother plans (`FoldRingPlans`)
+# and is ignored elsewhere. `:div` is the derivative through the divergence plans.
 @inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:deriv}, σw::Int, ghosts::Bool) =
     fold_dplan(f, -σ)
 @inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:div}, σw::Int, ghosts::Bool) =
@@ -386,7 +391,7 @@ end
 @inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:filter}, σw::Int, ghosts::Bool) =
     fold_fplan(f, σ)
 @inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:smooth}, σw::Int, ghosts::Bool) =
-    fold_splan(f, σ)
+    fold_splan(f, σ, ghosts)
 @inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:ring}, σw::Int, ghosts::Bool) =
     fold_rplan(f, σ, σw, ghosts)
 
@@ -401,8 +406,9 @@ which is returned.
 
 `σw` is the field's sign across a reflecting wall at the dimension's other
 end, selecting the detector's wall closure rows under `Val(:ring)`; the other
-roles ignore it. `ghosts` does the same for the detector on a refined patch,
-whose far end may be an interface end (`FoldRingPlans`).
+roles ignore it. `ghosts` selects the plans of the detector and of the
+smoother on a refined patch, whose far end may be an interface end
+(`FoldRingPlans`).
 
 A self-paired (axisymmetric) fold reduces to a mirror fill plus one folded
 plan, and so writes the folded-end halos of `f` in place. A paired fold runs

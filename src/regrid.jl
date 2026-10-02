@@ -1304,7 +1304,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              ghost_viscous=_ghost_viscous(solver),
                                              ring=_ring_detector(solver),
                                              boundaries, bcs=root.bcs,
-                                             root_folds=root.folds)
+                                             root_folds=root.folds,
+                                             n_sensed=_sensed_field_count(solver.art,
+                                                                          spec.tile))
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1347,7 +1349,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       ghost_viscous=_ghost_viscous(solver),
                                       ring=_ring_detector(solver),
                                       boundary=boundaries[ti], bcs=root.bcs,
-                                      root_folds=root.folds)
+                                      root_folds=root.folds,
+                                      n_sensed=_sensed_field_count(solver.art,
+                                                                   spec.tile))
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))
@@ -1762,7 +1766,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                   ghost_viscous=_ghost_viscous(solver),
                                   ring=_ring_detector(solver),
                                   boundary=boundaries[ti], bcs=rbcs,
-                                  root_folds=patches[1].folds)
+                                  root_folds=patches[1].folds,
+                                  n_sensed=_sensed_field_count(solver.art, spec.tile))
             Q = _state_like(p.rho, n_cons)
             push!(new_patches, p)
             push!(new_states, Q)

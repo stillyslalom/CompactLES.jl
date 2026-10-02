@@ -815,6 +815,27 @@ the planes it shares with surviving tiles from the survivors one-way
 Corner-coupled adjacency at level 0 does not arise; the root level stays a
 slab layout or a single patch.
 
+**Artificial properties across a shared face.** Within one tile the strain
+magnitude and the dilatation have no ghosts at a shared face, so the δ⁴
+detector clamps there and every sensor is smoothed with closure rows; on a
+converging shock that put μ\* and β\* up to half their peak off within three
+nodes of the face and left a checkerboard along the lattice. Exact
+coefficients need the strain magnitude six nodes into the neighbor, past the
+halo of four, so a level with a shared face computes them over the whole level
+before its right-hand sides (`_level_artificial!`, `src/level_sensors.jl`):
+gradients and the sensed fields per tile into `Patch.sensed_fields`, an
+exchange of those over the level's records, the detectors reading the
+ghosts, then an exchange of every sensor before each directional smoothing
+pass, which reads them through the smoother's interface rows
+(`InterfaceSmoothPlans`). A coarse-fine face keeps its single-patch treatment
+through a fill of the ghost layers (the edge value for the δ⁴ clamp, the
+half-offset mirror for the smoother's rows). Each tile's right-hand side then
+recomputes its gradients, since the workspace holds one tile's, which is the
+cost of the scheme: one gradient pass per tile per evaluation and a few planes
+of messages per sensor. A stacked device level runs the stages per stack and
+the exchanges and fills per tile; a level of one patch, or of tiles that share
+no face, keeps the per-tile path.
+
 **Shared RHS scratch.** A rank advances its tiles in sequence and nothing
 in the right-hand side's scratch outlives the evaluation that filled it, so
 the gradients, the sensor fields and their scratch, and the assembled fluxes

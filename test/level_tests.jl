@@ -1056,6 +1056,72 @@ end
     @test occursin("right-hand-side scratch", sprint(showerror, err))
 end
 
+@testset "tiled level: artificial coefficients across shared faces" begin
+    # Inside one tile the strain magnitude has no ghosts at a face shared with
+    # another tile, so a sensor built tile by tile clamps its detector and
+    # closes its smoother there. A level with shared faces computes its
+    # coefficients over the whole level instead (`_level_artificial!`), and
+    # four tiles then carry those of one patch over the same region but for
+    # the tiles' own gradient rows at the shared faces.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    ic(x, y, z) = Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(2y), 0.2cos(3x), 0.0),
+                       p=1.0)
+    mk(tile, region) = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                              refine=region, tile=tile)
+    st = mk(6, BlockRegion((18, 18, 0), (12, 12, 1)))
+    # The box over the union of the tiles, which the lattice widens past the
+    # requested region.
+    regs = level_regions(st, 1)
+    lo = ntuple(d -> minimum(r.offset[d] for r in regs), 3)
+    hi = ntuple(d -> maximum(r.offset[d] + r.extent[d] for r in regs), 3)
+    sb = mk(0, BlockRegion(lo, hi .- lo))
+    qt, qb = allocate_state(st), allocate_state(sb)
+    initialize!(st, qt, ic)
+    initialize!(sb, qb, ic)
+    @test CL._level_sensors(st, st.levels[2])
+    @test !CL._level_sensors(sb, sb.levels[2])
+    @test all(length(p.sensed_fields) == 1 for p in st.patches[2:end])
+    @test isempty(sb.patches[2].sensed_fields)
+    CL._prime_coefficients!(st, qt, Workspace(qt))
+    CL._prime_coefficients!(sb, qb, Workspace(qb))
+    box = sb.patches[2]
+    inner(p) = ntuple(d -> p.decomp.n_halo_d[d] .+ (1:p.decomp.n_local[d]), 3)
+    # The largest difference from the box over the four tiles, relative to
+    # the box's peak.
+    function deviation(name)
+        B = getfield(box, name)
+        ib = inner(box)
+        peak = maximum(abs, view(B, ib...))
+        worst = 0.0
+        for p in st.patches[2:end]
+            it = inner(p)
+            o = p.region.offset .- box.region.offset
+            A = getfield(p, name)
+            for j in eachindex(it[2]), i in eachindex(it[1])
+                b = B[ib[1][o[1] + i], ib[2][o[2] + j], ib[3][1]]
+                worst = max(worst, abs(A[it[1][i], it[2][j], it[3][1]] - b) / peak)
+            end
+        end
+        return worst
+    end
+    level = Dict(name => deviation(name) for name in (:mu_art, :kappa_art))
+    # The same tiles each computing their own, as a tile without a shared face
+    # does.
+    for (ps, Q) in CL.eachpatch(st, qt)
+        ps.patch.level == 1 || continue
+        CL.compute_primitives_and_gradients!(ps, Q)
+        CL.compute_artificial!(ps, Q)
+    end
+    own = Dict(name => deviation(name) for name in (:mu_art, :kappa_art))
+    @info "tiled coefficients against one patch" level own
+    # Measured 9.4e-7 (μ*, the tiles' gradient rows at the shared faces) and
+    # 2.8e-16 (κ*, whose field has no derivative), against 0.53 and 0.11
+    # tile by tile.
+    @test level[:mu_art] < 1e-5
+    @test level[:kappa_art] < 1e-13
+    @test own[:mu_art] > 0.1 && own[:kappa_art] > 0.01
+end
+
 @testset "tiled regrid seeds fresh tiles from surviving neighbors" begin
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())

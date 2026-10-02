@@ -41,7 +41,11 @@
 # rows at a fold or at a closed edge that reflects nothing. The smoother
 # follows the detector at a wall, `:gaussian` taking the even wall rows there
 # where its own are half a cell out.
-# Halos cover rank boundaries. The high-pass itself acts in
+# Halos cover rank boundaries. A tiled level with faces shared between tiles
+# computes its coefficients over the whole level instead (level_sensors.jl),
+# filling the ghost layers of the strain magnitude, the dilatation and every
+# sensor at a shared face from the neighbor before each line operator reads
+# them. The high-pass itself acts in
 # computational index space on every grid, a grid-based regularization in place
 # of a strictly physical-space one; only the length weighting is physical.
 
@@ -394,7 +398,9 @@ fraction. With it set, an [`InterfaceBC`](@ref) face, same-level or
 coarse-fine, is read like a rank boundary inside a patch. A field computed on
 the interior and then halo-exchanged has no such ghosts and must leave `ghosts`
 at its default: the strain magnitude and the dilatation are the two, and both
-keep the clamp at an interface. `SENSOR_INTERFACE_GHOSTS` turns the interface
+keep the clamp at an interface, except on a tiled level whose artificial
+properties are computed over the whole level, which fills their ghost layers
+first (`_level_artificial!`). `SENSOR_INTERFACE_GHOSTS` turns the interface
 reads off for a comparison on one build.
 
 A closed edge that is none of the three keeps the clamp, a
@@ -904,6 +910,10 @@ function gate_beta!(solver)
     return solver
 end
 
+# Whether β* carries the compression switch: `:gated_strain` and `:dilatation`.
+_gated(art::ArtificialProperties) =
+    art.beta_sensor === :gated_strain || art.beta_sensor === :dilatation
+
 @inline function _gate_beta_point!(beta_art, grad_u, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -1252,9 +1262,27 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    acc = solver.sensor_sp
+    _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                          a1, a2, a3, Y_tolerance)
+    smooth!(acc, solver)
+    for sp in 1:solver.equations.n_species
+        pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
+                   solver.D_art[sp], solver.c, acc, o1, o2, o3)
+    end
+    return solver
+end
+
+# The bracket of `bulk_diffusivity!` before smoothing, the maximum over the
+# species' mass and mole fractions, into the interior of `acc`. `tmp_a` and
+# `tmp_b` are its scratch.
+function _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                               a1, a2, a3, Y_tolerance)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     nxf, nyf, nzf = padded_extent(decomp)
     n_species = solver.equations.n_species
-    acc = solver.sensor_sp
     fill!(acc, 0)
     # With two species Y_2 = 1 − Y_1 and X_2 = 1 − X_1, so the second species'
     # detector outputs and excursions equal the first's to round-off and add
@@ -1278,12 +1306,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
         pointwise!(_max_into_point!, acc, nx, ny, nz, acc, solver.tmp_b,
                    o1, o2, o3)
     end
-    smooth!(acc, solver)
-    for sp in 1:n_species
-        pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
-                   solver.D_art[sp], solver.c, acc, o1, o2, o3)
-    end
-    return solver
+    return acc
 end
 
 @inline function _mole_fraction_point!(X, eos, Y, sp, n_species, i, j, k)

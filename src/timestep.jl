@@ -263,7 +263,12 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
         enforce = false
     end
     patches = getfield(solver, :patches)
-    if isempty(lev.stacks)
+    if _level_sensors(solver, lev)
+        # A tiled level with shared faces computes its artificial
+        # coefficients over the whole level first (level_sensors.jl); a
+        # configuration either takes this on every step or never.
+        _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce)
+    elseif isempty(lev.stacks)
         for pi in lev.patches
             ps = PatchSolver(solver, patches[pi])
             if enforce

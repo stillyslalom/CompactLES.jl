@@ -348,7 +348,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                ghost_viscous=_ghost_viscous(solver),
                                                ring=_ring_detector(solver),
                                                boundaries, bcs=root.bcs,
-                                               root_folds=root.folds)
+                                               root_folds=root.folds,
+                                               n_sensed=_sensed_field_count(solver.art,
+                                                                            spec.tile))
     restriction = spec.restriction
     fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(

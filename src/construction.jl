@@ -1054,7 +1054,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                      _ghost_viscous(interface_flux,
                                                                     transport),
                                                  ring=_ring_detector(art, n_species),
-                                                 boundaries, bcs, root_folds=folds)
+                                                 boundaries, bcs, root_folds=folds,
+                                                 n_sensed=_sensed_field_count(art, tile))
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -1191,7 +1192,8 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            ghost_viscous::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                           bcs=nothing, root_folds=nothing) where {T}
+                           bcs=nothing, root_folds=nothing,
+                           n_sensed::Int=0) where {T}
     folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundary, bcs)
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm, folded)
     fbcs = _fine_bcs(active_g, faces, boundary, bcs)
@@ -1219,7 +1221,8 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                                                (false, false, false))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
                            fbcs, plans, empty3,
-                           _patch_arrays(g, n_species), ws, _covered_mask(decomp_f),
+                           _patch_arrays(g, n_species, n_sensed), ws,
+                           _covered_mask(decomp_f),
                            scratch, gflux)
 end
 
@@ -1307,8 +1310,23 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     # node-centred wall rows of the `:gaussian` smoother, as the root's does
     # (`_sensor_wall_rows`); every other face keeps the scheme's rows.
     sw(d, side) = _sensor_wall_rows(smoo, wall_faces[d][side], 1, gaussian)
-    splans_f = ntuple(d -> decomp_f.active[d] ?
-        mkf(smoo, d; lo_closures=sw(d, 1), hi_closures=sw(d, 2)) : nothing, 3)
+    # A tiled level's artificial-property pass fills the ghost layers of the
+    # smoother's input at every interface face (`_level_artificial!`): the
+    # neighbor's sensor at a shared face, the half-offset mirror at a
+    # coarse-fine one. Its plans read them through the smoother's interface
+    # rows, none for the `:gaussian` stencil and the identity row of the
+    # compact filter, and keep the rows above at a face on the domain
+    # boundary. Every other caller takes the plans above (`InterfaceSmoothPlans`).
+    isr = interface_closures(smoo)
+    swg(d, side) = boundary[d][side] ? sw(d, side) : isr
+    function splan(d)
+        decomp_f.active[d] || return nothing
+        closed = mkf(smoo, d; lo_closures=sw(d, 1), hi_closures=sw(d, 2))
+        iface[d] || return InterfaceSmoothPlans(closed, closed)
+        return InterfaceSmoothPlans(mkf(smoo, d; lo_closures=swg(d, 1),
+                                        hi_closures=swg(d, 2)), closed)
+    end
+    splans_f = ntuple(splan, 3)
     # The d8 detector reads the interface ghosts of a field recovered over the
     # padded extent through rows of its own (`_ring_interface_rows`), and
     # closes on the scheme's own rows for a field without them. `nothing`
@@ -1358,7 +1376,9 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
              nothing
         fq = pairof(filt, d, at(d, 1, icf), at(d, 2, icf))
         sw_f(side) = folded[d][side] ? nothing : sw(d, side)
-        sp = pairof(smoo, d, sw_f(1), sw_f(2))
+        swg_f(side) = folded[d][side] ? nothing : swg(d, side)
+        sp = FoldRingPlans(pairof(smoo, d, swg_f(1), swg_f(2)),
+                           pairof(smoo, d, sw_f(1), sw_f(2)))
         rp = ((nothing, nothing), (nothing, nothing))
         if ring
             d8 = compact_d8(T)
@@ -1387,11 +1407,14 @@ end
 
 # The persistent arrays of a patch from an allocator `g()`, by name, in the
 # order the `Patch` constructor takes them.
-_patch_arrays(g::F, n_species::Int) where {F} =
-    (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
-     Y=[g() for _ in 1:n_species], mu_art=g(), beta_art=g(), kappa_art=g(),
-     D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
-     inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g())
+function _patch_arrays(g::F, n_species::Int, n_sensed::Int=0) where {F}
+    Y = [g() for _ in 1:n_species]
+    return (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
+            Y=Y, mu_art=g(), beta_art=g(), kappa_art=g(),
+            D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
+            inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g(),
+            sensed_fields=append!(empty(Y), (g() for _ in 1:n_sensed)))
+end
 
 # The refined `Patch` from its parts, with no pair buffers (`empty` stands in
 # for both): a refined patch's folds, those of a symmetry plane or the r-z
@@ -1404,7 +1427,7 @@ _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
           a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
-          ws, covered, scratch, gflux)
+          ws, covered, scratch, gflux, a.sensed_fields)
 
 # --- Stacked tiles of a device level ------------------------------------------
 #
@@ -1442,7 +1465,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               ghost_viscous::Bool=false,
                               ring::Bool=false,
                               boundaries=fill(_NO_BOUNDARY, length(tregions)),
-                              bcs=nothing, root_folds=nothing) where {T}
+                              bcs=nothing, root_folds=nothing,
+                              n_sensed::Int=0) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1454,7 +1478,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              level, faces[ti]; interface_divergence,
                                              ghost_viscous, ring,
                                              boundary=boundaries[ti], bcs,
-                                             root_folds))
+                                             root_folds, n_sensed))
         end
         return patches, stacks
     end
@@ -1471,7 +1495,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         interface_rhs, backend, n_species, n_cons,
                                         bulk, level; interface_divergence,
                                         ghost_viscous, ring, boundary=key[2], bcs,
-                                        smoother, root_folds)
+                                        smoother, root_folds, n_sensed)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1491,7 +1515,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, smoother::Symbol=:gaussian,
-                           root_folds=nothing) where {T}
+                           root_folds=nothing, n_sensed::Int=0) where {T}
     ntiles = length(tregions)
     # The members share their boundary faces and so fold alike: at a symmetry
     # plane or the r-z axis the spanning patch holds the fold with batched
@@ -1511,7 +1535,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                       ntiles * stride),
                              ntiles, stride)
     empty_s = StackedArray(empty_raw, ntiles, stride)
-    arrays = _patch_arrays(stacked, n_species)
+    arrays = _patch_arrays(stacked, n_species, n_sensed)
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
                              ring, bulk)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
@@ -1552,7 +1576,10 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        inv_J=v(arrays.inv_J), area_d=map(v, arrays.area_d),
                        inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
                        cot_over_r=v(arrays.cot_over_r),
-                       cot_over_r_gcl=v(arrays.cot_over_r_gcl))
+                       cot_over_r_gcl=v(arrays.cot_over_r_gcl),
+                       # Typed as `Y`'s views also when there is none.
+                       sensed_fields=append!(empty(map(v, arrays.Y)),
+                                             (v(a) for a in arrays.sensed_fields)))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, ring, boundary, wall_faces,
                               gaussian=smoother === :gaussian, folded, root_folds)

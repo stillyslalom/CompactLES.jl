@@ -184,18 +184,45 @@ A reflecting wall face is closed by the even rows of [`wall_closures`](@ref)
 under `:gaussian`, since the fields smoothed here are even at a wall. The
 `:compact` smoother keeps the state filter's plans and its own rows.
 
+A refined patch holds an `InterfaceSmoothPlans` per dimension. `ghosts`
+selects between its two plans: rows reading the ghost layers of `f` at every
+interface face, which a tiled level's artificial-property pass fills
+(`_level_artificial!`), or the closure rows a field without interface ghosts
+takes. A patch of any other kind ignores it.
+
 Every rank in the directional sub-communicator must call this function, as for
 `deriv_along!`.
 """
-function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int,
+                       ghosts::Bool=false)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, _plan_at(solver.smooth_plans, d), f, solver.decomp)
+        apply_along!(out, _smooth_plan(_plan_at(solver.smooth_plans, d), ghosts), f,
+                     solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf, Val(:smooth))
+        fold_apply!(out, f, solver, fold, σf, Val(:smooth), 1, ghosts)
     end
     return out
 end
+
+"""
+    InterfaceSmoothPlans(ghost, closed)
+
+The sensor-smoother plans of a refined patch along one dimension. `ghost`
+closes an interface end, same-level or coarse-fine, with the smoother's
+interface rows, which read the ghost layers; `closed` keeps the rows of a
+field whose interface ghosts carry no data, the scheme's own. A face on the
+domain boundary takes the same rows in both. `smooth_along!` selects between
+them.
+"""
+struct InterfaceSmoothPlans{P}
+    ghost::P
+    closed::P
+end
+
+@inline _smooth_plan(plan, ghosts::Bool) = plan
+@inline _smooth_plan(plans::InterfaceSmoothPlans, ghosts::Bool) =
+    ghosts ? plans.ghost : plans.closed
 
 """
     ring_along!(out, f, solver, d, σf, σw = 1, ghosts = false)
@@ -1376,7 +1403,7 @@ function compute_primitives_and_gradients!(solver::SolverLike, Q,
 end
 
 """
-    compute_rhs!(solver, Q, dQ, primitives_current=false)
+    compute_rhs!(solver, Q, dQ, primitives_current=false, coefficients_current=false)
 
 Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
 (boundary conditions should be enforced on `Q` beforehand). Collapsed dimensions
@@ -1405,15 +1432,26 @@ A trailing `primitives_current = true` skips the opening halo exchange and
 primitives pass, and is valid only immediately after the caller performs both on
 this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`step!`](@ref)
 passes it for the first RK stage of a `prepared` step, where [`max_rate`](@ref)
-has done the work. It is positional, not a keyword, allowing `bench/audit.jl`
-to reach the body with `code_typed`, which returns only the
-forwarding method of a function with keywords.
+has done the work. A further trailing `coefficients_current = true` keeps the
+artificial coefficients the patch holds, applying only the compression switch
+of `beta_sensor = :gated_strain` or `:dilatation`, which reads the gradients
+this call computes; a tiled level passes it after computing the coefficients
+over the whole level (`_level_artificial!`). Both flags are positional, not
+keywords, allowing `bench/audit.jl` to reach the body with `code_typed`, which
+returns only the forwarding method of a function with keywords.
 """
-function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
+function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
+                      coefficients_current::Bool=false)
     decomp = solver.decomp
     compute_primitives_and_gradients!(solver, Q, primitives_current)
     _validate_transport_state!(solver, Q; current=true)
-    compute_artificial!(solver, Q)
+    if coefficients_current
+        # The compression switch reads this patch's velocity gradients, which
+        # the shared workspace holds only from the pass just above.
+        _gated(solver.art) && gate_beta!(solver)
+    else
+        compute_artificial!(solver, Q)
+    end
     for d in 1:3
         decomp.active[d] || continue
         deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
