@@ -145,6 +145,38 @@ end
     @test all(r -> r.offset[1] > 48, level_regions(sensed, 1))
 end
 
+@testset "AMR frontend refines a jump at rest under sensor tags" begin
+    # A density step at rest over 0.6 < x < 0.8 (nodes 58 to 77): the
+    # artificial coefficients of a state at rest stay under the sensor
+    # threshold, so the initial layout is tagged by the density criterion at
+    # its default threshold, and the given threshold holds from then on. The
+    # box, which has no empty form, is placed there too.
+    jump(x, x0) = 0.5 * (1 + tanh((x - x0) / 0.01))
+    step(x, a, b) = jump(x, a) - jump(x, b)
+    rest = amr_test_problem((x, y, z, h) ->
+        Prim(p=1.0, rho=1.0 + 3step(x, 0.6, 0.8), u=(0.0, 0.0, 0.0)))
+    sensed = (initial=:sensor, tag_threshold=Inf, tag_sensor_threshold=0.5)
+    covers(regions, g) = any(r -> r.offset[1] < g <= r.offset[1] + r.extent[1], regions)
+    for tile in (8, 0)
+        solver, _ = setup(rest, Numerics(n_global=(96, 1, 1), filter=nothing,
+                                         amr=AMR(; sensed..., tile)))
+        regions = level_regions(solver, 1)
+        @test covers(regions, 58) && covers(regions, 77)
+        @test getfield(solver, :regrid).threshold == Inf
+    end
+    # Beside it, a slab moving at u = -1 over 0.2 < x < 0.4 (nodes 20 to
+    # 39), whose trailing edge at node 39 the sensor tags at setup (the
+    # leading edge falls under the threshold); the step at rest is then left
+    # to the given criteria.
+    both = amr_test_problem((x, y, z, h) ->
+        Prim(p=1.0, rho=1.0 + 3step(x, 0.6, 0.8), u=(-step(x, 0.2, 0.4), 0.0, 0.0)))
+    solver, _ = setup(both, Numerics(n_global=(96, 1, 1), filter=nothing,
+                                     amr=AMR(; sensed..., tile=8)))
+    regions = level_regions(solver, 1)
+    @test covers(regions, 20) || covers(regions, 39)
+    @test !covers(regions, 58) && !covers(regions, 77)
+end
+
 @testset "AMR frontend rejects ambiguous or invalid configuration" begin
     prob = amr_test_problem()
     region = BlockRegion((40, 0, 0), (16, 1, 1))

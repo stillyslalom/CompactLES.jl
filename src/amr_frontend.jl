@@ -40,7 +40,12 @@ small edges expensive in three dimensions. At setup, sensor and predicate
 selection require at least one tagged node, except in a tiled run that
 regrids: there an initial state that tags nothing starts with no refined
 tiles, the first regrid check that tags creates them, and a check at which
-nothing tags or holds removes every tile past `tile_lifetime`.
+nothing tags or holds removes every tile past `tile_lifetime`. Under
+`:sensor`, an initial state that the given criteria do not tag is tagged
+by the density criterion at its default threshold `0.02`, so that a jump at
+rest, which the artificial coefficients do not yet register, is refined
+from the initial condition; the given criteria apply from the first regrid
+check on.
 
 `tag_threshold`, the density criterion, defaults to `0.02` except under a
 predicate, where it defaults to `Inf` so that the predicate alone selects the
@@ -166,9 +171,13 @@ end
 _amr_predicate(f) = applicable(f, 0.0, 0.0, 0.0, 0.0) ? f :
                     applicable(f, 0.0, 0.0, 0.0) ? _StaticPredicate(f) : nothing
 
+# The density criterion's threshold when none is given, and the one a
+# sensor-selected start falls back on when its criteria tag nothing.
+const DEFAULT_TAG_THRESHOLD = 0.02
+
 _amr_tag_threshold(amr::AMR) =
     amr.tag_threshold !== nothing ? amr.tag_threshold :
-    _amr_callable(amr.initial) ? Inf : 0.02
+    _amr_callable(amr.initial) ? Inf : DEFAULT_TAG_THRESHOLD
 
 function _amr_physical_tag(predicate::F) where {F}
     return function (patch, I)
@@ -467,6 +476,24 @@ function _setup_amr(prob, num, amr::AMR)
         compute_rhs!(root, states[1], workspace.dQ[1])
     end
     candidate = tagged_region(solver, states[1])
+    spec = getfield(solver, :regrid)
+    # At a jump in density and pressure at rest the artificial coefficients
+    # are near zero: μ* and β* are built from the velocity field, which has
+    # no strain or dilatation before the first step, and κ* alone stays well
+    # under any useful threshold, so the sensor criterion tags no such
+    # feature. A sensor-selected start that its criteria leave untagged
+    # is tagged by the density criterion at its default threshold instead,
+    # and the level is filled from the initial condition. Otherwise the first
+    # tiles appear at the first regrid check, interpolated from the root's
+    # under-resolved jump, whose error they carry for the rest of the run. The
+    # configured threshold holds from the first regrid check on. `candidate`
+    # is reduced, so every rank takes the branch.
+    threshold = spec.threshold
+    if candidate === nothing && amr.initial === :sensor &&
+       threshold > DEFAULT_TAG_THRESHOLD
+        spec.threshold = oftype(threshold, DEFAULT_TAG_THRESHOLD)
+        candidate = tagged_region(solver, states[1])
+    end
     # A regridded tiled level may hold no tiles, so a start with nothing tagged
     # begins unrefined and the first regrid check that tags creates its tiles.
     # The box has no empty form.
@@ -474,7 +501,6 @@ function _setup_amr(prob, num, amr::AMR)
         throw(ArgumentError("AMR initial selection tagged no root nodes; " *
                             "supply a BlockRegion, lower the tag threshold, or " *
                             "give tile > 0 with regridding to start unrefined"))
-    spec = getfield(solver, :regrid)
     if candidate != seed || amr.tile > 0
         # The temporary seed is not a user-selected tile. Bypass its normal
         # minimum lifetime while preserving the requested lifetime for the
@@ -495,6 +521,7 @@ function _setup_amr(prob, num, amr::AMR)
             _regrid_impl!(solver, states, workspace, nothing; bootstrap=true)
         end
     end
+    spec.threshold = threshold
     initialize!(solver, states, prob.ic)
     validate_state!(solver, states; control=num.control,
                     stage="the AMR initial state")

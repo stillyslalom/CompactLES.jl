@@ -33,7 +33,10 @@ check, so it can move the region on a prescribed path; `(x, y, z) -> Bool`
 describes a fixed one. A predicate alone selects the region: the density
 criterion defaults to off under a predicate, and giving `tag_threshold`
 explicitly unites the two. `initial=:sensor` uses the enabled criteria on the
-initialized coarse state. The selected nodes are buffered and covered by a
+initialized coarse state. Where they tag nothing, as the artificial-diffusivity
+criterion does not at a jump at rest, the density criterion at its default
+threshold of 0.02 selects the initial region, and the enabled criteria apply
+from the first regrid check. The selected nodes are buffered and covered by a
 coarse-grid box or lattice tiles. If no node tags at setup, `setup` throws an
 `ArgumentError`: give a shape for a uniform state.
 
