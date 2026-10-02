@@ -4045,6 +4045,136 @@ function test_implicit_stage()
 end
 
 # ---------------------------------------------------------------------------
+# The additive pair with the conduction implicit (src/imex_step.jl) on a
+# decomposed patch, against the same run on COMM_SELF.
+#
+#   1. A temperature pulse in a periodic box with an acoustic flow, at about
+#      twenty times the explicit diffusive limit, under the default `:error`
+#      step rule: the stage residual and the step rule's measure are reduced
+#      across ranks, and the decomposed run must reproduce the undivided one
+#      to the stage tolerance. The preconditioner's aggregates follow the
+#      blocks and the reductions are summed in a different order, so the
+#      linear solves differ between the two runs by up to their tolerance and
+#      bitwise agreement is not expected. At `rtol = 1e-12` the states agree
+#      to about 1e-14 of each component's magnitude after twenty steps. The
+#      tolerance is 1e-10, a hundred times the stage tolerance, against the
+#      O(1) difference of an interface defect.
+#   2. A one-node temperature spike on a cold line, placed inside rank 0's
+#      block, at a step far beyond the explicit limit. The second stage is
+#      the trapezoidal rule at z = γhλ, which reflects the stiff modes of the
+#      spike, so its temperature is negative at the spike node on rank 0 only.
+#      Every rank must take the same failure from the reduced validity flag,
+#      and with retries every rank must take the same rollbacks and reach the
+#      endpoint at the state of the undivided run. A rank-local decision
+#      leaves the other ranks waiting in a reduction, which hangs the suite.
+# ---------------------------------------------------------------------------
+function test_imex_pair()
+    section("implicit conduction: decomposed pair against undivided")
+    noart = ArtificialProperties(enabled=false)
+    function normalized_diff(s, Q, ref, Qref, components)
+        worst = 0.0
+        for c in components
+            e = 0.0; scale = 0.0
+            for I in CL.interior(s.decomp)
+                loc = Tuple(I) .- s.decomp.n_halo_d
+                J = padded_index(ref, (loc .+ s.decomp.offset)...)
+                e = max(e, abs(Q[I, c] - Qref[J, c])); scale = max(scale, abs(Qref[J, c]))
+            end
+            # A component that stays zero (the spanwise momentum) enters unscaled.
+            magnitude = gmax(scale)
+            worst = max(worst, gmax(e) / (magnitude > 0 ? magnitude : 1.0))
+        end
+        worst
+    end
+    counters(s) = (s.step, s.implicit.accepted, s.implicit.rejected)
+    # The largest difference over ranks of an integer or a time.
+    spread(x) = gmax(x) + gmax(-x)
+
+    # 1. The pulse: a gas constant of one, γ = 1.4, κ = 2.5 and ρ c_v ≤ 2.5, so
+    #    α ≥ 1, and a viscous rate far below the acoustic one.
+    box(c, dims) =
+        Solver(n_global=(24, 36, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+               eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+               transport=ConstantTransport(mu0=1e-3, Pr=1e-3 * 3.5 / 2.5, Sc=1.0),
+               art=noart, cfl=0.5, implicit=ImplicitConduction(rtol=1e-12),
+               comm=c, dims=dims)
+    pulse(x, y, z) = Prim(rho=1 / (1 + 0.3exp(-((x - 0.4)^2 + (y - 0.55)^2) / 0.02)),
+                          u=(0.2sinpi(2y), 0.2cospi(2x), 0.0), p=1.0)
+    nsteps = 20
+    runs = map(((comm, (2, np ÷ 2, 1)), (MPI.COMM_SELF, (1, 1, 1)))) do (c, dims)
+        sv = box(c, dims)
+        Q = allocate_state(sv)
+        initialize!(sv, Q, pulse)
+        run!(sv, Q; tfinal=1e9, nmax=nsteps)
+        (sv, Q)
+    end
+    (s, Q), (ref, Qref) = runs
+    limit = 1 / (2 * (24^2 + 36^2))           # forward-Euler diffusive limit at α = 1
+    check("pulse: steps far beyond the diffusive limit (dt / limit = " *
+          "$(round(Int, ref.t / nsteps / limit)))", gmax(limit * nsteps / s.t), 0.2)
+    check("pulse: steps, accepted and rejected attempts agree",
+          sum(spread.(counters(s) .- counters(ref))), 0.5)
+    check("pulse: time matches undivided", gmax(abs(s.t - ref.t) / ref.t), 1e-12)
+    check("pulse: state matches undivided",
+          normalized_diff(s, Q, ref, Qref, 1:s.equations.n_cons), 1e-10)
+
+    # 2. The spike, on the serial suite's conduction line: c_v = 1, κ = α = 1,
+    #    and a gas constant small enough that the flow stays negligible.
+    n = SPLITN
+    h = 2 / n
+    gas = 1e-10
+    mu = 1e-3 * h^2
+    line(c, dims, control) =
+        Solver(n_global=(n, 1, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.0, 0.0),
+               bcs=per3, eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
+               transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas), Sc=1.0),
+               art=noart, filter_interval=0, cfl=1e6, control=control,
+               implicit=ImplicitConduction(step_rule=:none, rtol=1e-12),
+               comm=c, dims=dims)
+    spike_node = n ÷ (2np) + 1                  # the middle of rank 0's block
+    x_spike = -1 + (spike_node - 1) * h
+    spike(x, y, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                          p=gas * (abs(x - x_spike) < h / 2 ? 1.2 : 0.2))
+    tf = 32 * h^2 / 2                           # 32 forward-Euler diffusive limits
+    s = line(comm, splitdims(1), StepControl())
+    Q = allocate_state(s)
+    initialize!(s, Q, spike)
+    failure = try
+        run!(s, Q; tfinal=tf)
+        nothing
+    catch e
+        e isa SolverFailure || rethrow()
+        e
+    end
+    failed = failure isa SolverFailure && failure.reason === :implicit_solve &&
+             occursin("trial state", failure.detail)
+    check("spike: every rank raises the trial-state failure",
+          gsum(failed ? 0 : 1), 0.5)
+    # The failed attempt leaves its trial state in Q: the ranks holding a
+    # nonpositive internal energy are the ranks that found the state invalid.
+    ie = s.equations.i_energy
+    invalid = any(Q[I, ie] <= 0 for I in CL.interior(s.decomp))
+    check("spike: the invalid trial state lies on one rank only",
+          abs(gsum(invalid) - 1), 0.5)
+
+    runs = map(((comm, splitdims(1)), (MPI.COMM_SELF, (1, 1, 1)))) do (c, dims)
+        sv = line(c, dims, StepControl(retries=6))
+        Qv = allocate_state(sv)
+        initialize!(sv, Qv, spike)
+        run!(sv, Qv; tfinal=tf)
+        (sv, Qv)
+    end
+    (s, Q), (ref, Qref) = runs
+    retried = round(Int, log2(1e6 / ref.cfl))
+    check("spike: rollbacks agree with undivided ($retried retries)",
+          spread(s.cfl) + gmax(abs(s.cfl - ref.cfl)) + (retried > 0 ? 0 : 1), 0.5)
+    check("spike: every rank reaches the endpoint", gmax(abs(s.t - tf) / tf), 1e-14)
+    check("spike: steps, accepted and rejected attempts agree",
+          sum(spread.(counters(s) .- counters(ref))), 0.5)
+    check("spike: state matches undivided", normalized_diff(s, Q, ref, Qref, (ie,)), 1e-10)
+end
+
+# ---------------------------------------------------------------------------
 # A refined level reaching a symmetry plane, its tile folding there at the
 # fine spacing, with the tile decomposed over the level's ranks: the fold's
 # mirror fill on the edge rank, the box's mirror across the plane on every
@@ -4295,6 +4425,7 @@ const SUITE = (
     ("covered masks", test_covered_masks),
     ("AMR transfer pair", test_transfer_pair),
     ("staggered operators", test_staggered),
+    ("implicit conduction", test_imex_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
     ("mode truncation", test_mode_truncation),
