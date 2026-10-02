@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Vortex ring and shock · CompactLES.jl</title><meta name="title" content="Vortex ring and shock · CompactLES.jl"/><meta property="og:title" content="Vortex ring and shock · CompactLES.jl"/><meta property="twitter:title" content="Vortex ring and shock · CompactLES.jl"/><meta name="description" content="Documentation for CompactLES.jl."/><meta property="og:description" content="Documentation for CompactLES.jl."/><meta property="twitter:description" content="Documentation for CompactLES.jl."/><meta property="og:url" content="https://stillyslalom.github.io/CompactLES.jl/examples/vortex_ring_shock/"/><meta property="twitter:url" content="https://stillyslalom.github.io/CompactLES.jl/examples/vortex_ring_shock/"/><link rel="canonical" href="https://stillyslalom.github.io/CompactLES.jl/examples/vortex_ring_shock/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">CompactLES.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../reference/input-deck-cheat-sheet/">Cheat sheet</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../tutorials/coalescing_shock/">Coalescing shock</a></li><li><a class="tocitem" href="../../tutorials/shock_tube/">Shock tube</a></li><li><a class="tocitem" href="../../tutorials/acoustic_interface/">Acoustic interface</a></li><li><a class="tocitem" href="../../tutorials/sound_absorption/">Sound absorption</a></li><li><a class="tocitem" href="../../tutorials/loschmidt_cell/">Loschmidt cell</a></li><li><a class="tocitem" href="../../tutorials/richtmyer_meshkov/">Richtmyer–Meshkov instability</a></li><li><a class="tocitem" href="../../tutorials/rayleigh_taylor/">Rayleigh–Taylor instability</a></li><li><a class="tocitem" href="../../tutorials/supernova_remnant/">Supernova remnant</a></li><li><a class="tocitem" href="../../tutorials/imploding_shock/">Imploding shock</a></li><li><a class="tocitem" href="../../tutorials/advected_bubbles/">Advected bubbles</a></li><li><a class="tocitem" href="../../tutorials/axis_crossing_vortex/">Axis-crossing vortex</a></li><li><a class="tocitem" href="../../tutorials/oscillating_sphere/">Oscillating sphere</a></li></ul></li><li><span class="tocitem">Examples</span><ul><li><a class="tocitem" href="../shock_capturing/">Shock-capturing tests</a></li><li><a class="tocitem" href="../shock_bubble/">Shock–bubble interaction</a></li><li><a class="tocitem" href="../shock_tube/">Reshocked mixing layer</a></li><li><a class="tocitem" href="../taylor_green/">Taylor–Green vortex</a></li><li class="is-active"><a class="tocitem" href>Vortex ring and shock</a><ul class="internal"><li><a class="tocitem" href="#Gases-and-waves"><span>Gases and waves</span></a></li><li><a class="tocitem" href="#Jet"><span>Jet</span></a></li><li><a class="tocitem" href="#Tube"><span>Tube</span></a></li><li><a class="tocitem" href="#Run"><span>Run</span></a></li><li><a class="tocitem" href="#Ring"><span>Ring</span></a></li><li><a class="tocitem" href="#Waves"><span>Waves</span></a></li><li><a class="tocitem" href="#Flow"><span>Flow</span></a></li><li><a class="tocitem" href="#Conservation-and-the-phase-change"><span>Conservation and the phase change</span></a></li><li><a class="tocitem" href="#What-this-checks"><span>What this checks</span></a></li></ul></li></ul></li><li><span class="tocitem">How-to guides</span><ul><li><a class="tocitem" href="../../how-to/problem-setup/">Define a problem</a></li><li><a class="tocitem" href="../../how-to/boundary-conditions/">Choose boundary conditions</a></li><li><a class="tocitem" href="../../how-to/numerics-choices/">Choose numerics</a></li><li><a class="tocitem" href="../../how-to/run-control/">Control a run</a></li><li><a class="tocitem" href="../../how-to/output-restart/">Write output and restart</a></li><li><a class="tocitem" href="../../how-to/parallel-runs/">Run in parallel</a></li></ul></li><li><span class="tocitem">Explanation</span><ul><li><a class="tocitem" href="../../explanation/governing-equations/">Governing equations</a></li><li><a class="tocitem" href="../../explanation/discretization/">Discretization</a></li><li><a class="tocitem" href="../../explanation/regularization/">Filtering and artificial properties</a></li><li><a class="tocitem" href="../../explanation/thermodynamics/">Thermodynamics and transport</a></li><li><a class="tocitem" href="../../explanation/geometry/">Curvilinear coordinates</a></li><li><a class="tocitem" href="../../explanation/open-boundaries/">Open boundaries</a></li><li><a class="tocitem" href="../../explanation/parallel-compact-solve/">Parallel compact solve</a></li><li><a class="tocitem" href="../../explanation/verification-validation/">Verification and validation</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../../reference/capabilities/">Supported combinations</a></li><li><input class="collapse-toggle" id="menuitem-7-2" type="checkbox"/><label class="tocitem" for="menuitem-7-2"><span class="docs-label">Input and runtime API</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../reference/frontend/">Problem setup</a></li><li><a class="tocitem" href="../../reference/physics/">Physics models</a></li><li><a class="tocitem" href="../../reference/geometry-boundaries/">Geometry and boundaries</a></li><li><a class="tocitem" href="../../reference/runtime/">Runtime and output</a></li><li><a class="tocitem" href="../../reference/diagnostics/">Diagnostics</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-7-3" type="checkbox"/><label class="tocitem" for="menuitem-7-3"><span class="docs-label">Advanced and extension API</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../reference/amr/">Adaptive mesh refinement</a></li><li><a class="tocitem" href="../../reference/operators/">Operators and decomposition</a></li><li><a class="tocitem" href="../../reference/extensions/">Extending CompactLES</a></li></ul></li><li><a class="tocitem" href="../../reference/">Public API index</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Vortex ring and shock</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Vortex ring and shock</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/stillyslalom/CompactLES.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/stillyslalom/CompactLES.jl/blob/main/examples/vortex_ring_shock.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Vortex-ring-and-shock"><a class="docs-heading-anchor" href="#Vortex-ring-and-shock">Vortex ring and shock</a><a id="Vortex-ring-and-shock-1"></a><a class="docs-heading-anchor-permalink" href="#Vortex-ring-and-shock" title="Permalink"></a></h1><div class="admonition is-info" id="Provenance-8d1577c95bfda97d"><header class="admonition-header">Provenance<a class="admonition-anchor" href="#Provenance-8d1577c95bfda97d" title="Permalink"></a></header><div class="admonition-body"><p>The figures on this page were computed on 2026-10-02 at commit <a href="https://github.com/stillyslalom/CompactLES.jl/commit/79be27224c38e6bee3fb3df65cfee3fa2fbfa063"><code>79be272</code></a>, with Julia 1.11.4 on 8 ranks × 1 thread of a 12th Gen Intel(R) Core(TM) i9-12900K, on 112 × 384 and 56 × 192 nodes, in 8 min. They are reproduced by <code>mpiexec -n 8 julia --project=docs -t 1 examples/vortex_ring_shock.jl</code>.</p></div></div><p>This page is a demonstration, not a validation. It sets up a configuration from a vertical shock-tube experiment: a jet pulse through an injector in the top of the tube rolls up into a vortex ring, the ring travels 15 cm down to an interface between air and sulfur hexafluoride, and a shock of Mach number 1.36 is fired down the tube to reach the interface together with the ring. The injector is 1/2&quot; in diameter, and the 5&quot; square tube is represented by the round tube of the same cross-sectional area, so that the calculation is axisymmetric. The shock reflected from the end wall below the interface reshocks the layer.</p><p>No published measurement of this configuration is compared here. The page checks the parts of the calculation that have an independent reference: the waves at the interface against one-dimensional gas dynamics, the circulation of the ring against the vorticity the jet carries in, the speed of the ring against Kelvin&#39;s formula, the timing of the ring against that of the shock, and the mass of SF6 and the post-shock state through a change of boundary condition during the run.</p><p>One parameter differs from the experiment. Its jet runs at about 1.5 m/s, and the ring then takes about a quarter of a second to cross the 15 cm, some 3e5 steps of the calculation, whose step is set by the sound speed. The jet speed is therefore raised to 60 m/s, which shortens the transit by the same factor of 40. The consequences are measured below.</p><p>The script takes eight settings: <code>nr</code> and <code>nz</code>, the nodes across the radius of the tube and along it in the main run, which a second run halves; <code>Mach</code>, the Mach number of the shock; <code>jet_speed</code>, the peak speed of the jet in m/s; <code>stroke</code>, the length of the ejected slug in injector diameters; <code>t_shock</code>, the time at which the shock is fired, 0 for the time the run computes; <code>t_after</code>, the time the run continues after the shock reaches the interface; and <code>smoke</code>. With <code>smoke=true</code> the runs have 16 × 56 and 10 × 36 nodes, which checks that the page still runs; the figures come from the full run, launched on eight MPI ranks of one thread each.</p><pre><code class="language-julia hljs">using CompactLES   # re-exports MPI
+using CompactLES.Regions
+MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+
+using CairoMakie
+using Printf
+CairoMakie.activate!(type = &quot;png&quot;)
+
+
+opt = CompactLES.script_args(ARGS,
+    (nr = 112, nz = 384, Mach = 1.36, jet_speed = 60.0, stroke = 3.0, t_shock = 0.0,
+     t_after = 1.6e-3, smoke = false); positional = (:nr, :nz))
+grids = opt.smoke ? ((16, 56), (10, 36)) : ((opt.nr, opt.nz), (opt.nr ÷ 2, opt.nz ÷ 2))</code></pre><h2 id="Gases-and-waves"><a class="docs-heading-anchor" href="#Gases-and-waves">Gases and waves</a><a id="Gases-and-waves-1"></a><a class="docs-heading-anchor-permalink" href="#Gases-and-waves" title="Permalink"></a></h2><p>Both gases start at 295 K and atmospheric pressure, the air above the interface and the SF6 below it. The shock travels down the tube, toward decreasing <span>$z$</span>, and heats the air to 363 K. <code>IdealMixture</code> holds each species at its room-temperature heat capacities; with the temperature-dependent heat capacities of <code>Nasa9Mixture</code> the wave speeds below change by at most 1 m/s.</p><p>Three Riemann problems, each solved by <code>riemann_interface</code>, give the waves of a plane interface, as on the page Reshocked mixing layer: the shocked air meets the SF6 at rest; the shock transmitted into the SF6 reflects from the end wall; and the reflected shock meets the interface. The first argument of <code>riemann_interface</code> is the gas at lower <span>$z$</span>.</p><pre><code class="language-julia hljs">eos = IdealMixture([&quot;Air&quot;, &quot;SF6&quot;])
+p0, T0 = 101_325.0, 295.0
+air = Prim(Y = (1.0, 0.0), p = p0, T_ion = T0)
+sf6 = Prim(Y = (0.0, 1.0), p = p0, T_ion = T0)
+incident = shock_jump(eos, air, opt.Mach; dim = 3, direction = -1)
+impact = riemann_interface(eos, sf6, incident.post; dim = 3)
+shocked = impact.left
+mirror = Prim(Y = shocked.Y, p = shocked.p, T_ion = shocked.T_ion,
+              u = (0.0, 0.0, -shocked.u[3]))
+wall = riemann_interface(eos, mirror, shocked; dim = 3)
+reshock = riemann_interface(eos, wall.right, impact.right; dim = 3)
+W = abs(incident.shock_speed)
+@printf(&quot;incident shock %.1f m/s; behind it %.1f m/s, %.1f kPa, %.1f K\n&quot;, W,
+        incident.velocity, incident.post.p / 1e3, incident.post.T_ion)
+@printf(&quot;at the interface: transmitted shock %.1f m/s, reflected %s %.1f m/s, \
+        interface %.1f m/s\n&quot;, impact.left_speed, impact.right_wave,
+        impact.right_speed, impact.u_star)
+@printf(&quot;from the end wall: reflected shock %.1f m/s\n&quot;, wall.right_speed)
+@printf(&quot;at reshock: transmitted %s %.1f m/s, reflected %s %.1f m/s, interface %.1f m/s\n&quot;,
+        reshock.right_wave, reshock.right_speed, reshock.left_wave, reshock.left_speed,
+        reshock.u_star)</code></pre><h2 id="Jet"><a class="docs-heading-anchor" href="#Jet">Jet</a><a id="Jet-1"></a><a class="docs-heading-anchor-permalink" href="#Jet" title="Permalink"></a></h2><p>The injector of diameter <span>$D$</span> sits at the center of the top face. The jet speed rises and falls as <span>$U \sin^2(\pi t / t_p)$</span> over a pulse of length <span>$t_p$</span>, whose mean speed is <span>$U/2$</span>, so the slug of air it ejects is <span>$L = U t_p / 2$</span> long; <code>stroke</code> is <span>$L/D$</span>. Its default of 3 lies below the formation number of about 4, the stroke ratio beyond which a ring stops taking up the vorticity of the jet and leaves the rest behind it in a trailing jet, as summarized in the <a href="https://en.wikipedia.org/wiki/Vortex_ring">Wikipedia article on vortex rings</a>.</p><p>The slug model estimates the circulation of the ring. Across the edge of the jet the axial velocity falls from <span>$U(t)$</span> to zero, so the jet carries azimuthal vorticity <span>$-\partial u_z/\partial r$</span> into the tube, and with it circulation at the rate <span>$U(t)^2/2$</span>, whatever the profile of the edge. Integrated over the pulse this is <span>$\Gamma_0 = \tfrac{3}{16} U^2 t_p$</span>, or <span>$\tfrac98 U D$</span> for the default stroke. Without viscosity and before the shock, the circulation of each sign in the meridional plane changes only by what crosses the boundaries.</p><p>The Reynolds number <span>$U D/\nu$</span> and the Mach number <span>$U/c$</span> of the jet, at the experiment&#39;s speed and at the speed used here, take the viscosity of air at 295 K from the NASA transport fits of its constituents carried in the package (a <code>CeaTransport</code> of nitrogen, oxygen, argon and carbon dioxide in the mole fractions of air):</p><pre><code class="language-julia hljs">R = 0.127 / sqrt(π)      # radius of the round tube of the 5&quot; square&#39;s area, m
+D = 0.0127               # injector diameter
+gap = 0.15               # injector to interface
+z_interface = 0.10       # SF6 below, down to the end wall
+H = z_interface + gap    # the injector sits in the top face
+U = opt.jet_speed
+t_pulse = 2 * opt.stroke * D / U
+Gamma_slug = 3 / 16 * U^2 * t_pulse
+
+gases = (&quot;N2&quot;, &quot;O2&quot;, &quot;Ar&quot;, &quot;CO2&quot;)
+constituents = Nasa9Mixture(collect(gases))
+X_air = (0.78084, 0.209476, 0.009365, 0.000319)
+Y_air = mass_fractions(constituents, (gases .=&gt; X_air ./ sum(X_air))...; basis = :mole)
+state = thermodynamic_state(constituents, Prim(Y = Y_air, p = p0, T_ion = T0))
+mu_air = transport_coefficients(CeaTransport(constituents), constituents, T0, state.rho,
+                                state.cp, Y_air)[1]
+nu_air = mu_air / state.rho
+c_air = thermodynamic_state(eos, air).c
+for (label, speed) in ((&quot;experiment&quot;, 1.5), (&quot;here&quot;, U))
+    @printf(&quot;%-10s U = %5.1f m/s: Re = %6.0f, Mach %.4f, slug circulation %.2e m²/s\n&quot;,
+            label, speed, speed * D / nu_air, speed / c_air, 9 / 8 * speed * D)
+end
+@printf(&quot;pulse %.2f ms, stroke L/D = %.1f\n&quot;, 1e3t_pulse, opt.stroke)</code></pre><p>The faster jet raises the Reynolds number from 1200 to 5e4 and the Mach number from 0.004 to 0.17. The calculation carries no molecular viscosity, so neither value is represented: the grid and the artificial viscosity set the dissipation of the ring. A circulation 40 times larger also sets a velocity scale that is no longer small against the velocity the shock gives the interface, which is examined below.</p><h2 id="Tube"><a class="docs-heading-anchor" href="#Tube">Tube</a><a id="Tube-1"></a><a class="docs-heading-anchor-permalink" href="#Tube" title="Permalink"></a></h2><p>The domain is the meridional half-plane <span>$0 \le r \le R$</span>, <span>$0 \le z \le H$</span> of a <code>CylindricalMetric</code>, with the azimuthal dimension collapsed. An <code>AxisBC</code> closes <span>$r = 0$</span>, and the tube wall at <span>$r = R$</span> and the end wall at <span>$z = 0$</span> are <code>SlipWallBC</code>s, so the calculation has no boundary layers. <code>Layers</code> places the SF6 below <span>$z$</span> = 0.10 m with a blend two cells thick.</p><p>The top face is a <code>DirichletBC</code> whose state is a function of position and time: air at rest with the jet&#39;s velocity profile over the injector, its edge spread over 0.5 mm by <code>tanh_blend</code>. At <span>$t_s$</span> a <code>Ramp</code> changes this state to the gas behind the incident shock over the time the shock takes to cross three cells, so the shock enters already spread over about three cells. A Dirichlet face reflects the waves that reach it, and the shock reflected from the interface would come back down the tube. Ten cells after firing, the run therefore stops and continues with a phase change, <code>setup</code><code>(solver, Q; bcs)</code>, whose top face is an <code>NSCBCInflowBC</code> of the shocked air, through which waves traveling up the tube leave. As on the page Reshocked mixing layer, the target of the inflow switches to the gas behind each wave as it leaves: the shock reflected from the interface, then the shock transmitted at reshock, at the times of the one-dimensional solution.</p><p>The shock is fired so that it reaches the interface when the ring does. For that, the run assumes that the center of the ring leaves the injector plane at <span>$0.4\,t_p$</span> and travels at 0.38 of the peak jet speed, two values measured for this stroke on an earlier calculation; both are measured again below.</p><pre><code class="language-julia hljs">ring_speed_ratio, ring_delay = 0.38, 0.4
+arrival = ring_delay * t_pulse + gap / (ring_speed_ratio * U)
+t_shock = opt.t_shock &gt; 0 ? opt.t_shock : arrival - gap / W
+t_impact = t_shock + gap / W
+t_end = t_impact + opt.t_after
+t_wall = t_impact + z_interface / abs(impact.left_speed)
+z_meet = z_interface + impact.u_star * (t_wall - t_impact)
+t_reshock = t_wall + z_meet / (wall.right_speed - impact.u_star)
+z_reshock = wall.right_speed * (t_reshock - t_wall)
+t_reflected_out = t_impact + gap / impact.right_speed
+t_retransmitted_out = t_reshock + (H - z_reshock) / reshock.right_speed
+@printf(&quot;shock fired at %.3f ms, reaches the interface at %.3f ms; end wall %.3f ms, \
+        reshock %.3f ms at z = %.1f mm; run ends at %.3f ms\n&quot;, 1e3t_shock,
+        1e3t_impact, 1e3t_wall, 1e3t_reshock, 1e3z_reshock, 1e3t_end)
+
+pulse(t) = t &lt;= 0 || t &gt;= t_pulse ? 0.0 : sin(π * t / t_pulse)^2
+jet(r, θ, z, t) = Prim(Y = (1.0, 0.0), p = p0, T_ion = T0,
+                       u = (0.0, 0.0, -U * pulse(t) * (1 - tanh_blend(r, D / 2, 5e-4))))
+fire = Ramp(eos, jet, incident.post; start = t_shock, duration = Cells(3), speed = W)
+inflow_state(r, θ, z, t) = t &lt; t_reflected_out ? incident.post :
+                           t &lt; t_retransmitted_out ? impact.right : reshock.right
+faces(top) = ((AxisBC(), SlipWallBC()), PeriodicBC(), (SlipWallBC(), top))
+
+problem = Problem(
+    name = &quot;vortex ring and shock through an air/SF6 interface&quot;,
+    eos = eos,
+    metric = CylindricalMetric(),
+    domain = ((0.0, R), (0.0, 2π), (0.0, H)),
+    bcs = faces(DirichletBC(fire)),
+    ic = Layers(air, Slab(3, hi = z_interface) =&gt; sf6; width = Cells(2)),
+)</code></pre><h2 id="Run"><a class="docs-heading-anchor" href="#Run">Run</a><a id="Run-1"></a><a class="docs-heading-anchor-permalink" href="#Run" title="Permalink"></a></h2><p>The main run has 112 nodes across the radius and 384 along the tube, a spacing of 0.65 mm and 20 cells across the injector; the second run has 56 and 192. The numerics are the defaults. Every 50 µs each run records the azimuthal vorticity <span>$\omega_\theta$</span> over the whole plane and the mass of SF6. From the moment the shock is fired, every fourth step, it records the pressure and the SF6 mole fraction on the tube wall and on the axis. At six times it keeps the density and the vorticity.</p><pre><code class="language-julia hljs">frame_times = [t_pulse, (t_pulse + t_impact) / 2, t_impact, t_impact + 0.3e-3,
+               t_reshock + 0.2e-3, t_end]
+
+function weights(x)
+    w = fill(x[2] - x[1], length(x))
+    w[1] /= 2
+    w[end] /= 2
+    return w
+end
+
+function simulate(nr, nz)
+    solver, Q = setup(problem, Numerics(n_global = (nr, 1, nz)))
+    root = MPI.Comm_rank(solver.comm) == 0
+    ring = (t = Float64[], omega = Matrix{Float64}[], sf6 = Float64[])
+    coords = Ref{Any}(nothing)
+    frames = []
+    survey = Callback(EveryTime(50e-6), function (solver, Q)
+        rho, Y = field_array(solver, Q, :rho), field_array(solver, Q, :Y; species = 2)
+        mass = volume_integral(solver, rho .* Y)
+        snap = field_snapshot(solver, Q; fields = (:vorticity, :rho))
+        root || return nothing
+        coords[] = (snap.coords[1], snap.coords[3])
+        push!(ring.t, solver.t)
+        push!(ring.omega, snap[:vorticity][:, 1, :, 2])
+        push!(ring.sf6, mass)
+        nothing
+    end)
+    keep = Callback(AtTime(frame_times), function (solver, Q)
+        snap = field_snapshot(solver, Q; fields = (:vorticity, :rho))
+        root &amp;&amp; push!(frames, (t = solver.t, rho = snap[:rho][:, 1, :],
+                               omega = snap[:vorticity][:, 1, :, 2]))
+        nothing
+    end)
+    lines = (t = Float64[], wall_p = Vector{Float64}[], wall_X = Vector{Float64}[],
+             axis_p = Vector{Float64}[], axis_X = Vector{Float64}[])
+    record = Callback(EveryStep(4), function (solver, Q)
+        solver.t &gt;= t_shock || return nothing
+        z, wp = line_sample(solver, Q, :p; dim = 3, index = (nr, 1))
+        _, wX = line_sample(solver, Q, :X; dim = 3, index = (nr, 1), species = 2)
+        _, ap = line_sample(solver, Q, :p; dim = 3, index = (1, 1))
+        _, aX = line_sample(solver, Q, :X; dim = 3, index = (1, 1), species = 2)
+        push!(lines.t, solver.t)
+        push!(lines.wall_p, wp); push!(lines.wall_X, wX)
+        push!(lines.axis_p, ap); push!(lines.axis_X, aX)
+        nothing
+    end)
+    t_open = t_shock + 10 * (H / (nz - 1)) / W
+    wall = @elapsed begin
+        run!(solver, Q; tfinal = t_end,
+             callback = (survey, record, keep, Callback(AtTime(t_open), Returns(true))))
+        steps = solver.step
+        solver, Q = setup(solver, Q; bcs = faces(NSCBCInflowBC(incident.post;
+                                                               target = inflow_state)))
+        run!(solver, Q; tfinal = t_end, callback = (survey, record, keep))
+    end
+    root &amp;&amp; @printf(&quot;%d × %d nodes, h = %.2f mm: phase change at %.4f ms after %d steps, \
+                    %d steps in all, %.0f s\n&quot;, nr, nz, 1e3H / (nz - 1), 1e3t_open, steps,
+                    solver.step, wall)
+    return (; nr, nz, h = H / (nz - 1), t_open, ring, coords = coords[], frames, lines)
+end
+
+runs = mpi_main() do
+    [simulate(g...) for g in grids]
+end
+fine, coarse = runs</code></pre><p>The analysis and the figures below run on rank 0; the other ranks stop here.</p><pre><code class="language-julia hljs">MPI.Comm_rank(MPI.COMM_WORLD) == 0 || exit()</code></pre><h2 id="Ring"><a class="docs-heading-anchor" href="#Ring">Ring</a><a id="Ring-1"></a><a class="docs-heading-anchor-permalink" href="#Ring" title="Permalink"></a></h2><p>The jet&#39;s vorticity is negative in this frame. For each record before the shock arrives, the ring is the set of nodes within <span>$D$</span> of the most negative <span>$\omega_\theta$</span> at which <span>$\omega_\theta$</span> is negative, and its center is the centroid of <span>$\omega_\theta$</span> over that set, at radius <span>$R_r$</span> and height <span>$z_r$</span>. Circulations are given with the sign of the ring&#39;s, so positive: <span>$\Gamma_r$</span> is that of the ring, and <span>$\Gamma$</span> that of the whole plane. The radius <span>$a$</span> of the core is that of a core of uniform vorticity with the same second moment about the center, <span>$\langle \rho^2 \rangle = a^2/2$</span>.</p><p>Kelvin&#39;s formula gives the speed of a ring whose core of uniform vorticity is thin, <span>$a \ll R_r$</span>,</p><p class="math-container">\[U_K = \frac{\Gamma_r}{4\pi R_r}\left(\ln\frac{8R_r}{a} - \frac14\right),\]</p><p>as quoted in the Wikipedia article. The run compares it with the speed of the center over the middle of the transit, from 1 ms after the end of the pulse to 1.5 ms before the shock arrives, a straight line fitted to <span>$z_r$</span>, with <span>$\Gamma_r$</span>, <span>$R_r$</span> and <span>$a$</span> averaged over the same window.</p><pre><code class="language-julia hljs">function ring_track(run)
+    r, z = run.coords
+    wr, wz = weights(r), weights(z)
+    out = (t = Float64[], Gamma = Float64[], Gamma_ring = Float64[], Rr = Float64[],
+           zr = Float64[], core = Float64[], trailing = Float64[])
+    for (t, omega) in zip(run.ring.t, run.ring.omega)
+        t &lt;= t_impact || break
+        cell = omega .* wr .* wz&#39;
+        push!(out.t, t)
+        push!(out.Gamma, -sum(cell))
+        if t &lt; t_pulse / 2
+            foreach(v -&gt; push!(v, NaN),
+                    (out.Gamma_ring, out.Rr, out.zr, out.core, out.trailing))
+            continue
+        end
+        _, I = findmin(omega)
+        near = [omega[i, k] &lt; 0 &amp;&amp; (r[i] - r[I[1]])^2 + (z[k] - z[I[2]])^2 &lt; D^2
+                for i in eachindex(r), k in eachindex(z)]
+        G = sum(cell[near])
+        Rr = sum((r .* cell)[near]) / G
+        zr = sum((z&#39; .* cell)[near]) / G
+        moment = sum((((r .- Rr) .^ 2 .+ (z&#39; .- zr) .^ 2) .* cell)[near]) / G
+        push!(out.Gamma_ring, -G)
+        push!(out.Rr, Rr)
+        push!(out.zr, zr)
+        push!(out.core, sqrt(2moment))
+        push!(out.trailing, G - sum(min.(cell, 0)))
+    end
+    return out
+end
+
+function slope(t, x, window)
+    s = findall(k -&gt; window[1] &lt;= t[k] &lt;= window[2] &amp;&amp; isfinite(x[k]), eachindex(t))
+    length(s) &lt; 3 &amp;&amp; return NaN, NaN, NaN
+    a, b = t[s], x[s]
+    am, bm = sum(a) / length(a), sum(b) / length(b)
+    return sum((a .- am) .* (b .- bm)) / sum((a .- am) .^ 2), am, bm
+end
+
+tracks = [ring_track(run) for run in runs]
+transit = (t_pulse + 1e-3, t_impact - 1.5e-3)
+fits = map(zip(runs, tracks)) do (run, tr)
+    speed, tm, zm = slope(tr.t, tr.zr, transit)
+    s = findall(t -&gt; transit[1] &lt;= t &lt;= transit[2], tr.t)
+    mean(v) = sum(v[s]) / length(s)
+    Gr, Rr, a = mean(tr.Gamma_ring), mean(tr.Rr), mean(tr.core)
+    kelvin = Gr / (4π * Rr) * (log(8Rr / a) - 1 / 4)
+    k = findfirst(&gt;=(t_pulse), tr.t)
+    @printf(&quot;%3d × %3d: Γ = %.3f m²/s at the end of the pulse, %.2f Γ0; Γ_r = %.3f \
+            m²/s from %.1f to %.1f ms, %.3f m²/s when the shock arrives, with %.3f \
+            m²/s of negative vorticity behind it\n&quot;, run.nr, run.nz, tr.Gamma[k],
+            tr.Gamma[k] / Gamma_slug, Gr, 1e3transit[1], 1e3transit[2],
+            tr.Gamma_ring[end], tr.trailing[end])
+    @printf(&quot;           center at %.3f U = %.1f m/s, leaving the injector plane at \
+            %.2f t_p; Kelvin&#39;s speed %.1f m/s with R_r = %.1f mm, a = %.1f mm\n&quot;,
+            -speed / U, -speed, (tm + (H - zm) / speed) / t_pulse, kelvin, 1e3Rr, 1e3a)
+    @printf(&quot;           when the shock arrives the center is %.1f mm above the \
+            interface, at r = %.1f mm\n&quot;, 1e3 * (tr.zr[end] - z_interface),
+            1e3tr.Rr[end])
+    (; speed, tm, zm)
+end</code></pre><p>The circulation of the slug model, accumulated over the pulse:</p><pre><code class="language-julia hljs">slug(t) = U^2 / 2 * sum(pulse(s)^2 for s in range(0, t, length = 2001)) * t / 2001
+colors = Makie.wong_colors()
+fig = Figure(size = (760, 620))
+ax1 = Axis(fig[1, 1], ylabel = &quot;ring center height (mm)&quot;)
+ax2 = Axis(fig[2, 1], xlabel = &quot;t (ms)&quot;, ylabel = &quot;circulation (m²/s)&quot;)
+linkxaxes!(ax1, ax2)
+hidexdecorations!(ax1, grid = false)
+times = range(0, t_impact, length = 400)
+model = @. H - ring_speed_ratio * U * (times - ring_delay * t_pulse)
+lines!(ax1, 1e3times, 1e3model, color = :black, linestyle = :dash,
+       label = &quot;assumed in firing the shock&quot;)
+for (n, (run, tr)) in enumerate(zip(runs, tracks))
+    lines!(ax1, 1e3tr.t, 1e3tr.zr, color = colors[n], label = &quot;$(run.nr) × $(run.nz)&quot;)
+end
+hlines!(ax1, [1e3z_interface], color = :gray, label = &quot;interface&quot;)
+vlines!(ax1, [1e3t_impact], color = :gray, linestyle = :dot, label = &quot;shock arrives&quot;)
+ylims!(ax1, 1e3z_interface - 20, 1e3H)
+lines!(ax2, 1e3times, slug.(times), color = :black, linestyle = :dash,
+       label = &quot;slug model Γ0&quot;)
+for (n, (run, tr)) in enumerate(zip(runs, tracks))
+    lines!(ax2, 1e3tr.t, tr.Gamma, color = colors[n], linestyle = :dot,
+           label = &quot;Γ, $(run.nr) × $(run.nz)&quot;)
+    lines!(ax2, 1e3tr.t, tr.Gamma_ring, color = colors[n],
+           label = &quot;Γ_r, $(run.nr) × $(run.nz)&quot;)
+end
+Legend(fig[1, 2], ax1, framevisible = false)
+Legend(fig[2, 2], ax2, framevisible = false)</code></pre><p><img src="../../assets/examples/vortex_ring_shock/ring.png" alt="Ring height and circulation"/></p><p>On 112 × 384 nodes the center of the ring moves at 0.378 of the peak jet speed and its extrapolated track leaves the injector plane at <span>$0.39\,t_p$</span>, the values the firing time assumed, and the center is 3.7 mm above the interface when the shock arrives. On 56 × 192 nodes the ring moves at 0.354 of the jet speed and is 12 mm above the interface when the shock arrives: its speed depends on the resolution. Kelvin&#39;s formula with the measured circulation, radius and core gives the measured speed on both grids, to 0.1 m/s on the finer and 0.8 m/s on the coarser, although the core is not thin: <span>$a/R_r$</span> is 0.5 on the finer grid and 0.75 on the coarser.</p><p>At the end of the pulse the circulation in the plane is 1.00 <span>$\Gamma_0$</span> on the finer grid and 1.04 <span>$\Gamma_0$</span> on the coarser. The ring&#39;s own circulation then settles at 0.93 m²/s, 1.08 <span>$\Gamma_0$</span>, and changes by about 1% between then and the shock&#39;s arrival. It exceeds the net circulation because the plane also holds positive vorticity, in a layer along the top face beside the injector and in a stem of vorticity of both signs that trails the ring. The stem grows during the transit, which the inviscid equations do not allow away from the boundaries, and it is smaller on the finer grid: it holds 0.15 m²/s of negative vorticity when the shock arrives on the finer grid and 0.41 m²/s on the coarser, where the ring&#39;s own circulation falls by 5% during the transit. From 6.3 ms the net circulation falls while the ring&#39;s does not: positive vorticity forms on the interface beneath the approaching ring (the flow images below show it at 7.09 ms).</p><p>The ring moves at 22.7 m/s, a fifth of the 118 m/s that the shock gives the interface. At the experiment&#39;s jet speed and the same speed ratio the ring would move at 0.6 m/s, under 1% of it.</p><h2 id="Waves"><a class="docs-heading-anchor" href="#Waves">Waves</a><a id="Waves-1"></a><a class="docs-heading-anchor-permalink" href="#Waves" title="Permalink"></a></h2><p>Near the tube wall the shock crosses air the ring has not disturbed and meets a plane interface, so the waves there are those of one dimension. On the wall they are found as on the page Reshocked mixing layer: a shock is where the pressure crosses the middle of its one-dimensional jump, searched from the side the shock moves toward, and the interface is where the SF6 mole fraction crosses one half. A wave reflected from the interface is searched for on its own side of it. Each velocity is the slope of a straight line fitted to the positions over a window in which no other wave crosses the feature.</p><pre><code class="language-julia hljs">function crossing(x, v, level; from = :low)
+    i = from === :low ? findfirst(&gt;(level), v) : findlast(&gt;(level), v)
+    i === nothing &amp;&amp; return NaN
+    j = from === :low ? i - 1 : i + 1
+    (j &lt; 1 || j &gt; length(v)) &amp;&amp; return x[i]
+    return x[j] + (level - v[j]) / (v[i] - v[j]) * (x[i] - x[j])
+end
+
+midway(a, b) = (a + b) / 2
+function wave_tracks(run)
+    z, L = run.coords[2], run.lines
+    interface = [crossing(z, X, 0.5; from = :high) for X in L.wall_X]
+    above(v) = [v[k] &gt; interface[k] ? v[k] : NaN for k in eachindex(v)]
+    below(v) = [v[k] &lt; interface[k] ? v[k] : NaN for k in eachindex(v)]
+    high(level) = [crossing(z, p, level; from = :high) for p in L.wall_p]
+    return (
+        incident = [crossing(z, p, midway(p0, incident.post.p)) for p in L.wall_p],
+        transmitted = [crossing(z, p, midway(p0, impact.p_star)) for p in L.wall_p],
+        reflected = above(high(midway(incident.post.p, impact.p_star))),
+        wall_reflected = below(high(midway(impact.p_star, wall.p_star))),
+        retransmitted = above(high(midway(impact.p_star, reshock.p_star))),
+        interface,
+        axis_interface = [crossing(z, X, 0.5; from = :high) for X in L.axis_X],
+    )
+end
+
+windows = [
+    (&quot;incident shock&quot;, :incident, (t_shock + 50e-6, t_impact - 20e-6),
+     incident.shock_speed),
+    (&quot;transmitted shock&quot;, :transmitted, (t_impact + 50e-6, t_wall - 50e-6),
+     impact.left_speed),
+    (&quot;reflected shock&quot;, :reflected, (t_impact + 50e-6, t_reflected_out - 50e-6),
+     impact.right_speed),
+    (&quot;interface&quot;, :interface, (t_impact + 50e-6, t_reshock - 50e-6), impact.u_star),
+    (&quot;shock from the end wall&quot;, :wall_reflected, (t_wall + 50e-6, t_reshock - 50e-6),
+     wall.right_speed),
+    (&quot;shock into the air at reshock&quot;, :retransmitted,
+     (t_reshock + 50e-6, min(t_end, t_retransmitted_out) - 50e-6), reshock.right_speed),
+    (&quot;interface after reshock&quot;, :interface, (t_reshock + 50e-6, t_reshock + 250e-6),
+     reshock.u_star),
+]
+
+waves = [wave_tracks(run) for run in runs]
+@printf(&quot;%-30s %9s %9s %9s\n&quot;, &quot;velocity (m/s)&quot;, (&quot;$(r.nr) × $(r.nz)&quot; for r in runs)...,
+        &quot;1-D&quot;)
+for (label, f, window, exact) in windows
+    measured = [slope(run.lines.t, getfield(w, f), window)[1]
+                for (run, w) in zip(runs, waves)]
+    @printf(&quot;%-30s %9.1f %9.1f %9.1f\n&quot;, label, measured..., exact)
+end
+
+fig = Figure(size = (760, 520))
+ax = Axis(fig[1, 1], xlabel = &quot;t (ms)&quot;, ylabel = &quot;z (mm)&quot;)
+w = waves[1]
+L = fine.lines
+labels = ((:incident, &quot;incident and transmitted shock&quot;), (:reflected, &quot;reflected shocks&quot;),
+          (:interface, &quot;interface at the wall&quot;), (:axis_interface, &quot;interface on the axis&quot;))
+for (n, (f, label)) in enumerate(labels)
+    v = copy(getfield(w, f))
+    if f === :incident
+        v = [L.t[k] &lt; t_impact ? w.incident[k] : w.transmitted[k] for k in eachindex(L.t)]
+    elseif f === :reflected
+        v = [L.t[k] &lt; t_reshock ? (L.t[k] &lt; t_wall ? w.reflected[k] : w.wall_reflected[k]) :
+             w.retransmitted[k] for k in eachindex(L.t)]
+    end
+    scatter!(ax, 1e3L.t, 1e3v, markersize = 3, color = colors[n], label = label)
+end
+for (label, f, window, exact) in windows
+    _, tm, zm = slope(L.t, getfield(w, f), window)
+    ends = [window[1], window[2]]
+    lines!(ax, 1e3ends, 1e3 .* (zm .+ exact .* (ends .- tm)), color = :black)
+end
+lines!(ax, [NaN], [NaN], color = :black, label = &quot;one-dimensional velocity&quot;)
+xlims!(ax, 1e3t_shock, 1e3t_end)
+ylims!(ax, 0, 1e3H)
+Legend(fig[2, 1], ax, orientation = :horizontal, nbanks = 2, framevisible = false)</code></pre><p><img src="../../assets/examples/vortex_ring_shock/waves.png" alt="Waves and interface against time"/></p><p>On the wall each wave and the interface move at the one-dimensional velocity within 1%, except the shock reflected from the end wall and the interface after reshock, which differ by 1.7% and 1.6%; the two grids agree with each other within 1%. Over the 200 µs window the interface after reshock moves at 42.7 m/s against 43.4 m/s. It then slows and, near 8.2 ms, turns back toward the end wall.</p><p>On the axis the ring has pressed the interface 4.6 mm into the SF6 by the time the shock arrives, and the interface there then runs ahead of the interface at the wall, turning back at 7.69 ms against 7.77 ms at the wall. After reshock the SF6 on the axis rises far faster than the plane interface, and from 8.0 ms the mole fraction on the axis crosses one half at several heights, which the figure shows as a second branch.</p><h2 id="Flow"><a class="docs-heading-anchor" href="#Flow">Flow</a><a id="Flow-1"></a><a class="docs-heading-anchor-permalink" href="#Flow" title="Permalink"></a></h2><p>Each panel shows the density on the left of the axis and the azimuthal vorticity on the right, over the whole tube, at the end of the pulse, halfway through the transit, when the shock reaches the interface, 0.3 ms later, 0.2 ms after reshock and at the end of the run.</p><pre><code class="language-julia hljs">r, z = fine.coords
+rho_range = (1.0, 30.0)
+omega_scale = 0.25maximum(maximum(abs.(f.omega)) for f in fine.frames[1:2])
+fig = Figure(size = (760, 960))
+for (n, frame) in enumerate(fine.frames)
+    row, col = fldmod1(n, 3)
+    panel = Axis(fig[row, col], aspect = DataAspect(),
+                 title = @sprintf(&quot;%.2f ms&quot;, 1e3frame.t),
+                 xlabel = row == 2 ? &quot;r (mm)&quot; : &quot;&quot;, ylabel = col == 1 ? &quot;z (mm)&quot; : &quot;&quot;)
+    heatmap!(panel, -1e3 .* reverse(r), 1e3z, reverse(frame.rho, dims = 1),
+             colormap = :grays, colorscale = log10, colorrange = rho_range)
+    heatmap!(panel, 1e3r, 1e3z, frame.omega, colormap = :balance,
+             colorrange = (-omega_scale, omega_scale))
+    col == 1 || hideydecorations!(panel, grid = false)
+end
+Colorbar(fig[3, 1:2], limits = rho_range, colormap = :grays, scale = log10,
+         vertical = false, label = &quot;density (kg/m³)&quot;)
+Colorbar(fig[3, 3], limits = (-omega_scale, omega_scale), colormap = :balance,
+         vertical = false, label = &quot;ω_θ (1/s)&quot;)</code></pre><p><img src="../../assets/examples/vortex_ring_shock/flow.png" alt="Density and vorticity"/></p><p>At 1.27 ms the ring has rolled up just below the injector, with a layer of positive vorticity along the top face beside it, where the face holds the radial velocity at zero. At 4.18 ms the ring is a compact core with a faint stem behind it. At 7.09 ms the shock has reached the interface; the ring has pressed a dimple of air into the SF6 near the axis, and positive vorticity lines the interface beneath the ring.</p><p>At 7.39 ms the transmitted shock is in the SF6 and the reflected shock in the air above, at 170 mm. The ring has followed the interface down and sits at its edge, and the interface has rolled up around it. At 7.96 ms, 0.2 ms after reshock, the vorticity on the interface is positive and much stronger than the ring&#39;s: reshock, which travels from the SF6 into the air, deposits vorticity of the opposite sign to the first shock&#39;s, and the dimple inverts into a column of SF6 that rises along the axis. At the end of the run the SF6 on the axis reaches 139 mm, with a mole fraction above one half up to 73 mm, while the interface at the wall is at 31 mm.</p><p>The run ends 1.6 ms after the shock reaches the interface, 0.3 ms after the shock transmitted at reshock reaches the top face. Behind that shock the air moves up at 43 m/s, out through the top face, which an inflow condition does not represent.</p><h2 id="Conservation-and-the-phase-change"><a class="docs-heading-anchor" href="#Conservation-and-the-phase-change">Conservation and the phase change</a><a id="Conservation-and-the-phase-change-1"></a><a class="docs-heading-anchor-permalink" href="#Conservation-and-the-phase-change" title="Permalink"></a></h2><p>No SF6 crosses a boundary, so its mass is constant. The phase change keeps the state and replaces only the condition on the top face. Had the inflow condition not held the state the Dirichlet face left, the change would have sent a wave down the shocked air. Between the phase change and the shock&#39;s arrival at the interface, the run compares the pressure on the wall with the pressure behind the incident shock, on the face and everywhere more than 15 cells above the shock.</p><pre><code class="language-julia hljs">for (run, w) in zip(runs, waves)
+    m = run.ring.sf6
+    @printf(&quot;%3d × %3d: SF6 mass departs from its initial value by at most %.1e, \
+            %.1e at the end\n&quot;, run.nr, run.nz, maximum(abs.(m .- m[1])) / m[1],
+            abs(m[end] - m[1]) / m[1])
+    heights = run.coords[2]
+    face, clear = 0.0, 0.0
+    for (t, p, front) in zip(run.lines.t, run.lines.wall_p, w.incident)
+        run.t_open &lt; t &lt; t_impact || continue
+        face = max(face, abs(p[end] - incident.post.p))
+        above = heights .&gt; front + 15run.h
+        any(above) &amp;&amp; (clear = max(clear, maximum(abs.(p[above] .- incident.post.p))))
+    end
+    jump = incident.post.p - p0
+    @printf(&quot;           after the phase change the pressure departs from that behind \
+            the shock by at most %.1e of the jump on the face and %.1e above the \
+            shock\n&quot;, face / jump, clear / jump)
+end</code></pre><p>The mass of SF6 departs from its initial value by at most 5.5e-4 on the finer grid and 2.9e-3 on the coarser, while the transmitted shock reflects from the end wall, and returns to within 2.8e-5 and 1.2e-4 by the end of the run. After the phase change the pressure on the face and above the shock departs from the post-shock pressure by at most 0.4% of the jump on both grids, so the change of condition sends no larger wave down the tube.</p><h2 id="What-this-checks"><a class="docs-heading-anchor" href="#What-this-checks">What this checks</a><a id="What-this-checks-1"></a><a class="docs-heading-anchor-permalink" href="#What-this-checks" title="Permalink"></a></h2><ul><li>Near the tube wall the incident, transmitted and reflected shocks and the interface move at the velocities of the one-dimensional Riemann solutions to within 1.7% on both grids, through reshock.</li><li>On 112 × 384 nodes the ring moves at 0.378 of the peak jet speed and its track starts at <span>$0.39\,t_p$</span>, the values used to time the shock, so the ring is 3.7 mm above the interface when the shock arrives. On 56 × 192 nodes the ring is 6% slower and 12 mm higher.</li><li>Kelvin&#39;s formula, with the circulation, radius and core size measured in the calculation, gives the ring&#39;s speed within 4% on both grids.</li><li>The circulation of the plane at the end of the pulse is that of the slug model within 4%; the ring holds 1.08 <span>$\Gamma_0$</span> on the finer grid and keeps it within about 1% until the shock arrives.</li><li>The SF6 mass is conserved within 5.5e-4, and the change from the Dirichlet face to the characteristic inflow disturbs the post-shock pressure by at most 0.4% of the jump.</li></ul><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../taylor_green/">« Taylor–Green vortex</a><a class="docs-footer-nextpage" href="../../how-to/problem-setup/">Define a problem »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 2 October 2026 22:19">Friday 2 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
