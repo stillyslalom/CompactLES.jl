@@ -593,8 +593,8 @@ nothing #hide
 # and much stronger than the ring's: reshock, which travels from the SF6 into
 # the air, deposits vorticity of the opposite sign to the first shock's, and
 # the dimple inverts into a column of SF6 that rises along the axis. At the
-# end of the run the SF6 on the axis reaches 115 mm, with a mole fraction
-# above one half up to 59 mm, while the interface at the wall is at 33 mm.
+# end of the run the SF6 on the axis reaches 139 mm, with a mole fraction
+# above one half up to 73 mm, while the interface at the wall is at 31 mm.
 #
 # The run ends 1.6 ms after the shock reaches the interface, 0.3 ms after the
 # shock transmitted at reshock reaches the top face. Behind that shock the air
