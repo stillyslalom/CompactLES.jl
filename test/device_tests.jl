@@ -371,7 +371,11 @@ end
     # the ring pack as kernels), a fresh tile fills from the device chain,
     # and the tag sweep evaluates on the device and downloads the tag bytes.
     # Bitwise against the CPUBackend under FORCE_KA, tiles and tag history
-    # included, with the artificial properties live.
+    # included, with the artificial properties live. By t = 0.03 the regrid
+    # under the default tags has dropped a tile and created one outside the
+    # initial set (measured: at checks 20 and 25 of 27), so a fresh tile
+    # fills from the device chain; a longer run doubles the device runtime
+    # and reaches no further path.
     cpu_ka = CL.KernelAbstractions.CPU()
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
@@ -384,17 +388,18 @@ end
                    tile=8, backend=backend; kw...)
         states = allocate_state(s)
         initialize!(s, states, ic)
-        run!(s, states; tfinal=0.06, nmax=400)
-        return s, states
+        initial = level_regions(s, 1)
+        run!(s, states; tfinal=0.03, nmax=400)
+        return s, states, initial
     end
     for kw in ((;), (tag_sensor_threshold=0.05,),
                (interface_divergence=lele_d1_6(closures=:brady_livescu),),
                (interface_flux=:ghost,),
                (interface_flux=:ghost, transport=ConstantTransport(mu0=1e-3)))
-        s1, q1 = tiled(CPUBackend(); kw...)
+        s1, q1, initial = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2, _ = try
             tiled(DeviceBackend(cpu_ka); kw...)
         finally
             CL.FORCE_KA[] = false
@@ -403,6 +408,8 @@ end
         @test s1.step == s2.step
         @test level_regions(s1, 1) == level_regions(s2, 1)
         @test length(level_regions(s1, 1)) > 1
+        # Under the default tags the level holds a tile outside its initial set.
+        isempty(kw) && @test !issubset(level_regions(s1, 1), initial)
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
         # The device level's tiles take stacked storage: one stack (every
