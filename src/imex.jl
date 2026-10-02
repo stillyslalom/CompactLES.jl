@@ -118,10 +118,10 @@ Use it when the conductive rate `κ/(ρ c_v h²)` exceeds the acoustic rate
 `c/h` by an order of magnitude or more. The integrator takes six right-hand
 side evaluations per step against the default integrator's five, holds seven
 copies of the state beside it, and adds one or more linear solves per stage;
-the explicit half's stability region differs from the default integrator's,
-so its `cfl` limit is not the same. Requires a single patch on host storage
-without refinement, and adiabatic walls (slip or no-slip), symmetry planes,
-coordinate folds or periodic ends.
+its explicit half is stable at a slightly larger `cfl` than the default
+integrator, so a `cfl` chosen for the default carries over. Requires a single
+patch on host storage without refinement, and adiabatic walls (slip or
+no-slip), symmetry planes, coordinate folds or periodic ends.
 
 - `step_rule`: how the conduction's accuracy limits the step. `:error` sizes
   it from the pair's embedded error estimate of the implicit tendency, as a

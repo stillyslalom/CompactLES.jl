@@ -194,8 +194,9 @@ At 128³ with eight components that is on the order of a gigabyte beside the
 state, acceptable on a node and on an MI300A, but the reason the explicit
 RK45 stays the default: a run with no implicit term never allocates the ARK
 workspace, as DESIGN.md's analytic execution contract requires. The explicit
-half's stability region differs from RK45's, so its acoustic CFL limit is to
-be measured before any default is stated for it.
+half's stability region differs from RK45's; its acoustic limit is slightly
+higher, so a `cfl` chosen for RK45 is stable under the pair
+([the additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)).
 
 The stage equations share one right-hand side, so components contribute to
 one residual and are not updated in sequence, as H2 requires.
