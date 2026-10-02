@@ -101,31 +101,30 @@ under the relaxed default, measured below.
 
 ### The current reading
 
-`test/validation.jl` at `-t 16` under the current defaults (C6 `:neutral3`,
-`compact_filter(0.45, closures = :onesided)`, `filter_cfl = 0.35`, `smoother = :gaussian`,
-`detector = :delta4`, the node-centred sensor rows and the slip-wall flux contract). The
+`test/validation.jl` at `-t 1` under the current defaults (C6 `:neutral3`,
+`compact_filter(0.47, closures = :onesided)`, `filter_cfl = 0.35`, `smoother = :gaussian`,
+`detector = :species_d8`, the node-centred sensor rows and the slip-wall flux contract). The
 second column places `SymmetryPlaneBC` where the `SlipWallBC` was ([the face-centred
 symmetry plane](#the-face-centred-symmetry-plane)):
 
 ```
 case                                   node-centred wall            symmetry plane
-Woodward–Colella N=800, t=0.038  L1 3.2153e-2, peak 6.6166 @0.7785  L1 3.0330e-2, 6.6140 @0.7781
-Noh ν=1 cold N=400, cfl 0.15     3.9988, 24.1%, shock 0.2021,       3.9990, 25.0%, 0.2024,
-                                 pre-shock L1 3.603e-6, 10 cells    2.953e-6, 7 cells
-                                 e < 0, e_min −0.0293               e_min −0.0047
-Noh aligned N=100, AR=4          4.0035, 32.5%, 0.2084, 4966 steps, 3.9974, 27.8%, 0.2093,
-                                 transverse 2.052e-7                4938 steps, 5.135e-10
-Noh ν=2                          15.0086, 55%, 0.2091               –
-Noh ν=3                          62.5547, 29%, 0.2089               –
-Noh plane AR=2 (four inflows)    11.854, 0.236, L1 0.890, 750 steps –
-Lax                              L1 ρ 4.987e-3, u 7.467e-3, p 7.556e-3, contact 0.0053
-Shu–Osher                        L1 ρ 6.804e-3, train L1 2.087e-2, train peak 4.6800
-Sedov                            R_s 0.8085 (+1.06%), peak ρ 5.127, e_min −0.00427
-shock/SF6 interface              worst Y −0.0129 / 1.0129, width 4 cells, 647 steps
+Woodward–Colella N=800, t=0.038  L1 3.153e-2, peak 6.6384 @0.7772   L1 2.982e-2, 6.6283 @0.7781
+Noh ν=1 cold N=400, cfl 0.15     3.9988, 24%, shock 0.2021,         3.9990, 27%, 0.2024,
+                                 pre-shock L1 2.19e-5, 10 cells     1.63e-5, 8 cells
+                                 e < 0, e_min −0.0293               e_min −0.0094
+Noh aligned N=100, AR=4          4.0030, 33%, 0.2084, 4925 steps,   3.9994, 30%, 0.2093,
+                                 transverse 1.8e-9, 96 cells e < 0  4887 steps, 2.0e-10, 84 cells
+Noh ν=2                          15.0099, 55%, 0.2091, 6 cells      –
+Noh ν=3                          62.5811, 25%, 0.2089, 8 cells      –
+Noh plane AR=2 (four inflows)    11.862, 0.2356, L1 0.895, 745 steps, 545 cells e < 0
+Lax                              L1 ρ 4.930e-3, u 7.462e-3, p 7.551e-3
+Shu–Osher                        L1 ρ 6.741e-3, train L1 2.090e-2, train peak 4.6799
+Sedov                            R_s 0.8083 (+1.04%), peak ρ 5.140, 4 cells e < 0, e_min −0.00229
+shock/SF6 interface              worst Y −0.0050 / 1.0050, width 5 cells, 642 steps
 ```
 
-The node-centred Noh ν=1 entry, all but its pre-shock L1, is the closing state of
-`noh_case(1)` under `compact_filter(0.47)` in `bench/results/shockfoot.txt`
+The cells with e < 0 sit ahead of the shock fronts
 ([negative internal energy ahead of a shock](#negative-internal-energy-ahead-of-a-shock)).
 
 ### C_beta, the shock constant
@@ -1865,9 +1864,9 @@ and the ceiling did not move.
 
 ### Negative internal energy in completed runs
 
-The `n_e<0` column is nonzero in every sampled configuration, completed runs included: six
-to eight interior cells carry negative internal energy, travelling with the front, for the
-whole ν = 1 validation case. No diagnostic reports it, since `primitives!` floors T_ion at
+The `n_e<0` column is nonzero in every sampled configuration, completed runs included: up
+to eleven interior cells carry negative internal energy, travelling with the front, for the
+whole ν = 1 validation case, and ten remain at its end. No diagnostic reports it, since `primitives!` floors T_ion at
 1e-300 wherever e ≤ 0 and the positivity check in `max_rate` reads ρ, which stays positive.
 The quantity is ill-conditioned here: at the Noh ambient p₀ = 1e-4 the internal energy is
 1.5e-4 against a kinetic energy of 0.5, so e is a difference of terms agreeing to within
