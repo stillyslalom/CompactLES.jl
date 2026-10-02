@@ -20,10 +20,21 @@
 # on it. Whether it can be enabled there is an open item in
 # reference/CLUSTER.md.
 #
-# Two limits. Closures are typed by their defining module, so a test script's
-# initial-condition function still compiles `initialize!` for itself; and the
-# split-dimension paths (reduced-interface solves, off-rank folds) execute only
-# at np > 1, which no workload reaches. Both are in the residue above.
+# Compiled code is keyed on the `Solver` type, not on the decomposition. The
+# split-dimension paths (reduced-interface solves, off-rank folds, halo
+# exchange with a neighbour) are compiled with the tree that contains them
+# whether or not a run at np = 1 executes them, and a `--trace-compile` of two
+# phases of the MPI suite at np = 2 finds no CompactLES method compiled for the
+# decomposition alone. What a rank compiles is the `Solver` types the image
+# lacks. That type carries the precision, the metric, the equation of state
+# and transport types, the fold of each face and which dimensions are
+# active, so a fold on the second dimension, or a third active dimension, is
+# a separate tree.
+#
+# One limit. Closures are typed by their defining module, so a test script
+# still compiles `pointwise_initial` for its own initial-condition function, and
+# its own functions in full; a solver call inside them reaches the image's tree
+# when the image holds that `Solver` type.
 
 using PrecompileTools
 using MPIPreferences: MPIPreferences

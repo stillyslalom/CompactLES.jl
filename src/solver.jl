@@ -316,7 +316,18 @@ patch, and a rank outside a refined level's rank subset holds only the root,
 but the multi-patch drivers dispatch on the vector form, and a single-array
 state on such a rank silently skips the interface and level synchronization.
 """
-function allocate_state(solver::Solver)
+allocate_state(solver::Solver) = Base.inferencebarrier(_allocate_state(solver))
+
+# The form of the state follows the run-time layout, so the inferred result is a
+# union of the single-patch state and two vector forms. A function that holds
+# a concretely typed solver and passes the state on to `run!` or
+# `compute_rhs!` would then infer the whole step tree once per member, the two
+# vector forms included, although only one of them ever reaches the call. For
+# one cylindrical solver whose tree the package image holds, a function that
+# allocates, initializes and runs compiled for 13.7 s; behind the barrier the
+# calls dispatch at run time to the image's specialization and it compiles for
+# 2.6 s. The cost is one dynamic dispatch per call that receives the state.
+function _allocate_state(solver::Solver)
     n_cons = solver.equations.n_cons
     _multipatch(solver) || return _state_like(solver.rho, n_cons)
     patches = getfield(solver, :patches)
