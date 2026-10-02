@@ -167,7 +167,7 @@ jobs:
                         "positivity floor", "slicing", "composite budgets",
                         "composite face", "deep regrid subsets",
                         "placed levels", "folded regrid", "seam levels",
-                        "phase change"), ',')
+                        "phase change", "implicit conduction"), ',')
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
               for (np, args) in ((2, String[]), (8, ["phases=" * eight]))
