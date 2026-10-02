@@ -1,0 +1,20 @@
+command = "mpiexec -n 8 julia --project=docs -t 1 examples/vortex_ring_shock.jl"
+commit = "79be27224c38e6bee3fb3df65cfee3fa2fbfa063"
+date = "2026-10-02"
+dirty = false
+grid = "112 × 384 and 56 × 192 nodes"
+hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
+julia = "1.11.4"
+ranks = 8
+threads = 1
+wall_seconds = 509.5
+
+[settings]
+Mach = 1.36
+jet_speed = 60.0
+nr = 112
+nz = 384
+smoke = false
+stroke = 3.0
+t_after = 0.0016
+t_shock = 0.0

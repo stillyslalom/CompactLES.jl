@@ -632,7 +632,7 @@ end
 
 # The mass of SF6 departs from its initial value by at most 5.5e-4 on the
 # finer grid and 2.9e-3 on the coarser, while the transmitted shock reflects
-# from the end wall, and returns to within 4.3e-5 and 1.5e-4 by the end of the
+# from the end wall, and returns to within 2.8e-5 and 1.2e-4 by the end of the
 # run. After the phase change the pressure on the face and above the shock
 # departs from the post-shock pressure by at most 0.4% of the jump on both
 # grids, so the change of condition sends no larger wave down the tube.
