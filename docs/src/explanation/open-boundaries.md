@@ -75,9 +75,14 @@ included in the characteristic derivation.
 Current NSCBC is intended for faces whose normal coordinate has unit scale
 factor: Cartesian faces, cylindrical radial or axial faces, and spherical
 radial faces. Angular faces require additional metric terms in the wave
-analysis and should not be assumed equivalent. The transverse terms are the
-Cartesian ones; on a cylindrical or spherical face the curvature sources of
-the transverse directions stay in the right-hand side as computed.
+analysis and should not be assumed equivalent. The inflow's transverse terms
+include the curvature parts of the transverse velocity gradient, those of a
+collapsed transverse dimension among them: on the axial face of an
+axisymmetric grid the transverse divergence is ``\partial u_r/\partial r +
+u_r/r``, and the two terms are equal beside the axis. The outflow's
+transverse term includes them for a resolved transverse dimension only, and
+at a radial face its radiation condition carries the curvature source
+instead.
 
 ## EOS dependence
 

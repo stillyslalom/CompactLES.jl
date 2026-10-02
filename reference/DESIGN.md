@@ -1628,9 +1628,11 @@ components.
   of its characteristic, `L* = relaxation − β_t 𝒯` (Yoo & Im 2007): at β_t = 1
   the incoming characteristic variables follow their targets through a
   transverse flow at the face, at 0 the relaxation acts on the LODI amplitude
-  alone. The transverse terms are the Cartesian ones; the curvature sources of
-  a curvilinear face stay in the right-hand side as computed, like the viscous
-  terms. The LODI derivation of each relaxation form and of each transverse
+  alone. The transverse terms take the physical velocity gradient, whose
+  curvature parts a collapsed transverse dimension keeps (u_r/r on the z face
+  of an r-z grid, which beside the axis equals ∂u_r/∂r); the curvature
+  sources of the normal equations stay in the right-hand side as computed,
+  like the viscous terms. The LODI derivation of each relaxation form and of each transverse
   term is spelled out in the source so the signs can be audited, and
   `test/runtests.jl` checks the frozen-characteristic property at both faces.
   The weights are measured in `reference/CALIBRATION_APPENDIX.md`.

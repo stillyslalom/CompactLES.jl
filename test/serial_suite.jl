@@ -2509,6 +2509,60 @@ end
     @test parent(d1) != parent(d3)
 end
 
+@testset "NSCBC inflow: the r-z face freezes the incoming wave beside the axis" begin
+    # The top face of an r-z grid with a radial velocity proportional to r
+    # beside the axis, relaxation off. The transverse divergence there is
+    # ∂u_r/∂r + u_r/r, the second term from the collapsed θ; with it in 𝒯
+    # the incoming acoustic rate p − ρc u_z and the u_r rate fall with the
+    # resolution as on a Cartesian face (×19 and ×12 from 24 to 48 nodes).
+    # Without it the acoustic rate stays at half its beta_t = 0 value.
+    γ = 1.4
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, γ),
+                        IdealSpecies{Float64}("b", 0.5, γ)])
+    ic(r, θ, z) = begin
+        s = 0.5 + 0.2 * cos(2π * r^2) * sin(2π * z)
+        Prim(u=(0.1 * r * (1 - r^2) * (1 + 0.5 * cos(2π * z)), 0.0,
+                -(0.3 + 0.05 * cos(π * r^2) + 0.02 * sin(2π * z))),
+             p=1 + 0.05 * cos(2π * r^2 + 1) + 0.02 * cos(2π * z),
+             T_ion=1 + 0.1 * cos(π * r^2) * sin(2π * z), Y=(s, 1 - s))
+    end
+    function face_rates(beta_t, n)
+        bc = NSCBCInflowBC(u=(0.0, 0.0, -0.3), T_ion=1.0, Y=[0.6, 0.4], eta_u=0.0,
+                           eta_T=0.0, eta_t=0.0, eta_Y=0.0, beta_t=beta_t)
+        solver = Solver(n_global=(n, 1, n), L_domain=(1.0, 2π, 1.0),
+                        metric=CylindricalMetric(),
+                        bcs=((AxisBC(), SlipWallBC()), per3[2],
+                             (NSCBCOutflowBC(pinf=1.0), bc)),
+                        eos=eos, transport=ConstantTransport(mu0=0.0),
+                        art=ArtificialProperties(enabled=false))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, ic)
+        apply_bcs!(solver, Q)
+        dQ = zero(Q)
+        compute_rhs!(solver, Q, dQ)
+        m = solver.equations.i_mom
+        ie = solver.equations.i_energy
+        acoustic = radial = 0.0
+        for i in 1:n
+            I = padded_index(solver, i, 1, n)
+            ρ = solver.rho[I]; c = solver.c[I]
+            u = (solver.u[I], solver.v[I], solver.w[I])
+            ρt = dQ[I, 1] + dQ[I, 2]
+            ut = ntuple(a -> (dQ[I, m[a]] - u[a] * ρt) / ρ, 3)
+            pt = (γ - 1) * (dQ[I, ie] - sum(abs2, u) / 2 * ρt - ρ * sum(u .* ut))
+            acoustic = max(acoustic, abs(pt - ρ * c * ut[3]))
+            radial = max(radial, abs(ut[1]))
+        end
+        return acoustic, radial
+    end
+    full = face_rates(1.0, 24)
+    fine = face_rates(1.0, 48)
+    lodi = face_rates(0.0, 24)
+    @test all(lodi .> (0.1, 0.1))
+    @test all(full ./ lodi .< 1e-2)
+    @test all(full ./ fine .> 8)
+end
+
 @testset "validate_bc: NSCBC restrictions are setup errors" begin
     # Both restrictions are setup errors rather than documented caveats: left
     # unchecked, an angular face would fail nothing, since the wave analysis

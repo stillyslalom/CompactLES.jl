@@ -297,10 +297,22 @@ end
 # carries −β_t·𝒯, as the outflow's does: L* = relaxation − β_t 𝒯, with
 # β_t = 1 the full accounting, under which the incoming characteristic
 # variables follow their targets through the transverse flow, and 0 the plain
-# LODI form. The curvature terms of a cylindrical or spherical face are not
-# part of 𝒯 (they stay in dQ as computed, like the viscous terms): this is
-# the Cartesian form of the transverse terms, applied on a face whose normal
-# scale factor is one.
+# LODI form.
+#
+# The velocity gradients in 𝒯 are the physical components `grad_u`, which
+# carry the curvature parts of the transverse directions (metric.jl: u_r/r in
+# the cylindrical θθ component), so ∇_t·u_t is the transverse divergence of
+# the curved face and u_t·∇_t u its convective acceleration. A collapsed
+# transverse dimension has no derivative but keeps these parts, and they enter
+# 𝒯 as they do when the dimension is resolved. On the z face of an r-z grid
+# the θθ part is u_r/r, which beside the axis equals the ∂u_r/∂r of the
+# resolved direction. Without it the incoming acoustic wave is driven by
+# −ρc² u_r/r, and a radial velocity at the face beside the axis grows under
+# that drive while the inflow carries azimuthal vorticity from the face into
+# the domain. The scalar derivatives in 𝒯 have no curvature part. The
+# curvature sources of the normal equations, such as the metric source of the
+# radial momentum at a radial face, stay in dQ as computed, like the viscous
+# terms.
 #
 # The deltas relative to the physically computed amplitudes then use the
 # outflow mapping to conserved components, with the species terms
@@ -415,6 +427,10 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     act1 && deriv_along!(dr_t1, solver.rho, solver, t1, 1)
     act2 && deriv_along!(dp_t2, solver.p, solver, t2, 1)
     act2 && deriv_along!(dr_t2, solver.rho, solver, t2, 1)
+    # A collapsed transverse dimension contributes the curvature parts of its
+    # velocity gradient (zero on a Cartesian grid), read from `grad_u` alone.
+    crv1 = transverse && !solver.decomp.active[t1]
+    crv2 = transverse && !solver.decomp.active[t2]
 
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
@@ -432,7 +448,7 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     # limit recorded at the outflow launch.
     coef = (T(bc.eta_u), T(bc.eta_T), T(bc.eta_t), T(bc.eta_Y), T(bc.beta_t),
             Lref)
-    flags = (side == 1, act1, act2)
+    flags = (side == 1, act1, act2, crv1, crv2)
     dts = (d, t1, t2)
     eq = (solver.equations.i_mom, solver.equations.i_energy,
           solver.equations.n_species)
@@ -501,10 +517,11 @@ end
 # The inflow correction at one padded index `I`: the launched body and the
 # host loop of a pointwise target share it. `targets` is `(u∞, T∞)` and `YT`
 # the target composition tuple; `coef` is `(η_u, η_T, η_t, η_Y, β_t, L_ref)`,
-# `flags` is `(lowface, act1, act2)`, `dts` is `(d, t1, t2)`, and `eq` is
-# `(i_mom, i_energy, n_species)`. `dp_*`/`dr_*` are coordinate derivatives of
-# p and ρ along the face normal and the two transverse dimensions, read only
-# where the matching `act` flag is set.
+# `flags` is `(lowface, act1, act2, crv1, crv2)`, `dts` is `(d, t1, t2)`, and
+# `eq` is `(i_mom, i_energy, n_species)`. `dp_*`/`dr_*` are coordinate
+# derivatives of p and ρ along the face normal and the two transverse
+# dimensions, read only where the matching `act` flag is set; a `crv` flag
+# marks a collapsed transverse dimension whose `grad_u` row is read alone.
 @inline function _nscbc_inflow_apply!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
                                       cp_a, Y, grad_u, grad_Y, dp_n, dr_n,
                                       dp_t1, dr_t1, dp_t2, dr_t2, ih_d, ih_t1,
@@ -513,7 +530,7 @@ end
     @inbounds begin
         uT, TT = targets
         eta_u, eta_T, eta_t, eta_Y, beta_t, Lref = coef
-        lowface, act1, act2 = flags
+        lowface, act1, act2, crv1, crv2 = flags
         d, t1, t2 = dts
         m, i_energy, n_species = eq
         T = eltype(rho)
@@ -562,6 +579,19 @@ end
             tr_en += ut * (c * c * drt - dpt)
             tr_t1 += ut * grad_u[t2, t1][I]
             tr_t2 += ut * grad_u[t2, t2][I] + dpt / ρ
+        end
+        # The curvature parts of a collapsed transverse dimension (header).
+        if crv1
+            ut = uv[t1]
+            tr_ac += ρ * c * c * grad_u[t1, t1][I] + sgn * ρ * c * ut * grad_u[t1, d][I]
+            tr_t1 += ut * grad_u[t1, t1][I]
+            tr_t2 += ut * grad_u[t1, t2][I]
+        end
+        if crv2
+            ut = uv[t2]
+            tr_ac += ρ * c * c * grad_u[t2, t2][I] + sgn * ρ * c * ut * grad_u[t2, d][I]
+            tr_t1 += ut * grad_u[t2, t1][I]
+            tr_t2 += ut * grad_u[t2, t2][I]
         end
         βt = beta_t < 0 ? Ma : beta_t
         # Imposed incoming amplitudes (outgoing one kept as computed), each

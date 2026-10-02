@@ -85,18 +85,15 @@ independent and may proceed together, subject to one heavy run at a time.
    the defaults.
 3. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
    It supplies N18's remaining reference and V2's use case.
-4. **H2** integrates the existing molecular conduction implicitly with the ARK
-   pair, which verifies the IMEX contract on a known equation before any new
-   physics depends on it. The serial pair is delivered; an MPI phase remains.
-5. **A7** draws the material boundary and the per-component field declaration
+4. **A7** draws the material boundary and the per-component field declaration
    before H3 adds the first new evolved field.
-6. **H3**, then **H4**: two temperatures with an ionization closure and the
+5. **H3**, then **H4**: two temperatures with an ionization closure and the
    electron–ion exchange, then electron and ion conduction through the implicit
    stage. H5's table readers are delivered; its adapters follow A7.
-7. **N22** sharpens the species channel's interfaces. The flux is delivered
+6. **N22** sharpens the species channel's interfaces. The flux is delivered
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
-8. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+7. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
@@ -216,25 +213,25 @@ surface; H8 for a magnetized target.
   **Gate:** a slip-wall evolution row on the annulus in
   `test/convergence.jl` at the order of the Cartesian wall row.
 
-- [ ] **N26 — Keep the pressure positive ahead of a strong shock into cold gas.**
-  A blast wave at Mach 20 in cold ideal gas (the Supernova remnant tutorial,
-  `docs/literate/supernova_remnant.jl`, Sedov on a radial spherical grid)
-  drives the pressure below zero at one to seven nodes just ahead of the
-  captured shock, at every ambient temperature tried over three decades and
-  with the artificial properties off as well. The run completes under
-  `validity = :permissive`, which the Sedov case of `test/cases.jl` also
-  carries. The other strong-shock cases of the validation battery show the
-  same defect (the Shock-capturing tests example,
-  `examples/shock_capturing.jl`): the three Noh cases end with six to ten such
-  cells, and Woodward–Colella carries nine to fourteen at the two blast fronts
-  until they meet, as low as −28 against an ambient 0.025, and passes the
-  strict check only because none remain at the final time. Find whether the
-  oscillation comes from the scheme's response at the shock foot, the filter,
-  or the recovery of pressure from a small internal energy, and whether the
-  positivity floor should apply there.
-  **Gate:** the Sedov and Noh cases of `test/cases.jl` and the tutorial under
-  the default strict validity, their errors unchanged, and no inadmissible
-  cell during the Woodward–Colella run.
+- [ ] **N26 — Keep the internal energy positive ahead of a strong shock.**
+  Measured (`bench/shockfoot.jl`, commit `105f787`;
+  [negative internal energy ahead of a shock](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)):
+  on Woodward–Colella, Noh and Sedov the inadmissible cells are the compact
+  scheme's odd-even undershoot ahead of a captured shock, whose depth is set
+  by the jump and not by the ambient state, so an ambient internal energy
+  below a few percent of the jump goes negative. Round-off does not cause
+  it; the filter spreads it but damps it overall, and the artificial
+  properties reduce it without removing it. Every repair measured, a
+  per-point limit on the filter's correction and both scopes of the
+  positivity floor, moves a validation error outside its guard, so the cases
+  stay under `validity = :permissive`. Remaining, a design item: a
+  positivity-preserving blend toward a first-order flux where the high-order
+  update would be inadmissible (Hu, Adams and Shu 2013), which requires the
+  compact divergence written as differences of face fluxes. Decide whether
+  the scheme takes that form before implementing it.
+  **Gate:** the Sedov and Noh cases of `test/cases.jl` and the Supernova
+  remnant tutorial under the default strict validity, their errors
+  unchanged, and no inadmissible cell during the Woodward–Colella run.
 
 - [ ] **N27 — Decide the artificial species diffusivity's scale in slow flows.**
   The artificial species diffusivity scales with the sound speed times the
@@ -257,35 +254,29 @@ surface; H8 for a magnetized target.
 ## Validation and verification
 
 - [ ] **V4 — Cut the gate's wall time.**
-  The core gate takes about 36 minutes on the workstation with nothing
-  queued: `runtests.jl -O1` 15 min (12,772 assertions in 159 testsets),
-  the full MPI suite at two ranks 8 min, the eight-rank selection 6 min,
-  `test/convergence.jl` 4 min and `test/validation.jl` 3 min. The serial
-  suite and the MPI legs are compile-bound, and a package image evicted from
-  the depot, which holds ten images across every checkout and flag set, adds
-  about 3.5 min to the leg that rebuilds it. Most commits touch neither the
-  core numerics nor the communication, yet the gate runs the convergence
-  study and the MPI suite for every solver-side change. Stages, in order:
-  1. Measure first: a per-testset breakdown of compile and run time for the
-     serial suite and the MPI phases, and the wall of the serial suite split
-     into concurrent shards (`runtests.jl shard=k/n`) at n = 2, 4 and 8 on
-     this machine, where compilation is mostly single-threaded per process.
-  2. Trim the suite: merge or delete testsets whose coverage another
-     testset already gives, and keep the configuration count, which sets the
-     compile cost, as low as the coverage allows. A testset over a minute
-     indicates a cause to find, not a test to move: a case larger or longer
-     than its check needs, or a compile path that specializes on parts of the
-     solver type the code it compiles does not use, or lacks an inference
-     barrier.
-  3. Relax the gate in CLAUDE.md by change category: the convergence study
-     and the MPI suite only for changes to the numerics and the
-     communication they verify, an affected-suite run while iterating, and
-     one gate per commit. Decide the depot's image limit
-     (`JULIA_MAX_NUM_PRECOMPILE_FILES`) and whether the two-rank leg runs
-     the full suite.
-  **Gate:** the measured wall of the core gate and of the gate for a
-  change outside the numerics, before and after, and the coverage of
-  `bench/coverage.jl` held or any loss listed.
+  The core gate took about 36 minutes on the workstation. With the
+  inference barrier on `allocate_state` (commit `a8812af`), which removed a
+  threefold inference of the step tree wherever a function held a concretely
+  typed solver, it ran in about 20: the serial suite 8.0 min,
+  `test/convergence.jl` 2.2, the full MPI suite at two ranks 5.5 and the
+  eight-rank selection 3.8. CI built the package image twice per job
+  (fixed in commit `8ea9ebf`), and `runtests.jl timing=true` (commit
+  `725bf7d`) prints the compile and run time of every testset. Both suites
+  remain compile-bound: every MPI rank compiles each `Solver` type the image
+  lacks, and the serial suite's compile time is spread over its testsets,
+  none over a minute. Remaining:
+  1. Record the saving from the first CI run after these commits against
+     the run before them, per testset and per MPI phase.
+  2. Cut distinct `Solver` types where another testset covers the same
+     path: the C10 configuration of the two-slab device layout, the
+     checkpoint testsets' separate solvers, and the Float32 NASA-9 run beside
+     the device Float32 step; review the eight-rank list ("phase change", the
+     two wall-flux phases, "staggered operators", "composite budgets").
+  3. Hold the eight-rank phase list in one file instead of CI.yml and
+     CLAUDE.md, and decide the depot's image limit
+     (`JULIA_MAX_NUM_PRECOMPILE_FILES`).
+  **Gate:** the measured wall of the core gate before and after, and the
+  coverage of `bench/coverage.jl` held or any loss listed.
 
 - [ ] **V1 — Complete independent solver and experiment comparisons.**
   Run CompactLES against Pyranda on Re = 1600 Taylor–Green and one
@@ -321,11 +312,7 @@ surface; H8 for a magnetized target.
   would replace. The runner taking medians over repeated processes, with an
   order-alternated paired mode for a before/after comparison, is
   `bench/repeat.jl` (commit `2290c83`), and its first paired transcript is
-  `bench/results/derivcost.txt` (commit `a2d7311`). Also remaining:
-  `test/docrefs_tests.jl` does not detect a heading whose slug collides
-  with a docstring binding or another page's heading: a second `## Sphere`
-  heading on a tutorial made ``[`Sphere`](@ref)`` ambiguous, docrefs passed
-  and `makedocs` failed.
+  `bench/results/derivcost.txt` (commit `a2d7311`).
   **Gate:** KA-on-CPU equality does not substitute for hardware-GPU tests
   under S1.
 
@@ -553,35 +540,6 @@ limiter.
   supported metric, distributed residual/convergence studies, and freestream
   preservation. Variable coefficients require a policy for rebuilding the
   preconditioner's second-order operator.
-
-- [ ] **H2 — Integrate the existing conduction with the IMEX pair.**
-  ARK4(3)6L[2]SA is the chosen pair and RKL2 super-time-stepping is rejected
-  ([IMPLICIT.md](IMPLICIT.md#the-integrator)). The first implicit component is
-  the present 1T molecular conduction (IMPLICIT.md stage 3), so the integrator
-  is verified before H3 exists. Define the workspace contract; accept
-  component contributions to a joint residual and a consistent linearization;
-  define coefficient refresh, nonlinear trial invalidation and collective retry.
-  Independent physics components must not force sequential split updates.
-  Size the implicit half's step by accuracy, beside the acoustic limit of the
-  explicit half: the pair's embedded error estimate or Riot's target
-  fractional change of temperature per step, chosen by measurement
-  ([IMPLICIT.md](IMPLICIT.md#open-questions)).
-  Delivered, opt-in (commit `9fd6365`): `ImplicitConduction` through
-  `Numerics(implicit = ...)` on a single host-storage patch, the conduction
-  removed from the explicit half by a transport wrapper, Newton stages on
-  the delivered implicit solve, a failed solve recovered through the
-  `StepControl` rollback, both step rules implemented and measured alike at
-  equal work ([the additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)).
-  The defaults are `:error` at 1e-3 and `rtol = 1e-8`
-  ([CALIBRATION.md](CALIBRATION.md)); the pair is not the default
-  integrator. Remaining before closing: an MPI phase for the pair. The
-  refined-level and device forms are H1 stage 4.
-  **Depends on:** H1 stages 1 and 2, delivered.
-  **Gate:** temporal order on the smooth-evolution cases, a Gaussian
-  conduction pulse at steps far beyond the explicit diffusive limit (Riot's
-  `conduction_analytic`), stiff stability at large R, the acoustic CFL limit
-  of the explicit half, and a failed implicit solve recovered by collective
-  rollback.
 
 - [ ] **H10 — Carry the implicit stage to the production configuration.**
   The implicit conduction of H1 and H2 runs on one host-storage patch
@@ -1268,3 +1226,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   azimuthal momenta than in the scalars, with a floor of 2 and the θ cap at
   the momenta's mode, and is stable under the artificial properties (commit
   `f1171de`).
+
+### HED physics
+- [x] **H2** — `ImplicitConduction` integrates the molecular conduction in
+  the implicit half of ARK4(3)6L[2]SA on one host-storage patch, decomposed
+  or not, with collective rollback of a failed stage; a `cfl` chosen for the
+  default integrator carries over (commits `9fd6365`, `9c2edd8`).
