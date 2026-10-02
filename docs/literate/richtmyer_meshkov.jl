@@ -211,9 +211,9 @@ psi_post = growth_reduction(A_post, k * delta_post)
 #
 # [`Slab`](@ref CompactLES.Regions.Slab) accepts a function of the two other
 # coordinates as a bound, here ``(y, z) \mapsto x_i + a_0\cos ky``, and the
-# slab beyond that bound is filled with SF6. A [`Layer`](@ref) gives that slab
-# its own transition: with `profile = :erf`, `Layers` blends the gases by
-# volume along an error function across the bound, and a `width` of
+# slab beyond that bound is filled with SF6. A [`Layer`](@ref CompactLES.Regions.Layer)
+# gives that slab its own transition: with `profile = :erf`, `Layers` blends
+# the gases by volume along an error function across the bound, and a `width` of
 # ``\delta/\sqrt\pi`` makes the density the profile of Duff, Harlow and Hirt
 # with ``\delta = 5`` mm. A second slab holds the shocked air behind the shock
 # at ``x_s``, with the default transition, three cells wide.

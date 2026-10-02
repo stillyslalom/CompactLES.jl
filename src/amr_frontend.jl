@@ -8,7 +8,8 @@ refined at setup:
   as they move.
 - a predicate `(x, y, z, t) -> Bool`: the nodes where it holds, re-evaluated at
   every regrid check, so a region can move on a prescribed path.
-- a [`Shape`](@ref) or a predicate `(x, y, z) -> Bool`: a fixed region.
+- a [`Shape`](@ref CompactLES.Regions.Shape) or a predicate `(x, y, z) -> Bool`:
+  a fixed region.
 - a vector of nested shapes, one per level, finest last:
   `[Box((0.2, 0, 0), (0.6, 1, 1)), Sphere((0.4, 0.5, 0.5), 0.05)]` refines
   the box once and the sphere twice. Each shape is covered by the nodes of its

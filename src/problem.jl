@@ -890,7 +890,7 @@ Execution(base::Execution; kw...) = _with(base, kw)
 
 Grid, scheme, timestep, and decomposition choices used to realize a
 [`Problem`](@ref). The second form copies `base` with the given keywords
-replaced. The third starts from a preset of [`Presets`](@ref), whose
+replaced. The third starts from a preset of [`Presets`](@ref CompactLES.Presets), whose
 keywords the ones given after it override.
 
 # Keywords

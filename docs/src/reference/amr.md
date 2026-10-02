@@ -24,9 +24,10 @@ AMR(initial = [Box((0.2, 0, 0), (0.8, 1, 1)),             # fixed nested levels,
                Box((0.4, 0, 0), (0.6, 1, 1))])            # finest last
 ```
 
-Every region is given in physical coordinates. A [`Shape`](@ref), or a vector
-of nested shapes with the finest last, is covered by the nodes of each level's
-parent, with no counting of nodes. A predicate `(x, y, z, t) -> Bool` sees the
+Every region is given in physical coordinates. A
+[`Shape`](@ref CompactLES.Regions.Shape), or a vector of nested shapes with the
+finest last, is covered by the nodes of each level's parent, with no counting of
+nodes. A predicate `(x, y, z, t) -> Bool` sees the
 node's coordinates and the solver time and is evaluated again at each regrid
 check, so it can move the region on a prescribed path; `(x, y, z) -> Bool`
 describes a fixed one. A predicate alone selects the region: the density

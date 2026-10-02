@@ -23,13 +23,14 @@
     CompactLES.Regions
 
 Regions of space and the initial conditions assembled from them: the shapes
-[`Slab`](@ref), [`Box`](@ref), [`Ellipsoid`](@ref), [`Sphere`](@ref),
-[`Cylinder`](@ref) and [`LevelSet`](@ref), the [`Layers`](@ref) initial condition
-that stacks them, and the [`Cells`](@ref) width unit. CompactLES does not export
-the module's names, several of which are common in plotting and geometry
-packages; load them with `using CompactLES.Regions` or qualify them.
-CompactLES exports `Cells` as well, for the duration of a
-[`Ramp`](@ref CompactLES.Ramp).
+[`Slab`](@ref), [`Box`](@ref), [`Ellipsoid`](@ref),
+[`Sphere`](@ref CompactLES.Regions.Sphere),
+[`Cylinder`](@ref CompactLES.Regions.Cylinder) and [`LevelSet`](@ref), the
+[`Layers`](@ref) initial condition that stacks them, and the [`Cells`](@ref)
+width unit. CompactLES does not export the module's names, several of which are
+common in plotting and geometry packages; load them with
+`using CompactLES.Regions` or qualify them. CompactLES exports `Cells` as well,
+for the duration of a [`Ramp`](@ref CompactLES.Ramp).
 """
 module Regions
 
@@ -41,8 +42,9 @@ export Cells, Layer, Layers
 
 A region of space for a [`Layers`](@ref) initial condition, defined by a signed
 distance that is negative inside. The provided shapes are [`Slab`](@ref),
-[`Box`](@ref), [`Ellipsoid`](@ref), [`Sphere`](@ref), [`Cylinder`](@ref) and
-[`LevelSet`](@ref), combined with `∪`, `∩`, `setdiff` and `!`.
+[`Box`](@ref), [`Ellipsoid`](@ref), [`Sphere`](@ref CompactLES.Regions.Sphere),
+[`Cylinder`](@ref CompactLES.Regions.Cylinder) and [`LevelSet`](@ref), combined
+with `∪`, `∩`, `setdiff` and `!`.
 
 Shapes are evaluated in the coordinates of the run's metric: `(x, y, z)` for a
 Cartesian run, `(r, θ, z)` for a cylindrical one, `(r, θ, φ)` for a spherical
@@ -56,8 +58,9 @@ abstract type Shape end
 
 The signed distance from point `x` (a three-tuple in the metric's coordinates)
 to the boundary of `shape`, negative inside. `active` flags the resolved
-directions; a shape ignores the collapsed ones. A new [`Shape`](@ref) subtype
-implements this method and nothing else.
+directions; a shape ignores the collapsed ones. A new
+[`Shape`](@ref CompactLES.Regions.Shape) subtype implements this method and
+nothing else.
 """
 function signed_distance end
 
@@ -126,8 +129,8 @@ end
 
 The ellipsoid with semi-axes `radii` along the coordinate directions about
 `center`, both three-tuples. An infinite radius removes that direction, which is
-how [`Cylinder`](@ref) is built. The distance is exact for a sphere and scaled by
-the smallest semi-axis otherwise.
+how [`Cylinder`](@ref CompactLES.Regions.Cylinder) is built. The distance is
+exact for a sphere and scaled by the smallest semi-axis otherwise.
 """
 struct Ellipsoid <: Shape
     center::NTuple{3,Float64}
@@ -262,9 +265,9 @@ _fraction(profile::Symbol, d, w) =
     Layers(background, regions...; width = Cells(3), profile = :tanh)
 
 An initial condition built from regions: `background` everywhere, overlaid in
-order by each region, given as `shape => state` or as a [`Layer`](@ref). A later
-region covers the earlier ones where they overlap. Pass it to a
-[`Problem`](@ref CompactLES.Problem) as `ic`.
+order by each region, given as `shape => state` or as a
+[`Layer`](@ref CompactLES.Regions.Layer). A later region covers the earlier ones
+where they overlap. Pass it to a [`Problem`](@ref CompactLES.Problem) as `ic`.
 
 Each state is a [`Prim`](@ref CompactLES.Prim), or a function `(x, y, z) -> Prim`
 for a region whose state varies in space. The volume fraction of a region across its boundary

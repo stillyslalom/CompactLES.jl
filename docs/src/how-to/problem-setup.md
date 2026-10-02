@@ -54,8 +54,9 @@ material mixing length.
 A state made of several gases or several regions, such as a shocked gas, the
 gas ahead of the shock and a second gas beyond an interface, is written as a
 [`Layers`](@ref) initial condition: a background state overlaid by regions,
-each a [`Shape`](@ref) paired with a `Prim`. The shapes and `Layers` are in the
-`CompactLES.Regions` submodule, which `using CompactLES` does not load.
+each a [`Shape`](@ref CompactLES.Regions.Shape) paired with a `Prim`. The
+shapes and `Layers` are in the `CompactLES.Regions` submodule, which
+`using CompactLES` does not load.
 
 ```julia
 using CompactLES.Regions
@@ -74,8 +75,9 @@ initial = Layers(air,
 
 A later region covers an earlier one where they overlap. The shapes are
 [`Slab`](@ref) (between two bounds along one axis, either of which may be a
-function of the other two coordinates), [`Box`](@ref), [`Sphere`](@ref),
-[`Ellipsoid`](@ref), [`Cylinder`](@ref) and [`LevelSet`](@ref) for any other
+function of the other two coordinates), [`Box`](@ref),
+[`Sphere`](@ref CompactLES.Regions.Sphere), [`Ellipsoid`](@ref),
+[`Cylinder`](@ref CompactLES.Regions.Cylinder) and [`LevelSet`](@ref) for any other
 region, combined with `∪`, `∩`, `setdiff` and `!`. A shape ignores collapsed
 directions, so a `Sphere` is a disc in a planar run.
 

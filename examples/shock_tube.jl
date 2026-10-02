@@ -134,9 +134,10 @@ reshock = riemann_interface(eos, impact.left, wall.left)
 # and with phases drawn from `seed`; the root-mean-square displacement is
 # 0.5 mm. The `1` in [`Slab`](@ref CompactLES.Regions.Slab) is the first
 # coordinate, along the tube. Across the displaced interface the two gases
-# blend by volume along an error function, through a [`Layer`](@ref) whose
-# `width` makes the thickness of the blend, the difference in composition
-# divided by its largest gradient, 5 mm. That is the thickness of the layer in
+# blend by volume along an error function, through a
+# [`Layer`](@ref CompactLES.Regions.Layer) whose `width` makes the thickness of
+# the blend, the difference in composition divided by its largest gradient,
+# 5 mm. That is the thickness of the layer in
 # the experiment of Collins and Jacobs that the tutorial repeats. The
 # thickness is set in meters rather than in cells, so both grids start from
 # the same layer. The incident shock is spread over the default three cells.

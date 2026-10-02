@@ -16,9 +16,12 @@
 #      first, a code link such as [`Sphere`](@ref) included, and fails the
 #      build when its slug is the anchor of more than one heading; a second
 #      `## Sphere` anywhere in the docs therefore breaks every such link.
-#      A code link whose slug is the anchor of a single heading builds, but
-#      is linked to that heading rather than to the docstring; it is reported
-#      as a warning only;
+#      A code link to a rendered docstring whose slug is the anchor of a
+#      single heading builds, but is linked to that heading rather than to the
+#      docstring, and a second heading of the same name turns it into the
+#      failure above; it fails here too. Qualifying the link,
+#      [`Sphere`](@ref CompactLES.Regions.Sphere), gives it a slug no heading
+#      has;
 #   2. every `@docs` entry names a documented binding of CompactLES or of one
 #      of its submodules;
 #   3. every exported or public name CompactLES or a submodule owns has a
@@ -231,10 +234,10 @@ end
     check() -> (unresolved, unknown_entries, undocumented_exports, captured)
 
 Run the three checks and return the offenders, each as a vector of
-human-readable lines; the first three empty means the docs cross-references
-are sound. `captured` lists the code links to a rendered docstring whose slug
-is also the anchor of a single heading: Documenter builds them without error
-and links them to the heading.
+human-readable lines; all four empty means the docs cross-references are
+sound. `captured` lists the code links to a rendered docstring whose slug is
+also the anchor of a single heading: Documenter builds them without error and
+links them to the heading.
 """
 function check()
     page_paths = pages()
@@ -263,6 +266,12 @@ function check()
         n = base_name(target)
         return n !== nothing && isdefined(owner, Symbol(n))
     end
+    # The fully qualified name of a documented binding, for a link that names
+    # it. A module's docstring is held by the module itself.
+    function qualified(n)
+        mod = owners[n]
+        return nameof(mod) === Symbol(n) ? string(mod) : "$mod.$n"
+    end
     # Documenter tries the heading anchors before the docstrings, for a code
     # link as for a text link. A slug naming one heading resolves to it; a
     # slug naming several is an error, and no docstring of that name is
@@ -278,7 +287,9 @@ function check()
             n = code === nothing ? nothing : base_name(code)
             n !== nothing && n in rendered &&
                 push!(captured, "$where: $link resolves to the heading " *
-                                "$(only(places)), not to the docstring of `$n`")
+                                "$(only(places)), not to the docstring of `$n`; " *
+                                "qualify the link, as in " *
+                                "[`$n`](@ref $(qualified(n))), or rename the heading")
         elseif code === nothing
             push!(unresolved, "$where: $link names no heading")
         else
@@ -328,6 +339,7 @@ end # module DocRefs
     for line in undocumented_exports
         @warn "checkdocs=:exports would fail: $line"
     end
+    @test isempty(captured)
     @test isempty(unresolved)
     @test isempty(unknown_entries)
     @test isempty(undocumented_exports)
