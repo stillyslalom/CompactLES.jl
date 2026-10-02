@@ -201,10 +201,12 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtificialProperties(enabled=
                nmax=NMAX, filt=compact_filter(), filter_cfl=0.35,
                filter_weighting=:none)
     prob = sedov_problem(; R, σ)
-    # The blast leaves a near-vacuum behind the shock, and six of 256 cells
-    # there carry a negative internal energy at the end of the run, which the
-    # ideal-gas EOS reports as outside its domain. The case states that rather
-    # than rejecting on it, and its caller bounds the count and the defect.
+    # The internal energy of the cold gas ahead of the shock oscillates cell by
+    # cell, and at the end of the run four of 256 cells there, two to ten cells
+    # ahead of the front, carry a negative internal energy (and a negative total
+    # energy), which the ideal-gas EOS reports as outside its domain. The case
+    # states that rather than rejecting on it, and its caller bounds the count
+    # and the defect. bench/shockfoot.jl locates the cells.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter=StateFilter(filt; cfl=filter_cfl,
                                                         weighting=filter_weighting),
@@ -305,9 +307,9 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   deriv=lele_d1_6(), filt=compact_filter(), filter_cfl=0.35,
                   filter_weighting=:none, folded=false)
     prob = noh_problem(ν; N, t0, R, folded)
-    # The wall region of a Noh implosion runs as a pressureless layer: six to
-    # eight interior cells carry a negative internal energy that moves with the
-    # front, for the whole of a run that reaches the correct plateau. Reaching
+    # The cold inflow ahead of the front carries a negative internal energy at
+    # a handful of cells, an odd-even oscillation that travels with the front,
+    # for the whole of a run that reaches the correct plateau. Reaching
     # the expected plateau does not make those cells physical, so the case
     # states the violation rather than rejecting on it, and its caller bounds
     # the count and the worst defect. reference/CALIBRATION_APPENDIX.md carries the

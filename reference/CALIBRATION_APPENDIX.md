@@ -22,48 +22,50 @@ section that moved it says so in one sentence and the older figure is gone.
    (`bench/filter_conservation.jl`)
 5. [The CFL restriction and the symmetry cell](#the-cfl-restriction-and-the-symmetry-cell)
    (`bench/nohprobe.jl`)
-6. [Directional bulk viscosity](#directional-bulk-viscosity) (`bench/anisotropic.jl`)
-7. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
+6. [Negative internal energy ahead of a shock](#negative-internal-energy-ahead-of-a-shock)
+   (`bench/shockfoot.jl`)
+7. [Directional bulk viscosity](#directional-bulk-viscosity) (`bench/anisotropic.jl`)
+8. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
    (`bench/boundaryorder.jl`, `bench/temporalorder.jl`, `test/convergence.jl`)
-8. [The filter's wall rows](#the-filters-wall-rows) (`bench/wallfilter.jl`)
-9. [Wall closures in production](#wall-closures-in-production) (`bench/wallclosure.jl`)
-10. [The wall flux contracts](#the-wall-flux-contracts) (`test/wall_flux_tests.jl`)
-11. [Constant annihilation](#constant-annihilation) (`bench/constantfloor.jl`)
-12. [Closure certificates](#closure-certificates) (`bench/closurecertify.jl`,
+9. [The filter's wall rows](#the-filters-wall-rows) (`bench/wallfilter.jl`)
+10. [Wall closures in production](#wall-closures-in-production) (`bench/wallclosure.jl`)
+11. [The wall flux contracts](#the-wall-flux-contracts) (`test/wall_flux_tests.jl`)
+12. [Constant annihilation](#constant-annihilation) (`bench/constantfloor.jl`)
+13. [Closure certificates](#closure-certificates) (`bench/closurecertify.jl`,
     `bench/neutralsearch8.jl`, `bench/neutralsearch10.jl`)
-13. [The fifth-order closure search](#the-fifth-order-closure-search)
+14. [The fifth-order closure search](#the-fifth-order-closure-search)
     (`bench/closuresearch.jl`, `bench/closuredamping.jl`)
-14. [The sensor operators at walls](#the-sensor-operators-at-walls) (`bench/sensorwall.jl`)
-15. [The face-centred symmetry plane](#the-face-centred-symmetry-plane)
+15. [The sensor operators at walls](#the-sensor-operators-at-walls) (`bench/sensorwall.jl`)
+16. [The face-centred symmetry plane](#the-face-centred-symmetry-plane)
     (`bench/wallclosure.jl`, `test/mpi_tests.jl`)
-16. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
+17. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
     (`bench/noh_transverse.jl`)
-17. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
-18. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
-19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
+18. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
+19. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
+20. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
-20. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
+21. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
     `test/level_tests.jl`)
-21. [Temperature-dependent transport](#temperature-dependent-transport)
+22. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
-22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
+23. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
     (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
-23. [The contact with a temperature jump](#the-contact-with-a-temperature-jump)
+24. [The contact with a temperature jump](#the-contact-with-a-temperature-jump)
     (`bench/thermalcontact.jl`, `bench/tubebudget.jl`)
-24. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
-25. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
+25. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
+26. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
-26. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`, `bench/staggeredclosure.jl`, `bench/implicitstage.jl`)
-28. [False activation on smooth fields](#false-activation-on-smooth-fields)
+27. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
+28. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`, `bench/staggeredclosure.jl`, `bench/implicitstage.jl`)
+29. [False activation on smooth fields](#false-activation-on-smooth-fields)
     (`bench/falseactivation.jl`)
-29. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
+30. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
     (`bench/interfaceacoustics.jl`, `test/validation.jl`)
-30. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/sharpening.jl`,
+31. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/sharpening.jl`,
     `test/sharpening_tests.jl`)
-31. [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis)
+32. [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis)
     (`bench/axisspectrum.jl`, `bench/axisrunaway.jl`)
-32. [The outflow face on a radial grid](#the-outflow-face-on-a-radial-grid)
+33. [The outflow face on a radial grid](#the-outflow-face-on-a-radial-grid)
     (`bench/sphereoutflow.jl`, `test/sphere_dipole.jl`)
 
 ## The shock battery
@@ -108,9 +110,9 @@ symmetry plane](#the-face-centred-symmetry-plane)):
 ```
 case                                   node-centred wall            symmetry plane
 Woodward–Colella N=800, t=0.038  L1 3.2153e-2, peak 6.6166 @0.7785  L1 3.0330e-2, 6.6140 @0.7781
-Noh ν=1 cold N=400, cfl 0.15     3.9988, 23.9%, shock 0.2021,       3.9990, 25.0%, 0.2024,
-                                 pre-shock L1 3.603e-6, 6 cells     2.953e-6, 7 cells
-                                 e < 0, e_min −0.0315               e_min −0.0047
+Noh ν=1 cold N=400, cfl 0.15     3.9988, 24.1%, shock 0.2021,       3.9990, 25.0%, 0.2024,
+                                 pre-shock L1 3.603e-6, 10 cells    2.953e-6, 7 cells
+                                 e < 0, e_min −0.0293               e_min −0.0047
 Noh aligned N=100, AR=4          4.0035, 32.5%, 0.2084, 4966 steps, 3.9974, 27.8%, 0.2093,
                                  transverse 2.052e-7                4938 steps, 5.135e-10
 Noh ν=2                          15.0086, 55%, 0.2091               –
@@ -121,6 +123,10 @@ Shu–Osher                        L1 ρ 6.804e-3, train L1 2.087e-2, train peak
 Sedov                            R_s 0.8085 (+1.06%), peak ρ 5.127, e_min −0.00427
 shock/SF6 interface              worst Y −0.0129 / 1.0129, width 4 cells, 647 steps
 ```
+
+The node-centred Noh ν=1 entry, all but its pre-shock L1, is the closing state of
+`noh_case(1)` under `compact_filter(0.47)` in `bench/results/shockfoot.txt`
+([negative internal energy ahead of a shock](#negative-internal-energy-ahead-of-a-shock)).
 
 ### C_beta, the shock constant
 
@@ -1875,6 +1881,9 @@ cell 11.8, puts them at cells 14 to 28, ahead of the front, as an odd-even oscil
 the internal energy (−297, +323, −176, +57, +9, −30, +33, −22, +15, −6, +3, +1, −0.3 e₀ cell
 by cell), with the wall cell hot at 9200 e₀. The oscillation is the compact scheme's
 precursor, and the calculation still reaches the plateau to within 0.07%.
+The same precursor on Woodward–Colella and Sedov, its scaling with the jump and the repairs
+measured against it are under [negative internal energy ahead of a
+shock](#negative-internal-energy-ahead-of-a-shock).
 
 **Repairing those cells is a percent-level intervention and terminates the run.** Under
 `StepControl(floor_ratio = 1e-8, floor_scope = :internal_energy)` the failsafe repairs five
@@ -1972,6 +1981,140 @@ starts the cylindrical case singular at t = 0, which the axis takes, and its pla
 0.938 is a startup error of the same kind: the warm start returns 1.041 with the shock
 position exact, and warm-started at t₀ = 0.3 the axis completes through cfl 0.5 even
 unprimed.
+
+## Negative internal energy ahead of a shock
+
+```text
+julia --project=. -t 1 bench/shockfoot.jl
+julia --project=. -t 1 bench/shockfoot.jl part=defaults cases=sedov
+```
+
+The transcript of the first command is `bench/results/shockfoot.txt`.
+
+Woodward–Colella (N = 800), planar Noh (N = 400, cfl 0.15) and Sedov (N = 256) from
+`test/cases.jl` carry points with ρe = E − ½|m|²/ρ ≤ 0 under the defaults from step 9 of
+4380, step 1 of 3512 and step 89 of 3146. The script applies the filter pass from a step
+callback and reads the state on both sides of it. The trajectories are the production
+cases': under `part=identity` the final densities agree with those of `woodward()`,
+`noh_case(1)` and `sedov()` exactly, and the closing state reports agree for Noh and Sedov
+(`woodward()` returns none).
+
+### Where they sit
+
+Point-steps with ρe ≤ 0 summed over each run, before and after the filter pass; the most
+after one pass; the points made bad by the step, made bad by a pass and cured by a pass;
+the lowest ρe; and the distance of the bad points ahead of the nearest front, in cells:
+
+```
+case     bad before / after   max per step   step / pass / cured   min ρe before → after   ahead
+WC       36657 / 37114        15             582 / 3552 / 3095     −26.6 → −31.1           1–17
+Noh      30596 / 30308        11             1604 / 825 / 1113     −0.138 → −0.132         2–22
+Sedov    20869 / 20981        12             75 / 955 / 843        −0.162 → −0.213         1–26
+```
+
+All but 397 of the bad point-steps on Noh and 30 on Woodward–Colella lie ahead of the
+nearest front, in the undisturbed gas, in an odd-even pattern; none of these is at a wall.
+The exceptions lie behind a front or in a step with no front: Noh's first bad points, at
+step 1, precede its front, and 29 of Woodward–Colella's 30 fall after the collision of the
+blasts, when it has none. Sedov has no exception. On Noh the first bad points appear at
+step 1, at cells 3, 5 and 7, before any filter pass. On Woodward–Colella and Sedov the
+first appears after a pass, at steps 9 and 89, and over each run the passes lower the
+minimum, while on Noh they raise it slightly. A pass turns about as many points bad as it
+cures.
+
+The points are not a rounding effect. At Noh's median bad point K exceeds E by 0.35% of K,
+and on Woodward–Colella and Sedov 98% of the bad points have E < 0, which no cancellation
+produces. Noh ends on ten inadmissible points, 2 to 21 cells ahead of the front at
+x = 0.206 to 0.253, each with E > 0 and e_min −0.0293. Sedov ends on four, 2, 4, 7 and 10
+cells ahead of the front at r = 0.815 to 0.852, each with E < 0 and e_min −0.0023.
+Woodward–Colella ends on none.
+
+### Scale
+
+Woodward–Colella to the collision of the blasts, at three ambient pressures:
+
+```
+ambient p   bad after the pass   min ρe after   depth     ambient ρe
+0.01        37085                −31.1          −5.1%     2.3e-4
+0.1         20668                −30.9          −4.8%     2.3e-3
+1           4628                 −27.9          −2.5%     2.3e-3
+```
+
+The depth is the lowest ρe of a bad point ahead of a front over ρe three cells behind that
+front, and the last column is the ambient ρe over that same reference. Across a
+hundredfold change of the ambient pressure the lowest ρe stays between −28 and −31 while
+the ambient ρe rises from 0.025 to 2.5: the undershoot does not scale with the ambient
+state, and the count falls as the ambient energy rises. The depth is −2.3% on Noh against an
+ambient 7.8e-5, and −3.6% on Sedov against 1.4e-4. The undershoot is 11 to 300 times the
+ambient internal energy in every case, so a floor scaled to the ambient state is one to two
+orders of magnitude smaller than the deficit it repairs.
+
+### Ablations and coefficients
+
+Bad point-steps after the pass and the lowest ρe after it, Woodward–Colella to the
+collision of the blasts and Noh and Sedov to their end times. "Cap" marks a run stopped by
+the 4000-step cap short of that time: at t = 0.0216 for Woodward–Colella without the
+artificial properties, at t = 0.549 and 0.579 for Noh at `C_beta = 4` and
+`C_kappa = 0.1`.
+
+```
+variant                Woodward–Colella          Noh                       Sedov
+default                37085, −31.1              30308, −0.132             20981, −0.213
+filter off             17931, −9.72              fails @242, ρ < 0         fails @109, ρ < 0
+artificial props off   64019, −277 (cap)         fails @68, ρ < 0          26771, −5.10
+C_beta = 2             30765, −12.3              25514, −0.113             18314, −0.0539
+C_beta = 4             23514, −6.17              20996, −0.0881 (cap)      14550, −0.0223
+C_kappa = 0.1          35435, −17.4              31226, −0.104 (cap)       19510, −0.210
+ungated dilatation     37232, −33.7              31083, −0.137             21192, −0.344
+```
+
+Without the filter, Woodward–Colella still has 2332 points made bad by the step, and Noh
+and Sedov lose positivity at steps 242 and 109; the step produces the points without any
+filter pass. Without the artificial properties Woodward–Colella reaches −277 before the
+cap, Noh loses positivity at step 68 and Sedov reaches −5.10. From the default
+`C_beta = 1`, the lowest ρe is 2.5 and 5.0 times shallower on Woodward–Colella at
+`C_beta = 2` and 4, and 3.9 and 9.6 times shallower on Sedov, faster than 1/C_beta; on Noh
+it is 15% and 33% shallower, the second over a run stopped short. A tenfold `C_kappa`
+(0.1 against 0.01) raises Woodward–Colella's lowest ρe from −31.1 to −17.4 and leaves
+Sedov's at −0.21. The ungated dilatation sensor deepens the minimum on all three cases. No
+variant removes the points, and both constants are fitted to the battery's accuracy
+([C_beta](#c_beta-the-shock-constant)).
+
+### Repairs
+
+Each repair to the case's end time against the guards of `test/validation.jl`: L1 ρ below
+6e-2 on Woodward–Colella, R_s within 3% on Sedov, the Noh plateau within 1% of 4. The bad
+counts are point-steps after the pass (after the failsafe for the two floors), and the
+energy is what the repair added, as a fraction of the case's initial total:
+
+```
+                           Woodward–Colella           Sedov                      Noh
+repair                     bad     L1 ρ     energy    bad     R_s      energy    bad     plateau  energy
+none                       37114   3.15e-2  –         20981   +1.04%   –         30308   3.9988   –
+pass limited to ρe/2       7279    1.14e-1  +2.5%     2727    +4.16%   +17.3%    17695   3.9329   +1.7%
+pass limited to ρe/100     10011   1.09e-1  +2.3%     3566    +4.04%   +16.4%    18142   3.9347   +1.7%
+failsafe :representable    1179    1.13e-1  +2.3%     547     +2.95%   +13.3%    30308   3.9988   0
+failsafe :internal_energy  0       9.06e-2  +2.4%     0       +1.41%   +13.5%    0       3.9055   0
+```
+
+The limits stop a filter pass from lowering a point's internal energy below a half, or a
+hundredth, of its value before the pass; the failsafe rows run at `floor_ratio = 0.01`
+under each `floor_scope`. On Noh the representable floor repairs none of the 30371
+point-steps below the floor, all with E > 0, so its row is the unrepaired run. The internal-energy floor
+completes Noh at this ratio, while at `floor_ratio = 1e-8` it fails at step 15
+([above](#negative-internal-energy-in-completed-runs)); it adds no energy there and removes
+0.025 of momentum, converting kinetic energy into internal energy.
+
+Every repair moves Woodward–Colella's L1 past its guard. The two limits also fail Sedov's
+radius and Noh's plateau. The representable floor passes Sedov at +2.95%, and the
+internal-energy floor passes Sedov at +1.41% and fails Noh's plateau at 3.9055. Where a
+repair changes the total energy it adds 1.7% to 17% of the case's initial energy, since a
+floor or a limit raises the negative half of the oscillation about the ambient state and
+leaves the positive half. The limits also change the mass, by +0.5% to +0.6% on
+Woodward–Colella, +0.2% on Noh and −0.1% on Sedov, since a limit scales the whole
+correction of the conserved state at a point. The repair not yet measured is a blend
+toward a first-order positivity-preserving flux (Hu, Adams & Shu 2013), which requires the
+compact divergence in face-flux form ([what is proved](DESIGN.md#what-is-proved)).
 
 ## Directional bulk viscosity
 

@@ -440,8 +440,8 @@ let (rs, ρ, u, p, ok, report) = sedov()
     @test abs(Rnum / Rex - 1) < 0.03
     @test maximum(ρ) > 4.5                     # jump is 6; capture smears it
     @test minimum(ρ) > 0
-    # The near-vacuum behind the shock, bounded. The case runs permissive, so
-    # nothing else would notice this count growing.
+    # The negative internal energy ahead of the shock, bounded. The case runs
+    # permissive, so nothing else would notice this count growing.
     sayf("        closing state: %d inadmissible cell(s), e_min %+.5f
 ",
          report.inadmissible, report.e_min)
@@ -475,8 +475,9 @@ for (ν, ptol, ncell) in ((1, 0.01, 12), (2, 0.10, 12), (3, 0.15, 12))
     @test 0 < deficit < 0.7                   # wall heating budget
     @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
     @test epre < 5e-2
-    # The wall layer, bounded. Both are "no worse than" guards on the measured
-    # values in reference/CALIBRATION_APPENDIX.md, not targets.
+    # The negative internal energy ahead of the front, bounded. Both are "no
+    # worse than" guards on the measured values in reference/CALIBRATION_APPENDIX.md,
+    # not targets.
     @test report.inadmissible <= ncell
     @test report.e_min > -1.0
     @test report.nonfinite == 0 && report.negative_density == 0

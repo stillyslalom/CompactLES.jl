@@ -1542,7 +1542,11 @@ node of the line, it carries no first-order flux to blend toward and no cell
 average to limit about, and the compact filter is linear and not monotone. A
 correction of the second kind would need the compact divergence written as a
 difference of face fluxes and a first-order flux beside it; neither exists in
-the code, and whether one is needed has not been measured.
+the code. Woodward–Colella, planar Noh and Sedov carry points of negative
+internal energy ahead of every strong front, and each floor or limit on them
+that was measured fails at least one validation guard
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)),
+so such a flux is the repair that remains.
 
 ### Attributing the conserved budgets
 
