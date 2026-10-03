@@ -299,9 +299,20 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
     if positivity_limiter
-        _validate_positivity(bcs, metric, stretch, patch_grid,
-                             something(max_levels, refine === nothing ? 1 :
-                                       refine isa BlockRegion ? 2 : length(refine) + 1),
+        nlev_limited = something(max_levels, refine === nothing ? 1 :
+                                 refine isa BlockRegion ? 2 : length(refine) + 1)
+        # The limiter's face form holds on lines the closure rows close at an
+        # interface (`_validate_positivity`), so the interfaces take them
+        # before any plan is built.
+        if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1)
+            MPI.Comm_rank(comm) == 0 &&
+                @warn "positivity_limiter: the limiter takes interface lines closed by " *
+                      "the closure rows, so the patch and level interfaces close with " *
+                      "them (PatchInterfaces(flux = :closure)) in place of :ghost; " *
+                      "this can lower the order of accuracy at an interface."
+            interface_flux = :closure
+        end
+        _validate_positivity(bcs, metric, stretch, patch_grid, nlev_limited,
                              backend, eos,
                              implicit, equations === nothing ? NavierStokes1T(eos) :
                                        equations,

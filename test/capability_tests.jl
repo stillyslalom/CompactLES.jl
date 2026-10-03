@@ -195,10 +195,12 @@ include("capability_cases.jl")
                 limited(stretch=stretched))
         rejects("positivity_limiter: on a radial grid takes the filter weighting :none",
                 cyl, limited(filter=StateFilter(weighting=:volume)))
-        rejects("positivity_limiter: on same-level patches (patch_grid) takes", closed,
-                limited(execution=Execution(patch_grid=(2, 1, 1))))
-        rejects("positivity_limiter: on refined levels takes PatchInterfaces(flux = " *
-                ":closure)", closed, limited(amr=box))
+        # Interfaces under :ghost, the default, close with the closure rows
+        # under the limiter, with a warning.
+        for num in (limited(execution=Execution(patch_grid=(2, 1, 1))), limited(amr=box))
+            s, _ = @test_logs (:warn, r"closure") match_mode=:any setup(closed, num)
+            @test getfield(s, :interface_flux) === :closure
+        end
         rejects("positivity_limiter: on refined levels takes level_restriction = :inject",
                 closed, limited(amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)),
                                         level_restriction=:filter),

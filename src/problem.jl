@@ -805,7 +805,9 @@ and `interface_divergence`.
   to the step without lowering the error, and wherever `:ghost` is not
   supported: a curvilinear or stretched grid, `rhs = :onesided`, or a user EOS
   at a refined level with molecular transport, each of which setup rejects
-  under `:ghost` with an `ArgumentError`. See
+  under `:ghost` with an `ArgumentError`. Under
+  `Numerics(positivity_limiter = true)` setup takes `:closure` in place of
+  `:ghost` and warns. See
   [Choose numerics](@ref).
 - `rhs`: `:extended` (default) evaluates the gradient and divergence rows at
   an interface end from exchanged ghost data; `:onesided` closes them with
@@ -983,9 +985,12 @@ keywords the ones given after it override.
   resolved or not and a [`SymmetryPlaneBC`](@ref) allowed at its low end, or
   on the radial line of a `SphericalMetric` with θ and φ collapsed and
   [`OriginBC`](@ref) at r = 0, the last two under the filter weighting
-  `:none`. Same-level patches (`Execution(patch_grid = ...)`, Cartesian) and
-  refined levels (`amr`) take `PatchInterfaces(flux = :closure)` and the
-  injected restriction; on the radial grids a refined level is one box
+  `:none`. On same-level patches (`Execution(patch_grid = ...)`, Cartesian)
+  and refined levels (`amr`) the interfaces close with the closure rows: setup
+  replaces `PatchInterfaces(flux = :ghost)`, the default, by `:closure` and
+  warns, since the limiter's face form takes lines the closure rows close,
+  which can lower the order of accuracy at an interface. Refined levels take
+  the injected restriction, and on the radial grids a refined level is one box
   (`tile = 0`). A refined level's nodes at a coarse-fine face, which the
   parent's values overwrite, and a parent's nodes the child's restriction
   overwrites are not held. Setup rejects any other configuration.

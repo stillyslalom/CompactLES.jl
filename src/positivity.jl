@@ -328,7 +328,8 @@ end
 # own rows (`interface_flux = :closure`), or a single radial grid folded at
 # r = 0 (`_limiter_radial_line`), on the r-z plane with a symmetry plane
 # allowed at the low end of z; refined levels on either, under the same
-# interface rows and the injected restriction, tiled on the Cartesian grid
+# interface rows (the constructor switches `:ghost` to them, with a warning)
+# and the injected restriction, tiled on the Cartesian grid
 # only; without the implicit integrator, an ideal-gas mixture, and closed
 # lines long enough for the face relation of the filter.
 function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, eos,
@@ -348,13 +349,6 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
     radial && filter_weighting !== :none &&
         fail("on a radial grid takes the filter weighting :none")
     if nlev > 1
-        # A refined patch closes its lines at a coarse-fine face with the
-        # interface rows, which take a face form under `:closure` only, as at a
-        # same-level interface.
-        interface_flux === :closure ||
-            fail("on refined levels takes PatchInterfaces(flux = :closure): under " *
-                 ":ghost the inviscid flux and the rest of the flux close a " *
-                 "coarse-fine face with rows that share no face form")
         level_restriction === :inject ||
             fail("on refined levels takes level_restriction = :inject: the " *
                  "filtered restriction writes values the limiter does not bound " *
@@ -369,12 +363,10 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
     # gradient's interface rows, whose composite weight at the shared node is
     # h, and the rest of the flux the divergence's one-sided rows, whose
     # composite weight there is twice the end weight: no one set of node
-    # weights writes both as differences of face fluxes.
-    npatch == 1 || interface_flux === :closure ||
-        fail("on same-level patches (patch_grid) takes " *
-             "PatchInterfaces(flux = :closure): under :ghost the inviscid flux " *
-             "and the rest of the flux close an interface with rows that share " *
-             "no face form")
+    # weights writes both as differences of face fluxes. The constructor has
+    # switched such interfaces to `:closure` before this check.
+    (npatch == 1 && nlev == 1) || interface_flux === :closure ||
+        error("positivity limiter: interfaces under :ghost reached the check")
     backend isa CPUBackend || fail("runs on the host backend only")
     eos isa IdealMixture ||
         fail("supports the ideal-gas EOS (IdealSpecies, IdealMixture), whose " *

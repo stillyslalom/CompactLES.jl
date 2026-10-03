@@ -105,12 +105,12 @@ include("capability_cases.jl")
                                      ic=C.ic_radial), (48, 1, 48)))
             @test C.advances(prob, Numerics(n_global=n, positivity_limiter=true))
         end
-        # Refined levels under the interface rows: a box at the global step and
-        # subcycled, a regridded box, static and regridded tiles, and two nested
-        # boxes on the Cartesian grid; a box on the radial line at the axis and
-        # on the r-z plane at the corner of the axis and the plane at z = 0.
-        refined(n, amr) = Numerics(n_global=n, positivity_limiter=true, amr=amr,
-                                   patch_interfaces=:closure)
+        # Refined levels, whose interfaces setup closes with the closure rows in
+        # place of the default :ghost: a box at the global step and subcycled, a
+        # regridded box, static and regridded tiles, and two nested boxes on the
+        # Cartesian grid; a box on the radial line at the axis and on the r-z
+        # plane at the corner of the axis and the plane at z = 0.
+        refined(n, amr) = Numerics(n_global=n, positivity_limiter=true, amr=amr)
         box2 = Box((0.3, 0.3, 0), (0.7, 0.7, 1))
         spot = (x, y, z, t) -> abs(x - 0.5) < 0.1 && abs(y - 0.5) < 0.1
         for amr in (AMR(initial=box2), AMR(initial=box2, subcycle=true),

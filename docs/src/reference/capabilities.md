@@ -106,7 +106,11 @@ accepted on each of these grids under `patch_interfaces = :closure` and
 `level_restriction = :inject`, at the global step or subcycled, static or
 regridded: on the Cartesian grid as boxes or tiles, nested or not, and on the
 radial grids as one box per level (`tile = 0`), at r = 0 or clear of it. In
-every case the ideal-gas EOS and the explicit integrator are required.
+every case the ideal-gas EOS and the explicit integrator are required. On
+same-level patches and refined levels the interfaces close with the closure
+rows: under the default `patch_interfaces = :ghost` setup switches them to
+`:closure` and warns, since the switch can lower the order of accuracy at an
+interface.
 A closed line needs enough nodes for the face form and the filter's face
 relation: 25 under the default derivative, 31 under [`lele_d1_8`](@ref) and
 41 under [`lele_d1_10`](@ref). A line ending at a same-level interface or a
@@ -175,10 +179,8 @@ text below.
 | `positivity_limiter` on a curvilinear grid other than the r-z plane or the spherical radial line folded at r = 0 | `positivity_limiter: supports the CartesianMetric, the r-z plane` |
 | `positivity_limiter` on a stretched grid | `positivity_limiter: supports an unstretched grid only` |
 | `positivity_limiter` on a radial grid with `filter_weighting = :volume` | `positivity_limiter: on a radial grid takes the filter weighting :none` |
-| `positivity_limiter` with refinement under `patch_interfaces = :ghost` | `positivity_limiter: on refined levels takes PatchInterfaces(flux = :closure)` |
 | `positivity_limiter` with refinement under `level_restriction = :filter` | `positivity_limiter: on refined levels takes level_restriction = :inject` |
 | `positivity_limiter` with tiles on a radial grid | `positivity_limiter: on a radial grid supports a refined level as one box` |
-| `positivity_limiter` with `patch_grid` under `patch_interfaces = :ghost` | `positivity_limiter: on same-level patches (patch_grid) takes` |
 | `positivity_limiter` on a device | `positivity_limiter: runs on the host backend only` |
 | `positivity_limiter` with an EOS other than the ideal gas | `positivity_limiter: supports the ideal-gas EOS` |
 | `positivity_limiter` with implicit conduction | `positivity_limiter: does not combine with implicit conduction` |
