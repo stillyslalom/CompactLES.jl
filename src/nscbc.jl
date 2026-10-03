@@ -299,6 +299,21 @@ end
 # variables follow their targets through the transverse flow, and 0 the plain
 # LODI form.
 #
+# The pressure part ∇_t p/ρ of 𝒯_t is the exception, weighted by min(β_t, M)
+# with M = |u_n|/c. It is the transverse acceleration of an acoustic wave, not
+# of the incoming vorticity waves the transverse amplitudes describe. An
+# outgoing acoustic wave crossing the face obliquely carries a transverse
+# velocity; with u_t = f(x_n + (c − |u_n|) t) at an inflow face, the normal
+# convection −u_n ∂_n u_t, which L₃,₄ replaces, is −M/(1 − M) of ∂u_t/∂t, so
+# the wave's own rate at the face is ∂u_t/∂t = −(1 − M) ∇_t p/ρ, and the
+# weight M leaves exactly that. Under the full weight the face holds u_t
+# against the wave and sends a vorticity wave into the domain to cancel its
+# transverse velocity: a pulse crossing an inflow at Mach 0.3 leaves vorticity
+# 58 times that under the weight M, and a pressure pulse converging on the
+# r-z axis as it crossed the face left a peak azimuthal vorticity there nine
+# times that under the weight M. A vortex admitted through the target enters
+# as well under either weight, to within 13%.
+#
 # The velocity gradients in 𝒯 are the physical components `grad_u`, which
 # carry the curvature parts of the transverse directions (metric.jl: u_r/r in
 # the cylindrical θθ component), so ∇_t·u_t is the transverse divergence of
@@ -338,7 +353,10 @@ fractions `Y`; the outgoing acoustic wave remains determined by the interior.
 carries: 1 is the full accounting, under which the relaxed quantities follow
 their targets through a transverse flow at the face, 0 the plain LODI
 relaxation, and a negative value the local Mach number, the outflow's
-damping.
+damping. The transverse pressure gradient in the transverse velocities is
+weighted by at most the Mach number under any `beta_t`, so that an acoustic
+wave leaving obliquely through the face keeps its transverse velocity and
+sends no vorticity into the domain.
 
 `target` may be a stage-time function `(x, y, z, t) -> Prim`, or its
 spacing-aware form `(x, y, z, t, h) -> Prim`, overriding the constant targets
@@ -560,6 +578,9 @@ end
         tr_en = zero(T)
         tr_t1 = zero(T)
         tr_t2 = zero(T)
+        # The pressure parts ∇_t p/ρ of 𝒯_t, weighted apart (header).
+        gp_t1 = zero(T)
+        gp_t2 = zero(T)
         if act1
             ut = uv[t1]
             dpt = ih_t1[I] * dp_t1[I]
@@ -567,8 +588,9 @@ end
             tr_ac += ut * dpt + ρ * c * c * grad_u[t1, t1][I] +
                      sgn * ρ * c * ut * grad_u[t1, d][I]
             tr_en += ut * (c * c * drt - dpt)
-            tr_t1 += ut * grad_u[t1, t1][I] + dpt / ρ
+            tr_t1 += ut * grad_u[t1, t1][I]
             tr_t2 += ut * grad_u[t1, t2][I]
+            gp_t1 = dpt / ρ
         end
         if act2
             ut = uv[t2]
@@ -578,7 +600,8 @@ end
                      sgn * ρ * c * ut * grad_u[t2, d][I]
             tr_en += ut * (c * c * drt - dpt)
             tr_t1 += ut * grad_u[t2, t1][I]
-            tr_t2 += ut * grad_u[t2, t2][I] + dpt / ρ
+            tr_t2 += ut * grad_u[t2, t2][I]
+            gp_t2 = dpt / ρ
         end
         # The curvature parts of a collapsed transverse dimension (header).
         if crv1
@@ -594,6 +617,7 @@ end
             tr_t2 += ut * grad_u[t2, t2][I]
         end
         βt = beta_t < 0 ? Ma : beta_t
+        βp = min(βt, Ma)
         # Imposed incoming amplitudes (outgoing one kept as computed), each
         # the relaxation less the weighted transverse contribution.
         rel_ac = eta_u * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
@@ -603,8 +627,10 @@ end
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = eta_t * K * (uv[t1] - uT[t1]) - βt * tr_t1 - un * grad_u[d, t1][I]
-        Δd5 = eta_t * K * (uv[t2] - uT[t2]) - βt * tr_t2 - un * grad_u[d, t2][I]
+        Δd4 = eta_t * K * (uv[t1] - uT[t1]) - βt * tr_t1 - βp * gp_t1 -
+              un * grad_u[d, t1][I]
+        Δd5 = eta_t * K * (uv[t2] - uT[t2]) - βt * tr_t2 - βp * gp_t2 -
+              un * grad_u[d, t2][I]
         # Mixture quantities for the energy mapping, through the EOS contract.
         cpm = cp_a[I]
         φ = eos_phi(eos, ρ, p, Tp, cpm)

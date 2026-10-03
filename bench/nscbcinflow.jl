@@ -13,7 +13,9 @@
 #   pulse    a Gaussian pressure pulse released half a unit inside the
 #            inflow face, whose upstream half meets the face at every
 #            incidence angle; the reflection under each `beta_t` of
-#            NSCBCInflowBC, at the default relaxation rates
+#            NSCBCInflowBC, at the default relaxation rates, and the
+#            vorticity the face sends in, over the pulse's acoustic velocity
+#            divided by its radius
 #   vortex   an isentropic vortex entering through the inflow face from a
 #            time-dependent target, the analytic vortex at the plane; the
 #            error of its imposition under each `beta_t` and each
@@ -85,10 +87,23 @@ inflow(; beta_t=1.0, eta=0.28, target=nothing) =
 outflow(; beta_t=-1.0) = NSCBCOutflowBC(pinf=1.0, beta_t=beta_t)
 
 function interior(solver, Q, name)
+    name === :vorticity && return vorticity(solver, Q)
     CL.refresh_primitives!(solver, Q)
     f = CL.scalar_field(solver, name)
     nx, ny, _ = solver.decomp.n_local
     return [f[padded_index(solver, i, j, 1)] for i in 1:nx, j in 1:ny]
+end
+
+# ∂v/∂x − ∂u/∂y by second-order differences, one-sided at the x ends: a
+# measure of the vorticity a face sends in, not the solver's own derivative.
+function vorticity(solver, Q)
+    u, v = interior(solver, Q, :u), interior(solver, Q, :v)
+    nx, ny = size(u)
+    h = 1 / OPTS.N
+    dx(i, j) = i == 1 ? (v[2, j] - v[1, j]) / h :
+               i == nx ? (v[nx, j] - v[nx-1, j]) / h : (v[i+1, j] - v[i-1, j]) / 2h
+    return [dx(i, j) - (u[i, mod1(j + 1, ny)] - u[i, mod1(j - 1, ny)]) / 2h
+            for i in 1:nx, j in 1:ny]
 end
 
 # Maximum and root-mean-square of run − reference over x ∈ [xa, xb], the
@@ -167,13 +182,18 @@ function pulse_part()
     run!(ref, Qref; tfinal=tend, callback=cb)
     @printf("\npulse reflection at the inflow: M = %.2f, eps = %.1e, incident amplitude at the plane %.3e, t = %.3f\n",
             OPTS.M, OPTS.eps, peak[], tend)
-    @printf("  %-10s  %12s  %12s\n", "beta_t", "max|dp|/inc", "rms|dp|/inc")
+    # The vorticity scale: the acoustic velocity of the incident amplitude
+    # over the pulse radius.
+    ωscale = peak[] / c0 / OPTS.r0
+    @printf("  %-10s  %12s  %12s  %12s  %12s\n", "beta_t", "max|dp|/inc", "rms|dp|/inc",
+            "max|dω|/ω0", "rms|dω|/ω0")
     for β in BETAS
         s, Q = build(0.0, 2.0, (inflow(; beta_t=β), outflow()), pulse_ic(xc, yc))
         run!(s, Q; tfinal=tend)
         emax, erms = deviation(s, Q, ref, Qref, :p, 0.0, 1.5)
-        @printf("  %-10s  %12.3e  %12.3e\n", betaname(β), emax / peak[],
-                erms / peak[])
+        wmax, wrms = deviation(s, Q, ref, Qref, :vorticity, 0.0, 1.5)
+        @printf("  %-10s  %12.3e  %12.3e  %12.3e  %12.3e\n", betaname(β), emax / peak[],
+                erms / peak[], wmax / ωscale, wrms / ωscale)
     end
 end
 

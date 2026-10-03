@@ -66,7 +66,15 @@ share of the transverse contribution. At the inflow the default is the full
 share: the relaxed quantities then follow their targets through a
 transverse flow at the face, whereas a relaxation acting on the LODI
 amplitude alone holds them off their targets by the transverse contribution
-over the relaxation rate. At the outflow the default is the local Mach
+over the relaxation rate. The pressure part ``\nabla_t p/\rho`` of a
+transverse velocity's contribution is weighted by the smaller of `beta_t` and
+the local Mach number ``M``. It is the transverse acceleration of an acoustic
+wave: an acoustic wave leaving through an inflow face carries a transverse
+velocity whose rate at the face, once the normal convection that the imposed
+amplitude replaces is removed, is ``-(1 - M)\nabla_t p/\rho``. The weight
+``M`` leaves exactly that rate. Under the full share the face would hold the
+transverse velocity against the wave and send vorticity into the domain.
+At the outflow the default is the local Mach
 number, a damped share that keeps the incoming acoustic wave from reflecting
 obliquely incident waves. A negative value selects the local Mach number
 at either face. Viscous boundary terms are retained as computed and are not

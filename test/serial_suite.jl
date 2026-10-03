@@ -2435,8 +2435,11 @@ end
     # characteristic variables, p ± ρc u_n for the incoming acoustic wave,
     # c²ρ − p, u_t and Y_k, vanish up to the truncation gap between the
     # conservative divergence in dQ and the characteristic form; the outgoing
-    # one stays of order one. Under beta_t = 0 the same rates are of order
-    # one, and doubling the transverse resolution shrinks the gap at the
+    # one stays of order one. The transverse pressure gradient's share of 𝒯_t
+    # carries the Mach number instead (src/nscbc.jl), so the u_t rate measured
+    # is the remainder after the −(1 − M) ∇_t p/ρ that share leaves, with ∇_t p
+    # the solver's own derivative. Under beta_t = 0 the same rates are of
+    # order one, and doubling the transverse resolution shrinks the gap at the
     # sixth order (measured ×70; ×16 is asserted). Both faces, two species
     # of one γ so that ρe = p/(γ − 1) gives ∂p/∂t from dQ.
     γ = 1.4
@@ -2467,7 +2470,10 @@ end
         return solver, dQ
     end
     # Plane maxima of the incoming characteristic rates and of the outgoing.
-    function rates(solver, dQ, side)
+    function rates(solver, dQ, side; pressure=true)
+        dpy, dpz = solver.tmp_a, solver.tmp_b
+        CompactLES.deriv_along!(dpy, solver.p, solver, 2, 1)
+        CompactLES.deriv_along!(dpz, solver.p, solver, 3, 1)
         m = solver.equations.i_mom
         ie = solver.equations.i_energy
         nx, ny, nz = solver.decomp.n_local
@@ -2484,14 +2490,16 @@ end
             ac_in = max(ac_in, abs(pt + sgn * ρ * c * ut[1]))
             ac_out = max(ac_out, abs(pt - sgn * ρ * c * ut[1]))
             en = max(en, abs(c^2 * ρt - pt))
-            tv = max(tv, abs(ut[2]), abs(ut[3]))
+            gy, gz = solver.inv_h[2][I] * dpy[I], solver.inv_h[3][I] * dpz[I]
+            share = pressure ? (1 - abs(u[1]) / c) / ρ : 0.0
+            tv = max(tv, abs(ut[2] + share * gy), abs(ut[3] + share * gz))
             ty = max(ty, abs((dQ[I, 1] - solver.Y[1][I] * ρt) / ρ))
         end
         return (ac_in, en, tv, ty), ac_out
     end
     for side in (1, 2)
         full, out = rates(rhs(side, 1.0, (24, 24, 16))..., side)
-        lodi, _ = rates(rhs(side, 0.0, (24, 24, 16))..., side)
+        lodi, _ = rates(rhs(side, 0.0, (24, 24, 16))..., side; pressure=false)
         fine, _ = rates(rhs(side, 1.0, (24, 48, 32))..., side)
         @test out > 1.0
         @test all(lodi .> (1.0, 0.05, 0.1, 0.05))
@@ -2515,7 +2523,9 @@ end
     # ∂u_r/∂r + u_r/r, the second term from the collapsed θ; with it in 𝒯
     # the incoming acoustic rate p − ρc u_z and the u_r rate fall with the
     # resolution as on a Cartesian face (×19 and ×12 from 24 to 48 nodes).
-    # Without it the acoustic rate stays at half its beta_t = 0 value.
+    # Without it the acoustic rate stays at half its beta_t = 0 value. The u_r
+    # rate is measured after the −(1 − M) ∂p/∂r/ρ that the pressure share of
+    # 𝒯_t leaves, as on the Cartesian face above.
     γ = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, γ),
                         IdealSpecies{Float64}("b", 0.5, γ)])
@@ -2526,7 +2536,7 @@ end
              p=1 + 0.05 * cos(2π * r^2 + 1) + 0.02 * cos(2π * z),
              T_ion=1 + 0.1 * cos(π * r^2) * sin(2π * z), Y=(s, 1 - s))
     end
-    function face_rates(beta_t, n)
+    function face_rates(beta_t, n; pressure=true)
         bc = NSCBCInflowBC(u=(0.0, 0.0, -0.3), T_ion=1.0, Y=[0.6, 0.4], eta_u=0.0,
                            eta_T=0.0, eta_t=0.0, eta_Y=0.0, beta_t=beta_t)
         solver = Solver(n_global=(n, 1, n), L_domain=(1.0, 2π, 1.0),
@@ -2542,6 +2552,8 @@ end
         compute_rhs!(solver, Q, dQ)
         m = solver.equations.i_mom
         ie = solver.equations.i_energy
+        dpr = solver.tmp_a
+        CompactLES.deriv_along!(dpr, solver.p, solver, 1, 1)
         acoustic = radial = 0.0
         for i in 1:n
             I = padded_index(solver, i, 1, n)
@@ -2551,13 +2563,14 @@ end
             ut = ntuple(a -> (dQ[I, m[a]] - u[a] * ρt) / ρ, 3)
             pt = (γ - 1) * (dQ[I, ie] - sum(abs2, u) / 2 * ρt - ρ * sum(u .* ut))
             acoustic = max(acoustic, abs(pt - ρ * c * ut[3]))
-            radial = max(radial, abs(ut[1]))
+            share = pressure ? (1 - abs(u[3]) / c) / ρ : 0.0
+            radial = max(radial, abs(ut[1] + share * solver.inv_h[1][I] * dpr[I]))
         end
         return acoustic, radial
     end
     full = face_rates(1.0, 24)
     fine = face_rates(1.0, 48)
-    lodi = face_rates(0.0, 24)
+    lodi = face_rates(0.0, 24; pressure=false)
     @test all(lodi .> (0.1, 0.1))
     @test all(full ./ lodi .< 1e-2)
     @test all(full ./ fine .> 8)
