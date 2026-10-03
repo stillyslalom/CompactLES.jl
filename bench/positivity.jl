@@ -7,6 +7,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=weights,pulse
 #   julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
 #   julia --project=. -t 1 bench/positivity.jl part=src
+#   julia --project=. -t 1 bench/positivity.jl part=src cases=sedov,noh2,noh3
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -57,9 +58,12 @@
 #             followed by `@r` for bounds of r times the initial minimum ρ and
 #             ρe (A+B@0.01)
 #   src       each case through `run!` with `Numerics(positivity_limiter)`
-#             off and on, the package's form of A+B@0.01: the points with
-#             ρ ≤ 0 or ρe ≤ 0 after each step, the metric, the steps, what the
-#             limiter did and the wall time
+#             off and on, the package's form of A+B@0.01 with each cell's
+#             bound at most 1% of its own value: the points with ρ ≤ 0 or
+#             ρe ≤ 0 after each step, the metric, the steps, what the limiter
+#             did and the wall time. It also takes the radial cases of
+#             test/cases.jl, Sedov and Noh ν = 2, 3, folded at r = 0, whose
+#             metric is the validation battery's
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -92,7 +96,8 @@ const CL = CompactLES
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
-const CASES = (:woodward, :noh)
+const CASES = (:woodward, :noh, :sedov, :noh2, :noh3)
+const RADIAL = (:sedov, :noh2, :noh3)
 const PARTS = ("weights", "identity", "pulse", "variants", "src")
 const VARIANTS = ("none", "A", "A-nostore", "A-rhs", "B", "A+B", "A-rhs+B")
 const WC_AMBIENT = 0.01
@@ -105,7 +110,9 @@ const STAGE_ADVANCE = ntuple(k -> (k < 5 ? CL.RKC[k+1] : 1.0) - CL.RKC[k], 5)
 
 # --- the cases ----------------------------------------------------------------
 
-end_time(case) = case === :woodward ? WC_T : case === :noh ? NOH_T : PULSE_T
+end_time(case) = case === :woodward ? WC_T : case === :noh ? NOH_T :
+                 case === :sedov ? SEDOV_T : case === :noh2 ? NOH_T :
+                 case === :noh3 ? NOH_T - Dict(NOH_T0)[3] : PULSE_T
 case_gamma(case) = case === :noh ? NOH_G : 1.4
 
 function woodward_problem()
@@ -145,6 +152,16 @@ function build(case; interval=0, limiter=false)
         return setup(woodward_problem(),
                      Numerics(n_global=(WC_N, 1, 1), art=art, cfl=0.3, filter=filter,
                               control=control, positivity_limiter=limiter))
+    case === :sedov &&
+        return setup(sedov_problem(),
+                     Numerics(n_global=(SEDOV_N, 1, 1), art=art, cfl=0.3, filter=filter,
+                              control=control, positivity_limiter=limiter))
+    if case in (:noh2, :noh3)
+        ν = case === :noh2 ? 2 : 3
+        return setup(noh_problem(ν),
+                     Numerics(n_global=(Dict(NOH_N)[ν], 1, 1), art=art, cfl=NOH_CFL,
+                              filter=filter, control=control, positivity_limiter=limiter))
+    end
     case === :noh &&
         return setup(noh_problem(1),
                      Numerics(n_global=(Dict(NOH_N)[1], 1, 1), art=art, cfl=NOH_CFL,
@@ -797,7 +814,14 @@ function metric(case, solver, Q)
         return @sprintf("L1 rho %.4e, peak %.4f at x = %.4f",
                         l1(ρ, [interp1(xr, ρr, x) for x in xs]), ρ[imax], xs[imax])
     end
-    plateau, deficit, shock, _ = noh_metrics(xs, ρ, 1)
+    if case === :sedov
+        R = front_position(xs, ρ, 2.0)
+        exact = sedov_shock_radius(SEDOV_E, SEDOV_T, 3, 1.4)
+        return @sprintf("R_s %.4f (%+.2f%%), peak %.3f", R, 100 * (R / exact - 1),
+                        maximum(ρ))
+    end
+    ν = case === :noh2 ? 2 : case === :noh3 ? 3 : 1
+    plateau, deficit, shock, _ = noh_metrics(xs, ρ, ν)
     return @sprintf("plateau %.4f, wall deficit %.1f%%, shock %.4f", plateau,
                     100 * deficit, shock)
 end
@@ -968,6 +992,8 @@ function main(args)
     for c in cases
         c in CASES ||
             throw(ArgumentError("unknown case '$c', want one of $(join(CASES, ", "))"))
+        c in RADIAL && parts != ["src"] &&
+            throw(ArgumentError("the radial case '$c' runs in part=src alone"))
     end
     variants = variant_flags.(split(opt.variants, ','))
     weights = "weights" in parts ? weights_part(cases) : Dict{Symbol,Vector{Float64}}()

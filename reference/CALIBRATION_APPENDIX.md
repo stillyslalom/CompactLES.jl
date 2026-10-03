@@ -2166,11 +2166,46 @@ them on Noh. The first-order bound 2τα/W reaches 0.938 at the wall node at cfl
 (0.31 inside) and 0.33 on Noh at cfl 0.15, so at the default cfl 0.5 it fails at a
 `:neutral3` wall node.
 
-`part=src` runs both cases through `run!` with `Numerics(positivity_limiter = true)`,
-the package's A + B at 1% of the initial minimum. Woodward–Colella takes 4366 steps with
-no inadmissible point after any step and L1 ρ 3.1519e-2, limiting 1.7% of stage faces and
-2.0% of pass faces; Noh takes 4759 steps with none, plateau 3.9989, wall deficit 24.6% and
-shock 0.2021, limiting 2.0% and 2.7%. Neither leaves an unguaranteed cell side.
+`part=src` runs the cases through `run!` with `Numerics(positivity_limiter = true)`, the
+package's A + B with each cell's bound 1% of the smaller of the initial minimum and its own
+base value. Woodward–Colella takes 5557 steps with no inadmissible point after any step and
+L1 ρ 3.1564e-2, limiting 0.83% of stage faces and 1.4% of pass faces; Noh takes 5140 steps
+with none, plateau 3.9989, wall deficit 24.4% and shock 0.2021, limiting 1.4% and 1.7%.
+Neither leaves an unguaranteed cell side. With the bound at 1% of the initial minimum alone
+they took 4366 and 4759 steps: the cell bound lets cells settle below that minimum, where
+κ\* sizes the step. The cell fraction, swept with the limiter on (steps, and on the 2-D
+Cartesian Sedov quadrant of N = 96 at cfl 0.4, the unguaranteed sides and the point-steps
+left inadmissible):
+
+```
+fraction        WC steps   Noh steps   quadrant: steps   unguaranteed   bad points
+none (old)      4366       4759        1497              185391         76
+0.5             5632       6487        1507              2185           72
+0.1             6277       7029        1719              2375           74
+0.01            5557       5140        1203              1450           33
+0.001           4942       4545        1185              830            49
+```
+
+Every fraction keeps both one-dimensional guards, and every one takes the quadrant's
+unguaranteed sides from 185391 to under 2400.
+
+`part=src cases=sedov,noh2,noh3` runs the radial cases of the validation battery through
+the fold. Sedov takes 3362 steps (3146 off) with no inadmissible point, R_s 0.8083
+(+1.04%) and peak ρ 5.162 (5.140 off); Noh ν = 2 takes 2633 (2188) with plateau 15.054
+(15.010), wall deficit 55% and shock 0.2087; ν = 3 1148 (1080), plateau 62.708 (62.581),
+deficit 25%, shock 0.2086. Unlimited, the three leave 20981, 14249 and 8542 point-steps
+inadmissible. Sedov conserves Σ W J ρ and Σ W J E to 1.2e-13 and 1.5e-13 of the totals
+(7.7e-14 and 1.5e-13 off) once a limited filter pass weights the components even at the
+origin by J; weighted by W alone, the pass moved the mass by 1.8e-4. Noh ν = 2 and 3
+leave no unguaranteed side. Sedov leaves 2904, nearly all (2640 of 2644 at a cell fraction
+of 0.1) at a cell whose node terms alone would take it below its bound: the hoop stress of
+β\* at the shock accelerates the cold gas past its internal energy. Those cells take
+first-order fluxes at both faces; given the shares without the node part instead, the run
+left 748 inadmissible point-steps behind the front. The face at the axis was limited at 7 of 13165 stages on Noh ν = 2, and never on
+ν = 3 or Sedov. A limited step costs 1.9–2.0 times the unlimited one on all three (paired
+in one process). The Supernova remnant tutorial completes with the limiter on under strict
+validity in 2126 steps (2009 off), inferring 0.963, 0.975 and 0.982 × 10⁵¹ erg at 5, 10
+and 20 kyr against 0.963, 0.976 and 0.982 off.
 
 ## Directional bulk viscosity
 
