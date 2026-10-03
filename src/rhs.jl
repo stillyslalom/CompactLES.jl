@@ -547,10 +547,10 @@ end
 # corrections) keeps the one-sided rows of `div_plans`. Without molecular
 # transport both solves run here. The split costs one pointwise pass per
 # component and interface dimension and, where a remainder exists, a second
-# line solve (and on a device plan a second pass); the molecular part adds
-# one pass over all interface dimensions and one halo exchange per dimension.
-# It allocates nothing beyond the `ghost_flux` arrays sized at construction;
-# `tmp_b` and `tmp_a` are its scratch.
+# line solve; the molecular part adds one pass over all interface dimensions
+# and one halo exchange per dimension. It allocates nothing beyond the
+# `ghost_flux` arrays sized at construction; `tmp_b`, `tmp_a` and `sensor_sp`
+# are its scratch.
 #
 # On the axisymmetric cylindrical metric the divergence along `d` is
 # inv_J·D(A_d F_d), and both parts carry the product: A_d(F − P) through the
@@ -623,17 +623,107 @@ end
     return nothing
 end
 
-# Both fields of `_inviscid_flux_point!` in one pass: the remainder into
-# `rem` and the ghost-differenced flux into `out`.
-@inline function _split_flux_point!(rem, out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
-                                    n_species, m1, m2, m3, i_energy, viscous, less_p,
-                                    i, j, k)
+# The inviscid form of `_inviscid_flux_point!` with the component's kind fixed
+# at the launch, one body per kind: a partial density, a momentum component
+# (`along` when its direction is `d`, where the pressure enters) and the
+# energy. `ud` is the velocity component along `d`. Each writes the
+# ghost-differenced flux into `out` and, unless `rem` is `nothing`, the
+# remainder into `rem`, by the expressions of `_ghost_differenced_flux`, so
+# the values are bitwise those of the generic body, which selects the
+# expression at every point. The body adds the offsets `o1`, `o2`, `o3` to its
+# index, so that a launch may cover part of the padded block (`_ghost_split!`).
+@inline function _species_split_point!(rem, out, F, rho, Yc, ud, p, Ad, less_p,
+                                       o1, o2, o3, i, j, k)
     @inbounds begin
-        I = CartesianIndex(i, j, k)
-        f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
-                                    m1, m2, m3, i_energy, viscous, I)
-        rem[I] = _area_scaled(Ad, I, F[I] - f)
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        _store_split!(rem, out, F, p, Ad, rho[I] * Yc[I] * ud[I], less_p, I)
+    end
+    return nothing
+end
+
+@inline function _momentum_split_point!(rem, out, F, rho, ud, um, p, Ad, along, less_p,
+                                        o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        pI = p[I]
+        f = rho[I] * ud[I] * um[I] + ifelse(along, pI, zero(pI))
+        _store_split!(rem, out, F, p, Ad, f, less_p, I)
+    end
+    return nothing
+end
+
+@inline function _energy_split_point!(rem, out, F, Q, ud, p, Ad, i_energy, less_p,
+                                      o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        _store_split!(rem, out, F, p, Ad, (Q[I, i_energy] + p[I]) * ud[I], less_p, I)
+    end
+    return nothing
+end
+
+@inline function _store_split!(rem, out, F, p, Ad, f, less_p, I)
+    @inbounds begin
+        rem === nothing || (rem[I] = _area_scaled(Ad, I, F[I] - f))
         out[I] = _area_scaled(Ad, I, ifelse(less_p, f - p[I], f))
+    end
+    return nothing
+end
+
+"""
+    _ghost_split!(rem, out, solver, F, Q, c, d, Ad, less_p)
+
+The ghost-differenced inviscid flux of component `c` along `d` into `out`
+and, unless `rem` is `nothing`, the remainder `F − f` into `rem`, each times
+the area factor `Ad` where it is not `nothing`, by the kind's body above. The
+launch covers the padded extent along `d` and the interior across it, since
+the line fills of the divergence and gradient plans, host and device, read a
+field only on the lines through interior transverse nodes; on a 3-D tile of
+25 nodes a side with four ghost layers that leaves out 43% of the padded
+block. A fold along `d` takes the whole padded block, as its mirror fill and
+butterfly read the field there. A component outside the Navier–Stokes layout
+takes the generic body (`_generic_split!`).
+"""
+function _ghost_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
+                       less_p::Bool)
+    decomp = solver.decomp
+    eq = solver.equations
+    nl = decomp.n_local
+    pad = decomp.n_halo_d
+    nf = padded_extent(decomp)
+    whole = solver.folds[d] !== nothing
+    b1, b2, b3 = ntuple(e -> whole || e == d ? nf[e] : nl[e], 3)
+    o1, o2, o3 = ntuple(e -> whole || e == d ? 0 : pad[e], 3)
+    vel = (solver.u, solver.v, solver.w)
+    m1, m2, m3 = eq.i_mom
+    if c <= eq.n_species
+        pointwise!(_species_split_point!, out, b1, b2, b3, rem, out, F, solver.rho,
+                   solver.Y[c], vel[d], solver.p, Ad, less_p, o1, o2, o3)
+    elseif c == m1 || c == m2 || c == m3
+        m = c == m1 ? 1 : c == m2 ? 2 : 3
+        pointwise!(_momentum_split_point!, out, b1, b2, b3, rem, out, F, solver.rho,
+                   vel[d], vel[m], solver.p, Ad, d == m, less_p, o1, o2, o3)
+    elseif c == eq.i_energy
+        pointwise!(_energy_split_point!, out, b1, b2, b3, rem, out, F, Q, vel[d],
+                   solver.p, Ad, eq.i_energy, less_p, o1, o2, o3)
+    else
+        _generic_split!(rem, out, solver, F, Q, c, d, Ad, less_p)
+    end
+    return nothing
+end
+
+# `_ghost_split!` through `_inviscid_flux_point!`, one pass per field over the
+# whole padded block.
+function _generic_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
+                         less_p::Bool)
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
+    n1f, n2f, n3f = padded_extent(solver.decomp)
+    for (dest, remainder) in ((rem, true), (out, false))
+        dest === nothing && continue
+        pointwise!(_inviscid_flux_point!, dest, n1f, n2f, n3f,
+                   dest, F, Q, solver.rho, solver.u, solver.v, solver.w,
+                   solver.p, solver.field_tuples.Y, solver.ghost_flux[d], Ad, c, d,
+                   eq.n_species, m1, m2, m3, eq.i_energy, remainder, false, less_p)
     end
     return nothing
 end
@@ -820,31 +910,15 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
                    eq.i_energy, true, true, less_p)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
     elseif !_flux_remainder(solver, d)
-        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, false, viscous, less_p)
+        _ghost_split!(nothing, solver.tmp_b, solver, Fdc, Q, c, d, Ad, less_p)
         _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ, σ)
-    elseif _host_line_solves(solver, d)
-        # Both fields in one pass: the host line solves take no scratch, so
-        # `tmp_a` holds the second until its solve.
-        pointwise!(_split_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-                   solver.tmp_b, solver.tmp_a, Fdc, Q, solver.rho, solver.u,
-                   solver.v, solver.w, solver.p, Y, G, Ad, c, d, eq.n_species,
-                   m1, m2, m3, eq.i_energy, viscous, less_p)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
-        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d, iJ, σ)
     else
-        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, true, viscous, less_p)
+        # Both fields in one pass. `sensor_sp`, dead once the coefficients
+        # are assembled (`compute_artificial!`), holds the second until its
+        # solve, since a device plan or a fold solves through `tmp_a`.
+        _ghost_split!(solver.tmp_b, solver.sensor_sp, solver, Fdc, Q, c, d, Ad, less_p)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
-        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, false, viscous, less_p)
-        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ, σ)
+        _ext_subtract_along!(dQ, c, solver.sensor_sp, solver, d, iJ, σ)
     end
     return dQ
 end
@@ -853,13 +927,6 @@ end
 # one.
 _flux_sign(solver::SolverLike, d::Int, c::Int) =
     solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
-
-# Whether both divergences along `d` run the fused host solves, which use no
-# scratch field: `div_subtract_along!` and `_ext_subtract_along!` otherwise
-# route through `tmp_a`.
-_host_line_solves(solver::SolverLike, d::Int) =
-    solver.folds[d] === nothing && !(_plan_at(solver.div_plans, d) isa DevicePlan) &&
-    !(_plan_at(solver.deriv_plans, d) isa DevicePlan)
 
 # dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
 # interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit

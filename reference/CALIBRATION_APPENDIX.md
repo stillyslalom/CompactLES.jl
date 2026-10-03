@@ -6833,8 +6833,9 @@ near-discontinuous interface.
 
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
 process, one rank and one thread on the i9-12900K under Julia 1.11.4, the
-package at the commit that records this table and the overhead profile; the
-root-step account below is older and says at which commits it was taken. Each
+package at the commit that records this table and the overhead profile, but
+for the 3-D blob's rows and columns, taken at `3c2bc6a`; the root-step
+account below is older and says at which commits it was taken. Each
 problem runs warm as the root grid alone (coarse), the root with one
 subcycled regridded box, the same with lattice tiles, and the uniform grid at
 the refined spacing (fine). The error is the composite L1 norm of ρ
@@ -6843,9 +6844,9 @@ figures.
 
 | problem | root / fine grid | end time | fine wall | fine steps |
 |---|---|---|---|---|
-| sod | 201 × 17 / 601 × 49, slip walls, cfl 0.2, tile 8 | 0.1 | 33.7 s | 1347 |
-| blobs | 64² / 192², periodic, edge 0.01 (0.64 root spacings), tile 16 | 0.2 | 8.81 s | 213 |
-| shock | 256 / 767, r-z axis, tile 16 | 0.221 | 1.37 s | 2023 |
+| sod | 201 × 17 / 601 × 49, slip walls, cfl 0.2, tile 8 | 0.1 | 33.6 s | 1347 |
+| blobs | 64² / 192², periodic, edge 0.01 (0.64 root spacings), tile 16 | 0.2 | 8.75 s | 213 |
+| shock | 256 / 767, r-z axis, tile 16 | 0.221 | 1.40 s | 2023 |
 | blob3d | 24³ / 72³, periodic, tile 8 | 1.0 | 78.4 s | 104 |
 
 The wall ratio is the product of the point-step ratio and the ratio of the
@@ -6855,14 +6856,14 @@ substep, and its points are the time average of the level-1 nodes.
 | problem | run | wall / fine | point-steps / fine | per point-step / fine | level steps / fine | level points / fine | L1 ρ |
 |---|---|---|---|---|---|---|---|
 | sod | coarse | 0.042 | 0.041 | 1.03 | | | 2.6e-3 |
-| sod | box | 0.302 | 0.261 | 1.16 | 1.04 | 0.21 | 7.03e-5 |
-| sod | tiles | 0.459 | 0.289 | 1.59 | 1.01 | 0.25 | 8.07e-5 |
+| sod | box | 0.294 | 0.261 | 1.13 | 1.04 | 0.21 | 7.03e-5 |
+| sod | tiles | 0.435 | 0.289 | 1.51 | 1.01 | 0.25 | 8.07e-5 |
 | blobs | coarse | 0.049 | 0.047 | 1.04 | | | 4.5e-2 |
-| blobs | box | 2.07 | 1.59 | 1.30 | 2.03 | 0.75 | 7.74e-3 |
-| blobs | tiles | 2.08 | 1.47 | 1.41 | 1.65 | 0.86 | 3.18e-4 |
-| shock | coarse | 0.115 | 0.111 | 1.03 | | | 1.6e-2 |
-| shock | box | 1.59 | 0.600 | 2.65 | 1.13 | 0.42 | 1.56e-3 |
-| shock | tiles | 1.53 | 0.635 | 2.40 | 1.13 | 0.45 | 2.17e-3 |
+| blobs | box | 2.01 | 1.59 | 1.27 | 2.03 | 0.75 | 7.74e-3 |
+| blobs | tiles | 2.01 | 1.47 | 1.37 | 1.65 | 0.86 | 3.18e-4 |
+| shock | coarse | 0.114 | 0.111 | 1.03 | | | 1.6e-2 |
+| shock | box | 1.59 | 0.600 | 2.66 | 1.13 | 0.42 | 1.56e-3 |
+| shock | tiles | 1.49 | 0.635 | 2.35 | 1.13 | 0.45 | 2.17e-3 |
 | blob3d | coarse | 0.016 | 0.016 | 0.97 | | | 4.9e-3 |
 | blob3d | box | 0.766 | 0.524 | 1.46 | 2.16 | 0.23 | 8.51e-4 |
 | blob3d | tiles | 1.79 | 1.25 | 1.43 | 1.56 | 0.79 | 7.93e-5 |
@@ -6925,37 +6926,55 @@ and 85778 and 295139 on the 3-D blob (18.9).
 
 | phase | sod box | sod tiles | per point | blobs box | blobs tiles | per point | blob3d box | blob3d tiles | per point |
 |---|---|---|---|---|---|---|---|---|---|
-| level RHS and artificial coefficients | 12.1 | 16.4 | 1.17 | 70.8 | 92.8 | 1.14 | 393 | 1330 | 0.98 |
-| Hermite shell fill | 0.48 | 0.85 | 1.53 | 4.92 | 4.64 | 0.82 | 121 | 243 | 0.58 |
-| ghost-flux divergence | 3.48 | 9.52 | 2.36 | 32.0 | 39.9 | 1.09 | 192 | 755 | 1.15 |
-| post-step shell | 0.06 | 0.08 | 1.04 | 0.32 | 0.40 | 1.08 | 11.4 | 22.7 | 0.58 |
-| same-level sync | 0 | 0.99 | | 0.02 | 1.80 | | 0.1 | 75.9 | |
-| level filter | 0.53 | 0.72 | 1.18 | 3.30 | 4.24 | 1.12 | 16.8 | 59.9 | 1.04 |
-| level stage update | 0.46 | 0.72 | 1.34 | 2.03 | 2.36 | 1.01 | 8.0 | 36.5 | 1.32 |
-| root RHS and Hermite endpoint | 3.22 | 3.14 | | 5.29 | 5.33 | | 29.8 | 31.3 | |
-| regrid | 0.38 | 0.31 | | 5.38 | 2.93 | | 16.8 | 24.9 | |
-| whole step | 21.9 | 34.1 | | 127 | 157 | | 801 | 2606 | |
+| level RHS and artificial coefficients | 12.0 | 16.2 | 1.17 | 70.8 | 92.2 | 1.13 | 393 | 1330 | 0.98 |
+| Hermite shell fill | 0.52 | 0.78 | 1.29 | 4.61 | 4.87 | 0.92 | 121 | 243 | 0.58 |
+| ghost-flux divergence | 2.83 | 7.82 | 2.39 | 28.3 | 33.1 | 1.02 | 192 | 755 | 1.15 |
+| post-step shell | 0.05 | 0.10 | 1.78 | 0.45 | 0.51 | 1.00 | 11.4 | 22.7 | 0.58 |
+| same-level sync | 0 | 0.90 | | 0.04 | 1.68 | | 0.1 | 75.9 | |
+| level filter | 0.53 | 0.90 | 1.47 | 3.42 | 3.61 | 0.92 | 16.8 | 59.9 | 1.04 |
+| level stage update | 0.51 | 0.77 | 1.31 | 1.71 | 2.56 | 1.30 | 8.0 | 36.5 | 1.32 |
+| root RHS and Hermite endpoint | 3.22 | 3.13 | | 5.17 | 5.52 | | 29.8 | 31.3 | |
+| regrid | 0.36 | 0.27 | | 5.19 | 3.85 | | 16.8 | 24.9 | |
+| whole step | 21.2 | 32.2 | | 122 | 151 | | 801 | 2606 | |
 
-On the tiles the level-wide artificial coefficients alone take 33.4%, 36.0%
-and 32.3% of the step, the ghost-flux divergence 27.9%, 25.4% and 29.0%, and
-the Hermite shell fill 2.5%, 3.0% and 9.3%. The shell is filled only on a
+On the tiles the level-wide artificial coefficients alone take 34.5%, 37.0%
+and 32.3% of the step, the ghost-flux divergence 24.3%, 22.0% and 29.0%, and
+the Hermite shell fill 2.4%, 3.2% and 9.3%. The shell is filled only on a
 tile with a parent-fed face, and there only over the boxes of the
 interpolation chain its slots read. Each tile's right-hand side reads the
 primitives and velocity gradients computed in the level-wide pass.
 Per level point against the box, the filter and the stage update cost
-1.01–1.34 times as much on tiles, the right-hand side with the artificial
-coefficients 0.98–1.17 times, the ghost-flux divergence 1.09–2.36 times, the
+0.92–1.47 times as much on tiles, the right-hand side with the artificial
+coefficients 0.98–1.17 times, the ghost-flux divergence 1.02–2.39 times, the
 most on Sod, whose tiles have two interface dimensions where the box spanning
-the channel has one, and the shell fill and the post-step shell 0.58–1.53
+the channel has one, and the shell fill and the post-step shell 0.58–1.78
 times. The same-level synchronization exists only on tiles, at 1.1–2.9% of
 the step.
 
-On the 1-D shock box the level's right-hand side is 34.3% of the step, the
-ghost-flux divergence 30.2%, the root's right-hand side and the Hermite
-endpoint 16.3%, regridding 3.8%, the shell fill 1.9% and the folded box at
+On the 1-D shock box the level's right-hand side is 34.2% of the step, the
+ghost-flux divergence 28.4%, the root's right-hand side and the Hermite
+endpoint 16.2%, regridding 3.1%, the shell fill 1.7% and the folded box at
 the axis 1.9%. On its tiles (7.1 on average) the level-wide artificial
-coefficients take 34.9%, the ghost-flux divergence 22.8%, the level's
-right-hand side 15.6% and the shell fill 2.2%.
+coefficients take 33.4%, the ghost-flux divergence 22.8%, the level's
+right-hand side 16.9% and the shell fill 3.0%.
+
+**Per level point and right-hand side.** A scratch script (not kept) timed
+one evaluation at the state after 150 root steps, on the Sod tiles (10
+tiles, 6250 level points, padded blocks 1.74 times their interiors) and the
+blobs' (13 tiles, 31213 points, 1.35), against the uniform fine grid. The
+level-wide pass costs 102 and 114 ns per point, where the fine grid's
+primitives, velocity gradients and `compute_artificial!` cost 90 and 102
+ns. Of the pass, the primitives and velocity gradients take 35 and 32 ns (25
+and 27 on the fine grid), the exchanges between its stages 4 and 2 ns, and
+the sensors and the coefficients 62 and 85 ns (65 and 75 in
+`compute_artificial!`). The ghost-flux divergence takes 71 ns on both: two
+line solves of 29 ns, each summed over the components and the interface
+dimensions, and the split of every flux into its ghost-differenced part and
+the remainder, 10 and 12 ns. The fine grid's divergence is one solve, 23 and
+29 ns. On the 3-D blob's tiles after six root steps (8 tiles, 125000 points)
+the split costs 24 ns and each solve 47 ns. The divergence plans' one-sided
+interface rows carry left-hand-side rows of their own, so the two solves
+share no factorization.
 
 **The species band on the blobs.** A per-step trace of the mass-fraction
 minimum to t = 0.4 (a scratch script, not kept) shows the box's excursion. With a
