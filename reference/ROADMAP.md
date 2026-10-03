@@ -219,9 +219,14 @@ surface; H8 for a magnetized target.
   `0d05acd`); the other configurations are N32. Each cell's bound is 1% of
   the smaller of that minimum and its own value (commit `4d7fc5a`), which
   cuts the unguaranteed sides of a 2-D Sedov quadrant by two orders.
+  The θ passes run as line sweeps over linearly indexed fields (commit
+  `cb0b33a`), so the limited step costs 1.1 to 1.7 times the unlimited one.
+  A `run!` entering with a marginally inadmissible point keeps the limiter
+  on, with ε taken over the admissible points (commit `736d12b`).
   Remaining: wall nodes above cfl ≈ 0.32, where the first-order bound fails;
-  and the cost, 1.8 to 2.4 times the unlimited step, which fusing the face
-  pass with the offset and the count should reduce.
+  a cell whose source terms alone take it below its bound, which is left
+  unguaranteed and can end a limited run slightly negative; and the radial
+  rate pass, the largest remaining cost on the r-z plane.
   **Gate:** the Sedov and Noh cases of `test/cases.jl` and the Supernova
   remnant tutorial under the default strict validity, their errors
   unchanged, and no inadmissible cell during the Woodward–Colella run.
@@ -233,12 +238,23 @@ surface; H8 for a magnetized target.
   radial lines folded at r = 0, the spherical origin and the θ-collapsed
   axis, carry it (commits `4d7fc5a`, `71f4fb1`): Sedov, Noh ν = 2, 3 and the
   Supernova remnant tutorial run under strict validity with no inadmissible
-  point, at about twice the unlimited step. The r-z plane carries it with
+  point, at about 1.4 times the unlimited step. The r-z plane carries it with
   the axis, a symmetry plane at z = 0 and their corner (commits `d50697d`,
   `451285c`): Sedov leaves no inadmissible point and its shock radius is
-  within 0.25% of the spherical line's in every direction, at about 2.5
-  times the unlimited step. In order: same-level patch interfaces and refined levels, anchoring the face
-  flux at a coarse-fine face and carrying the registers under subcycling;
+  within 0.25% of the spherical line's in every direction, at about 1.7
+  times the unlimited step. Same-level patches carry it under
+  `interface_flux = :closure` (commit `7a191c3`): the face at the shared
+  node is limited by one θ on both patches and carries its own register,
+  and Woodward–Colella and planar Noh on two and three patches leave no
+  inadmissible point. Under `:ghost`, the default, the inviscid flux closes
+  the interface with the gradient's rows (composite weight h at the shared
+  node) and the rest with the divergence's one-sided rows (twice the end
+  weight), so no one face form covers both; the remaining route writes the
+  difference as a node term in each cell's limit, as the radial lines'
+  geometric part is, and is measured before it replaces `:closure`, which
+  lowers the interface's order. In order: refined levels, anchoring the face flux at a
+  coarse-fine face as at a node the parent's shell overwrites and
+  carrying the registers under subcycling;
   then device storage and stacked tiles; then the remaining metrics and the
   tabulated and NASA-9 equations of state, whose admissibility test is not
   linear. Each extension's face weights come from its own rows: the metric's
@@ -475,22 +491,28 @@ promotion.
   into point-steps and cost per point-step, with a phase profile and an
   account of what sized each root step
   ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
-  The box is below the fine wall on the Sod tube and the 3-D blob; the tiles
-  are above it on all four, and on the blob problems only the tiles reach
-  the fine answer. The remaining work, by measured share:
+  The box is below the fine wall on the Sod tube and the 3-D blob, the tiles
+  on the Sod tube only, and on the blob problems only the tiles reach the
+  fine answer. The remaining work, by measured share:
   1. The level's step count. A parent's nodes that restriction overwrites,
      more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
      0.75 rather than the solver's (commit `f1d420c`; excluding them made
      the axis shock run away): the Sod level takes the fine run's step count,
      the tiled Sod tube runs at 0.73 of the fine wall, the shock falls from
-     1115 to 763 root steps. On the box blobs and the 3-D runs the level's
-     own artificial rate holds 1.5 to 2.5 times the fine count; the 3-D blob
-     is not re-measured.
-  2. The tiles' cost per point, about twice the fine grid's: the level-wide
-     artificial coefficients (a fifth to a quarter of the step), the
-     Hermite shell fill (a fifth to a third, about twice the box's cost per
-     level point and growing with tile surface) and the ghost-flux
-     divergence (about a fifth).
+     1115 to 763 root steps. On the box blobs and the 3-D box the artificial
+     rate holds the level at 2.2 to 2.6 times the fine count, the 3-D box's
+     root step bounded by its covered root nodes on most steps; the 3-D
+     tiles take 1.56 times it under the level's hyperbolic rate.
+  2. The tiles' cost per point, 1.3 to 1.5 times the fine grid's (2.4 on
+     the shock): the shell fill runs only where a tile has a parent-fed
+     face, each tile's right-hand side reads the level pass's velocity
+     gradients, `Patch` is mutable (commit `3c2bc6a`) and the ghost-flux
+     split runs one body per kind of component over the region the line
+     fills read (commit `74343a7`). The level-wide artificial coefficients cost
+     what a uniform patch's do per point. What remains is the ghost-flux
+     divergence's second line solve per component on each interface
+     dimension, whose one-sided rows carry their own left-hand side, so
+     removing it is a change of numerics.
   3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
      blob problems; revisit `tag_buffer`, the tag threshold and the tile
      edge against the error they buy.

@@ -1672,35 +1672,41 @@ of 0.15, the folded operator of the product having no unit column sums. The unwe
 filter's non-conservation on a non-uniform volume is real but is the wall closure's, present
 on a uniform Cartesian grid too.
 
-**The runs.** The battery's curvilinear cases, with the filter's own change of total mass,
-momentum and energy over the run relative to the largest total seen. The runs filter through
-a callback with the solver's own pass disabled, reproducing `test/validation.jl` to four
-digits under `:none`.
+**The runs.** The battery's curvilinear cases, with the filter's own change of total mass
+and energy over the run relative to the largest total seen. The runs filter through a
+callback with the solver's own pass disabled, at the script's α = 0.45 rather than the
+default 0.47.
 
 ```
                     plateau    wall deficit   shock     filter mass   filter energy   steps
-Noh nu=1  none      3.9959      62.9%        0.2046     -1.14e-3      +3.41e-4       3650
-          volume    3.9959      62.9%        0.2046     -1.14e-3      +3.41e-4       3650
-Noh nu=2  none     15.0020      55.2%        0.2092     -4.33e-6      +7.86e-7       2245
-          volume   15.0109      44.7%        0.2091     +1.44e-5      +1.84e-6       2227
-Noh nu=3  none     62.5012      27.8%        0.2090     +8.38e-7      +8.38e-7       1113
-          volume   62.5671      45.9%        0.2089     -5.96e-7      -5.98e-7       1105
+Noh nu=1  none      3.9988      23.9%        0.2021     +1.64e-5      -1.65e-5       3557
+          volume    3.9988      23.9%        0.2021     +1.64e-5      -1.65e-5       3557
+Noh nu=2  none     15.0086      55.6%        0.2091     -4.09e-6      +3.24e-7       2205
+          volume   15.0168      46.3%        0.2090     +1.04e-5      -6.60e-8       2197
+Noh nu=3  none     62.5634      24.9%        0.2089     +2.00e-11     -3.85e-11      1092
+          volume   62.6028      38.8%        0.2088     +1.93e-11     -3.76e-11      1086
 
-Sedov     none     R_s 0.8086 (+1.07%)   peak rho 5.124   filter mass -1.1e-13   3527
-          volume   R_s 0.8084 (+1.05%)   peak rho 5.144   filter mass -1.4e-14   3184
+Sedov     none     R_s 0.8085 (+1.06%)   peak rho 5.127   filter mass -9.8e-14   3143
+          volume   R_s 0.8084 (+1.05%)   peak rho 5.144   filter mass -1.2e-14   3149
 
 shock/interface, 121 points, t = 0.15        worst Y            width   steps
-  uniform          none, volume              -0.0137 / 1.0137   3       125
-  clustered a=0.5  none                      -0.0076 / 1.0076   3       196
-                   volume                    -0.0083 / 1.0083   3       196
+  uniform          none, volume              -0.0045 / 1.0045   3       122
+  clustered a=0.5  none                      -0.0019 / 1.0019   4       196
+                   volume                    -0.0021 / 1.0021   4       196
 ```
 
 The planar case and the uniform interface are the same run to every digit, the weighting
-being skipped on a uniform volume. The filter's mass defect over a run is 1e-3 on the planar
-wall and below 2e-5 on the curved metrics under either form, momentum and energy alike. The
-weighting moves the wall deficit down at the axis, where it triples the filter's mass tally,
-and up at the origin, where both forms conserve to round-off, so that change is in the
-filtered image's shape at the singular cell. Sedov does not move; the interface rings more.
+being skipped on a uniform volume. Over a run the filter changes the total mass by 1.6e-5 at
+the planar wall, by 4e-6 unweighted and 1e-5 weighted at the axis, and by 2e-11 at the
+origin, where both forms conserve to round-off as the operator rows predict; the energy
+change is of the same order or smaller. The weighting lowers the wall deficit at the axis,
+55.6% to 46.3%, at 2.5 times the filter's mass change, and raises it at the origin, 24.9% to
+38.8%, where neither form changes the mass, so that change is in the filtered image's shape
+at the singular cell. Sedov does not move, and on the clustered interface the weighted form
+overshoots slightly more. Two changes since the weighting was first measured moved the planar
+row: the one-sided rows made the default at `d611bae`, which create two orders less filter
+mass on a closed line ([the filter's wall rows](#the-filters-wall-rows)), and the slip wall's
+flux contract at `e2a6c4f`, which took this script's wall deficit from 49.8% to 23.9%.
 
 **Decision.** `filter_weighting = :none` stays the default, `:volume` the measured
 alternative. A filter conserving on a closed line would have to change the closure rows,
@@ -6859,9 +6865,8 @@ near-discontinuous interface.
 
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
 process, one rank and one thread on the i9-12900K under Julia 1.11.4, the
-package at the commit that records this table and the overhead profile, but
-for the 3-D blob's rows and columns, taken at `3c2bc6a`; the root-step
-account below is older and says at which commits it was taken. Each
+package at the commit that records this table and the overhead profile; the
+root-step account below says at which commits it was taken. Each
 problem runs warm as the root grid alone (coarse), the root with one
 subcycled regridded box, the same with lattice tiles, and the uniform grid at
 the refined spacing (fine). The error is the composite L1 norm of ρ
@@ -6873,7 +6878,7 @@ figures.
 | sod | 201 × 17 / 601 × 49, slip walls, cfl 0.2, tile 8 | 0.1 | 33.6 s | 1347 |
 | blobs | 64² / 192², periodic, edge 0.01 (0.64 root spacings), tile 16 | 0.2 | 8.75 s | 213 |
 | shock | 256 / 767, r-z axis, tile 16 | 0.221 | 1.40 s | 2023 |
-| blob3d | 24³ / 72³, periodic, tile 8 | 1.0 | 78.4 s | 104 |
+| blob3d | 24³ / 72³, periodic, tile 8 | 1.0 | 81.3 s | 104 |
 
 The wall ratio is the product of the point-step ratio and the ratio of the
 wall per point-step, each against the fine run. The level's steps count every
@@ -6890,9 +6895,9 @@ substep, and its points are the time average of the level-1 nodes.
 | shock | coarse | 0.114 | 0.111 | 1.03 | | | 1.6e-2 |
 | shock | box | 1.59 | 0.600 | 2.66 | 1.13 | 0.42 | 1.56e-3 |
 | shock | tiles | 1.49 | 0.635 | 2.35 | 1.13 | 0.45 | 2.17e-3 |
-| blob3d | coarse | 0.016 | 0.016 | 0.97 | | | 4.9e-3 |
-| blob3d | box | 0.766 | 0.524 | 1.46 | 2.16 | 0.23 | 8.51e-4 |
-| blob3d | tiles | 1.79 | 1.25 | 1.43 | 1.56 | 0.79 | 7.93e-5 |
+| blob3d | coarse | 0.016 | 0.016 | 0.98 | | | 4.9e-3 |
+| blob3d | box | 0.739 | 0.524 | 1.41 | 2.16 | 0.23 | 8.51e-4 |
+| blob3d | tiles | 1.68 | 1.25 | 1.34 | 1.56 | 0.79 | 7.93e-5 |
 
 The shock ran under `validity=permissive`: under the default policy the
 tiled run stops with an invalid state at its last step, the 761st, and its
@@ -6906,7 +6911,9 @@ lower wall on the 3-D blob comes with eleven times the tiles' error.
 
 **The root step.** The account below was taken at `f1d420c`, before
 `1fe960a` left a covered node's unresolved residual out of the parent's filter
-pass; the root and level step counts of the table above are the current ones.
+pass, but for the 3-D blob's rows, which were taken with the table above and
+have no before column; the root and level step counts of the table above are
+the current ones.
 At `4a1f0b4` the covered root nodes, carrying the
 artificial diffusivity the root's sensor takes on the restricted fine
 solution, bounded 99.4–100% of the root steps on the Sod tube, the shock and
@@ -6925,6 +6932,8 @@ after, and the class bounding the root step after:
 | blobs tiles | 1.66 | 1.32 | 2.13 | 1.69 | overwritten 97.5% |
 | shock box | 1.66 | 1.13 | 1.65 | 1.13 | overwritten 74%, level 24% |
 | shock tiles | 1.65 | 1.12 | 1.65 | 1.12 | overwritten 75%, level 26% |
+| blob3d box | | 1.63 | | 2.16 | root covered 71%, level 29% |
+| blob3d tiles | | 1.17 | | 1.56 | level 81.5%, root covered 16.7%, overwritten 1.9% |
 
 At cfl 0.2 the Sod tube's overwritten nodes ran at up to 2.8 times the
 solver's CFL number, under the 3.75 the ceiling allows, so the ceiling never
@@ -6941,8 +6950,13 @@ away within one root step at the focus: their rate after the step reached
 times on the tiles, from 19. Held to a CFL number of 1.0 the box run's step
 then collapsed at t = 0.22096 and the tiles' rate reached 9.6e4 times; held
 to 0.9 or 0.75 both runs completed, with the rate after the last step at
-most 28 times. On the 3-D blob the level's own rate, mostly artificial,
-bounded 23% and 14% of the steps before, and the rule is not rerun there.
+most 28 times. On the 3-D blob box the artificial diffusivity is above half
+the bounding rate on 91% of the root-covered steps and 86% of the level's,
+and the rates with the covered root nodes left out predict 68.7 root steps,
+1.49 of the root-only run's. On the tiles it is above half on 2.3% of the
+level's steps, and the prediction is 52.2, 1.13 of the root-only run's.
+The overwritten nodes ran at up to 1.18 and 1.50 times the solver's CFL
+number on the box and the tiles, the tiles at the ceiling.
 
 **Where the tiled overhead goes.** Milliseconds per root step of the box and
 the tiles, from the sampling profile scaled by the timed wall, and the
@@ -6952,20 +6966,20 @@ and 85778 and 295139 on the 3-D blob (18.9).
 
 | phase | sod box | sod tiles | per point | blobs box | blobs tiles | per point | blob3d box | blob3d tiles | per point |
 |---|---|---|---|---|---|---|---|---|---|
-| level RHS and artificial coefficients | 12.0 | 16.2 | 1.17 | 70.8 | 92.2 | 1.13 | 393 | 1330 | 0.98 |
-| Hermite shell fill | 0.52 | 0.78 | 1.29 | 4.61 | 4.87 | 0.92 | 121 | 243 | 0.58 |
-| ghost-flux divergence | 2.83 | 7.82 | 2.39 | 28.3 | 33.1 | 1.02 | 192 | 755 | 1.15 |
-| post-step shell | 0.05 | 0.10 | 1.78 | 0.45 | 0.51 | 1.00 | 11.4 | 22.7 | 0.58 |
-| same-level sync | 0 | 0.90 | | 0.04 | 1.68 | | 0.1 | 75.9 | |
-| level filter | 0.53 | 0.90 | 1.47 | 3.42 | 3.61 | 0.92 | 16.8 | 59.9 | 1.04 |
-| level stage update | 0.51 | 0.77 | 1.31 | 1.71 | 2.56 | 1.30 | 8.0 | 36.5 | 1.32 |
-| root RHS and Hermite endpoint | 3.22 | 3.13 | | 5.17 | 5.52 | | 29.8 | 31.3 | |
-| regrid | 0.36 | 0.27 | | 5.19 | 3.85 | | 16.8 | 24.9 | |
-| whole step | 21.2 | 32.2 | | 122 | 151 | | 801 | 2606 | |
+| level RHS and artificial coefficients | 12.0 | 16.2 | 1.17 | 70.8 | 92.2 | 1.13 | 407 | 1380 | 0.98 |
+| Hermite shell fill | 0.52 | 0.78 | 1.29 | 4.61 | 4.87 | 0.92 | 127 | 255 | 0.58 |
+| ghost-flux divergence | 2.83 | 7.82 | 2.39 | 28.3 | 33.1 | 1.02 | 168 | 608 | 1.05 |
+| post-step shell | 0.05 | 0.10 | 1.78 | 0.45 | 0.51 | 1.00 | 11.9 | 23.5 | 0.58 |
+| same-level sync | 0 | 0.90 | | 0.04 | 1.68 | | 0.2 | 79.5 | |
+| level filter | 0.53 | 0.90 | 1.47 | 3.42 | 3.61 | 0.92 | 18.4 | 60.7 | 0.96 |
+| level stage update | 0.51 | 0.77 | 1.31 | 1.71 | 2.56 | 1.30 | 8.0 | 37.9 | 1.38 |
+| root RHS and Hermite endpoint | 3.22 | 3.13 | | 5.17 | 5.52 | | 31.9 | 30.5 | |
+| regrid | 0.36 | 0.27 | | 5.19 | 3.85 | | 17.2 | 24.9 | |
+| whole step | 21.2 | 32.2 | | 122 | 151 | | 801 | 2530 | |
 
 On the tiles the level-wide artificial coefficients alone take 34.5%, 37.0%
-and 32.3% of the step, the ghost-flux divergence 24.3%, 22.0% and 29.0%, and
-the Hermite shell fill 2.4%, 3.2% and 9.3%. The shell is filled only on a
+and 34.5% of the step, the ghost-flux divergence 24.3%, 22.0% and 24.1%, and
+the Hermite shell fill 2.4%, 3.2% and 10.1%. The shell is filled only on a
 tile with a parent-fed face, and there only over the boxes of the
 interpolation chain its slots read. Each tile's right-hand side reads the
 primitives and velocity gradients computed in the level-wide pass.
@@ -6974,7 +6988,7 @@ Per level point against the box, the filter and the stage update cost
 coefficients 0.98–1.17 times, the ghost-flux divergence 1.02–2.39 times, the
 most on Sod, whose tiles have two interface dimensions where the box spanning
 the channel has one, and the shell fill and the post-step shell 0.58–1.78
-times. The same-level synchronization exists only on tiles, at 1.1–2.9% of
+times. The same-level synchronization exists only on tiles, at 1.1–3.1% of
 the step.
 
 On the 1-D shock box the level's right-hand side is 34.2% of the step, the
