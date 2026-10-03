@@ -19,14 +19,19 @@
 #   is the composite quadrature of `volume_integral`, so a root node a child
 #   level covers is weighted by the uncovered fraction of its cell
 #   (`Patch.covered`) and counted once; Linf runs over nodes with any
-#   uncovered fraction; species problems add the mixedness ∫Y(1−Y)dV;
+#   uncovered fraction; species problems add the mixedness ∫Y(1−Y)dV. A
+#   refined run's L1 is also split into the refined level's nodes and the
+#   root's uncovered nodes, since a whole-domain norm mixes the error the
+#   cover reaches with the root's own;
 # - for a refined run, a sampling profile of `run!` binned by phase and by
 #   level: the Hermite fill of the shell, the box saves, the folded box at an
 #   axis or a plane, the extra right-hand side of the Hermite endpoint, the
 #   ghost-flux divergence at coarse-fine faces, restriction, the post-step
-#   shell, regridding (tagging, coefficients, fill, the rest), the state
-#   filter, the right-hand side and the rest of the step; a sample counts
-#   toward the first phase in that order whose function is on its stack;
+#   shell, the same-level synchronization of a tiled level, regridding
+#   (tagging, coefficients, fill, the rest), the state filter, the right-hand
+#   side, the level-wide artificial coefficients of a tiled level and the rest
+#   of the step; a sample counts toward the first phase in that order whose
+#   function is on its stack;
 # - for a refined run, the step-size account: root steps against the coarse
 #   run's, which rate class bounded each root step (root nodes uncovered,
 #   partly covered or covered by the child level, or a refined level at its
@@ -44,7 +49,8 @@
 # out the callback's samples and those of that repeated restriction, and the
 # milliseconds per step it prints scale its shares by the timed run's wall.
 # The callback's run is checked against the timed run's step count and final
-# root state.
+# root state; on a tiled 3-D level the two have differed in the last digits,
+# a cause not yet traced.
 #
 #   julia --project=. -t 1 bench/amrwin.jl quick=true
 #   julia --project=. -t 1 bench/amrwin.jl problems=sod
@@ -62,12 +68,16 @@
 #
 # `configs=` selects the configurations, `profile=false` and `diagnose=false`
 # skip the extra run, `art=false` turns off the artificial properties
-# everywhere, `validity=permissive` reports a final state outside the species
-# band instead of failing the configuration, `quick=true` takes small grids and
-# short end times for a smoke run. Each problem's grid, tile edge and end time
+# everywhere, `validity=permissive` reports an invalid final state (a mass
+# fraction outside the species band, a negative internal energy) instead of
+# dropping the configuration, `quick=true` takes small grids and short end
+# times for a smoke run. Each problem's grid, tile edge and end time
 # are options (`sod_n`, `blob3d_t`, ...), and the blobs' edge width `blobs_w`.
 # Serial only: the composite error compares node by node against an
-# undistributed fine run.
+# undistributed fine run. The full set takes about half an hour at -t 1 on the
+# workstation, the 3-D problem a third of it; run one problem per process. The
+# measurements are in reference/CALIBRATION_APPENDIX.md under this script's
+# name.
 #
 # The summary numbers, the phase shares and the step-size account also appear
 # on `row,<problem>,<config>,<key>,<value>` lines, so bench/repeat.jl can take
@@ -281,6 +291,11 @@ function composite_errors(solver, states, ref, spec)
         F = ref.fields[(name, sp)]
         errs = [zeros(size(f)) for f in fs]
         ones_ = [zeros(size(f)) for f in fs]
+        # The same sums split by region: `inside` on the refined levels'
+        # nodes, `outside` on the root's nodes weighted by their uncovered
+        # fraction, so that an error the cover cannot reach is read apart.
+        inside = [zeros(size(f)) for f in fs]
+        inside_ones = [zeros(size(f)) for f in fs]
         linf = 0.0
         missing_nodes = 0
         for (li, p) in enumerate(patches)
@@ -299,12 +314,23 @@ function composite_errors(solver, states, ref, spec)
                 e = abs(fs[li][I] - F[g1 + pf[1], g2 + pf[2], g3 + pf[3]])
                 errs[li][I] = e
                 ones_[li][I] = 1.0
+                if p.level > 0
+                    inside[li][I] = e
+                    inside_ones[li][I] = 1.0
+                end
                 covered[I] == 0xff || (linf = max(linf, e))
             end
         end
         label = name === :Y ? "Y$sp" : String(name)
-        out["L1_$label"] = volume_integral(solver, errs) / volume_integral(solver, ones_)
+        total, volume = volume_integral(solver, errs), volume_integral(solver, ones_)
+        out["L1_$label"] = total / volume
         out["Linf_$label"] = linf
+        if length(patches) > 1
+            e_in, v_in = volume_integral(solver, inside), volume_integral(solver, inside_ones)
+            out["L1in_$label"] = e_in / v_in
+            out["L1out_$label"] = (total - e_in) / (volume - v_in)
+            out["cover_volume"] = v_in / volume
+        end
     end
     if spec.mixture
         Ys = fields_of(solver, states, :Y, 2)
@@ -745,9 +771,10 @@ function run_problem(spec, configs)
         res = results[config]
         same = r.solver.step == res["steps"] &&
                root_fingerprint(r.solver, r.states) == res["fingerprint"]
-        same || println("  $config census run differs from the timed run: steps " *
-                        "$(r.solver.step) / $(res["steps"]), root sum " *
-                        "$(root_fingerprint(r.solver, r.states)) / $(res["fingerprint"])")
+        sum_census = root_fingerprint(r.solver, r.states)
+        same || @printf("  %s census run: steps %d / %d, root sum differs by %.1e relative\n",
+                        config, r.solver.step, res["steps"],
+                        abs(sum_census / res["fingerprint"] - 1))
         res["point_steps"] = sum(census.level_points)
     end
     for config in ("coarse", "fine")
@@ -792,6 +819,12 @@ function run_problem(spec, configs)
             @printf(" %13.4e", get(res, k, NaN))
         end
         println()
+        for (name, sp) in spec.compare
+            label = name === :Y ? "Y$sp" : String(name)
+            haskey(res, "L1in_$label") || continue
+            @printf("  %s: L1 %.4e on the level (%.3f of the volume), %.4e on the root\n",
+                    label, res["L1in_$label"], res["cover_volume"], res["L1out_$label"])
+        end
         get(res, "noncoincident", 0) > 0 &&
             @printf("  (%d nodes of %s have no coincident fine node and are left out)\n",
                     Int(res["noncoincident"]), config)

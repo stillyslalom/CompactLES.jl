@@ -491,36 +491,35 @@ promotion.
   away from the feature within a small factor of the uniform fine grid's.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
-  Refinement exists to reach the fine grid's answer sooner. On the small
-  serial cases measured it does not: a 1-D converging shock at the axis, a
-  planar Sod tube in 2-D and three blobs advected through a periodic 2-D box,
-  each warm against the uniform grid at the refined spacing, take from 0.93
-  to 2.5 times the uniform wall. Three causes, each measurable on its own:
-  1. The root step. Covered root nodes carry the artificial diffusivity of
-     the restricted fine solution, whose features the root cannot resolve,
-     and its diffusive rate sizes the subcycled step: the root takes 1.5 to
-     1.7 times the steps of a root-only run, and with the artificial
-     properties off the two rates agree. Restriction overwrites those nodes,
-     so their rate need not bound the step; candidates are excluding covered
-     nodes from `max_rate` through `covered`, or not evaluating the
-     artificial properties there.
-  2. The cover. The tagged region is broader than the feature: 15 of 16
-     tiles for three blobs of radius 0.08 in a unit box, and tiles of edge 8
-     do more work than one box on the Sod tube. Revisit `tag_buffer`, the
-     default `tag_threshold` and the reach of the gradient criterion.
-  3. The cost per point, 1.4 to 2.5 times the uniform grid's: the Hermite
-     fill of the ghost shell (14–30% of a subcycled run, more as tiles
-     shrink), the ghost-flux divergence at coarse-fine faces (12–22%),
-     regridding (up to 9%) and the folded box at the axis (7–12% in 1-D).
-  Build the instrument first: a `bench/` script that times warm coarse,
-  refined and uniform-fine runs of one problem in one process and reports
-  point-steps, a phase profile and the composite error against the fine run,
-  with `bench/amr_cost.jl`'s 3-D case, where refinement already wins, as one
-  of its problems.
-  **Gate:** on the Sod tube, the blob case and the 3-D cost case, the refined
-  wall below the uniform fine wall at a composite error no larger than the
-  current refined run's; bit-identical numerics for any change that claims
-  to touch cost only.
+  `bench/amrwin.jl` times warm root-only, box, tiled and uniform-fine runs
+  of a planar Sod tube, three blobs in a periodic box, the converging shock
+  at the r-z axis and `bench/amr_cost.jl`'s 3-D blob, and splits each wall
+  into point-steps and cost per point-step, with a phase profile and an
+  account of what sized each root step
+  ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
+  The box is below the fine wall on the Sod tube and the 3-D blob; the tiles
+  are above it on all four, and on the blob problems only the tiles reach
+  the fine answer. The remaining work, by measured share:
+  1. The level's step count, 1.6 to 2.6 times the fine run's. Covered root
+     nodes, carrying the restricted solution's artificial diffusivity, bound
+     most root steps; leaving them out of `max_rate` predicts the fine run's
+     count on the Sod tube, the shock and the tiled blobs. On the box blobs
+     and the 3-D runs the level's own artificial rate then holds 1.5 to 2.5.
+  2. The tiles' cost per point, about twice the fine grid's: the level-wide
+     artificial coefficients (a fifth to a quarter of the step), the
+     Hermite shell fill (a fifth to a third, about twice the box's cost per
+     level point and growing with tile surface) and the ghost-flux
+     divergence (about a fifth).
+  3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
+     blob problems; revisit `tag_buffer`, the tag threshold and the tile
+     edge against the error they buy.
+  4. Robustness: the tiled shock ends with negative internal energy at the
+     axis, and the box leaves the species band after regrid checks when
+     the root under-resolves the edge (A18).
+  **Gate:** on the Sod tube, the blob case and the 3-D case, the refined wall
+  below the uniform fine wall at a composite error no larger than the
+  tiles' recorded in the appendix; bit-identical numerics for any change
+  that claims to touch cost only.
 
 - [ ] **A13 — Refinement on the remaining metrics and layouts.**
   N23 takes the cylindrical metric and the symmetry plane. Refinement still
