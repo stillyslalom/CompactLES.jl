@@ -105,6 +105,30 @@ include("capability_cases.jl")
                                      ic=C.ic_radial), (48, 1, 48)))
             @test C.advances(prob, Numerics(n_global=n, positivity_limiter=true))
         end
+        # Refined levels under the interface rows: a box at the global step and
+        # subcycled, a regridded box, static and regridded tiles, and two nested
+        # boxes on the Cartesian grid; a box on the radial line at the axis and
+        # on the r-z plane at the corner of the axis and the plane at z = 0.
+        refined(n, amr) = Numerics(n_global=n, positivity_limiter=true, amr=amr,
+                                   patch_interfaces=:closure)
+        box2 = Box((0.3, 0.3, 0), (0.7, 0.7, 1))
+        spot = (x, y, z, t) -> abs(x - 0.5) < 0.1 && abs(y - 0.5) < 0.1
+        for amr in (AMR(initial=box2), AMR(initial=box2, subcycle=true),
+                    AMR(initial=spot, regrid_interval=1),
+                    AMR(initial=box2, tile=8),
+                    AMR(initial=spot, regrid_interval=1, tile=8),
+                    AMR(initial=[box2, Box((0.4, 0.4, 0), (0.6, 0.6, 1))]))
+            @test C.advances(C.problem(bcs=(C.wall, C.wall, C.per)), refined((48, 48, 1), amr))
+        end
+        for (prob, n, region) in
+            ((C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),
+                        ic=C.ic_radial), (64, 1, 1), Box((0.0, 0, 0), (0.4, 2π, 1))),
+             (C.problem(bcs=((AxisBC(), SlipWallBC()), C.per,
+                             (SymmetryPlaneBC(), SlipWallBC())),
+                        domain=C.cyl_domain, metric=CylindricalMetric(), ic=C.ic_radial),
+              (48, 1, 48), Box((0.0, 0, 0), (0.5, 2π, 0.5))))
+            @test C.advances(prob, refined(n, AMR(initial=region)))
+        end
     end
 
     @testset "layouts × backend × precision" begin

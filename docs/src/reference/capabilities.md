@@ -101,13 +101,21 @@ collapsed, folded at r = 0 by [`AxisBC`](@ref), z resolved or not and a
 [`SymmetryPlaneBC`](@ref) allowed at its low end; and on the radial line of a
 `SphericalMetric` with θ and φ collapsed, folded at r = 0 by
 [`OriginBC`](@ref). The last two are accepted serial or decomposed along
-either dimension under the filter weighting `:none`. In every case the
-ideal-gas EOS and the explicit integrator are required.
-A closed line needs enough nodes for the filter's face relation: 38 under the
-default derivative, 42 under [`lele_d1_8`](@ref) and 50 under
-[`lele_d1_10`](@ref). A slab's line along the split dimension is checked with
-the interface rows at its interface ends and needs at most as many, 34 under
-the default derivative between two interfaces.
+either dimension under the filter weighting `:none`. Refined levels are
+accepted on each of these grids under `patch_interfaces = :closure` and
+`level_restriction = :inject`, at the global step or subcycled, static or
+regridded: on the Cartesian grid as boxes or tiles, nested or not, and on the
+radial grids as one box per level (`tile = 0`), at r = 0 or clear of it. In
+every case the ideal-gas EOS and the explicit integrator are required.
+A closed line needs enough nodes for the face form and the filter's face
+relation: 25 under the default derivative, 31 under [`lele_d1_8`](@ref) and
+41 under [`lele_d1_10`](@ref). A line ending at a same-level interface or a
+coarse-fine face is checked with the interface rows there and needs at most as
+many, 23 under the default derivative between two such ends; a tile of edge
+8 parent nodes has 25. Under the limiter a regridded box spans at least 9
+parent nodes along each dimension under the default derivative (11 and 14
+under the other two), and a refined patch whose lines are shorter raises an
+`ArgumentError` when its limiter is built.
 
 ## Checkpoints
 
@@ -167,7 +175,9 @@ text below.
 | `positivity_limiter` on a curvilinear grid other than the r-z plane or the spherical radial line folded at r = 0 | `positivity_limiter: supports the CartesianMetric, the r-z plane` |
 | `positivity_limiter` on a stretched grid | `positivity_limiter: supports an unstretched grid only` |
 | `positivity_limiter` on a radial grid with `filter_weighting = :volume` | `positivity_limiter: on a radial grid takes the filter weighting :none` |
-| `positivity_limiter` with refinement | `positivity_limiter: supports no refined levels` |
+| `positivity_limiter` with refinement under `patch_interfaces = :ghost` | `positivity_limiter: on refined levels takes PatchInterfaces(flux = :closure)` |
+| `positivity_limiter` with refinement under `level_restriction = :filter` | `positivity_limiter: on refined levels takes level_restriction = :inject` |
+| `positivity_limiter` with tiles on a radial grid | `positivity_limiter: on a radial grid supports a refined level as one box` |
 | `positivity_limiter` with `patch_grid` under `patch_interfaces = :ghost` | `positivity_limiter: on same-level patches (patch_grid) takes` |
 | `positivity_limiter` on a device | `positivity_limiter: runs on the host backend only` |
 | `positivity_limiter` with an EOS other than the ideal gas | `positivity_limiter: supports the ideal-gas EOS` |

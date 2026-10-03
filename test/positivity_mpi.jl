@@ -189,4 +189,62 @@ function test_positivity_limiter()
           report.inadmissible + report.negative_density, 0.5)
     check("patches, one rank: the limiter acted (expect > 0)",
           ctref.stage_limited > 0 && ctref.filter_limited > 0 ? 0.0 : 1.0, 0.5)
+
+    # A refined level of tiles, which the level's rank subset holds, a tile
+    # decomposed within its owners where they are several, at the global step
+    # and subcycled, against every patch on one rank: the tiles' shared faces
+    # take one θ through the level's records and communicator. The subcycled
+    # run's root step is three of the global run's, and its limiter acts within
+    # the steps taken; at a lower ambient pressure, where it acts sooner, a
+    # last-bit difference in the root's decomposed running sums flips a θ in
+    # the cold gas and the states differ by 3e-5 after twelve steps.
+    for sub in (false, true)
+        section("positivity limiter: refined tiles across ranks against one rank" *
+                (sub ? ", subcycled" : ""))
+        function refined(comm_here)
+            s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                            per3[3]), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.4,
+                       control=StepControl(validity=:permissive), positivity_limiter=true,
+                       refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
+                       subcycle=sub, interface_flux=:closure, comm=comm_here)
+            Q = allocate_state(s)
+            initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                                p=1e-3 + exp(-((x - 0.5)^2 +
+                                                               (y - 0.45)^2) / 0.004)))
+            run!(s, Q; tfinal=1.0, nmax=20)
+            return s, Q
+        end
+        rref, Qrref = refined(MPI.COMM_SELF)
+        crref = CL.positivity_counts(rref)
+        s, Q = refined(comm)
+        c = CL.positivity_counts(s)
+        rpatches = getfield(rref, :patches)
+        worst = 0.0
+        for (ps, q) in CL.eachpatch(s, Q)
+            k = findfirst(p -> p.level == ps.patch.level && p.region == ps.patch.region,
+                          rpatches)
+            pr = CL.PatchSolver(rref, rpatches[k])
+            off = ps.decomp.offset
+            for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
+                n in 1:s.equations.n_cons
+                a = q[padded_index(ps, i, j, 1), n]
+                b = Qrref[k][padded_index(pr, i + off[1], j + off[2], 1), n]
+                worst = max(worst, abs(a - b))
+            end
+        end
+        scale = maximum(q -> maximum(abs, parent(q)), Qrref)
+        tag = sub ? "subcycled tiles" : "tiles"
+        check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
+        check("$tag: clock against one rank", abs(s.t - rref.t) / rref.t, 1e-8)
+        check("$tag: stage faces limited (relative difference)",
+              abs(c.stage_limited - crref.stage_limited) / max(crref.stage_limited, 1),
+              1e-2)
+        report = state_report(s, Q)
+        check("$tag: inadmissible points at the end",
+              report.inadmissible + report.negative_density, 0.5)
+        sub && check("$tag, one rank: the limiter acted (expect > 0)",
+                     crref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
+    end
 end

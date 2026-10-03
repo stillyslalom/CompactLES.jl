@@ -307,7 +307,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                        equations,
                              deriv, filt, filter_weighting, n_global, n_halo,
                              L_domain, T; interface_flux, interface_rhs,
-                             interface_divergence)
+                             interface_divergence, tile, level_restriction)
     end
     if implicit !== nothing
         _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
@@ -785,9 +785,11 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                        n_cons, n_species; interface_divergence,
                                        interface_flux, schemes)
         # One limiter per patch this rank holds, in the order of its patches.
-        positivity_limiter &&
-            (solver.positivity = [PositivityLimiter(PatchSolver(solver, p))
-                                  for p in getfield(solver, :patches)])
+        if positivity_limiter
+            held = getfield(solver, :patches)
+            solver.positivity = PatchLimiters(Any[PositivityLimiter(PatchSolver(solver, p))
+                                                  for p in held], Any[p for p in held])
+        end
         return solver
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
@@ -1181,6 +1183,13 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
+    # The patches' limiters are built as `run!` starts, and again for the
+    # patches a regrid replaces (`_follow_patches!`).
+    positivity_limiter &&
+        (solver.positivity = PatchLimiters(Any[], Any[],
+                                           _limiter_least_box(deriv, filt, interface_rhs,
+                                                              interface_divergence, n_halo,
+                                                              T)))
     # Each held patch's covered mask from the regions of the level below,
     # which every rank of the patch's level holds (`_fill_covered!`).
     for ℓ in 1:length(levels)-1

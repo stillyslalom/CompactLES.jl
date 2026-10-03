@@ -453,6 +453,9 @@ function tagged_region(solver::Solver, Qc)
     reach = _placement_faces(solver, spec)
     bare = _unbuffered_faces(solver, reach)
     lo_feasible, hi_feasible = _feasible_nodes(n_global, active, margin, reach)
+    # Four nodes, or more under the positivity limiter, whose face form needs
+    # a fine line of a length (`_limiter_least_box`).
+    least = _limiter_least_extent(solver)
     # Tagged nodes in the margin band of a face the level does not reach
     # cannot be refined; say so once rather than leave a feature at a
     # boundary silently coarse. The bounds are reduced, so every rank agrees.
@@ -468,7 +471,7 @@ function tagged_region(solver::Solver, Qc)
             P = wrap[d]
             lo = tlo[d] - spec.buffer
             hi = thi[d] + spec.buffer
-            n = clamp(hi - lo + 1, 4, P - 2 * margin)
+            n = clamp(hi - lo + 1, least, P - 2 * margin)
             lo = fld(lo + hi - n + 1, 2)
             return (mod(lo - 1, P), n)
         end
@@ -487,9 +490,9 @@ function tagged_region(solver::Solver, Qc)
         while true
             reach[d][1] && lo <= margin && (lo = 1)
             reach[d][2] && hi > n_global[d] - margin && (hi = n_global[d])
-            need = _placement_extent(spec.interpolation_order,
-                                     bare[d][1] && lo == 1,
-                                     bare[d][2] && hi == n_global[d])
+            need = max(least, _placement_extent(spec.interpolation_order,
+                                                bare[d][1] && lo == 1,
+                                                bare[d][2] && hi == n_global[d]))
             (hi - lo + 1 >= need || hi - lo + 1 >= b - a + 1) && break
             hi < b ? (hi += 1) : (lo -= 1)
         end

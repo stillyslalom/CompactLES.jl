@@ -12,6 +12,8 @@
 #   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,rz,blast N=64
 #   julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
 #   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,blast N=80 patches=2
+#   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,noh43
+#   julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -91,6 +93,24 @@
 #             density difference from the one-patch run in the same state, and
 #             the one-patch runs' own difference after a relative change of
 #             1e-15 to the initial energy. Not in `part=all`
+#   levels    refined levels under `patch_interfaces = :closure`, limiter off
+#             and on, each case of `levels` to its end time: the steps, the
+#             inadmissible point-steps after every step, split into the nodes
+#             of a refined patch's coarse-fine plane (the parent's shell) and
+#             the rest, the limiter's counts and the case's metrics. `wc` and
+#             `wcsub`: Woodward–Colella on 200 nodes with a box over root nodes
+#             111:170, at the global step and subcycled; `wcregrid`: a
+#             regridded box and regridded tiles of edge 8 following the density
+#             tags, the tiles also subcycled; `noh85`, `noh43` (and `noh85sub`,
+#             `noh43sub`): the cylindrical Noh of test/validation.jl's level
+#             rows on a box at the axis over that many root nodes, and
+#             `nohuniform`, the uniform run at the level's spacing; `a19`: the
+#             converging shock of the r-z plane, 64² nodes, with a box at the
+#             corner of the axis and the plane, to t = 0.165; `tiles` and
+#             `tilessub`: a blast in a 64² square with tiles of edge 8 over its
+#             centre, to t = 0.25. Not in `part=all`
+#   levelcost the wall time per step of the same cases' first steps, as
+#             `cost` takes it. Not in `part=all`
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -143,8 +163,8 @@ end_time(case) = case === :woodward ? WC_T : case === :noh ? NOH_T :
                  case === :noh3 ? NOH_T - Dict(NOH_T0)[3] : PULSE_T
 case_gamma(case) = case === :noh ? NOH_G : 1.4
 
-function woodward_problem()
-    h = 1.0 / (WC_N - 1)
+function woodward_problem(N=WC_N)
+    h = 1.0 / (N - 1)
     δ = 2h
     return Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                    transport=ConstantTransport(mu0=0.0),
@@ -1151,18 +1171,186 @@ function patches_part(counts)
     end
 end
 
+# --- refined levels --------------------------------------------------------
+
+units(s, Q) = Q isa Vector ? CL.eachpatch(s, Q) : ((s, Q),)
+level_of(ps) = ps isa CL.PatchSolver ? ps.patch.level : 0
+
+# The inadmissible points of the composite, those on a refined patch's
+# coarse-fine plane apart.
+function bad_split(s, Q)
+    shell = 0
+    rest = 0
+    eq = s.equations
+    m1, m2, m3 = eq.i_mom
+    for (ps, q) in units(s, Q)
+        n = ps.decomp.n_local
+        o = ps.decomp.offset
+        N = ps.decomp.n_global
+        for k in 1:n[3], j in 1:n[2], i in 1:n[1]
+            I = padded_index(ps, i, j, k)
+            ρ = sum(q[I, c] for c in 1:eq.n_species)
+            e = q[I, eq.i_energy] - (q[I, m1]^2 + q[I, m2]^2 + q[I, m3]^2) / (2ρ)
+            (ρ > 0 && e > 0) && continue
+            g = (i + o[1], j + o[2], k + o[3])
+            on = any(d -> n[d] > 1 && ((g[d] == 1 && CL.parent_fed(ps.bcs[d][1])) ||
+                                       (g[d] == N[d] && CL.parent_fed(ps.bcs[d][2]))), 1:3)
+            on ? (shell += 1) : (rest += 1)
+        end
+    end
+    return shell, rest
+end
+
+# (x, ρ) along the first line, the finest level's value at each x.
+function level_profile(s, Q)
+    pts = Dict{Float64,Tuple{Int,Float64}}()
+    for (ps, q) in units(s, Q), i in 1:ps.decomp.n_local[1]
+        x = round(xcoord(ps, 1, i), digits=12)
+        lv = level_of(ps)
+        haskey(pts, x) && pts[x][1] >= lv && continue
+        pts[x] = (lv, q[padded_index(ps, i, 1, 1), 1])
+    end
+    x = sort(collect(keys(pts)))
+    return x, [pts[k][2] for k in x]
+end
+
+level_numerics(n, amr, on; kw...) =
+    Numerics(; n_global=n, art=ArtificialProperties(enabled=true),
+             filter=StateFilter(compact_filter(); cfl=0.35),
+             control=StepControl(validity=:permissive), patch_interfaces=:closure, amr,
+             positivity_limiter=on, kw...)
+
+const LEVEL_CASES = ("wc", "wcsub", "wcregrid", "noh85", "noh43", "noh85sub", "noh43sub",
+                     "nohuniform", "a19", "tiles", "tilessub")
+
+# The runs of a level case: (label, problem, numerics from the limiter switch,
+# end time, metric of the final state or `nothing`).
+function level_runs(name)
+    per = (PeriodicBC(), PeriodicBC())
+    if name in ("wc", "wcsub", "wcregrid")
+        wc = woodward_problem(200)
+        num(a) = on -> level_numerics((200, 1, 1), a, on; cfl=0.3)
+        name == "wcregrid" || return [("box", wc,
+                                       num(AMR(initial=BlockRegion((110, 0, 0), (60, 1, 1)),
+                                               subcycle=name == "wcsub")), WC_T, nothing)]
+        jumps = (x, y, z, t) -> t == 0 && (abs(x - 0.1) < 0.03 || abs(x - 0.9) < 0.03)
+        amr(; kw...) = AMR(; initial=jumps, regrid_interval=10, kw...)
+        return [(label, wc, num(a), WC_T, nothing)
+                for (label, a) in (("regridded box", amr()),
+                                   ("regridded tiles", amr(tile=8)),
+                                   ("regridded tiles, subcycled", amr(tile=8, subcycle=true)))]
+    elseif startswith(name, "noh")
+        N = Dict(NOH_N)[2]
+        uniform = name == "nohuniform"
+        m = uniform ? 0 : parse(Int, name[4:5])
+        sub = endswith(name, "sub")
+        metric = (s, Q) -> begin
+            x, ρ = level_profile(s, Q)
+            plat, deficit, shock, _ = noh_metrics(x, ρ, 2)
+            drift = volume_integral(s, Q, :rho) / noh_cylinder_mass(NOH_T) - 1
+            @sprintf("plateau %.4f, deficit %.1f%%, shock %.4f, mass %+.2e", plat,
+                     100deficit, shock, drift)
+        end
+        noh_num(on) = Numerics(n_global=(uniform ? 3N - 1 : N, 1, 1),
+                               art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
+                               positivity_limiter=on, patch_interfaces=:closure,
+                               control=StepControl(validity=:permissive),
+                               amr=uniform ? nothing :
+                                   AMR(initial=BlockRegion((0, 0, 0), (m, 1, 1)),
+                                       subcycle=sub))
+        return [(uniform ? "uniform, $(3N - 1) nodes" : "box over $m nodes",
+                 noh_problem(2; N, t0=0.0), noh_num, NOH_T, metric)]
+    elseif name == "a19"
+        rz = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=1.4), metric=CylindricalMetric(),
+                     domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                     bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                     ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
+                                      Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
+        corner = CL.Regions.Box((0.0, 0.0, 0.0), (0.8, 1.0, 0.8))
+        return [("box at the corner", rz,
+                 on -> Numerics(n_global=(64, 1, 64), amr=AMR(initial=corner),
+                                positivity_limiter=on, patch_interfaces=:closure,
+                                control=StepControl(validity=:permissive)), 0.165, nothing)]
+    end
+    blast = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                    transport=ConstantTransport(mu0=0.0),
+                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()), per),
+                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                         p=1e-3 + exp(-((x - 0.5)^2 + (y - 0.45)^2) /
+                                                      0.004)))
+    return [("tiles of edge 8", blast,
+             on -> level_numerics((64, 64, 1),
+                                  AMR(initial=BlockRegion((16, 16, 0), (32, 32, 1)), tile=8,
+                                      subcycle=name == "tilessub"), on; cfl=0.4),
+             0.25, nothing)]
+end
+
+function levels_part(names)
+    println("\n=== levels: refined levels, limiter off and on ===")
+    for name in names, (label, prob, num, tfinal, metric) in level_runs(name),
+        on in (false, true)
+        s, Q = setup(prob, num(on))
+        bad = [0, 0]
+        count_bad = (s, q) -> (bad .+= bad_split(s, q); nothing)
+        run!(s, Q; tfinal, callback=count_bad)
+        @printf("  %-10s %-26s %-3s %6d steps, bad shell %5d, rest %6d", name, label,
+                on ? "on" : "off", s.step, bad[1], bad[2])
+        if on
+            c = CL.positivity_counts(s)
+            @printf(", limited %.2f%% / %.2f%%, unguaranteed %d",
+                    100c.stage_limited / c.stage_faces, 100c.filter_limited / c.filter_faces,
+                    c.unguaranteed)
+        end
+        metric === nothing || print(", ", metric(s, Q))
+        println()
+        flush(stdout)
+    end
+end
+
+function level_cost_part(names, reps)
+    println("\n=== levelcost: wall time per step of refined runs, limiter off and on ===")
+    steps = Dict("wc" => 600, "wcsub" => 300, "noh85" => 1000, "noh43" => 1000,
+                 "noh85sub" => 400, "noh43sub" => 400, "a19" => 150, "tiles" => 60,
+                 "tilessub" => 30)
+    for name in names, (label, prob, num, tfinal, _) in level_runs(name)
+        nmax = get(steps, name, 300)
+        for on in (false, true)
+            s, Q = setup(prob, num(on))
+            run!(s, Q; tfinal, nmax=2)
+        end
+        per_step = Dict(false => Float64[], true => Float64[])
+        for _ in 1:reps, on in (false, true)
+            s, Q = setup(prob, num(on))
+            wall = @elapsed run!(s, Q; tfinal, nmax)
+            push!(per_step[on], wall / s.step)
+        end
+        ratios = per_step[true] ./ per_step[false]
+        @printf("  %-10s %-26s off %.3f ms, on %.3f ms per step; on/off %.2f\n", name,
+                label, 1e3 * median(per_step[false]), 1e3 * median(per_step[true]),
+                median(ratios))
+        flush(stdout)
+    end
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
-                                patches="1"))
+                                patches="1", levels="wc,wcsub,noh43"))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     counts = parse.(Int, split(opt.patches, ','))
     for p in parts
-        p in PARTS || p in ("rz", "cost", "patches") ||
+        p in PARTS || p in ("rz", "cost", "patches", "levels", "levelcost") ||
             throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")), \
-                                 rz, cost or patches"))
+                                 rz, cost, patches, levels or levelcost"))
+    end
+    level_names = split(opt.levels, ',')
+    for l in level_names
+        l in LEVEL_CASES ||
+            throw(ArgumentError("unknown level case '$l', want one of " *
+                                join(LEVEL_CASES, ", ")))
     end
     for c in cases
         c in CASES || (c in PLANE_CASES && parts == ["cost"]) ||
@@ -1178,6 +1366,8 @@ function main(args)
     "rz" in parts && rz_part(opt.N)
     "cost" in parts && cost_part(cases, opt.N, opt.steps, opt.reps, first(counts))
     "patches" in parts && patches_part(counts)
+    "levels" in parts && levels_part(level_names)
+    "levelcost" in parts && level_cost_part(level_names, opt.reps)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []

@@ -491,14 +491,16 @@ function _substep_cfl_failure(solver, guard, root_dt, control)
         "StepControl.substep_cfl = $(control.substep_cfl)")
 end
 
+# `limiter` is the positivity limiters of the patches (`_limited_run_step!`),
+# or `nothing`.
 function _subcycled_step_status!(solver::Solver, states, dQs, dus, dt,
-                                 prepared::Bool, control)
+                                 prepared::Bool, control, limiter=nothing)
     t0 = solver.t
     guard = SubstepCFLGuard(dt)
     # `solver.step` counts completed steps; the level counts below are
     # one-based indices of the step in progress.
     status = _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
-                             solver.step + 1, dt, 1, control, guard)
+                             solver.step + 1, dt, 1, control, guard, limiter)
     status == 0 || return status, guard
     solver.tstage = t0 + dt
     _validate_transport_state!(solver, states)
@@ -552,10 +554,12 @@ _child_count(count::Int, mc::Int) = 3 * (count - 1) + mc
 # step, which the Hermite shell reads as θ = (m − 1 + RKC) / 3; both are
 # unused at the root. The operation order at two levels is the one the
 # two-level driver established, so a two-level run is unchanged by the
-# recursion.
+# recursion. Under the positivity limiter (`limiter`, the patches' limiters)
+# each stage's increment is limited after the Hermite endpoint's save, which
+# keeps the right-hand side, and a refined level's filter passes are limited.
 function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
                          prepared::Bool, count::Int, parent_dt, m::Int,
-                         control, guard)
+                         control, guard, limiter=nothing)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[ℓ]
@@ -605,13 +609,15 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         ℓ > 1 && shell!((T(m - 1) + T(RKC[stage])) / T(3))
-        status = _level_rhs!(solver, lev, states, dQs, first_prepared,
+        status = _level_rhs!(solver, lev, states,
+                             _limiter_stage_rhs(limiter, dQs, stage, dt), first_prepared,
                              !first_prepared, lev.level_comm.comm)
         status == 0 || return status
         status = _refreshed_substep_status!(solver, lev, states, dt, stage,
                                             count, control, guard)
         status == 0 || return status
         stage == 1 && save_boxes!(false)
+        _limit_level_stage!(limiter, solver, lev, states, dQs, dus, stage, dt)
         _ledger_open!(solver, states, lev)
         _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
         _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
@@ -629,7 +635,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     end
     _ledger!(solver, states, :wall_enforce, lev)
     if ℓ > 1 && solver.filter_interval > 0 && count % solver.filter_interval == 0
-        _level_filter!(solver, lev, states)
+        _limited_level_filter!(limiter, solver, lev, states)
         _ledger!(solver, states, :filter, lev)
         _sync_level!(solver, states, lev)
         _ledger!(solver, states, :same_level, lev)
@@ -656,7 +662,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         for mc in 1:3
             status = _advance_level!(solver, ℓ + 1, states, dQs, dus,
                             t0 + (mc - 1) * dtf, dtf, false,
-                            _child_count(count, mc), dt, mc, control, guard)
+                            _child_count(count, mc), dt, mc, control, guard, limiter)
             status == 0 || break
         end
     end
@@ -1926,7 +1932,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
         end
         prepared = true         # see the apply_bcs!/max_rate note above
         failure = limiting ?
-                  _limited_run_step!(_cold(solver), Q, workspace, dt, prepared)::Nothing :
+                  _limited_run_step!(_cold(solver), Q, workspace, dt, prepared,
+                                     control)::Union{Nothing,SolverFailure} :
                   _run_step!(solver, Q, workspace, dt, prepared, control)
         if failure !== nothing
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,

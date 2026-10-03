@@ -197,11 +197,21 @@ include("capability_cases.jl")
                 cyl, limited(filter=StateFilter(weighting=:volume)))
         rejects("positivity_limiter: on same-level patches (patch_grid) takes", closed,
                 limited(execution=Execution(patch_grid=(2, 1, 1))))
-        rejects("positivity_limiter: supports no refined levels", closed,
-                limited(amr=box))
-        rejects("the face relation of the filter needs at least", closed,
-                limited(execution=Execution(patch_grid=(2, 1, 1)),
+        rejects("positivity_limiter: on refined levels takes PatchInterfaces(flux = " *
+                ":closure)", closed, limited(amr=box))
+        rejects("positivity_limiter: on refined levels takes level_restriction = :inject",
+                closed, limited(amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)),
+                                        level_restriction=:filter),
+                                patch_interfaces=:closure))
+        rejects("positivity_limiter: on a radial grid supports a refined level as one box",
+                C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),
+                          ic=C.ic_radial),
+                limited(amr=AMR(initial=Box((0.0, 0, 0), (0.5, 2π, 1)), tile=8),
                         patch_interfaces=:closure))
+        rejects("the face relation of the filter needs at least", closed,
+                Numerics(n_global=(40, 1, 1), positivity_limiter=true,
+                         execution=Execution(patch_grid=(2, 1, 1)),
+                         patch_interfaces=:closure))
         rejects("positivity_limiter: runs on the host backend only", closed,
                 limited(execution=Execution(backend=C.device())))
         rejects("positivity_limiter: supports the ideal-gas EOS",
@@ -216,7 +226,7 @@ include("capability_cases.jl")
         rejects("positivity_limiter: does not support folded ends other than r = 0",
                 C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)), limited())
         rejects("the face relation of the filter needs at least", closed,
-                Numerics(n_global=(32, 1, 1), positivity_limiter=true))
+                Numerics(n_global=(20, 1, 1), positivity_limiter=true))
         rejects("the solver components carry different floating-point types", gas,
                 Numerics(n_global=(32, 1, 1), deriv=lele_d1_6(Float32)))
 

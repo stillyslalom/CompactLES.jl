@@ -4,7 +4,9 @@
 # and the bound it takes from the state entering `run!`; on the radial lines
 # folded at the cylindrical axis and the spherical origin, the face form with
 # the fold's face value, a run it never acts in, a blast it keeps admissible
-# while conserving, and the Noh implosions under strict validity. The rejected
+# while conserving, and the Noh implosions under strict validity; on
+# same-level patches and on refined levels, a run it never acts in and a
+# strong shock it keeps admissible. The rejected
 # configurations are in capability_tests.jl, the decomposed run in the MPI
 # suite's "positivity limiter" phase.
 #
@@ -489,5 +491,82 @@ end
         @test bad == 0
         @test abs(total(1) - mass0) / mass0 < 1e-13
         @test abs(total(5) - energy0) / energy0 < 1e-13
+    end
+
+    # Refined levels under the interface rows.
+    pos_level(n, amr, on; kw...) =
+        Numerics(; n_global=n, art=ArtificialProperties(enabled=true),
+                 filter=StateFilter(compact_filter(); cfl=0.35),
+                 control=StepControl(validity=:permissive), patch_interfaces=:closure,
+                 amr, positivity_limiter=on, kw...)
+
+    @testset "a refined run it never acts in is the unlimited refined run" begin
+        # Tiles over a quiet pulse, at the global step and subcycled.
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=1e-4),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.1, 0.1, 0.0),
+                                            p=1 + 1e-2 * exp(-((x - 0.45)^2 +
+                                                                (y - 0.5)^2) / 0.01)))
+        for sub in (false, true)
+            runs = map((false, true)) do on
+                s, Q = setup(prob, pos_level((48, 48, 1),
+                                             AMR(initial=BlockRegion((12, 12, 0),
+                                                                     (24, 24, 1)),
+                                                 tile=8, subcycle=sub), on))
+                run!(s, Q; tfinal=1.0, nmax=6)
+                (s, Q)
+            end
+            (s0, Q0), (s1, Q1) = runs
+            counts = CL.positivity_counts(s1)
+            @test counts.stage_faces > 0 && counts.filter_faces > 0
+            @test counts.stage_limited == 0 && counts.filter_limited == 0
+            @test s0.step == s1.step && s0.t == s1.t
+            @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+        end
+    end
+
+    @testset "a strong shock through a refined box stays admissible" begin
+        # Woodward–Colella with a box over the collision, at the global step
+        # and subcycled. The parent's nodes the restriction overwrites are not
+        # held, and their state reaches no first-order flux of a held node.
+        N = 200
+        h = 1.0 / (N - 1)
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, h), (0.0, h)),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                            p=1000 * (1 - tanh_blend(x, 0.1, 2h)) +
+                              0.01 * (tanh_blend(x, 0.1, 2h) - tanh_blend(x, 0.9, 2h)) +
+                              100 * tanh_blend(x, 0.9, 2h)))
+        for sub in (false, true)
+            bads = map((false, true)) do on
+                s, Q = setup(prob, pos_level((N, 1, 1),
+                                             AMR(initial=BlockRegion((110, 0, 0),
+                                                                     (60, 1, 1)),
+                                                 subcycle=sub), on; cfl=0.3))
+                bad = pos_bad_points(s, Q; tfinal=WC_T)
+                @test completed(s, WC_T)
+                on && @test CL.positivity_counts(s).stage_limited > 0
+                bad
+            end
+            @test bads[1] > 0
+            @test bads[2] == 0
+        end
+    end
+
+    @testset "Noh through the axis on a level under strict validity" begin
+        # The cylindrical implosion on a box at the axis over the first N ÷ 6 + 1
+        # root nodes, whose shock leaves the box through its coarse-fine face.
+        N = Dict(NOH_N)[2]
+        s, Q = setup(noh_problem(2; N, t0=0.0),
+                     Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
+                              cfl=NOH_CFL, patch_interfaces=:closure,
+                              positivity_limiter=true,
+                              amr=AMR(initial=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)))))
+        run!(s, Q; tfinal=NOH_T)
+        @test completed(s, NOH_T)
+        report = state_report(s, Q)
+        @test report.inadmissible == 0 && report.negative_density == 0
     end
 end

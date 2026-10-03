@@ -2132,6 +2132,8 @@ julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,no
 julia --project=. -t 1 bench/positivity.jl part=cost cases=rz,blast steps=300 N=64
 julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
 julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
+julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,nohuniform,a19,tiles,tilessub
+julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2296,6 +2298,51 @@ on two patches with the artificial properties and the filter off, conserves the 
 its corrections entered there; the running sum's end, which meets the register to round-off,
 and corrections left out of the low patch's anchor gave 8.5e-11. On the periodic blast of 80²
 the limited step costs 1.54 times the unlimited one on one patch and 1.49 on two.
+
+`part=levels` runs refined levels under `patch_interfaces = :closure`. A refined patch closes its
+lines at a coarse-fine face with the same interface rows, and its end node there, which the
+parent's shell overwrites, is not held. Held to their cell bounds, the parent's nodes the
+restriction overwrites fell to temperatures of 1e-12 under subcycling, where the parent steps
+them at up to the CFL number 0.75, and κ\* = ρc/T there set the root step: Woodward–Colella with a
+box took 3055 root steps against 1126 unlimited. Exempt, and kept out of their held neighbours'
+first-order fluxes where not admissible, as a shell node is, they took 1603; held at the global
+step, where they advance at the fine level's CFL number, the same run took 2632 steps against
+2367 exempt, and Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3216. The inadmissible
+point-steps after every step, those on a refined patch's coarse-fine plane apart:
+
+```
+case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
+WC 200, box, global step               1950 / 2367      148, 14684             0, 0
+WC 200, box, subcycled                 1126 / 1603      133, 10281             0, 0
+WC 200, regridded box                  3203 / 4204      0, 32799               0, 0
+WC 200, regridded tiles of 8           1094 / 1428      0, 8429                0, 0
+WC 200, regridded tiles, subcycled     1085 / 1398      0, 8432                0, 0
+Noh ν = 2, box over 85 nodes           6642 / 9220      0, 56724               0, 0
+Noh ν = 2, box over 43 nodes           6015 / 8097      477, 53933             0, 0
+Noh ν = 2, 85 nodes, subcycled         2214 / 2989      0, 18991               0, 0
+Noh ν = 2, 43 nodes, subcycled         2350 / 4059      216, 21802             0, 0
+r-z converging shock, corner box       627 / 627        0, 903                 0, 0
+blast 64², tiles of 8                  227 / 255        3051, 11428            179, 0
+blast 64², tiles of 8, subcycled       139 / 241        2092, 8186             596, 0
+```
+
+On the Noh level rows the limited box over 85 nodes gives plateau 15.6672, deficit 50.9%, shock
+0.2032 and mass +1.83e-7 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
+0.2032 and +1.79e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8301, 50.9%,
+0.2086 and −5.5e-5 (unlimited 14.9530, 52.4%, 0.2084, −1.3e-3). The 3216 unguaranteed sides
+there are the parent's, from the shock's arrival in its covered nodes. The inadmissible points
+the limiter leaves on the blast are shell nodes the parent's Lagrange interpolation sets between
+its nodes across the shock, along the face; no interior node of a tile or of the parent goes
+inadmissible. `part=levelcost`, as `part=cost`:
+
+```
+case                                   off, ms/step   on, ms/step   on/off
+WC 200, box, global step               0.360          0.459         1.33
+WC 200, box, subcycled                 0.787          0.906         1.15
+Noh ν = 2, box over 85 nodes           0.928          1.180         1.28
+blast 64², tiles of 8                  16.0           21.9          1.37
+r-z converging shock 64², corner box   31.2           51.0          1.59
+```
 
 ## Directional bulk viscosity
 
