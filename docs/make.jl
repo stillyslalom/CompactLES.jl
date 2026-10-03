@@ -221,6 +221,7 @@ DocMeta.setdocmeta!(
                 "Physics models" => "reference/physics.md",
                 "Geometry and boundaries" => "reference/geometry-boundaries.md",
                 "Runtime and output" => "reference/runtime.md",
+                "Field extraction and plotting" => "reference/extraction.md",
                 "Diagnostics" => "reference/diagnostics.md",
             ],
             "Advanced and extension API" => [

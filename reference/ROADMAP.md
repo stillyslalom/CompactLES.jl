@@ -235,7 +235,7 @@ surface; H8 for a magnetized target.
   Supernova remnant tutorial run under strict validity with no inadmissible
   point, at about twice the unlimited step. The r-z plane carries it with
   the axis, a symmetry plane at z = 0 and their corner (commits `d50697d`,
-  `f5f09c2`): Sedov leaves no inadmissible point and its shock radius is
+  `451285c`): Sedov leaves no inadmissible point and its shock radius is
   within 0.25% of the spherical line's in every direction, at about 2.5
   times the unlimited step. In order: same-level patch interfaces and refined levels, anchoring the face
   flux at a coarse-fine face and carrying the registers under subcycling;
@@ -454,7 +454,7 @@ promotion.
   The parent's filter pass spread the residual of an under-resolved
   restricted feature from the covered nodes along the parent's lines, into
   uncovered nodes and the level's ghost data; it now leaves that residual
-  out where the density is unresolved (commit `1fe960a`;
+  out where the density is unresolved (commit `04d3cff`;
   [measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
   The Advected bubbles tutorial's disturbance away from the bubbles is now 1
   to 10 times the uniform fine grid's, and the largest mass change of a gas
