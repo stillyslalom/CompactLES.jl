@@ -82,6 +82,14 @@ include("capability_cases.jl")
             @test C.advances(C.problem(bcs=(C.wall, C.per, C.per), eos=eos, ic=ic),
                              Numerics(n_global=n, positivity_limiter=true))
         end
+        # Same-level patches whose interfaces take their own rows, along a
+        # closed and along a periodic direction.
+        for bcs in ((C.wall, C.per, C.per), (C.per, C.per, C.per))
+            @test C.advances(C.problem(bcs=bcs),
+                             Numerics(n_global=(96, 16, 1), positivity_limiter=true,
+                                      execution=Execution(patch_grid=(2, 1, 1)),
+                                      patch_interfaces=:closure))
+        end
         # The radial grids folded at the cylindrical axis and the spherical
         # origin, and the r-z plane, periodic in z or with a plane at z = 0.
         for (prob, n) in ((C.problem(bcs=C.axis, domain=C.cyl_domain,

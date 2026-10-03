@@ -473,11 +473,13 @@ end
 
 # The divergence operator along a line of `n` nodes at spacing `h`, as a dense
 # matrix: the scheme's own plan applied to the identity on a one-rank
-# decomposition, so the closure rows and the line solve are those of the run.
-function _line_operator(scheme, n::Int, h, n_halo::Int, ::Type{T}) where {T}
+# decomposition, so the closure rows and the line solve are those of the run;
+# `lo_closures` and `hi_closures` replace an end's rows as `plan_direction`'s do.
+function _line_operator(scheme, n::Int, h, n_halo::Int, ::Type{T};
+                        lo_closures=nothing, hi_closures=nothing) where {T}
     decomp = Decomp{T}((n, n, 1), (false, false, false); dims=(1, 1, 1),
                        n_halo=n_halo, comm=MPI.COMM_SELF)
-    plan = plan_direction(decomp, scheme, 1, h)
+    plan = plan_direction(decomp, scheme, 1, h; lo_closures, hi_closures)
     o1, o2, _ = decomp.n_halo_d
     f = zeros(T, n + 2o1, n + 2o2, 1)
     out = zeros(T, n + 2o1, n + 2o2, 1)

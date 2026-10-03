@@ -141,4 +141,52 @@ function test_positivity_limiter()
     end
     check("r-z, one rank: the limiter acted (expect > 0)",
           cpref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
+
+    # Two same-level patches split along x, each on its own share of the
+    # ranks and decomposed within it at np > 2, against both patches on one
+    # rank: a patch's lines end at the interface as at a wall, and nothing of
+    # the limiter crosses it.
+    section("positivity limiter: same-level patches across ranks against one rank")
+    function patched(comm_here)
+        s = Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                   art=ArtificialProperties(enabled=true), cfl=0.4,
+                   control=StepControl(validity=:permissive), positivity_limiter=true,
+                   patch_grid=(2, 1, 1), interface_flux=:closure, comm=comm_here)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 + (y - 0.5)^2) /
+                                                         0.004)))
+        run!(s, Q; tfinal=1.0, nmax=40)
+        return s, Q
+    end
+    tref, Qtref = patched(MPI.COMM_SELF)
+    ctref = CL.positivity_counts(tref)
+    s, Q = patched(comm)
+    c = CL.positivity_counts(s)
+    worst = 0.0
+    for (ps, q) in CL.eachpatch(s, Q)
+        pref = getfield(tref, :patches)[ps.patch.id]
+        qref = Qtref[ps.patch.id]
+        off = ps.decomp.offset
+        for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
+            k in 1:s.equations.n_cons
+            a = q[padded_index(ps, i, j, 1), k]
+            b = qref[padded_index(CL.PatchSolver(tref, pref), i + off[1], j + off[2], 1), k]
+            worst = max(worst, abs(a - b))
+        end
+    end
+    scale = maximum(q -> maximum(abs, parent(q)), Qtref)
+    check("patches: state against one rank (relative)", gmax(worst) / scale, 1e-8)
+    check("patches: clock against one rank", abs(s.t - tref.t) / tref.t, 1e-8)
+    check("patches: stage faces limited (relative difference)",
+          abs(c.stage_limited - ctref.stage_limited) / max(ctref.stage_limited, 1), 1e-2)
+    check("patches: faces tested, counted once",
+          abs(c.stage_faces - ctref.stage_faces) +
+          abs(c.filter_faces - ctref.filter_faces), 0.5)
+    report = state_report(s, Q)
+    check("patches: inadmissible points at the end",
+          report.inadmissible + report.negative_density, 0.5)
+    check("patches, one rank: the limiter acted (expect > 0)",
+          ctref.stage_limited > 0 && ctref.filter_limited > 0 ? 0.0 : 1.0, 0.5)
 end

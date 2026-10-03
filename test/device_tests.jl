@@ -809,6 +809,7 @@ const POINTWISE_BODIES = (
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
     :_internal_energy_point!, :_interp_point!, :_inviscid_flux_point!,
     :_kappa_point!, :_limiter_anchor_point!, :_limiter_correct_point!,
+    :_limiter_end_anchor_point!, :_limiter_end_face_point!,
     :_limiter_offset_point!, :_limiter_radial_correct_point!,
     :_limiter_radial_rate_point!, :_limiter_radial_theta_point!,
     :_limiter_scan_point!, :_limiter_subtract_point!, :_limiter_theta_point!,

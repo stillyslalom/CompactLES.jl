@@ -976,14 +976,16 @@ keywords the ones given after it override.
   [`step!`](@ref) takes the unlimited step. When on, it holds a node register
   per conserved component and active direction, about a fifth more memory in
   three dimensions, and a step costs 1.1 to 1.7 times the unlimited one;
-  [`positivity_counts`](@ref) reports how often it acted. It requires a
-  single patch without refinement, the host backend, the ideal-gas EOS and
-  the explicit integrator, on an unstretched `CartesianMetric` without folds,
-  on the r-z plane of a `CylindricalMetric` with θ collapsed and
-  [`AxisBC`](@ref) at r = 0, z resolved or not and a [`SymmetryPlaneBC`](@ref)
-  allowed at its low end, or on the radial line of a `SphericalMetric` with θ
-  and φ collapsed and [`OriginBC`](@ref) at r = 0, the last two under the
-  filter weighting `:none`; setup rejects any other configuration.
+  [`positivity_counts`](@ref) reports how often it acted. It requires no
+  refined levels, the host backend, the ideal-gas EOS and the explicit
+  integrator, on an unstretched `CartesianMetric` without folds, on one patch
+  or on same-level patches (`Execution(patch_grid = ...)`) whose interfaces
+  take `PatchInterfaces(flux = :closure)`, on the r-z plane of a
+  `CylindricalMetric` with θ collapsed and [`AxisBC`](@ref) at r = 0, z
+  resolved or not and a [`SymmetryPlaneBC`](@ref) allowed at its low end, or
+  on the radial line of a `SphericalMetric` with θ and φ collapsed and
+  [`OriginBC`](@ref) at r = 0, the last two on one patch under the filter
+  weighting `:none`; setup rejects any other configuration.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a
@@ -1165,8 +1167,8 @@ function _setup(prob::Problem, num::Numerics)
             throw(ArgumentError("implicit conduction runs on a single patch without " *
                                 "refinement; remove amr or implicit"))
         num.positivity_limiter &&
-            throw(ArgumentError("positivity_limiter: supports a single patch " *
-                                "without refinement; remove amr or the limiter"))
+            throw(ArgumentError("positivity_limiter: supports no refined levels " *
+                                "(refine, amr); remove amr or the limiter"))
         legacy == _AMR_LEGACY_DEFAULTS ||
             throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
                                 "not both"))

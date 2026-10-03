@@ -94,7 +94,9 @@ tiled level with regridding and at most two levels.
 
 `Numerics(positivity_limiter = true)` is accepted on one host patch of an
 unstretched Cartesian grid, serial or decomposed along any dimension, in one,
-two or three dimensions; on the r-z plane of a `CylindricalMetric` with θ
+two or three dimensions, and on same-level slabs of that grid (`patch_grid`)
+under `patch_interfaces = :closure`, each slab serial or decomposed; on the
+r-z plane of a `CylindricalMetric` with θ
 collapsed, folded at r = 0 by [`AxisBC`](@ref), z resolved or not and a
 [`SymmetryPlaneBC`](@ref) allowed at its low end; and on the radial line of a
 `SphericalMetric` with θ and φ collapsed, folded at r = 0 by
@@ -103,7 +105,9 @@ either dimension under the filter weighting `:none`. In every case the
 ideal-gas EOS and the explicit integrator are required.
 A closed line needs enough nodes for the filter's face relation: 38 under the
 default derivative, 42 under [`lele_d1_8`](@ref) and 50 under
-[`lele_d1_10`](@ref).
+[`lele_d1_10`](@ref). A slab's line along the split dimension is checked with
+the interface rows at its interface ends and needs at most as many, 34 under
+the default derivative between two interfaces.
 
 ## Checkpoints
 
@@ -163,7 +167,8 @@ text below.
 | `positivity_limiter` on a curvilinear grid other than the r-z plane or the spherical radial line folded at r = 0 | `positivity_limiter: supports the CartesianMetric, the r-z plane` |
 | `positivity_limiter` on a stretched grid | `positivity_limiter: supports an unstretched grid only` |
 | `positivity_limiter` on a radial grid with `filter_weighting = :volume` | `positivity_limiter: on a radial grid takes the filter weighting :none` |
-| `positivity_limiter` with `patch_grid` or refinement | `positivity_limiter: supports a single patch without refinement` |
+| `positivity_limiter` with refinement | `positivity_limiter: supports no refined levels` |
+| `positivity_limiter` with `patch_grid` under `patch_interfaces = :ghost` | `positivity_limiter: on same-level patches (patch_grid) takes` |
 | `positivity_limiter` on a device | `positivity_limiter: runs on the host backend only` |
 | `positivity_limiter` with an EOS other than the ideal gas | `positivity_limiter: supports the ideal-gas EOS` |
 | `positivity_limiter` with implicit conduction | `positivity_limiter: does not combine with implicit conduction` |

@@ -2123,6 +2123,8 @@ julia --project=. -t 1 bench/positivity.jl
 julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
 julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,noh2,noh3 steps=1000
 julia --project=. -t 1 bench/positivity.jl part=cost cases=rz,blast steps=300 N=64
+julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
+julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2251,6 +2253,42 @@ A θ pass indexing the fields by a node's linear index runs in two thirds of the
 one indexing them by a Cartesian index, whose stride arithmetic each array repeats. On the
 r-z plane the radial pass that forms each face's speed and each cell's rate with its node
 terms is about two fifths of the limiter's time in a sampling profile, its largest part.
+
+A limited run can end with a point a little below zero internal energy: the periodic blast
+of 64² limited at cfl 0.2, 0.25 and 0.3, `run!` called for one step at a time, returned one at
+ρe ≈ −1e-20 after 11, 10 and 8 steps, and the next call then ran unlimited while ε was
+scaled by a non-positive minimum. With ε taken over the points where ρ and ρe are positive,
+all three run 200 steps limited.
+
+`part=patches` runs the two line cases on two and three same-level patches along x under
+`patch_interfaces = :closure`. A patch's line closes at an interface with the `:cascade3`
+rows, end weight 0.369 h against 0.215 h at a `:neutral3` wall, and the shared node is the
+end node of both patches; the averaging after each stage makes it the mean of the two
+patches' updates. With the end face at the shared node left unlimited, as at a wall,
+Woodward–Colella at N = 400 left 16 and 76 inadmissible point-steps on two and three patches,
+every one at the shared node, and none with the artificial properties off: the two patches'
+sensors give the artificial fluxes there different values. Limiting the end face as well,
+toward the point flux of the node's state, by one θ on both patches, removes them; at the
+battery's resolution:
+
+```
+case   patches   steps off / on   bad point-steps off / on   L1 ρ against one patch, off / on
+WC     2         4384 / 5569      37042 / 0                  8.84e-4 / 1.64e-3
+WC     3         4385 / 5527      36808 / 0                  4.75e-3 / 5.65e-3
+Noh    2         3511 / 5202      30297 / 0                  7.89e-6 / 2.07e-4
+Noh    3         3511 / 5112      30307 / 0                  1.13e-5 / 2.40e-4
+```
+
+No limited run leaves an unguaranteed side. A relative change of 1e-15 to the initial energy
+moves the limited one-patch runs by 3.6e-4 (Woodward–Colella) and 2.3e-4 (Noh) in L1 and the
+unlimited ones by 3.5e-8 and 1.1e-5, since θ is not continuous in round-off; the limited Noh
+runs differ from one patch at that level, at the wall and the shock, and agree to 1e-12 within
+eight nodes of an interface. The interface test of `test/positivity_tests.jl`, a periodic blast
+on two patches with the artificial properties and the filter off, conserves the composite
+Σ W Q to 2.6e-14 of the totals once the end face carries the face register at that end, with
+its corrections entered there; the running sum's end, which meets the register to round-off,
+and corrections left out of the low patch's anchor gave 8.5e-11. On the periodic blast of 80²
+the limited step costs 1.54 times the unlimited one on one patch and 1.49 on two.
 
 ## Directional bulk viscosity
 

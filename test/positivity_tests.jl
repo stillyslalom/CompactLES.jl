@@ -380,4 +380,114 @@ end
         @test abs(total(1) - mass0) / mass0 < 1e-13
         @test abs(total(5) - energy0) / energy0 < 1e-13
     end
+
+    @testset "a patched run it never acts in is the unlimited patched run" begin
+        # Two same-level patches along x, whose interface closes the divergence
+        # with its own rows, and a wall at either end.
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=1e-4),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.1, 0.1, 0.0),
+                                            p=1 + 1e-2 * exp(-((x - 0.45)^2 +
+                                                                (y - 0.5)^2) / 0.01)))
+        runs = map((false, true)) do on
+            s, Q = setup(prob, Numerics(n_global=(96, 40, 1), positivity_limiter=on,
+                                        art=ArtificialProperties(enabled=true),
+                                        execution=Execution(patch_grid=(2, 1, 1)),
+                                        patch_interfaces=:closure))
+            run!(s, Q; tfinal=1.0, nmax=40)
+            (s, Q)
+        end
+        (s0, Q0), (s1, Q1) = runs
+        counts = CL.positivity_counts(s1)
+        @test counts.stage_faces > 0 && counts.filter_faces > 0
+        @test counts.stage_limited == 0 && counts.filter_limited == 0
+        @test s0.step == s1.step && s0.t == s1.t
+        @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+    end
+
+    # (x, ρ) at every node of a line, a shared interface node once.
+    function pos_line(s, Q)
+        pts = Dict{Float64,Float64}()
+        for (ps, q) in (Q isa Vector ? CL.eachpatch(s, Q) : ((s, Q),)),
+            i in 1:ps.decomp.n_local[1]
+            pts[CL.xcoord(ps, 1, i)] = q[CL.padded_index(ps, i, 1, 1), 1]
+        end
+        x = sort(collect(keys(pts)))
+        return x, [pts[k] for k in x]
+    end
+
+    @testset "a strong shock through two patch interfaces stays admissible" begin
+        # Woodward–Colella on three patches: the left shock crosses the first
+        # interface and the collision the second. The limited patched run
+        # leaves no inadmissible point and stays as close to the limited single
+        # patch as the unlimited patched run is to the unlimited single patch.
+        N = 200
+        h = 1.0 / (N - 1)
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, h), (0.0, h)),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                            p=1000 * (1 - tanh_blend(x, 0.1, 2h)) +
+                              0.01 * (tanh_blend(x, 0.1, 2h) - tanh_blend(x, 0.9, 2h)) +
+                              100 * tanh_blend(x, 0.9, 2h)))
+        run_wc(patches, on) = begin
+            s, Q = setup(prob, Numerics(n_global=(N, 1, 1), cfl=0.3,
+                                        art=ArtificialProperties(enabled=true),
+                                        filter=StateFilter(compact_filter(); cfl=0.35),
+                                        control=StepControl(validity=:permissive),
+                                        execution=Execution(patch_grid=(patches, 1, 1)),
+                                        patch_interfaces=:closure,
+                                        positivity_limiter=on))
+            bad = pos_bad_points(s, Q; tfinal=WC_T)
+            (s, bad, pos_line(s, Q)...)
+        end
+        (s0, bad0, x0, ρ0), (s1, bad1, x1, ρ1) = run_wc(3, false), run_wc(3, true)
+        _, _, _, ρs0 = run_wc(1, false)
+        _, _, _, ρs1 = run_wc(1, true)
+        @test bad0 > 0
+        @test bad1 == 0
+        @test s1.t == s0.t
+        counts = CL.positivity_counts(s1)
+        @test counts.stage_limited > 0 && counts.filter_limited > 0
+        @test length(x1) == N
+        L1(a, b) = sum(abs, a .- b) / sum(abs, b)
+        @test L1(ρ1, ρs1) < 2 * L1(ρ0, ρs0)
+    end
+
+    @testset "a limited blast conserves across patch interfaces" begin
+        # Periodic along both directions and split along x, without the
+        # artificial properties and the filter, whose fluxes at the shared node
+        # differ between the two patches: the composite sum, each patch's
+        # weights and the shared node in both patches, is conserved.
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-5 + exp(-((x - 0.45)^2 + (y - 0.5)^2) /
+                                                         0.004)))
+        s, Q = setup(prob, Numerics(n_global=(96, 48, 1), cfl=0.3, filter=nothing,
+                                    art=ArtificialProperties(enabled=false),
+                                    control=StepControl(validity=:permissive),
+                                    execution=Execution(patch_grid=(2, 1, 1)),
+                                    patch_interfaces=:closure, positivity_limiter=true))
+        lims = getfield(s, :positivity)
+        function total(c)
+            acc = 0.0
+            for (p, (ps, q)) in enumerate(CL.eachpatch(s, Q))
+                W = lims[p].weights
+                o = ps.decomp.n_halo_d
+                for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1]
+                    acc += W[1][i+o[1]] * W[2][j+o[2]] * q[CL.padded_index(ps, i, j, 1), c]
+                end
+            end
+            return acc
+        end
+        mass0, energy0 = total(1), total(5)
+        bad = pos_bad_points(s, Q; tfinal=1.0, nmax=40)
+        counts = CL.positivity_counts(s)
+        @test counts.stage_limited > 0
+        @test bad == 0
+        @test abs(total(1) - mass0) / mass0 < 1e-13
+        @test abs(total(5) - energy0) / energy0 < 1e-13
+    end
 end

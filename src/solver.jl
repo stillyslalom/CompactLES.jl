@@ -108,7 +108,8 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # The implicit half of the additive Runge–Kutta integrator (imex.jl), or
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
-    # The positivity limiter (positivity.jl), or `nothing` without it. Read by
+    # The positivity limiter (positivity.jl), a vector of them aligned with the
+    # patches of a patched solver, or `nothing` without it. Read by
     # `run!` alone, which steps a limited solver through `_limited_run_step!`
     # behind a function barrier, so the field is untyped, as `inputs` is.
     positivity::Any

@@ -10,6 +10,8 @@
 #   julia --project=. -t 1 bench/positivity.jl part=src cases=sedov,noh2,noh3
 #   julia --project=. -t 1 bench/positivity.jl part=rz N=96
 #   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,rz,blast N=64
+#   julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
+#   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,blast N=80 patches=2
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -80,7 +82,15 @@
 #             the median of the pairs' ratios. `cases` takes the radial cases
 #             here too, `rz` (the Sedov of part=rz on N × N nodes) and `blast`
 #             (the same deposit at the centre of a periodic square of N × N
-#             nodes). Not in `part=all`
+#             nodes). Not in `part=all`. `patches` > 1 splits the Cartesian
+#             cases into that many same-level patches along x
+#   patches   Woodward–Colella and planar Noh on one patch and on each count
+#             of same-level patches in `patches`, along x under
+#             `patch_interfaces = :closure`, limiter off and on: the steps, the
+#             inadmissible point-steps, the unguaranteed sides and the L1
+#             density difference from the one-patch run in the same state, and
+#             the one-patch runs' own difference after a relative change of
+#             1e-15 to the initial energy. Not in `part=all`
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -162,14 +172,17 @@ end
 # The case's numerics with the filter left to the loop (`interval = 0`), under
 # `validity = :permissive` as in bench/shockfoot.jl. `interval = 1` gives the
 # filter back to `run!`, and `limiter` sets `Numerics(positivity_limiter)`.
-function build(case; interval=0, limiter=false)
+function build(case; interval=0, limiter=false, patches=1)
     filter = StateFilter(compact_filter(); cfl=0.35, interval)
     control = StepControl(validity=:permissive)
     art = ArtificialProperties(enabled=true)
+    execution = Execution(patch_grid=(patches, 1, 1))
     case === :woodward &&
         return setup(woodward_problem(),
                      Numerics(n_global=(WC_N, 1, 1), art=art, cfl=0.3, filter=filter,
-                              control=control, positivity_limiter=limiter))
+                              control=control, positivity_limiter=limiter,
+                              execution=execution,
+                              patch_interfaces=:closure))
     case === :sedov &&
         return setup(sedov_problem(),
                      Numerics(n_global=(SEDOV_N, 1, 1), art=art, cfl=0.3, filter=filter,
@@ -184,7 +197,8 @@ function build(case; interval=0, limiter=false)
         return setup(noh_problem(1),
                      Numerics(n_global=(Dict(NOH_N)[1], 1, 1), art=art, cfl=NOH_CFL,
                               filter=filter, control=control,
-                              positivity_limiter=limiter))
+                              positivity_limiter=limiter, execution=execution,
+                              patch_interfaces=:closure))
     return setup(pulse_problem(),
                  Numerics(n_global=(PULSE_N, 1, 1), art=art, cfl=0.3, filter=filter,
                           control=control, positivity_limiter=limiter))
@@ -1020,10 +1034,11 @@ function plane_problem(case)
                                         p=1e-5 + pin * exp(-(r^2 + z^2) / SEDOV_S^2)))
 end
 
-plane_numerics(on, n) = Numerics(n_global=n, art=ArtificialProperties(enabled=true),
-                                 cfl=0.3, filter=StateFilter(compact_filter(); cfl=0.35),
-                                 control=StepControl(validity=:permissive),
-                                 positivity_limiter=on)
+plane_numerics(on, n; patches=1) =
+    Numerics(n_global=n, art=ArtificialProperties(enabled=true), cfl=0.3,
+             filter=StateFilter(compact_filter(); cfl=0.35),
+             control=StepControl(validity=:permissive), positivity_limiter=on,
+             execution=Execution(patch_grid=(patches, 1, 1)), patch_interfaces=:closure)
 
 # Sedov on the r-z quarter plane and on the spherical line at the same spacing.
 function rz_part(N)
@@ -1065,13 +1080,14 @@ end
 
 # The wall time per step off and on, over the first `steps` steps from fresh
 # solvers, `reps` pairs alternated after a compiling run of each.
-function cost_part(cases, N, steps, reps)
-    println("\n=== cost: wall time per step, limiter off and on ===")
+function cost_part(cases, N, steps, reps, patches)
+    println("\n=== cost: wall time per step, limiter off and on, $patches patch(es) ===")
     for case in cases
         plane = case in PLANE_CASES
-        make(on) = !plane ? build(case; interval=1, limiter=on) :
+        make(on) = !plane ? build(case; interval=1, limiter=on, patches) :
                    setup(plane_problem(case),
-                         plane_numerics(on, case === :rz ? (N, 1, N) : (N, N, 1)))
+                         plane_numerics(on, case === :rz ? (N, 1, N) : (N, N, 1);
+                                        patches))
         tfinal = plane ? SEDOV_T : end_time(case)
         for on in (false, true)
             solver, Q = make(on)
@@ -1092,16 +1108,61 @@ function cost_part(cases, N, steps, reps)
     end
 end
 
+# Each line of the density along x, the shared node of two patches once.
+function line_density(solver, Q)
+    points = Dict{Float64,Float64}()
+    for (ps, q) in (Q isa Vector ? CL.eachpatch(solver, Q) : ((solver, Q),)),
+        i in 1:ps.decomp.n_local[1]
+        points[xcoord(ps, 1, i)] = q[padded_index(ps, i, 1, 1), 1]
+    end
+    return [points[x] for x in sort(collect(keys(points)))]
+end
+
+function patches_part(counts)
+    println("\n=== patches: same-level patches along x, interface_flux = :closure ===")
+    for case in (:woodward, :noh), limiter in (false, true)
+        function run_case(patches; perturb=false)
+            solver, Q = build(case; interval=1, limiter, patches)
+            if perturb
+                for i in 1:solver.decomp.n_local[1]
+                    Q[padded_index(solver, i, 1, 1), 5] *= 1 + 1e-15
+                end
+            end
+            bad = Ref(0)
+            count_bad = (s, q) -> (r = state_report(s, q);
+                                   bad[] += r.negative_density + r.inadmissible; nothing)
+            run!(solver, Q; tfinal=end_time(case), callback=count_bad)
+            return solver, line_density(solver, Q), bad[]
+        end
+        ref, ρref, _ = run_case(1)
+        L1(ρ) = sum(abs, ρ .- ρref) / sum(abs, ρref)
+        _, ρp, _ = run_case(1; perturb=true)
+        @printf("  %-9s %-3s one patch: %5d steps; after a 1e-15 change, L1 %.2e\n", case,
+                limiter ? "on" : "off", ref.step, L1(ρp))
+        for P in counts
+            solver, ρ, bad = run_case(P)
+            @printf("  %-9s %-3s %d patches: %5d steps, bad %6d, L1 against one patch \
+                     %.2e", case, limiter ? "on" : "off", P, solver.step, bad, L1(ρ))
+            limiter && @printf(", unguaranteed sides %d",
+                               CL.positivity_counts(solver).unguaranteed)
+            println()
+        end
+        flush(stdout)
+    end
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
-                                identity_steps=300, N=96, steps=500, reps=3))
+                                identity_steps=300, N=96, steps=500, reps=3,
+                                patches="1"))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
+    counts = parse.(Int, split(opt.patches, ','))
     for p in parts
-        p in PARTS || p in ("rz", "cost") ||
+        p in PARTS || p in ("rz", "cost", "patches") ||
             throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")), \
-                                 rz or cost"))
+                                 rz, cost or patches"))
     end
     for c in cases
         c in CASES || (c in PLANE_CASES && parts == ["cost"]) ||
@@ -1115,7 +1176,8 @@ function main(args)
     "pulse" in parts && pulse_part()
     "src" in parts && src_part(cases)
     "rz" in parts && rz_part(opt.N)
-    "cost" in parts && cost_part(cases, opt.N, opt.steps, opt.reps)
+    "cost" in parts && cost_part(cases, opt.N, opt.steps, opt.reps, first(counts))
+    "patches" in parts && patches_part(counts)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []

@@ -195,10 +195,13 @@ include("capability_cases.jl")
                 limited(stretch=stretched))
         rejects("positivity_limiter: on a radial grid takes the filter weighting :none",
                 cyl, limited(filter=StateFilter(weighting=:volume)))
-        rejects("positivity_limiter: supports a single patch without refinement", closed,
+        rejects("positivity_limiter: on same-level patches (patch_grid) takes", closed,
                 limited(execution=Execution(patch_grid=(2, 1, 1))))
-        rejects("positivity_limiter: supports a single patch without refinement", closed,
+        rejects("positivity_limiter: supports no refined levels", closed,
                 limited(amr=box))
+        rejects("the face relation of the filter needs at least", closed,
+                limited(execution=Execution(patch_grid=(2, 1, 1)),
+                        patch_interfaces=:closure))
         rejects("positivity_limiter: runs on the host backend only", closed,
                 limited(execution=Execution(backend=C.device())))
         rejects("positivity_limiter: supports the ideal-gas EOS",

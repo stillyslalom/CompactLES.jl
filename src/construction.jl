@@ -306,7 +306,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                              implicit, equations === nothing ? NavierStokes1T(eos) :
                                        equations,
                              deriv, filt, filter_weighting, n_global, n_halo,
-                             L_domain, T)
+                             L_domain, T; interface_flux, interface_rhs,
+                             interface_divergence)
     end
     if implicit !== nothing
         _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
@@ -775,14 +776,19 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     n_species = equations.n_species
     n_cons = equations.n_cons
     if npatch > 1
-        return _build_patched_solver(T, n_global, periodic, regions, faces_all,
-                                     patch_grid, bcs, eos, equations, transport,
-                                     art, metric, stretch, sources, origin, Lt,
-                                     coord_shift, h, deriv, filt, smoo, cfl,
-                                     filter_interval, filter_cfl, filter_weighting,
-                                     control, n_halo, comm, backend, interface_rhs,
-                                     n_cons, n_species; interface_divergence,
-                                     interface_flux, schemes)
+        solver = _build_patched_solver(T, n_global, periodic, regions, faces_all,
+                                       patch_grid, bcs, eos, equations, transport,
+                                       art, metric, stretch, sources, origin, Lt,
+                                       coord_shift, h, deriv, filt, smoo, cfl,
+                                       filter_interval, filter_cfl, filter_weighting,
+                                       control, n_halo, comm, backend, interface_rhs,
+                                       n_cons, n_species; interface_divergence,
+                                       interface_flux, schemes)
+        # One limiter per patch this rank holds, in the order of its patches.
+        positivity_limiter &&
+            (solver.positivity = [PositivityLimiter(PatchSolver(solver, p))
+                                  for p in getfield(solver, :patches)])
+        return solver
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     truncation = mode_truncation(T, polar_truncation, decomp,
