@@ -8730,6 +8730,7 @@ and geometry limits](#fold-order-and-geometry-limits).
 ```text
 julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1,4.1 sigmas=0,0.25,1
 julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1 sigmas=0 ns=64,128,256
+julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1,4.1 sigmas=0.25 betas=1
 ```
 
 The dipole of the Oscillating sphere tutorial (sphere radius 0.1, k = ω = 4π,
@@ -8762,6 +8763,15 @@ nothing under the curvature term, whose relaxation rate c/R (0.476 and 0.244
 at the two radii) exceeds σc/L_ref (0.125 and 0.0625); at `sigma` = 1 the
 excess, 0.024 and 0.006, adds the reflection (K − κ)/(2ω) in some phase. The
 plane form's relaxation adds σc/(2ωL_ref), 4.97e-3 and 2.49e-3, in phase.
+
+The transverse term carries the u_θ cot θ/r of the collapsed φ, which the
+φφ velocity gradient holds once u_r/r is dropped. Under the default weight
+`beta_t` = M ≈ 1e-3 it moves each reflection above by at most 1.2e-5 of its
+value (1.0021156e-3 to 1.0021067e-3 at R = 2.1). Under `beta_t` = 1, where
+the transverse term enters at first order in the amplitude, the reflection
+at R = 2.1 and 4.1 is 4.55e-4 and 4.13e-5 with it and 2.96e-4 and 1.62e-4
+without it: without it the reflection falls as (kR)^−0.9, with it as
+(kR)^−3.6.
 
 The tutorial's own grid (32 polar nodes) and default relaxation, to t = 2:
 the amplitude along the line nearest the axis is 0.999 to 1.004 of the exact

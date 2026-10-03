@@ -1614,7 +1614,10 @@ components.
   `L* = max(K, n_c c/2r)(p − p∞) − ρc² n_c u_r/r − β_t 𝒯`: the first-order
   radiation condition of Bayliss and Turkel, (∂_t + c∂_r + n_c c/2r) p′ = 0,
   with the curvature source of the velocity divergence taken out of the
-  incoming wave and out of 𝒯. It reflects a wave of wavenumber k by a
+  incoming wave and out of 𝒯. 𝒯 otherwise takes the physical velocity
+  gradient, a collapsed transverse dimension's curvature parts included, as
+  at the inflow (u_r/r on the z face of an r-z grid, u_θ cot θ/r at the
+  radial face of an r-θ grid). It reflects a wave of wavenumber k by a
   second-order 1/(2(kr)²) where the plane form reflects 1/(2kr), and its own
   relaxation toward p∞ replaces σ's wherever it is the faster; the inner face
   of an annulus keeps the plane form. The derivation is in the header of

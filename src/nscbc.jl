@@ -61,9 +61,22 @@
 # purpose, holding the mean pressure, is already served by κ. On a curved
 # transverse direction grad_u[t,t] carries u_r/r (metric.jl), which is part
 # of the curvature source above and not of the transverse flow, so the
-# transverse term 𝒯 drops it there. The inner radial face of an annulus,
-# where the outgoing wave converges and the same condition would relax at a
-# negative rate, keeps the plane form, as does every Cartesian face.
+# transverse term 𝒯 drops it there.
+#
+# The velocity gradients in 𝒯 are otherwise the physical components, curvature
+# parts included, and a collapsed transverse dimension contributes its row as
+# a resolved one does, as at the inflow (the derivation is with the inflow
+# below). On the z face of an r-z grid that row adds the transverse divergence
+# u_r/r of the collapsed θ, which beside the axis equals the ∂u_r/∂r of the
+# resolved direction, and on the radial face of a spherical grid with φ
+# collapsed it adds the u_θ cot θ / r that remains of the φφ component once
+# u_r/r is dropped. At the radial face of a cylindrical grid with θ collapsed
+# it adds only the centrifugal part −u_θ²/r of u_t·∇_t u_n, which vanishes
+# without swirl.
+#
+# The inner radial face of an annulus, where the outgoing wave converges and
+# the same condition would relax at a negative rate, keeps the plane form, as
+# does every Cartesian face.
 
 """
     NSCBCOutflowBC(; pinf, sigma=0.25, Lref=0.0, beta_t=-1.0)
@@ -211,6 +224,9 @@ _curved_transverse(::SphericalMetric, d::Int) = (d == 1, d == 1)
         # On a curved face, 1/r and the divergences of the transverse
         # velocities less the curvature part u_r/r, which the curvature term
         # below carries in full.
+        # A collapsed transverse dimension has no pressure derivative but keeps
+        # the curvature parts of its velocity-gradient row, zero on a Cartesian
+        # grid, and they enter as a resolved row's do (header).
         ir = zero(T)
         (curv1 | curv2) && (ir = inv_r[I])
         transverse_in = zero(T)
@@ -220,6 +236,10 @@ _curved_transverse(::SphericalMetric, d::Int) = (d == 1, d == 1)
             curv1 && (div1 -= un * ir)
             transverse_in += ut * ih_t1[I] * dp_t1[I] +
                   ρ * c * c * div1 + sgn * ρ * c * ut * grad_u[t1, d][I]
+        else
+            div1 = grad_u[t1, t1][I]
+            curv1 && (div1 -= un * ir)
+            transverse_in += ρ * c * c * div1 + sgn * ρ * c * uv[t1] * grad_u[t1, d][I]
         end
         if act2
             ut = uv[t2]
@@ -227,6 +247,10 @@ _curved_transverse(::SphericalMetric, d::Int) = (d == 1, d == 1)
             curv2 && (div2 -= un * ir)
             transverse_in += ut * ih_t2[I] * dp_t2[I] +
                   ρ * c * c * div2 + sgn * ρ * c * ut * grad_u[t2, d][I]
+        else
+            div2 = grad_u[t2, t2][I]
+            curv2 && (div2 -= un * ir)
+            transverse_in += ρ * c * c * div2 + sgn * ρ * c * uv[t2] * grad_u[t2, d][I]
         end
         βt = beta_t < 0 ? Ma : beta_t
         K = sigma * (1 - Ma * Ma) * c / Lref

@@ -9,12 +9,14 @@
 # CompactLES.
 
 """
-    sphere_dipole_reflection(R; sigma=0.25, n=128, ntheta=16, samples=32)
+    sphere_dipole_reflection(R; sigma=0.25, beta_t=-1.0, n=128, ntheta=16,
+                             samples=32)
 
 The sphere of radius a = 0.1 oscillates along the polar axis with velocity
 U cos(ωt), U = 1e-3, at wavelength λ = 0.5 (k = ω = 4π, ρ = c = 1,
 γ = 1.4); a `DirichletBC` holds the exact dipole at r = a and the run starts
-from it. The outer face at `R` carries `NSCBCOutflowBC(pinf = 1/γ; sigma)`.
+from it. The outer face at `R` carries
+`NSCBCOutflowBC(pinf = 1/γ; sigma, beta_t)`.
 The radial spacing is that of `n` nodes over [a, 2.1], and the run ends at
 t = R − a, before the wave the face reflects returns from the sphere. Over
 the last period the pressure on the line of nodes nearest the axis is
@@ -28,7 +30,8 @@ reflection coefficient.
 Returns `(reflection = |β/α|, amplitude = |α/A|, steps, nr, kR)`, `A` the
 exact amplitude.
 """
-function sphere_dipole_reflection(R; sigma=0.25, n=128, ntheta=16, samples=32)
+function sphere_dipole_reflection(R; sigma=0.25, beta_t=-1.0, n=128, ntheta=16,
+                                  samples=32)
     γ, a, λ, U = 1.4, 0.1, 0.5, 1e-3
     k = 2π / λ
     h1(x) = -cis(x) * (x + im) / x^2
@@ -49,7 +52,7 @@ function sphere_dipole_reflection(R; sigma=0.25, n=128, ntheta=16, samples=32)
         metric = SphericalMetric(),
         domain = ((a, R), (0.0, π), (0.0, 1.0)),
         bcs = ((DirichletBC((r, θ, φ, t) -> exact(r, θ, t)),
-                NSCBCOutflowBC(pinf = 1 / γ, sigma = sigma)),
+                NSCBCOutflowBC(pinf = 1 / γ, sigma = sigma, beta_t = beta_t)),
                (PoleBC(), PoleBC()), PeriodicBC()),
         ic = (r, θ, φ) -> exact(r, θ, 0.0))
     solver, Q = setup(problem, Numerics(n_global = (nr, ntheta, 1)))

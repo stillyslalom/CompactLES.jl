@@ -226,19 +226,6 @@ surface; H8 for a magnetized target.
   remnant tutorial under the default strict validity, their errors
   unchanged, and no inadmissible cell during the Woodward–Colella run.
 
-- [ ] **N33 — Measure the mass the r-z axis face carries.** On the
-  θ-collapsed axis fold the area-weighted mass and energy fluxes are even in
-  r, so the folded divergence's face at the axis carries a nonzero flux,
-  about −h² ρ u_r′(0)/12 by the operator's face relation (Python analysis of
-  the folded C6 operator, not yet measured in the solver): second order
-  globally, but near 17% of the first node's mass per unit time at every
-  resolution. On the spherical origin the fluxes are odd and the face carries
-  none. Measure the total mass drift of an r-z run with radial flow through
-  the axis region (a converging shock, an axis-crossing vortex) against a
-  closed Cartesian run, and decide whether the scheme should carry the axis
-  face flux explicitly.
-  **Gate:** the measured drift recorded, and the decision with it.
-
 - [ ] **N32 — Carry the positivity limiter to every configuration.** N26's
   limiter starts on the Cartesian metric, one patch, host storage. The goal is
   parity with the uniform Cartesian run on every supported configuration, and
@@ -1081,6 +1068,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
   pressure pulse crossing the face while the face held u_r against its
   radial gradient; the transverse pressure gradient of the inflow's
   transverse terms now takes the weight min(β_t, M) (commit `7187b27`).
+- [x] **N33** — The r-z axis face carries −h² ρ u_r′(0)/12, a twelfth of the
+  first node's mass rate and the rate of change of the midpoint rule's own
+  error at the axis; the scheme is unchanged, and with an (h²/24) q₁ end
+  correction the r-z mass is conserved to fourth order (commit `3742897`).
 
 ### Filtering, regularization, boundaries and species
 
