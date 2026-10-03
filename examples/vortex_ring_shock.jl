@@ -535,10 +535,10 @@ nothing #hide
 # ![Waves and interface against time](../assets/examples/vortex_ring_shock/waves.png)
 #
 # On the wall each wave and the interface move at the one-dimensional
-# velocity within 1%, except the shock reflected from the end wall and the
-# interface after reshock, which differ by 1.7% and 1.6%; the two grids agree
-# with each other within 1%. Over the 200 µs window the interface after reshock
-# moves at 42.7 m/s against 43.4 m/s. It then slows and, near 8.2 ms, turns
+# velocity within 1% on the finer grid, except the shock reflected from the
+# end wall and the interface after reshock, which differ by 1.7% and 1.6%;
+# the two grids agree with each other within 1%. Over the 200 µs window the
+# interface after reshock moves at 42.7 m/s against 43.4 m/s. It then slows and, near 8.2 ms, turns
 # back toward the end wall.
 #
 # On the axis the ring has pressed the interface 4.6 mm into the SF6 by the
@@ -595,6 +595,12 @@ nothing #hide
 # the dimple inverts into a column of SF6 that rises along the axis. At the
 # end of the run the SF6 on the axis reaches 139 mm, with a mole fraction
 # above one half up to 73 mm, while the interface at the wall is at 31 mm.
+#
+# The oblique lines near the top of the tube at 7.96 and 8.69 ms spread from
+# vorticity that forms at the inflow face within 2 mm of the axis near
+# 7.8 ms, after the shock reflected from the interface has left through it
+# and the inflow target has switched. It peaks at 3700 1/s and decays to
+# 2000 1/s as the inflow carries it down.
 #
 # The run ends 1.6 ms after the shock reaches the interface, 0.3 ms after the
 # shock transmitted at reshock reaches the top face. Behind that shock the air
