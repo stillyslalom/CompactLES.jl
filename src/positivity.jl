@@ -137,6 +137,19 @@
 # sub-communicator per direction per stage and per filter pass, entered by
 # every rank of it; on a line a rank holds whole, the sweep of the running sum
 # finishes the face values.
+#
+# On device storage the bodies launch as kernels over the same boxes, and
+# every array they read lives in the fields' storage: the weights, the face
+# areas, the flags of the overwritten positions and the line planes are
+# uploaded or allocated there at construction. Four steps stay on the host,
+# each with an explicit copy: the tallies of a θ pass, reduced on the device
+# to four sums that cross to the host (one copy per pass); the offsets of a
+# decomposed line, whose planes cross to the host for the `Allgather` and
+# back (one copy each way per direction, stage and filter pass); the θ
+# exchange at a same-level interface, whose two planes per record cross and
+# return; and the minima that set ε, from a host copy of the state once per
+# `run!`. A device level's tiles share stacked storage, and the limiter, whose
+# registers are per patch, is not carried on a tiled device level.
 
 # ε is this fraction of the minimum ρ and ρe of the state entering `run!`.
 const LIMITER_FRACTION = 0.01
@@ -158,11 +171,12 @@ The state of the positivity limiter on a solver built with
 per-direction node registers, the line planes of the running sums, and the
 bounds of the current `run!`. Built by setup.
 """
-mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T}}
+mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
+                                 B<:AbstractVector{Bool},P<:AbstractArray{T,3},
+                                 C<:AbstractArray{Int,3}}
     weights::NTuple{3,V}            # W_d at each padded position along d
     inv_weights::NTuple{3,V}        # 1 / W_d, which the face pass multiplies by
-    free::Tuple{Vector{Bool},Vector{Bool},Vector{Bool},A}
-                                    # positions on a face whose condition
+    free::Tuple{B,B,B,A}            # positions on a face whose condition
                                     # overwrites the state (DirichletBC, a
                                     # coarse-fine face), and the patch's
                                     # `overwritten` nodes
@@ -178,29 +192,32 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T}}
     radial::NTuple{3,Bool}          # d is a radial line folded at r = 0
     fold_lo::NTuple{3,Bool}         # the global low end of d is a fold
     n_comp::NTuple{3,Int}           # registers of d: n_cons, and the pressure
-    volume::Vector{Bool}            # per component (and a trailing false): a
+    volume::B                       # per component (and a trailing false): a
                                     # filter pass along a radial line weights
                                     # it by J
     volume_state::NTuple{5,Bool}    # the same for ρ, the momenta and E
     areal::NTuple{3,Bool}           # d takes area-weighted fluxes, D(A_d F), on
                                     # lines of constant A_d (z on the r-z plane)
     interface::NTuple{3,NTuple{2,Bool}} # the ends of d at a patch interface
-    anchor::Vector{Array{T,3}}      # per d: (n_cons, n_a, n_b) Φ at the low face
-    anchor_hi::Vector{Array{T,3}}   # Φ at the high face, at a patch interface
-    totals::Vector{Array{T,3}}      # line totals of the local running sums
-    aux::Vector{Array{T,3}}         # anchor (stage) or measurement (filter)
-    offset::Vector{Array{T,3}}      # this rank's running-sum offset
-    wrap::Vector{Array{T,3}}        # the value at the global low face
-    cstar::Vector{Array{T,3}}       # the constant removed from a filter flux
-    zero_plane::Vector{Array{T,3}}
-    line_counts::Vector{Array{Int,3}}   # per d: (4, n_a, n_b) each line's tallies
-                                        # of a θ pass, summed into `counts`
+    anchor::Vector{P}               # per d: (n_cons, n_a, n_b) Φ at the low face
+    anchor_hi::Vector{P}            # Φ at the high face, at a patch interface
+    totals::Vector{P}               # line totals of the local running sums
+    aux::Vector{P}                  # anchor (stage) or measurement (filter)
+    offset::Vector{P}               # this rank's running-sum offset
+    wrap::Vector{P}                 # the value at the global low face
+    cstar::Vector{P}                # the constant removed from a filter flux
+    zero_plane::Vector{P}
+    line_counts::Vector{C}          # per d: (4, n_a, n_b) each line's tallies
+                                    # of a θ pass, summed into `counts`
+    # Host copies of `offset`, `wrap` and `cstar` per d, which `_line_offsets!`
+    # forms and uploads on device storage; empty until a device path needs them.
+    staged::Vector{NTuple{3,Array{T,3}}}
     send::Vector{Vector{T}}
     recv::Vector{Vector{T}}
-    deriv_lhs::Vector{T}            # the derivative's interior face relation
-    deriv_rhs::Vector{T}
-    filter_lhs::Vector{T}           # the filter's, and its explicit face stencil
-    filter_psi::Vector{T}
+    deriv_lhs::V                    # the derivative's interior face relation
+    deriv_rhs::V
+    filter_lhs::V                   # the filter's, and its explicit face stencil
+    filter_psi::V
     periodic::NTuple{3,Bool}
     measure::NTuple{3,Int}          # local face of the filter relation, 0 none
     anchor_face::NTuple{3,Int}      # local face of a periodic anchor
@@ -323,15 +340,15 @@ function _filter_face_stencil(scheme, ::Type{T}) where {T}
 end
 
 # The checks of the configurations the limiter covers, before anything is
-# built: host patches of an unstretched Cartesian grid without folds, one or
+# built: patches of an unstretched Cartesian grid without folds, one or
 # several along a slab layout whose interfaces close the divergence with their
 # own rows (`interface_flux = :closure`), or a single radial grid folded at
 # r = 0 (`_limiter_radial_line`), on the r-z plane with a symmetry plane
 # allowed at the low end of z; refined levels on either, under the same
 # interface rows (the constructor switches `:ghost` to them, with a warning)
-# and the injected restriction, tiled on the Cartesian grid
-# only; without the implicit integrator, an ideal-gas mixture, and closed
-# lines long enough for the face relation of the filter.
+# and the injected restriction, tiled on the Cartesian grid of the host
+# backend only; without the implicit integrator, an ideal-gas mixture, and
+# closed lines long enough for the face relation of the filter.
 function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, eos,
                               implicit, equations, deriv, filt, filter_weighting,
                               n_global, n_halo, L_domain, ::Type{T};
@@ -367,7 +384,10 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
     # switched such interfaces to `:closure` before this check.
     (npatch == 1 && nlev == 1) || interface_flux === :closure ||
         error("positivity limiter: interfaces under :ghost reached the check")
-    backend isa CPUBackend || fail("runs on the host backend only")
+    # A device level's tiles share stacked storage, whose batched right-hand
+    # side has no per-tile registers.
+    backend isa DeviceBackend && nlev > 1 && tile > 0 &&
+        fail("on a DeviceBackend supports a refined level as one box (tile = 0)")
     eos isa IdealMixture ||
         fail("supports the ideal-gas EOS (IdealSpecies, IdealMixture), whose " *
              "admissible states are ρ > 0 and ρe > 0; got $(typeof(eos).name.name)")
@@ -517,7 +537,8 @@ function PositivityLimiter(solver)
     decomp = solver.decomp
     T = eltype(solver.h)
     n_cons = solver.equations.n_cons
-    plan_scheme(d) = (p = _plan_at(solver.div_plans, d); p.scheme)
+    plan_scheme(d) = (p = _plan_at(solver.div_plans, d);
+                      (p isa DevicePlan ? p.host : p).scheme)
     schemes = solver.schemes
     deriv = schemes.deriv
     filt = schemes.filt
@@ -611,8 +632,12 @@ function PositivityLimiter(solver)
                  for d in 1:3, c in 1:n_cons+1]
     register_fields = [FieldVector([registers[d, c] for c in 1:n_comp[d]])
                        for d in 1:3]
-    planes = [zeros(T, n_comp[d], _transverse(decomp.n_local, d)...) for d in 1:3]
-    copies() = [copy(p) for p in planes]
+    # The line planes and the tallies live in the fields' storage, where the
+    # bodies read and write them.
+    like = solver.tmp_a
+    planes = [_limiter_zeros(like, T, (n_comp[d], _transverse(decomp.n_local, d)...))
+              for d in 1:3]
+    copies() = [_limiter_zeros(like, T, size(p)) for p in planes]
     send = [zeros(T, 2 * length(planes[d]) + 1) for d in 1:3]
     recv = [zeros(T, decomp.dims[d] * length(send[d])) for d in 1:3]
     filter_lhs = _band_lhs(filt)
@@ -668,17 +693,36 @@ function PositivityLimiter(solver)
               solver.inv_J, solver.inv_h..., faces..., ws[2, 1], ws[2, 2])
     all(f -> size(f) == shape, fields) ||
         error("positivity limiter: the solver's fields do not share one padded extent")
-    return PositivityLimiter{T,typeof(solver.tmp_a),typeof(weights[1])}(
-        weights, map(w -> one(T) ./ w, weights), (free..., _limiter_exempt(solver)), registers,
-        register_fields,
+    # The vectors the bodies read, formed on the host and uploaded once.
+    up(x) = _limiter_upload(like, x)
+    weights_s = map(up, weights)
+    free_s = map(up, free)
+    line_counts = [_limiter_zeros(like, Int, (4, _transverse(decomp.n_local, d)...))
+                   for d in 1:3]
+    return PositivityLimiter{T,typeof(solver.tmp_a),typeof(weights_s[1]),
+                             typeof(free_s[1]),typeof(planes[1]),eltype(line_counts)}(
+        weights_s, map(w -> up(one(T) ./ w), weights), (free_s..., _limiter_exempt(solver)),
+        registers, register_fields,
         FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), ws[2, 1], ws[2, 2],
-        theta, areas, radial, fold_lo, n_comp, volume, volume_state, areal, interface,
+        theta, map(up, areas), radial, fold_lo, n_comp, up(volume), volume_state, areal,
+        interface,
         copies(), copies(), copies(), copies(), copies(), copies(), copies(), copies(),
-        [zeros(Int, 4, _transverse(decomp.n_local, d)...) for d in 1:3],
-        send, recv, _band_lhs(deriv), copy(deriv.coeffs), filter_lhs,
-        _filter_face_stencil(filt, T), decomp.periodic, measure, anchor_face,
-        zero(T), zero(T), false, zeros(Int, 6))
+        line_counts, NTuple{3,Array{T,3}}[], send, recv, up(T.(_band_lhs(deriv))),
+        up(T.(deriv.coeffs)), up(T.(filter_lhs)), up(_filter_face_stencil(filt, T)),
+        decomp.periodic, measure, anchor_face, zero(T), zero(T), false, zeros(Int, 6))
 end
+
+# A host array in the storage of `like`: the array itself on host storage, a
+# device copy otherwise.
+function _limiter_upload(like, x::Array)
+    _cpu_storage(like) && return x
+    y = similar(like, eltype(x), size(x))
+    copyto!(y, x)
+    return y
+end
+
+# A zero-filled array of `dims` in the storage of `like`.
+_limiter_zeros(like, ::Type{S}, dims::Dims) where {S} = fill!(similar(like, S, dims), zero(S))
 
 # The two transverse extents of a direction's lines, in index order.
 _transverse(n, d) = d == 1 ? (n[2], n[3]) : d == 2 ? (n[1], n[3]) : (n[1], n[2])
@@ -794,8 +838,14 @@ function _rebuild_limiters!(solver, pl::PatchLimiters)
 end
 
 # This rank's minimum ρ over the interior points where it is positive, and of
-# ρe where both are.
-function _limiter_minima(solver, Q)
+# ρe where both are. A state in device storage is copied to the host for the
+# sweep, once per `run!`.
+_limiter_minima(solver, Q) =
+    _device_path(Q) ?
+    _limiter_minima_host(solver, ConservedState(Array(_dense_copy(parent(Q))))) :
+    _limiter_minima_host(solver, Q)
+
+function _limiter_minima_host(solver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -1144,6 +1194,8 @@ end
 # the averaging uses. Collective among the ranks holding the shared planes.
 function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm)
     isempty(records) && return nothing
+    _device_path(lims[first(records).patch].theta) &&
+        return _exchange_interface_theta_staged!(solver, lims, d, due, records, comm)
     patches = getfield(solver, :patches)
     me = MPI.Comm_rank(comm)
     normal(pl) = any(lims[pl.patch].interface[d])
@@ -1198,6 +1250,74 @@ function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm)
     end
     return nothing
 end
+
+# The exchange above on device storage. Each record's planes of θ cross to the
+# host as `_pack_fields!` stages a block: the end faces for the message and
+# the comparison, the faces beside the node, and on a local pairing the
+# partner's end faces, read after the records before it have written them, as
+# the host loop reads them. The minima are taken on the host in the same order
+# and both planes are written back where a face changed.
+function _exchange_interface_theta_staged!(solver, lims, d::Int, due, records, comm)
+    patches = getfield(solver, :patches)
+    me = MPI.Comm_rank(comm)
+    normal(pl) = any(lims[pl.patch].interface[d])
+    end_planes(pl) = _shift_ranges(pl.mine, d,
+                                   _end_shift(patches[pl.patch].decomp, pl.mine, d))
+    reqs = MPI.Request[]
+    for pl in records
+        normal(pl) && pl.partner != me || continue
+        push!(reqs, MPI.Irecv!(pl.buf, comm; source=pl.partner, tag=pl.tag))
+    end
+    for pl in records
+        normal(pl) && pl.partner != me || continue
+        _pack_fields!(pl.sbuf, (lims[pl.patch].theta,), end_planes(pl))
+        push!(reqs, MPI.Isend(pl.sbuf, comm; dest=pl.partner, tag=pl.sendtag))
+    end
+    MPI.Waitall(reqs)
+    for pl in records
+        normal(pl) || continue
+        lim = lims[pl.patch]
+        T = eltype(lim.theta)
+        s = _end_shift(patches[pl.patch].decomp, pl.mine, d)
+        re = _shift_ranges(pl.mine, d, s)
+        rb = _shift_ranges(re, d, s == 0 ? -1 : 1)
+        m = prod(length.(re))
+        own = Vector{T}(undef, m)
+        beside = Vector{T}(undef, m)
+        _pack_fields!(own, (lim.theta,), re)
+        _pack_fields!(beside, (lim.theta,), rb)
+        partner = if pl.partner == me
+            so = _end_shift(patches[pl.partner_patch].decomp, pl.theirs, d)
+            v = Vector{T}(undef, m)
+            _pack_fields!(v, (lims[pl.partner_patch].theta,), _shift_ranges(pl.theirs, d, so))
+            v
+        else
+            pl.buf
+        end
+        decomp = patches[pl.patch].decomp
+        changed = false
+        for (idx, I) in enumerate(CartesianIndices(pl.mine))
+            _interior_transverse(I, decomp, d) || continue
+            mine = own[idx]
+            v = min(mine, partner[idx])
+            v < mine || continue
+            own[idx] = v
+            beside[idx] = v
+            changed = true
+            due[pl.patch] = true
+            mine == 1 && (lim.counts[2] += s == 0 ? 2 : 1)
+        end
+        if changed
+            _unpack_fields!((lim.theta,), own, re)
+            _unpack_fields!((lim.theta,), beside, rb)
+        end
+    end
+    return nothing
+end
+
+# Padded ranges `r` moved by `s` along d.
+_shift_ranges(r::NTuple{3,UnitRange{Int}}, d::Int, s::Int) =
+    ntuple(e -> e == d ? (first(r[e])+s:last(r[e])+s) : r[e], 3)
 
 _interior_transverse(I, decomp, d) =
     all(e -> e == d || decomp.n_halo_d[e] < I[e] <= decomp.n_halo_d[e] + decomp.n_local[e],
@@ -1260,12 +1380,47 @@ function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
     tot = lim.totals[d]
     # The stage's anchor is the face register at the global low face.
     aux = mode == 1 ? lim.anchor[d] : lim.aux[d]
-    off, wrap, cstar = lim.offset[d], lim.wrap[d], lim.cstar[d]
     L = length(tot)
-    P = decomp.dims[d]
-    send, recv = lim.send[d], lim.recv[d]
+    send = lim.send[d]
+    # Device storage crosses to the host message here, and the offsets formed
+    # on the host are uploaded after: one copy of each plane per pass.
     copyto!(send, 1, vec(tot), 1, L)
     copyto!(send, L + 1, vec(aux), 1, L)
+    _device_path(tot) ? _staged_offsets!(lim, decomp, d, mode) :
+                        _form_offsets!(lim.offset[d], lim.wrap[d], lim.cstar[d], lim, decomp,
+                                       d, mode)
+    return nothing
+end
+
+# The offsets formed in the host copies of the planes and uploaded.
+function _staged_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
+    planes = _staged_planes!(lim, d)
+    _form_offsets!(planes..., lim, decomp, d, mode)
+    copyto!(lim.offset[d], planes[1])
+    copyto!(lim.wrap[d], planes[2])
+    copyto!(lim.cstar[d], planes[3])
+    return nothing
+end
+
+# The host copies of the offset planes of d, allocated at the first device pass.
+function _staged_planes!(lim::PositivityLimiter{T}, d::Int) where {T}
+    if isempty(lim.staged)
+        for e in 1:3
+            dims = size(lim.offset[e])
+            push!(lim.staged, (zeros(T, dims), zeros(T, dims), zeros(T, dims)))
+        end
+    end
+    return lim.staged[d]
+end
+
+# The Allgather of the message `send` holds, and the offsets of this rank's
+# running sums, the global low face's value and the filter's constant formed
+# from it into `off`, `wrap` and `cstar`, host arrays.
+function _form_offsets!(off, wrap, cstar, lim::PositivityLimiter, decomp, d::Int,
+                        mode::Int)
+    L = length(off)
+    P = decomp.dims[d]
+    send, recv = lim.send[d], lim.recv[d]
     send[end] = mode == 2 && lim.measure[d] > 0 ? 1 : 0
     MPI.Allgather!(send, MPI.UBuffer(recv, length(send)), decomp.sub[d])
     stride = length(send)
@@ -1356,21 +1511,34 @@ function _limiter_tally!(lim, decomp, d, closed_hi, mode, fold, end_face=false)
     n = decomp.n_local[d]
     tallies = lim.line_counts[d]
     nA, nB = size(tallies, 2), size(tallies, 3)
-    limited = 0
-    shared = 0
-    sides = 0
-    axis = 0
-    @inbounds for b in 1:nB, a in 1:nA
-        limited += tallies[1, a, b]
-        shared += tallies[2, a, b]
-        sides += tallies[3, a, b]
-        axis += tallies[4, a, b]
-    end
+    limited, shared, sides, axis = _device_path(tallies) ? _tally_reduced(tallies) :
+                                   _tally_sum(tallies)
     faces = ((closed_hi ? n - 1 : n) + (fold ? 1 : 0) + (end_face ? 1 : 0)) * nA * nB
     lim.counts[mode == 1 ? 1 : 3] += faces
     lim.counts[5] += sides
     lim.counts[6] += axis
     return limited, shared
+end
+
+# The four tallies summed over the lines: a host loop, and on device storage a
+# reduction over the lines there with one copy of its four sums to the host.
+function _tally_sum(tallies)
+    limited = 0
+    shared = 0
+    sides = 0
+    axis = 0
+    @inbounds for b in 1:size(tallies, 3), a in 1:size(tallies, 2)
+        limited += tallies[1, a, b]
+        shared += tallies[2, a, b]
+        sides += tallies[3, a, b]
+        axis += tallies[4, a, b]
+    end
+    return limited, shared, sides, axis
+end
+
+function _tally_reduced(tallies)
+    s = Array(sum(tallies; dims=(2, 3)))
+    return s[1], s[2], s[3], s[4]
 end
 
 # --- The stage on a radial line ------------------------------------------

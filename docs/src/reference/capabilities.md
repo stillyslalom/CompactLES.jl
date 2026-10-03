@@ -92,7 +92,7 @@ tiled level with regridding and at most two levels.
 
 ## Positivity limiter
 
-`Numerics(positivity_limiter = true)` is accepted on one host patch of an
+`Numerics(positivity_limiter = true)` is accepted on one patch of an
 unstretched Cartesian grid, serial or decomposed along any dimension, in one,
 two or three dimensions, and on same-level slabs of that grid (`patch_grid`)
 under `patch_interfaces = :closure`, each slab serial or decomposed; on the
@@ -105,7 +105,9 @@ either dimension under the filter weighting `:none`. Refined levels are
 accepted on each of these grids under `patch_interfaces = :closure` and
 `level_restriction = :inject`, at the global step or subcycled, static or
 regridded: on the Cartesian grid as boxes or tiles, nested or not, and on the
-radial grids as one box per level (`tile = 0`), at r = 0 or clear of it. In
+radial grids as one box per level (`tile = 0`), at r = 0 or clear of it.
+Each of these runs on the host backend or a `DeviceBackend`, except a tiled
+refined level, which runs on the host backend only. In
 every case the ideal-gas EOS and the explicit integrator are required. On
 same-level patches and refined levels the interfaces close with the closure
 rows: under the default `patch_interfaces = :ghost` setup switches them to
@@ -181,7 +183,7 @@ text below.
 | `positivity_limiter` on a radial grid with `filter_weighting = :volume` | `positivity_limiter: on a radial grid takes the filter weighting :none` |
 | `positivity_limiter` with refinement under `level_restriction = :filter` | `positivity_limiter: on refined levels takes level_restriction = :inject` |
 | `positivity_limiter` with tiles on a radial grid | `positivity_limiter: on a radial grid supports a refined level as one box` |
-| `positivity_limiter` on a device | `positivity_limiter: runs on the host backend only` |
+| `positivity_limiter` with tiles on a device | `positivity_limiter: on a DeviceBackend supports a refined level as one box` |
 | `positivity_limiter` with an EOS other than the ideal gas | `positivity_limiter: supports the ideal-gas EOS` |
 | `positivity_limiter` with implicit conduction | `positivity_limiter: does not combine with implicit conduction` |
 | `positivity_limiter` with a fold other than r = 0 of a radial grid or a symmetry plane at z = 0 of an r-z plane | `positivity_limiter: does not support folded ends other than r = 0` |

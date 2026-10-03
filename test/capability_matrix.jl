@@ -129,6 +129,30 @@ include("capability_cases.jl")
               (48, 1, 48), Box((0.0, 0, 0), (0.5, 2π, 0.5))))
             @test C.advances(prob, refined(n, AMR(initial=region)))
         end
+        # On a device backend: one patch, two patches, the spherical radial
+        # line, the r-z plane with a plane at z = 0, and a subcycled box.
+        dev = Execution(backend=C.device())
+        for (prob, num) in
+            ((C.problem(bcs=(C.wall, C.per, C.per)),
+              Numerics(n_global=(48, 16, 1), positivity_limiter=true, execution=dev)),
+             (C.problem(bcs=(C.wall, C.per, C.per)),
+              Numerics(n_global=(96, 16, 1), positivity_limiter=true,
+                       execution=Execution(dev; patch_grid=(2, 1, 1)),
+                       patch_interfaces=:closure)),
+             (C.problem(bcs=((OriginBC(), SlipWallBC()), C.per, C.per),
+                        domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
+                        metric=SphericalMetric(), ic=C.ic_radial),
+              Numerics(n_global=(64, 1, 1), positivity_limiter=true, execution=dev)),
+             (C.problem(bcs=((AxisBC(), SlipWallBC()), C.per,
+                             (SymmetryPlaneBC(), SlipWallBC())),
+                        domain=C.cyl_domain, metric=CylindricalMetric(), ic=C.ic_radial),
+              Numerics(n_global=(48, 1, 48), positivity_limiter=true, execution=dev)),
+             (C.problem(bcs=(C.wall, C.wall, C.per)),
+              Numerics(n_global=(48, 48, 1), positivity_limiter=true, execution=dev,
+                       patch_interfaces=:closure,
+                       amr=AMR(initial=box2, subcycle=true))))
+            @test C.advances(prob, num)
+        end
     end
 
     @testset "layouts × backend × precision" begin

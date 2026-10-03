@@ -214,8 +214,11 @@ include("capability_cases.jl")
                 Numerics(n_global=(40, 1, 1), positivity_limiter=true,
                          execution=Execution(patch_grid=(2, 1, 1)),
                          patch_interfaces=:closure))
-        rejects("positivity_limiter: runs on the host backend only", closed,
-                limited(execution=Execution(backend=C.device())))
+        rejects("positivity_limiter: on a DeviceBackend supports a refined level as one box",
+                C.problem(bcs=(wall, wall, per)),
+                Numerics(n_global=(48, 48, 1), positivity_limiter=true,
+                         execution=Execution(backend=C.device()), patch_interfaces=:closure,
+                         amr=AMR(initial=Box((0.3, 0.3, 0), (0.7, 0.7, 1)), tile=8)))
         rejects("positivity_limiter: supports the ideal-gas EOS",
                 C.problem(bcs=(wall, per, per), eos=C.EOSES[3][2]), limited())
         rejects("positivity_limiter: does not combine with implicit conduction", closed,

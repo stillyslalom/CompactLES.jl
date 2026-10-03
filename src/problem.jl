@@ -979,7 +979,7 @@ keywords the ones given after it override.
   per conserved component and active direction, about a fifth more memory in
   three dimensions, and a step costs 1.1 to 1.7 times the unlimited one;
   [`positivity_counts`](@ref) reports how often it acted. It requires the
-  host backend, the ideal-gas EOS and the explicit integrator, on an
+  ideal-gas EOS and the explicit integrator, on an
   unstretched `CartesianMetric` without folds, on the r-z plane of a
   `CylindricalMetric` with θ collapsed and [`AxisBC`](@ref) at r = 0, z
   resolved or not and a [`SymmetryPlaneBC`](@ref) allowed at its low end, or
@@ -990,10 +990,11 @@ keywords the ones given after it override.
   replaces `PatchInterfaces(flux = :ghost)`, the default, by `:closure` and
   warns, since the limiter's face form takes lines the closure rows close,
   which can lower the order of accuracy at an interface. Refined levels take
-  the injected restriction, and on the radial grids a refined level is one box
-  (`tile = 0`). A refined level's nodes at a coarse-fine face, which the
-  parent's values overwrite, and a parent's nodes the child's restriction
-  overwrites are not held. Setup rejects any other configuration.
+  the injected restriction, and on the radial grids or a `DeviceBackend` a
+  refined level is one box (`tile = 0`). A refined level's nodes at a
+  coarse-fine face, which the parent's values overwrite, and a parent's nodes
+  the child's restriction overwrites are not held. Setup rejects any other
+  configuration.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a
