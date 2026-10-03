@@ -964,7 +964,7 @@ keywords the ones given after it override.
   after a phase change, so a cell the flow has emptied, as in the core of a
   blast, is held to a fraction of its own state. The partial densities are
   not bounded. On a Cartesian grid source terms and the NSCBC boundary terms
-  are outside the guarantee; on a radial line they are a part of each cell's
+  are outside the guarantee; on a radial grid they are a part of each cell's
   update and inside it, except where they alone would take the cell below
   its bound, and the cell then takes first-order fluxes. A cell whose
   first-order step violates its own CFL bound is outside it too, which at a
@@ -976,11 +976,12 @@ keywords the ones given after it override.
   three dimensions, and a step costs about twice the unlimited one;
   [`positivity_counts`](@ref) reports how often it acted. It requires a
   single patch without refinement, the host backend, the ideal-gas EOS and
-  the explicit integrator, on an unstretched `CartesianMetric` without folds
-  or on the radial line of a `CylindricalMetric` or `SphericalMetric` with
-  every other dimension collapsed, [`AxisBC`](@ref) or [`OriginBC`](@ref) at
-  r = 0 and the filter weighting `:none`; setup rejects any other
-  configuration.
+  the explicit integrator, on an unstretched `CartesianMetric` without folds,
+  on the r-z plane of a `CylindricalMetric` with θ collapsed and
+  [`AxisBC`](@ref) at r = 0, z resolved or not and a [`SymmetryPlaneBC`](@ref)
+  allowed at its low end, or on the radial line of a `SphericalMetric` with θ
+  and φ collapsed and [`OriginBC`](@ref) at r = 0, the last two under the
+  filter weighting `:none`; setup rejects any other configuration.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a

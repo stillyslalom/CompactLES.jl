@@ -48,6 +48,16 @@ function pos_radial(metric; N, ic=(r, a, b) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
     return setup(prob, Numerics(; n_global=(N, 1, 1), kw...))
 end
 
+# The r-z plane over the unit square, folded at the axis and by a symmetry
+# plane at z = 0, slip walls outside.
+function pos_rz(; N, ic, kw...)
+    prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                   metric=CylindricalMetric(), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
+                   ic=ic)
+    return setup(prob, Numerics(; n_global=(N, 1, N), kw...))
+end
+
 # The fold's face value of the running sum of `div`, the divergence of `f`
 # with parity σ, as a stage takes it.
 function pos_fold_face(lim, f, div, σ, halo)
@@ -290,6 +300,36 @@ end
             report = state_report(s, Q)
             @test report.inadmissible == 0 && report.negative_density == 0
         end
+    end
+
+    @testset "an r-z run it never acts in is the unlimited run" begin
+        pulse(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                              p=1 + 1e-2 * exp(-20 * (r^2 + (z - 0.2)^2)))
+        runs = map((false, true)) do on
+            s, Q = pos_rz(; N=48, ic=pulse, positivity_limiter=on,
+                          art=ArtificialProperties(enabled=true))
+            run!(s, Q; tfinal=1.0, nmax=30)
+            (s, Q)
+        end
+        (s0, Q0), (s1, Q1) = runs
+        counts = CL.positivity_counts(s1)
+        @test counts.stage_faces > 0 && counts.filter_faces > 0
+        @test counts.stage_limited == 0 && counts.filter_limited == 0
+        @test s0.step == s1.step && s0.t == s1.t
+        @test parent(Q0) == parent(Q1)
+    end
+
+    @testset "an r-z blast at the corner of the axis and the plane stays admissible" begin
+        # The blast sits on the corner cell, so its first steps limit the axis
+        # face, the plane face and the corner together.
+        blast(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                              p=1e-4 + exp(-(r^2 + z^2) / 0.08^2))
+        s, Q = pos_rz(; N=48, ic=blast, cfl=0.3, art=ArtificialProperties(enabled=true),
+                      control=StepControl(validity=:permissive), positivity_limiter=true)
+        bad = pos_bad_points(s, Q; tfinal=1.0, nmax=40)
+        counts = CL.positivity_counts(s)
+        @test counts.stage_limited > 0 && counts.filter_limited > 0
+        @test bad == 0
     end
 
     @testset "the bound follows the state entering run!" begin

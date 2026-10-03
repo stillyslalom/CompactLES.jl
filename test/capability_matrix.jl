@@ -82,13 +82,20 @@ include("capability_cases.jl")
             @test C.advances(C.problem(bcs=(C.wall, C.per, C.per), eos=eos, ic=ic),
                              Numerics(n_global=n, positivity_limiter=true))
         end
-        # The radial lines folded at the cylindrical axis and the spherical origin.
-        for prob in (C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),
-                               ic=C.ic_radial),
-                     C.problem(bcs=((OriginBC(), SlipWallBC()), C.per, C.per),
-                               domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
-                               metric=SphericalMetric(), ic=C.ic_radial))
-            @test C.advances(prob, Numerics(n_global=(64, 1, 1), positivity_limiter=true))
+        # The radial grids folded at the cylindrical axis and the spherical
+        # origin, and the r-z plane, periodic in z or with a plane at z = 0.
+        for (prob, n) in ((C.problem(bcs=C.axis, domain=C.cyl_domain,
+                                     metric=CylindricalMetric(), ic=C.ic_radial), (64, 1, 1)),
+                          (C.problem(bcs=((OriginBC(), SlipWallBC()), C.per, C.per),
+                                     domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
+                                     metric=SphericalMetric(), ic=C.ic_radial), (64, 1, 1)),
+                          (C.problem(bcs=C.axis, domain=C.cyl_domain,
+                                     metric=CylindricalMetric(), ic=C.ic_radial), (48, 1, 16)),
+                          (C.problem(bcs=((AxisBC(), SlipWallBC()), C.per,
+                                          (SymmetryPlaneBC(), SlipWallBC())),
+                                     domain=C.cyl_domain, metric=CylindricalMetric(),
+                                     ic=C.ic_radial), (48, 1, 48)))
+            @test C.advances(prob, Numerics(n_global=n, positivity_limiter=true))
         end
     end
 

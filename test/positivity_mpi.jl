@@ -93,4 +93,52 @@ function test_positivity_limiter()
           report.inadmissible + report.negative_density, 0.5)
     check("radial, one rank: the limiter acted (expect > 0)",
           csref.stage_limited > 0 && csref.filter_limited > 0 ? 0.0 : 1.0, 0.5)
+
+    # A blast at the corner of the r-z axis and a symmetry plane at z = 0,
+    # split along r and along z in turn: the rates the z faces read cross the
+    # rank boundary with the radial pass's exchange, and the plane's face
+    # register sits on the rank holding z = 0.
+    section("positivity limiter: the r-z plane split across ranks against one rank")
+    corner(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                           p=1e-4 + exp(-(r^2 + z^2) / 0.06^2))
+    function plane(comm_here, dims_here)
+        s = Solver(n_global=(SPLITN, 1, SPLITN), L_domain=(1.0, 1.0, 1.0),
+                   metric=CylindricalMetric(),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
+                   eos=gas, art=ArtificialProperties(enabled=true), cfl=0.3,
+                   control=StepControl(validity=:permissive), positivity_limiter=true,
+                   comm=comm_here, dims=dims_here)
+        Q = allocate_state(s)
+        initialize!(s, Q, corner)
+        run!(s, Q; tfinal=1.0, nmax=40)
+        return s, Q
+    end
+    pref, Qpref = plane(MPI.COMM_SELF, (1, 1, 1))
+    cpref = CL.positivity_counts(pref)
+    for ax in (1, 3)
+        s, Q = plane(comm, splitdims(ax))
+        c = CL.positivity_counts(s)
+        off = s.decomp.offset
+        worst = 0.0
+        for k in 1:s.decomp.n_local[3], i in 1:s.decomp.n_local[1], q in 1:s.equations.n_cons
+            a = Q[padded_index(s, i, 1, k), q]
+            b = Qpref[padded_index(pref, i + off[1], 1, k + off[3]), q]
+            worst = max(worst, abs(a - b))
+        end
+        # θ is not continuous in the gathered running sums' last bits, as in
+        # the Cartesian case above: 1.9e-12 at np = 2 split along r.
+        check("r-z split axis $ax: state against one rank (relative)",
+              gmax(worst) / maximum(abs, parent(Qpref)), 1e-8)
+        check("r-z split axis $ax: stage faces limited (relative difference)",
+              abs(c.stage_limited - cpref.stage_limited) / max(cpref.stage_limited, 1),
+              1e-2)
+        check("r-z split axis $ax: faces tested, counted once",
+              abs(c.stage_faces - cpref.stage_faces) +
+              abs(c.filter_faces - cpref.filter_faces), 0.5)
+        report = state_report(s, Q)
+        check("r-z split axis $ax: inadmissible points at the end",
+              report.inadmissible + report.negative_density, 0.5)
+    end
+    check("r-z, one rank: the limiter acted (expect > 0)",
+          cpref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
 end
