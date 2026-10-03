@@ -305,7 +305,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                              backend, eos,
                              implicit, equations === nothing ? NavierStokes1T(eos) :
                                        equations,
-                             deriv, filt, n_global, n_halo, L_domain, T)
+                             deriv, filt, filter_weighting, n_global, n_halo,
+                             L_domain, T)
     end
     if implicit !== nothing
         _validate_implicit(bcs, patch_grid, refine, max_levels, backend)

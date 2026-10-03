@@ -154,6 +154,12 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
     return dQ
 end
 
+# The pressure term inv_h_d ∂p/∂ξ_d of component `c` where it enters as a
+# gradient (`_pressure_gradient`), subtracted from `dQ`. A separate function so
+# that the positivity limiter's stage array keeps it in a register of its own.
+pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
+    div_subtract_along!(dQ, c, solver.p, solver, d, 1, solver.inv_h[d])
+
 """Compact filter of `f` along dimension `d` with antipodal sign `σf`.
 
 Every rank in the directional sub-communicator must call this function. Its
@@ -1519,8 +1525,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
                                solver.tmp_b, Ad, Fdc, solver.p)
                     div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
                                         solver.inv_J)
-                    div_subtract_along!(dQ, c, solver.p, solver, d, 1,
-                                        solver.inv_h[d])
+                    pressure_subtract_along!(dQ, c, solver, d)
                 else
                     pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                                solver.tmp_b, Ad, Fdc)

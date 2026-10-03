@@ -189,10 +189,12 @@ include("capability_cases.jl")
                          execution=Execution(backend=C.device())))
         closed = C.problem(bcs=(wall, per, per))
         limited(; kw...) = Numerics(; n_global=(64, 1, 1), positivity_limiter=true, kw...)
-        rejects("positivity_limiter: supports an unstretched CartesianMetric only", cyl,
-                Numerics(n_global=(24, 1, 1), positivity_limiter=true))
-        rejects("positivity_limiter: supports an unstretched CartesianMetric only", closed,
+        rejects("positivity_limiter: supports the CartesianMetric, and the radial line",
+                cyl, Numerics(n_global=(24, 16, 1), positivity_limiter=true))
+        rejects("positivity_limiter: supports an unstretched grid only", closed,
                 limited(stretch=stretched))
+        rejects("positivity_limiter: on a radial line takes the filter weighting :none",
+                cyl, limited(filter=StateFilter(weighting=:volume)))
         rejects("positivity_limiter: supports a single patch without refinement", closed,
                 limited(execution=Execution(patch_grid=(2, 1, 1))))
         rejects("positivity_limiter: supports a single patch without refinement", closed,
@@ -203,7 +205,7 @@ include("capability_cases.jl")
                 C.problem(bcs=(wall, per, per), eos=C.EOSES[3][2]), limited())
         rejects("positivity_limiter: does not combine with implicit conduction", closed,
                 limited(implicit=ImplicitConduction()))
-        rejects("positivity_limiter: does not support folded ends",
+        rejects("positivity_limiter: does not support folded ends other than r = 0",
                 C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)), limited())
         rejects("the face relation of the filter needs at least", closed,
                 Numerics(n_global=(32, 1, 1), positivity_limiter=true))

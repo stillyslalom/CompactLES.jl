@@ -94,7 +94,11 @@ tiled level with regridding and at most two levels.
 
 `Numerics(positivity_limiter = true)` is accepted on one host patch of an
 unstretched Cartesian grid, serial or decomposed along any dimension, in one,
-two or three dimensions, with the ideal-gas EOS and the explicit integrator.
+two or three dimensions, and on the radial line of a `CylindricalMetric` or
+`SphericalMetric` with every other dimension collapsed, folded at r = 0 by
+[`AxisBC`](@ref) or [`OriginBC`](@ref), serial or decomposed along r under
+the filter weighting `:none`; in either case with the ideal-gas EOS and the
+explicit integrator.
 A closed line needs enough nodes for the filter's face relation: 38 under the
 default derivative, 42 under [`lele_d1_8`](@ref) and 50 under
 [`lele_d1_10`](@ref).
@@ -154,12 +158,14 @@ text below.
 | `polar_truncation` with a stretched radius | `polar_truncation requires an unstretched radial dimension` |
 | `polar_truncation` with `patch_grid` or refinement | `polar_truncation takes a single patch without refinement` |
 | `polar_truncation` on a device | `polar_truncation runs on the host backend only` |
-| `positivity_limiter` on a curvilinear or stretched grid | `positivity_limiter: supports an unstretched CartesianMetric only` |
+| `positivity_limiter` on a curvilinear grid other than a radial line folded at r = 0 | `positivity_limiter: supports the CartesianMetric, and the radial line` |
+| `positivity_limiter` on a stretched grid | `positivity_limiter: supports an unstretched grid only` |
+| `positivity_limiter` on a radial line with `filter_weighting = :volume` | `positivity_limiter: on a radial line takes the filter weighting :none` |
 | `positivity_limiter` with `patch_grid` or refinement | `positivity_limiter: supports a single patch without refinement` |
 | `positivity_limiter` on a device | `positivity_limiter: runs on the host backend only` |
 | `positivity_limiter` with an EOS other than the ideal gas | `positivity_limiter: supports the ideal-gas EOS` |
 | `positivity_limiter` with implicit conduction | `positivity_limiter: does not combine with implicit conduction` |
-| `positivity_limiter` with a symmetry plane or a coordinate fold | `positivity_limiter: does not support folded ends` |
+| `positivity_limiter` with a symmetry plane, or a coordinate fold other than r = 0 of a radial line | `positivity_limiter: does not support folded ends other than r = 0` |
 | `positivity_limiter` on a closed line too short for the filter's face relation | `the face relation of the filter needs at least` |
 | components of different floating-point types | `the solver components carry different floating-point types` |
 | a `patch_grid` checkpoint | `a same-level patch layout (patch_grid) has no checkpoint` |

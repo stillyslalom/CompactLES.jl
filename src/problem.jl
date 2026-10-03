@@ -958,19 +958,29 @@ keywords the ones given after it override.
   correction for a filter pass), after Hu, Adams and Shu (J. Comput. Phys.
   242, 2013). The correction conserves mass, momentum and energy, and leaves
   every face it does not limit unchanged, so a run in which it never acts is
-  the unlimited run bit for bit. The bound is 1% of the minimum density and
-  the minimum ρe of the state entering each [`run!`](@ref), taken again by a
-  continued run, after a restart and after a phase change. The partial
-  densities are not bounded, and source terms and the NSCBC boundary terms
-  are outside the guarantee; so is a cell whose first-order step violates its
-  own CFL bound, which at a wall node under the default closure rows happens
-  above a CFL of about 0.32. The limiter acts in `run!`; a direct
+  the unlimited run bit for bit. The bound on a cell is 1% of the smaller of
+  its own density (ρe) and the minimum density (ρe) of the state entering
+  each [`run!`](@ref), taken again by a continued run, after a restart and
+  after a phase change, so a cell the flow has emptied, as in the core of a
+  blast, is held to a fraction of its own state. The partial densities are
+  not bounded. On a Cartesian grid source terms and the NSCBC boundary terms
+  are outside the guarantee; on a radial line they are a part of each cell's
+  update and inside it, except where they alone would take the cell below
+  its bound, and the cell then takes first-order fluxes. A cell whose
+  first-order step violates its own CFL bound is outside it too, which at a
+  wall node under the default closure rows happens above a CFL of about
+  0.32, and at the spherical origin above about 0.6. The limiter acts in
+  `run!`; a direct
   [`step!`](@ref) takes the unlimited step. When on, it holds a node register
   per conserved component and active direction, about a fifth more memory in
   three dimensions, and a step costs about twice the unlimited one;
-  [`positivity_counts`](@ref) reports how often it acted. It requires an unstretched `CartesianMetric`, a single patch without
-  refinement or folds, the host backend, the ideal-gas EOS and the explicit
-  integrator, and setup rejects any other configuration.
+  [`positivity_counts`](@ref) reports how often it acted. It requires a
+  single patch without refinement, the host backend, the ideal-gas EOS and
+  the explicit integrator, on an unstretched `CartesianMetric` without folds
+  or on the radial line of a `CylindricalMetric` or `SphericalMetric` with
+  every other dimension collapsed, [`AxisBC`](@ref) or [`OriginBC`](@ref) at
+  r = 0 and the filter weighting `:none`; setup rejects any other
+  configuration.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a
