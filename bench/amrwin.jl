@@ -61,11 +61,13 @@
 #           settings, against the uniform 3N³ grid at the refined spacing
 #
 # `configs=` selects the configurations, `profile=false` and `diagnose=false`
-# skip the two extra runs, `art=false` turns off the artificial properties
-# everywhere, `quick=true` takes small grids and short end times for a smoke
-# run. Each problem's grid, tile edge and end time are options (`sod_n`,
-# `blob3d_t`, ...). Serial only: the composite error compares node by node
-# against an undistributed fine run.
+# skip the extra run, `art=false` turns off the artificial properties
+# everywhere, `validity=permissive` reports a final state outside the species
+# band instead of failing the configuration, `quick=true` takes small grids and
+# short end times for a smoke run. Each problem's grid, tile edge and end time
+# are options (`sod_n`, `blob3d_t`, ...), and the blobs' edge width `blobs_w`.
+# Serial only: the composite error compares node by node against an
+# undistributed fine run.
 #
 # The summary numbers, the phase shares and the step-size account also appear
 # on `row,<problem>,<config>,<key>,<value>` lines, so bench/repeat.jl can take
@@ -84,9 +86,9 @@ const CL = CompactLES
 const opt = CompactLES.script_args(ARGS, (
     problems = "sod,blobs,shock,blob3d", configs = "coarse,box,tiles,fine",
     quick = false, warm = 12, nmax = 100_000, profile = true, diagnose = true,
-    art = true, delay = 0.002,
+    art = true, validity = "strict", delay = 0.002,
     sod_n = 201, sod_ny = 17, sod_tile = 8, sod_t = 0.1,
-    blobs_n = 64, blobs_tile = 16, blobs_t = 0.2,
+    blobs_n = 64, blobs_tile = 16, blobs_t = 0.2, blobs_w = 0.01,
     shock_n = 256, shock_tile = 16, shock_t = 0.221,
     blob3d_n = 24, blob3d_tile = 8, blob3d_t = 1.0))
 
@@ -112,11 +114,11 @@ function sod_spec(nx, ny, tile, tfinal)
             box, tiles=AMR(box; tile=tile), compare=[(:rho, 1)], mixture=false)
 end
 
-function blobs_spec(n, tile, tfinal)
+function blobs_spec(n, tile, tfinal, w)
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.25, 1.09)])
     centers = ((0.25, 0.30), (0.70, 0.45), (0.45, 0.80))
-    R, w, U = 0.08, 0.01, 0.5
+    R, U = 0.08, 0.5
     wrap(d) = d - round(d)
     function ic(x, y, z)
         θ = 0.0
@@ -177,8 +179,12 @@ function problem_spec(name)
     q = opt.quick
     name == "sod" && return q ? sod_spec(61, 13, 8, 0.02) :
                                 sod_spec(opt.sod_n, opt.sod_ny, opt.sod_tile, opt.sod_t)
-    name == "blobs" && return q ? blobs_spec(32, 8, 0.03) :
-                                  blobs_spec(opt.blobs_n, opt.blobs_tile, opt.blobs_t)
+    # The quick blobs take an edge of one root spacing: at a third of one the
+    # box run leaves the species band, which is a finding for the full size,
+    # not for a smoke run.
+    name == "blobs" && return q ? blobs_spec(32, 8, 0.03, 0.03) :
+                                  blobs_spec(opt.blobs_n, opt.blobs_tile, opt.blobs_t,
+                                             opt.blobs_w)
     name == "shock" && return q ? shock_spec(96, 16, 0.02) :
                                   shock_spec(opt.shock_n, opt.shock_tile, opt.shock_t)
     name == "blob3d" && return q ? blob3d_spec(18, 6, 0.15) :
@@ -188,15 +194,19 @@ end
 
 function numerics(spec, config)
     art = ArtificialProperties(enabled=opt.art)
-    config == "coarse" && return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art)
-    config == "fine" && return Numerics(n_global=spec.n_fine, cfl=spec.cfl, art=art)
+    control = StepControl(validity=Symbol(opt.validity))
+    config == "coarse" && return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art,
+                                          control=control)
+    config == "fine" && return Numerics(n_global=spec.n_fine, cfl=spec.cfl, art=art,
+                                        control=control)
     amr = config == "box" ? spec.box :
           config == "tiles" ? spec.tiles :
           config == "box_global" ? AMR(spec.box; subcycle=false) :
           config == "tiles_global" ? AMR(spec.tiles; subcycle=false) :
           error("unknown config '$config', want coarse, box, tiles, fine, " *
                 "box_global or tiles_global")
-    return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art, amr=amr)
+    return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art, amr=amr,
+                    control=control)
 end
 
 refined(config) = config in ("box", "tiles", "box_global", "tiles_global")
