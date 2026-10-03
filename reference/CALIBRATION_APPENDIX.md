@@ -2121,6 +2121,8 @@ face-flux form, is measured below.
 ```text
 julia --project=. -t 1 bench/positivity.jl
 julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
+julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,noh2,noh3 steps=1000
+julia --project=. -t 1 bench/positivity.jl part=cost cases=rz,blast steps=300 N=64
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2202,8 +2204,7 @@ of 0.1) at a cell whose node terms alone would take it below its bound: the hoop
 β\* at the shock accelerates the cold gas past its internal energy. Those cells take
 first-order fluxes at both faces; given the shares without the node part instead, the run
 left 748 inadmissible point-steps behind the front. The face at the axis was limited at 7 of 13165 stages on Noh ν = 2, and never on
-ν = 3 or Sedov. A limited step costs 1.9–2.0 times the unlimited one on all three (paired
-in one process). The Supernova remnant tutorial completes with the limiter on under strict
+ν = 3 or Sedov. The Supernova remnant tutorial completes with the limiter on under strict
 validity in 2126 steps (2009 off), inferring 0.963, 0.975 and 0.982 × 10⁵¹ erg at 5, 10
 and 20 kyr against 0.963, 0.976 and 0.982 off.
 
@@ -2226,10 +2227,30 @@ axis is limited at 18705 of 982560 axis line-stages at N = 96 and 26245 of 18387
 flux, up to a twelfth of node 1's rate, and the radius along the axis is the sphere's. The
 307011 unguaranteed sides at N = 128 (183977 at 96) are, as on the line, cells whose node
 terms alone leave their bound; a diagnostic run at N = 64 found every one of them there,
-none at the plane, the axis or a first-order half state. A limited r-z step costs about 2.5
-times the unlimited one (single runs). The spherical line at N = 64, the deposit three
-nodes wide, fails at step 28 unlimited and at step 43 limited: the node terms at the
-origin need the whole cell from step 15.
+none at the plane, the axis or a first-order half state. The spherical line at N = 64, the
+deposit three nodes wide, fails at step 28 unlimited and at step 43 limited: the node terms
+at the origin need the whole cell from step 15.
+
+`part=cost` times a step with the limiter off and on over the first steps of each case from
+fresh solvers, three off/on pairs alternated in one process, the medians of the times and of
+the pairs' ratios (the 1-D cases over 1000 steps, the planes at N = 64 over 300, the blast a periodic square
+with the Sedov deposit at its centre):
+
+```
+case                  off, ms/step   on, ms/step   on/off
+Woodward–Colella      0.621          0.731         1.18
+Noh                   0.326          0.374         1.14
+Sedov                 0.254          0.368         1.45
+Noh ν = 2             0.241          0.341         1.42
+Noh ν = 3             0.253          0.359         1.42
+r-z Sedov 64²         4.04           6.75          1.67
+blast 64²             3.16           4.89          1.56
+```
+
+A θ pass indexing the fields by a node's linear index runs in two thirds of the time of
+one indexing them by a Cartesian index, whose stride arithmetic each array repeats. On the
+r-z plane the radial pass that forms each face's speed and each cell's rate with its node
+terms is about two fifths of the limiter's time in a sampling profile, its largest part.
 
 ## Directional bulk viscosity
 

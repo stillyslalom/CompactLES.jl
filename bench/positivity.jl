@@ -9,6 +9,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=src
 #   julia --project=. -t 1 bench/positivity.jl part=src cases=sedov,noh2,noh3
 #   julia --project=. -t 1 bench/positivity.jl part=rz N=96
+#   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,rz,blast N=64
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -73,6 +74,13 @@
 #             the peak density, the inadmissible point-steps, and the stage
 #             faces limited at the axis. Not in `part=all`; about two minutes
 #             at N = 96
+#   cost      the wall time per step with the limiter off and on over the
+#             first `steps` steps of each case in `cases`, from fresh solvers,
+#             `reps` off/on pairs alternated in one process: the medians and
+#             the median of the pairs' ratios. `cases` takes the radial cases
+#             here too, `rz` (the Sedov of part=rz on N × N nodes) and `blast`
+#             (the same deposit at the centre of a periodic square of N × N
+#             nodes). Not in `part=all`
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -107,6 +115,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const CASES = (:woodward, :noh, :sedov, :noh2, :noh3)
 const RADIAL = (:sedov, :noh2, :noh3)
+const PLANE_CASES = (:rz, :blast)
 const PARTS = ("weights", "identity", "pulse", "variants", "src")
 const VARIANTS = ("none", "A", "A-nostore", "A-rhs", "B", "A+B", "A-rhs+B")
 const WC_AMBIENT = 0.01
@@ -988,25 +997,41 @@ function src_part(cases)
     end
 end
 
-# Sedov on the r-z quarter plane and on the spherical line at the same spacing.
-function rz_part(N)
-    println("\n=== rz: Sedov on the r-z plane against the spherical line ===")
+# The Sedov deposit of test/cases.jl in a plane: on the r-z quarter plane
+# folded at the axis and by a symmetry plane at z = 0 (`:rz`), or at the
+# centre of a periodic square (`:blast`), which the limiter acts on in two
+# Cartesian directions from the first steps.
+function plane_problem(case)
     R = 1.2
     γ = 1.4
     pin = SEDOV_E * (γ - 1) / (π^1.5 * SEDOV_S^3)
-    prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                   transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
-                   domain=((0.0, R), (0.0, 1.0), (0.0, R)),
+    gas = IdealSpecies("gas"; gamma=γ, R=1.0)
+    case === :blast &&
+        return Problem(eos=gas, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, R), (0.0, R), (0.0, 1.0)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-5 + pin * exp(-((x - R / 2)^2 +
+                                                                 (y - R / 2)^2) /
+                                                               SEDOV_S^2)))
+    return Problem(eos=gas, transport=ConstantTransport(mu0=0.0),
+                   metric=CylindricalMetric(), domain=((0.0, R), (0.0, 1.0), (0.0, R)),
                    bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
                    ic=(r, θ, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                         p=1e-5 + pin * exp(-(r^2 + z^2) / SEDOV_S^2)))
-    exact = sedov_shock_radius(SEDOV_E, SEDOV_T, 3, γ)
-    numerics(on, n) = Numerics(n_global=n, art=ArtificialProperties(enabled=true), cfl=0.3,
-                               filter=StateFilter(compact_filter(); cfl=0.35),
-                               control=StepControl(validity=:permissive),
-                               positivity_limiter=on)
+end
+
+plane_numerics(on, n) = Numerics(n_global=n, art=ArtificialProperties(enabled=true),
+                                 cfl=0.3, filter=StateFilter(compact_filter(); cfl=0.35),
+                                 control=StepControl(validity=:permissive),
+                                 positivity_limiter=on)
+
+# Sedov on the r-z quarter plane and on the spherical line at the same spacing.
+function rz_part(N)
+    println("\n=== rz: Sedov on the r-z plane against the spherical line ===")
+    prob = plane_problem(:rz)
+    exact = sedov_shock_radius(SEDOV_E, SEDOV_T, 3, 1.4)
     for on in (false, true)
-        solver, Q = setup(prob, numerics(on, (N, 1, N)))
+        solver, Q = setup(prob, plane_numerics(on, (N, 1, N)))
         bad = Ref(0)
         count_bad = (s, q) -> (r = state_report(s, q);
                                bad[] += r.negative_density + r.inadmissible; nothing)
@@ -1031,28 +1056,58 @@ function rz_part(N)
         end
         flush(stdout)
     end
-    solver, Q = setup(sedov_problem(), numerics(true, (N, 1, 1)))
+    solver, Q = setup(sedov_problem(), plane_numerics(true, (N, 1, 1)))
     run!(solver, Q; tfinal=SEDOV_T)
     xs, ρs, _, _ = case_line_profile(solver, Q)
     @printf("  sphere %d, on: %5d steps, R_s %.4f, peak ρ %.3f\n", N, solver.step,
             front_position(xs, ρs, 2.0), maximum(ρs))
 end
 
+# The wall time per step off and on, over the first `steps` steps from fresh
+# solvers, `reps` pairs alternated after a compiling run of each.
+function cost_part(cases, N, steps, reps)
+    println("\n=== cost: wall time per step, limiter off and on ===")
+    for case in cases
+        plane = case in PLANE_CASES
+        make(on) = !plane ? build(case; interval=1, limiter=on) :
+                   setup(plane_problem(case),
+                         plane_numerics(on, case === :rz ? (N, 1, N) : (N, N, 1)))
+        tfinal = plane ? SEDOV_T : end_time(case)
+        for on in (false, true)
+            solver, Q = make(on)
+            run!(solver, Q; tfinal, nmax=3)
+        end
+        per_step = Dict(false => Float64[], true => Float64[])
+        for _ in 1:reps, on in (false, true)
+            solver, Q = make(on)
+            wall = @elapsed run!(solver, Q; tfinal, nmax=steps)
+            push!(per_step[on], wall / solver.step)
+        end
+        ratios = per_step[true] ./ per_step[false]
+        @printf("  %-9s %s: off %.3f ms, on %.3f ms per step; on/off %.2f (pairs %s)\n",
+                case, plane ? "$(N)²" : "line", 1e3 * median(per_step[false]),
+                1e3 * median(per_step[true]), median(ratios),
+                join((@sprintf("%.2f", r) for r in ratios), ", "))
+        flush(stdout)
+    end
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
-                                identity_steps=300, N=96))
+                                identity_steps=300, N=96, steps=500, reps=3))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     for p in parts
-        p in PARTS || p == "rz" ||
-            throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")) or rz"))
+        p in PARTS || p in ("rz", "cost") ||
+            throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")), \
+                                 rz or cost"))
     end
     for c in cases
-        c in CASES ||
+        c in CASES || (c in PLANE_CASES && parts == ["cost"]) ||
             throw(ArgumentError("unknown case '$c', want one of $(join(CASES, ", "))"))
-        c in RADIAL && parts != ["src"] &&
-            throw(ArgumentError("the radial case '$c' runs in part=src alone"))
+        c in RADIAL && parts != ["src"] && parts != ["cost"] &&
+            throw(ArgumentError("the radial case '$c' runs in part=src or part=cost alone"))
     end
     variants = variant_flags.(split(opt.variants, ','))
     weights = "weights" in parts ? weights_part(cases) : Dict{Symbol,Vector{Float64}}()
@@ -1060,6 +1115,7 @@ function main(args)
     "pulse" in parts && pulse_part()
     "src" in parts && src_part(cases)
     "rz" in parts && rz_part(opt.N)
+    "cost" in parts && cost_part(cases, opt.N, opt.steps, opt.reps)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []

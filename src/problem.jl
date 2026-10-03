@@ -973,7 +973,7 @@ keywords the ones given after it override.
   `run!`; a direct
   [`step!`](@ref) takes the unlimited step. When on, it holds a node register
   per conserved component and active direction, about a fifth more memory in
-  three dimensions, and a step costs about twice the unlimited one;
+  three dimensions, and a step costs 1.1 to 1.7 times the unlimited one;
   [`positivity_counts`](@ref) reports how often it acted. It requires a
   single patch without refinement, the host backend, the ideal-gas EOS and
   the explicit integrator, on an unstretched `CartesianMetric` without folds,

@@ -105,10 +105,12 @@
 # corner cell takes the axis share, the plane face and its two interior faces.
 #
 # Per-point work runs through `pointwise!` bodies over three index boxes: the
-# lines of a direction (one sequential scan per line), its faces, and its
-# nodes. The running sum along a decomposed line takes one `Allgather` of the
-# line totals over the direction's sub-communicator per direction per stage
-# and per filter pass, entered by every rank of it.
+# lines of a direction (the running sums and the θ passes, one sequential sweep
+# per line), its faces, and its nodes. The running sum along a decomposed line
+# takes one `Allgather` of the line totals over the direction's
+# sub-communicator per direction per stage and per filter pass, entered by
+# every rank of it; on a line a rank holds whole, the sweep of the running sum
+# finishes the face values.
 
 # ε is this fraction of the minimum ρ and ρe of the state entering `run!`.
 const LIMITER_FRACTION = 0.01
@@ -141,6 +143,7 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T}}
                                     # and the pressure's in flux[3, 1]
     base::FieldVector{A,Vector{A}}  # the filter's pre-pass state, flux[2, :]
     rates::A                        # a radial cell's rate, flux[2, 1] at a stage
+    speeds::A                       # a radial face's speed, flux[2, 2] at a stage
     areas::NTuple{3,V}              # Ā at the face after each padded position
     radial::NTuple{3,Bool}          # d is a radial line folded at r = 0
     fold_lo::NTuple{3,Bool}         # the global low end of d is a fold
@@ -158,6 +161,8 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T}}
     wrap::Vector{Array{T,3}}        # the value at the global low face
     cstar::Vector{Array{T,3}}       # the constant removed from a filter flux
     zero_plane::Vector{Array{T,3}}
+    line_counts::Vector{Array{Int,3}}   # per d: (4, n_a, n_b) each line's tallies
+                                        # of a θ pass, summed into `counts`
     send::Vector{Vector{T}}
     recv::Vector{Vector{T}}
     deriv_lhs::Vector{T}            # the derivative's interior face relation
@@ -419,11 +424,18 @@ function PositivityLimiter(solver)
     lay = _limiter_layout(solver)
     volume_state = (volume[1], volume[lay[2]], volume[lay[3]], volume[lay[4]],
                     volume[lay[5]])
+    # The bodies index every field by the linear index of a padded node.
+    shape = size(solver.tmp_a)
+    fields = (solver.tmp_b, solver.rho, solver.u, solver.v, solver.w, solver.p, solver.c,
+              solver.inv_J, solver.inv_h..., faces..., ws[2, 1], ws[2, 2])
+    all(f -> size(f) == shape, fields) ||
+        error("positivity limiter: the solver's fields do not share one padded extent")
     return PositivityLimiter{T,typeof(solver.tmp_a),typeof(weights[1])}(
         weights, map(w -> one(T) ./ w, weights), free, registers, register_fields,
-        FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), ws[2, 1],
+        FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), ws[2, 1], ws[2, 2],
         areas, radial, fold_lo, n_comp, volume, volume_state, areal,
         copies(), copies(), copies(), copies(), copies(), copies(), copies(),
+        [zeros(Int, 4, _transverse(decomp.n_local, d)...) for d in 1:3],
         send, recv, _band_lhs(deriv), copy(deriv.coeffs), filter_lhs,
         _filter_face_stencil(filt, T), decomp.periodic, measure, anchor_face,
         zero(T), zero(T), false, zeros(Int, 6))
@@ -438,6 +450,29 @@ _transverse(n, d) = d == 1 ? (n[2], n[3]) : d == 2 ? (n[1], n[3]) : (n[1], n[2])
     d == 1 ? CartesianIndex(p + o1, a + o2, b + o3) :
     d == 2 ? CartesianIndex(a + o1, p + o2, b + o3) :
              CartesianIndex(a + o1, b + o2, p + o3)
+
+# The same node's linear index in an array of the padded extent, whose first
+# two sizes are n1 and n2, and the linear stride along d. The bodies index the
+# fields, which share that extent, this way: a Cartesian index costs each
+# array its own stride arithmetic, measured at a third of a θ pass.
+@inline function _line_linear(d, p, a, b, o1, o2, o3, n1, n2)
+    I = _line_node(d, p, a, b, o1, o2, o3)
+    return I[1] + (I[2] - 1) * n1 + (I[3] - 1) * n1 * n2
+end
+@inline _line_stride(d, n1, n2) = d == 1 ? 1 : d == 2 ? n1 : n1 * n2
+
+# A conserved state or an increment of one, indexed by a node's linear index
+# and a component; `_BaseState` reads the same way.
+struct _LinearState{A}
+    data::A
+    stride::Int
+end
+_LinearState(Q::ConservedState) = (q = parent(Q); _LinearState(q, stride(q, 4)))
+Base.@propagate_inbounds Base.getindex(s::_LinearState, l::Int, c::Int) =
+    s.data[l+(c-1)*s.stride]
+Base.@propagate_inbounds Base.setindex!(s::_LinearState, v, l::Int, c::Int) =
+    setindex!(s.data, v, l + (c - 1) * s.stride)
+Adapt.adapt_structure(to, s::_LinearState) = _LinearState(adapt(to, s.data), s.stride)
 
 # --- The bounds of a run ---------------------------------------------------
 
@@ -586,15 +621,9 @@ function _limited_subtract!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::In
     nx, ny, nz = decomp.n_local
     o1, o2, o3 = decomp.n_halo_d
     div_along!(solver.tmp_a, f, solver, d, σf)
-    if inv_J === nothing
-        pointwise!(_subtract_div_point!, dQ.dQ, nx, ny, nz,
-                   dQ.dQ, solver.tmp_a, c, o1, o2, o3)
-    else
-        pointwise!(_subtract_jac_div_point!, dQ.dQ, nx, ny, nz,
-                   dQ.dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
-    end
-    pointwise!(_limiter_register_point!, solver.tmp_a, nx, ny, nz,
-               lim.registers[d, slot], solver.tmp_a, dQ.A, dQ.dt, o1, o2, o3)
+    pointwise!(_limiter_subtract_point!, dQ.dQ, nx, ny, nz,
+               dQ.dQ, lim.registers[d, slot], solver.tmp_a, inv_J, c, dQ.A, dQ.dt,
+               o1, o2, o3)
     if decomp.coords[d] == 0
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_anchor_point!, solver.tmp_a, nA, nB, 1,
@@ -628,8 +657,8 @@ function _limit_stage!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt
         n = decomp.n_local[d]
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_correct_point!, solver.tmp_a, n, nA, nB,
-                   dQ, lim.register_fields[d], lim.faces, solver.tmp_b, Q,
-                   (solver.u, solver.v, solver.w), solver.c, solver.p,
+                   _LinearState(dQ), lim.register_fields[d], lim.faces, solver.tmp_b,
+                   _LinearState(Q), (solver.u, solver.v, solver.w), solver.c, solver.p,
                    lim.weights[d], d, one(T), τ, 1, (inv_B, inv_Bdt),
                    _limiter_layout(solver),
                    (_limiter_closed(lim, decomp, d)..., _limiter_fold(lim, decomp, d)), n,
@@ -660,11 +689,17 @@ function _line_faces!(lim::PositivityLimiter, solver, Q, d::Int, mode::Int, scal
     # filter pass the conserved components.
     n_comp = mode == 1 ? lim.n_comp[d] : solver.equations.n_cons
     volume = mode == 2 && lim.radial[d]
-    pointwise!(_limiter_scan_point!, solver.tmp_a, nA, nB, 1,
-               lim.faces, lim.register_fields[d], Q, lim.base, lim.weights[d],
-               solver.h[d], lim.totals[d], lim.aux[d], n_comp, n, d, mode,
+    # A line this rank holds whole takes its offsets from its own anchor or
+    # measurement, and the scan finishes its face values.
+    whole = decomp.dims[d] == 1
+    whole && mode == 2 && lim.measure[d] == 0 && _no_measure_error(d)
+    pointwise!(_limiter_scan_point!, solver.tmp_a, 1, nA, nB,
+               lim.faces, lim.register_fields[d], _LinearState(Q), lim.base, lim.weights[d],
+               solver.h[d], lim.totals[d], lim.aux[d], lim.anchor[d], n_comp, n, d, mode,
                mode == 2 ? lim.measure[d] : 0, lim.filter_lhs, lim.filter_psi, wf,
-               volume, lim.volume, solver.inv_J, o1, o2, o3)
+               volume, lim.volume, solver.inv_J, (whole, lim.periodic[d], scale),
+               o1, o2, o3)
+    whole && return nothing
     _line_offsets!(lim, decomp, d, mode)
     last_rank = decomp.coords[d] == decomp.dims[d] - 1
     pointwise!(_limiter_offset_point!, solver.tmp_a, n + 1, nA, nB,
@@ -675,12 +710,11 @@ function _line_faces!(lim::PositivityLimiter, solver, Q, d::Int, mode::Int, scal
     return nothing
 end
 
-# The offsets of this rank's running sums. One `Allgather` of the line totals
-# (and of the low face's anchor or the filter relation's measurement) over
-# the direction's sub-communicator, entered by every rank of it; the prefix
-# sums are formed in rank order on every rank, so the face two ranks share
-# carries the same value on both. Without a decomposition along d nothing is
-# exchanged.
+# The offsets of this rank's running sums along a decomposed line. One
+# `Allgather` of the line totals (and of the low face's anchor or the filter
+# relation's measurement) over the direction's sub-communicator, entered by
+# every rank of it; the prefix sums are formed in rank order on every rank, so
+# the face two ranks share carries the same value on both.
 function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
     tot = lim.totals[d]
     # The stage's anchor is the face register at the global low face.
@@ -688,16 +722,6 @@ function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
     off, wrap, cstar = lim.offset[d], lim.wrap[d], lim.cstar[d]
     L = length(tot)
     P = decomp.dims[d]
-    if P == 1
-        for e in 1:L
-            base = mode == 1 ? aux[e] : zero(eltype(aux))
-            off[e] = base
-            wrap[e] = base
-            cstar[e] = mode == 1 ? zero(eltype(aux)) : aux[e]
-        end
-        mode == 2 && lim.measure[d] == 0 && _no_measure_error(d)
-        return nothing
-    end
     send, recv = lim.send[d], lim.recv[d]
     copyto!(send, 1, vec(tot), 1, L)
     copyto!(send, L + 1, vec(aux), 1, L)
@@ -751,11 +775,11 @@ end
 # The run's bounds and the cell fraction, as the per-point bodies take them.
 _limiter_bounds(lim) = (lim.eps_rho, lim.eps_e, oftype(lim.eps_rho, LIMITER_CELL_FRACTION))
 
-# θ per face of direction d into `tmp_b` (and the unguaranteed sides into
-# `tmp_a`), then the faces and sides of this rank counted. Returns the number
-# of faces limited that this rank owns, and whether its low face, which the
-# rank below owns and counts, is limited anywhere: its node 1 takes that
-# face's correction too.
+# θ per face of direction d into `tmp_b`, a line per body, then the faces and
+# the unguaranteed sides of this rank counted. Returns the number of faces
+# limited that this rank owns, and whether its low face, which the rank below
+# owns and counts, is limited anywhere: its node 1 takes that face's
+# correction too.
 function _limit_faces!(lim::PositivityLimiter, solver, Q, d::Int, τ, mode::Int)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -763,41 +787,39 @@ function _limit_faces!(lim::PositivityLimiter, solver, Q, d::Int, τ, mode::Int)
     nA, nB = _transverse(decomp.n_local, d)
     closed_lo, closed_hi = _limiter_closed(lim, decomp, d)
     fold = _limiter_fold(lim, decomp, d)
-    pointwise!(_limiter_theta_point!, solver.tmp_a, n + 1, nA, nB,
-               solver.tmp_b, solver.tmp_a, Q, lim.faces,
+    pointwise!(_limiter_theta_point!, solver.tmp_a, 1, nA, nB,
+               solver.tmp_b, lim.line_counts[d], _linear(Q), lim.faces,
                (solver.u, solver.v, solver.w), solver.c, solver.p, lim.inv_weights,
                lim.free, decomp.active, d, n, (closed_lo, closed_hi, fold), solver.h[d],
                τ, mode, _limiter_bounds(lim), _limiter_layout(solver),
                mode == 2 ? lim.radial[d] : lim.areal[d],
                mode == 2 ? lim.volume_state : (true, true, true, true, true), solver.inv_J,
                mode == 1 && lim.areal[d], lim.rates, o1, o2, o3)
-    return _limiter_count!(lim, solver.tmp_b, solver.tmp_a, decomp, d, closed_hi, mode,
-                           fold)
+    return _limiter_tally!(lim, decomp, d, closed_hi, mode, fold)
 end
 
-# A fold's face is this rank's own and counted with its faces.
-function _limiter_count!(lim, theta, flags, decomp, d, closed_hi, mode, fold)
-    o1, o2, o3 = decomp.n_halo_d
+# The tallies a θ pass left per line in `line_counts[d]`: the faces limited,
+# the low face limited where the rank below owns it, the unguaranteed sides,
+# and the faces limited at r = 0. A fold's face is this rank's own and counted
+# with its faces.
+function _limiter_tally!(lim, decomp, d, closed_hi, mode, fold)
     n = decomp.n_local[d]
-    nA, nB = _transverse(decomp.n_local, d)
+    tallies = lim.line_counts[d]
+    nA, nB = size(tallies, 2), size(tallies, 3)
     limited = 0
     shared = 0
     sides = 0
+    axis = 0
     @inbounds for b in 1:nB, a in 1:nA
-        for f in 0:n
-            I = _line_node(d, f, a, b, o1, o2, o3)
-            if theta[I] < 1
-                (f >= 1 || fold) ? (limited += 1) : (shared += 1)
-                mode == 1 && fold && f == 0 && lim.radial[d] && (lim.counts[6] += 1)
-            end
-            flag = Int(flags[I])
-            f >= 1 && (flag & 1) != 0 && (sides += 1)
-            f <= n - 1 && (flag & 2) != 0 && (sides += 1)
-        end
+        limited += tallies[1, a, b]
+        shared += tallies[2, a, b]
+        sides += tallies[3, a, b]
+        axis += tallies[4, a, b]
     end
     faces = ((closed_hi ? n - 1 : n) + (fold ? 1 : 0)) * nA * nB
     lim.counts[mode == 1 ? 1 : 3] += faces
     lim.counts[5] += sides
+    lim.counts[6] += axis
     return limited, shared
 end
 
@@ -817,29 +839,32 @@ function _limit_radial!(lim::PositivityLimiter, solver, Q, dQ, du, d::Int, A, B,
     lay = _limiter_layout(solver)
     bounds = _limiter_bounds(lim)
     regs = (lim.register_fields[1], lim.register_fields[2], lim.register_fields[3])
-    pointwise!(_limiter_radial_rate_point!, lim.rates, n, nA, nB,
-               lim.rates, Q, dQ, du, regs, uvw, solver.c, solver.p, solver.rho,
-               solver.inv_J, solver.inv_h[d], lim.weights, lim.areas[d], decomp.active,
-               d, (fold, closed_hi, n), (A, B, dt), bounds, lay, o1, o2, o3)
+    speeds = lim.speeds
+    Ql = _LinearState(Q)
+    dQl = _LinearState(dQ)
+    pointwise!(_limiter_radial_rate_point!, lim.rates, 1, nA, nB,
+               lim.rates, speeds, Ql, dQl, _LinearState(du), regs, uvw, solver.c,
+               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights,
+               lim.areas[d], decomp.active, d, (fold, closed_hi, n), (A, B, dt), bounds,
+               lay, o1, o2, o3)
     # The face two ranks share takes the same θ on both, from both cells'
     # rates, along r here and along z in the pass that follows.
     for e in 1:3
         decomp.active[e] && decomp.dims[e] > 1 && exchange_dim!(lim.rates, decomp, e)
     end
-    pointwise!(_limiter_radial_theta_point!, solver.tmp_a, n + 1, nA, nB,
-               solver.tmp_b, solver.tmp_a, Q, lim.faces, lim.rates, uvw, solver.c,
+    pointwise!(_limiter_radial_theta_point!, solver.tmp_a, 1, nA, nB,
+               solver.tmp_b, lim.line_counts[d], Ql, lim.faces, lim.rates, uvw, solver.c,
                solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights[d],
-               lim.areas[d], lim.free, d, (fold, closed_lo, closed_hi, n), τ, bounds,
-               lay, o1, o2, o3)
-    limited, shared = _limiter_count!(lim, solver.tmp_b, solver.tmp_a, decomp, d,
-                                      closed_hi, 1, fold)
+               lim.areas[d], speeds, lim.free, d, (fold, closed_lo, closed_hi, n), τ,
+               bounds, lay, o1, o2, o3)
+    limited, shared = _limiter_tally!(lim, decomp, d, closed_hi, 1, fold)
     lim.counts[2] += limited
     limited + shared > 0 || return nothing
     pointwise!(_limiter_radial_correct_point!, solver.tmp_a, n, nA, nB,
-               dQ, lim.register_fields[d], lim.faces, solver.tmp_b, Q, uvw, solver.c,
-               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights[d],
-               lim.areas[d], lim.anchor[d], d, τ, (one(B) / B, one(B) / (B * dt)), lay,
-               fold, o1, o2, o3)
+               dQl, lim.register_fields[d], lim.faces, solver.tmp_b, Ql, uvw, solver.p,
+               solver.inv_J, solver.inv_h[d], lim.weights[d], lim.areas[d], speeds,
+               lim.anchor[d], d, τ, (one(B) / B, one(B) / (B * dt)), lay, fold,
+               o1, o2, o3)
     return nothing
 end
 
@@ -849,22 +874,28 @@ end
 # F̃ = G + ζ p e_r of a cell whose pressure fraction at the face is ζ:
 # (1 − λv)(1 − λv(1 + (γ − 1)(1 − ζ))) > λ² ζ² c² (γ − 1)/(2γ), λ = 1/a,
 # v = ±u, holds for a ≥ max(1, |1 + (γ − 1)(1 − ζ)|)|u| + ζ c √((γ − 1)/(2γ)),
-# and the second term is kept at least c so that ζ = 1 gives |u| + c.
-@inline function _radial_speed(u, c, γ, ζ)
-    k = abs(1 + (γ - 1) * (1 - ζ))
-    return max(one(k), k) * abs(u) + max(one(k), ζ * sqrt((γ - 1) / (2γ))) * c
+# and the second term is kept at least c so that ζ = 1 gives |u| + c. The
+# node's `_radial_node` holds s = √((γ − 1)/(2γ)).
+@inline function _radial_speed(x, ζ)
+    k = abs(1 + (x.γ - 1) * (1 - ζ))
+    return max(one(k), k) * abs(x.u) + max(one(k), ζ * x.s) * x.c
 end
 
-# The speed at a face of area Ā between nodes L and R: the largest over both
-# states and both cells' ζ = (inv_h / inv_J) / Ā, since each cell's half state
-# holds both states. With R === L, the speed of one state at a closed end.
-@inline function _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Ā, L, R)
-    γL = _limiter_gamma(ρ[L], c[L], p[L])
-    γR = _limiter_gamma(ρ[R], c[R], p[R])
-    ζL = inv_h[L] / (inv_J[L] * Ā)
-    ζR = inv_h[R] / (inv_J[R] * Ā)
-    return max(_radial_speed(ud[L], c[L], γL, ζL), _radial_speed(ud[L], c[L], γL, ζR),
-               _radial_speed(ud[R], c[R], γR, ζL), _radial_speed(ud[R], c[R], γR, ζR))
+# What a node contributes to the speeds of its two faces.
+Base.@propagate_inbounds function _radial_node(ud, c, p, ρ, inv_J, inv_h, L)
+    γ = _limiter_gamma(ρ[L], c[L], p[L])
+    return (u=ud[L], c=c[L], γ=γ, s=sqrt((γ - 1) / (2γ)), ih=inv_h[L], iJ=inv_J[L])
+end
+
+# The speed at a face of area Ā between nodes l and r (`_radial_node`): the
+# largest over both states and both cells' ζ = (inv_h / inv_J) / Ā, since each
+# cell's half state holds both states. With r = l, the speed of one state at a
+# closed end.
+@inline function _radial_face_speed(l, r, Ā)
+    ζL = l.ih / (l.iJ * Ā)
+    ζR = r.ih / (r.iJ * Ā)
+    return max(_radial_speed(l, ζL), _radial_speed(l, ζR), _radial_speed(r, ζL),
+               _radial_speed(r, ζR))
 end
 
 # The area-weighted flux of a state per unit area, G = (ρu, m u, (E + p)u)
@@ -880,8 +911,8 @@ end
 # The node terms' part of the stage increment at I, aggregated: B (A du + dt dQ)
 # less the directions' face parts −B inv_J r_e (and −B inv_h r_p for the
 # radial pressure of d), which leaves B times the node terms' history.
-@inline function _limiter_node_increment(Q, dQ, du, regs, inv_J, inv_h, act, d, A, B,
-                                         dt, lay, I)
+Base.@propagate_inbounds function _limiter_node_increment(Q, dQ, du, regs, inv_J, inv_h,
+                                                          act, d, A, B, dt, lay, I)
     ns, m1, m2, m3, ie, nc = lay
     md = d == 1 ? m1 : d == 2 ? m2 : m3
     T = typeof(B)
@@ -927,157 +958,199 @@ end
     return max(s, zero(T))
 end
 
-# The rate of the cell at node pp of a radial line d over the share its face
-# and geometric parts keep, into `rates`: Σ R / (1 − β_n), with R the per-volume
-# rates Ā a inv_J/W of its two faces (`AXIS_SHARE` of the outer face's for
-# the face at the fold), γ u⁺ ΔĀ inv_J/W of its geometric part and
-# 2(|u_e| + c)/W_e of every other active direction, and β_n the node part's
-# share; Inf where the node part alone needs the whole cell.
-@inline function _limiter_radial_rate_point!(rates, Q, dQ, du, regs, uvw, c, p, ρ,
-                                             inv_J, inv_h, W, areas, act, d, ends,
-                                             coeffs, bounds, lay, o1, o2, o3, pp, a, b)
+# The speed of each face of a radial line d into `speeds`, the face f at node
+# f, and the rate of each cell over the share its face and geometric parts
+# keep into `rates`: Σ R / (1 − β_n), with R the per-volume rates
+# Ā a inv_J/W of its two faces (`AXIS_SHARE` of the outer face's for the face
+# at the fold), γ u⁺ ΔĀ inv_J/W of its geometric part and 2(|u_e| + c)/W_e of
+# every other active direction, and β_n the node part's share; Inf where the
+# node part alone needs the whole cell. The face at a closed far end takes its
+# one state; the fold's face takes none. The θ and correction passes read the
+# speeds, and the sweep carries a node's part of them to its next face.
+@inline function _limiter_radial_rate_point!(rates, speeds, Q, dQ, du, regs, uvw, c, p, ρ,
+                                             inv_J, inv_h, W, areas, act, d, ends, coeffs,
+                                             bounds, lay, o1, o2, o3, _, a, b)
     @inbounds begin
         T = eltype(rates)
         fold, closed_hi, n = ends
         A, B, dt = coeffs
         o = d == 1 ? o1 : d == 2 ? o2 : o3
-        Im = _line_node(d, pp - 1, a, b, o1, o2, o3)
-        I = _line_node(d, pp, a, b, o1, o2, o3)
-        Ip = _line_node(d, pp + 1, a, b, o1, o2, o3)
+        n1, n2 = size(rates, 1), size(rates, 2)
+        sd = _line_stride(d, n1, n2)
+        L0 = _line_linear(d, 0, a, b, o1, o2, o3, n1, n2)
         ud = uvw[d]
-        Āp = areas[pp+o]
-        Ām = areas[pp-1+o]
-        ap = closed_hi && pp == n ?
-             _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Āp, I, I) :
-             _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Āp, I, Ip)
-        Rp = Āp * ap
-        Rm = fold && pp == 1 ? T(AXIS_SHARE) * Rp :
-             Ām * _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Ām, Im, I)
-        γ = _limiter_gamma(ρ[I], c[I], p[I])
-        R = inv_J[I] / W[d][pp+o] * (Rp + Rm + γ * max(ud[I], zero(T)) * (Āp - Ām))
-        for e in 1:3
-            (e == d || !act[e]) && continue
-            R += 2 * (abs(uvw[e][I]) + c[I]) / W[e][I[e]]
+        lo = _radial_node(ud, c, p, ρ, inv_J, inv_h, L0)
+        a_lo = zero(T)
+        for pp in 0:n
+            L = L0 + pp * sd
+            hi = _radial_node(ud, c, p, ρ, inv_J, inv_h, L + sd)
+            Āp = areas[pp+o]
+            a_hi = fold && pp == 0 ? zero(T) :
+                   closed_hi && pp == n ? _radial_face_speed(lo, lo, Āp) :
+                   _radial_face_speed(lo, hi, Āp)
+            speeds[L] = a_hi
+            if pp >= 1
+                # The cell at node pp, between faces pp − ½ and pp + ½.
+                I = _line_node(d, pp, a, b, o1, o2, o3)
+                Ām = areas[pp-1+o]
+                Rp = Āp * a_hi
+                Rm = fold && pp == 1 ? T(AXIS_SHARE) * Rp : Ām * a_lo
+                R = inv_J[L] / W[d][pp+o] *
+                    (Rp + Rm + lo.γ * max(ud[L], zero(T)) * (Āp - Ām))
+                for e in 1:3
+                    (e == d || !act[e]) && continue
+                    R += 2 * (abs(uvw[e][L]) + c[L]) / W[e][I[e]]
+                end
+                q = _limiter_state(Q, L, lay)
+                δ = _limiter_node_increment(Q, dQ, du, regs, inv_J, inv_h, act, d, A, B,
+                                            dt, lay, L)
+                βn = one(T) / _limiter_reach(q, δ, _limiter_cell_bound(q, bounds))
+                rates[L] = βn < 1 ? R / (1 - βn) : T(Inf)
+            end
+            lo = hi
+            a_lo = a_hi
         end
-        q = _limiter_state(Q, I, lay)
-        δ = _limiter_node_increment(Q, dQ, du, regs, inv_J, inv_h, act, d, A, B, dt,
-                                    lay, I)
-        βn = one(T) / _limiter_reach(q, δ, _limiter_cell_bound(q, bounds))
-        rates[I] = βn < 1 ? R / (1 - βn) : T(Inf)
     end
     return nothing
 end
 
-# θ at face f = f1 − 1 of a radial line d, and its unguaranteed sides, as
-# `_limiter_theta_point!` takes them at a stage. A cell's part for the face
-# is q ∓ (1/β)[H − τ (Ā G(q), p) as a node change], 1/β its rate over the
-# face's, and its first-order counterpart the Lax–Friedrichs half state; the
-# cell at the fold takes the fold face with the axis share, whose first-order
-# values are 0 and τ p_1, and the cell on a closed far end takes its boundary
-# face, never limited, in one part with its interior face, as on a Cartesian
-# line. A side is guaranteed when τ times its cell's rate is below one; a
-# cell whose node part needs the whole cell takes the first-order flux.
-@inline function _limiter_radial_theta_point!(theta, flags, Q, faces, rates, uvw, c, p,
-                                              ρ, inv_J, inv_h, W, areas, free, d, ends,
-                                              τ, bounds, lay, o1, o2, o3, f1, a, b)
+# θ at each face of a radial line d, the face f in place of node f, and the
+# line's tallies into `counts` (see `_limiter_tally!`), as the Cartesian θ
+# pass takes them at a stage. A cell's part for the face is
+# q ∓ (1/β)[H − τ (Ā G(q), p) as a node change], 1/β its rate over the face's,
+# and its first-order counterpart the Lax–Friedrichs half state; the cell at
+# the fold takes the fold face with the axis share, whose first-order values
+# are 0 and τ p_1, and the cell on a closed far end takes its boundary face,
+# never limited, in one part with its interior face, as on a Cartesian line.
+# A side is guaranteed when τ times its cell's rate is below one; a cell
+# whose node part needs the whole cell takes the first-order flux.
+@inline function _limiter_radial_theta_point!(theta, counts, Q, faces, rates, uvw, c, p,
+                                              ρ, inv_J, inv_h, W, areas, speeds, free, d,
+                                              ends, τ, bounds, lay, o1, o2, o3, _, a, b)
     @inbounds begin
         T = eltype(theta)
         fold, closed_lo, closed_hi, n = ends
-        f = f1 - 1
-        Il = _line_node(d, f, a, b, o1, o2, o3)
-        Ir = _line_node(d, f + 1, a, b, o1, o2, o3)
-        flag = 0
-        θ = one(T)
-        if !((closed_lo && f == 0) || (closed_hi && f == n))
-            o = d == 1 ? o1 : d == 2 ? o2 : o3
-            ud = uvw[d]
-            fold_face = fold && f == 0
-            wall_r = closed_hi && f == n - 1
-            Ā = areas[f+o]
-            np = lay[6] + 1
-            G = _limiter_face_state(faces, Il, lay)
-            Π = faces[np][Il]
-            cl = !fold_face && _limiter_constrained(free, Il)
-            cr = _limiter_constrained(free, Ir)
-            a_face = fold_face ? zero(T) :
-                     _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Ā, Il, Ir)
-            ql = _limiter_state(Q, Il, lay)
-            qr = _limiter_state(Q, Ir, lay)
-            εl = _limiter_cell_bound(ql, bounds)
-            εr = _limiter_cell_bound(qr, bounds)
-            sJl = inv_J[Il] / W[f+o]
-            shl = inv_h[Il] / W[f+o]
-            sJr = inv_J[Ir] / W[f+1+o]
-            shr = inv_h[Ir] / W[f+1+o]
-            # The low cell's part for its outer face.
-            kl = rates[Il] / (sJl * Ā * a_face)
-            bl = _limiter_axpy(ql, kl * τ,
-                               _radial_vector(map(x -> Ā * x,
-                                                  _radial_flux(ql, ud[Il], p[Il])),
-                                              p[Il], sJl, shl, d))
-            Hl = _radial_vector(G, Π, sJl, shl, d)
-            # The high cell's part for its inner face.
-            if fold_face
-                Ā1 = areas[1+o]
-                I2 = _line_node(d, 2, a, b, o1, o2, o3)
-                kr = rates[Ir] /
-                     (sJr * T(AXIS_SHARE) * Ā1 *
-                      _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Ā1, Ir, I2))
-                br = _limiter_axpy(qr, -kr * τ, _radial_vector(
-                                   (zero(T), zero(T), zero(T), zero(T), zero(T)), p[Ir],
-                                   sJr, shr, d))
-            elseif wall_r
-                Āw = areas[f+1+o]
-                aw = _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Āw, Ir, Ir)
-                γ = _limiter_gamma(ρ[Ir], c[Ir], p[Ir])
-                kr = rates[Ir] / (sJr * (Ā * a_face + Āw * aw +
-                                         γ * max(ud[Ir], zero(T)) * (Āw - Ā)))
-                br = _limiter_axpy(qr, -kr, _radial_vector(
-                                   _limiter_face_state(faces, Ir, lay), faces[np][Ir],
-                                   sJr, shr, d))
-            else
-                kr = rates[Ir] / (sJr * Ā * a_face)
-                br = _limiter_axpy(qr, -kr * τ,
+        o = d == 1 ? o1 : d == 2 ? o2 : o3
+        n1, n2 = size(theta, 1), size(theta, 2)
+        sd = _line_stride(d, n1, n2)
+        L0 = _line_linear(d, 0, a, b, o1, o2, o3, n1, n2)
+        ud = uvw[d]
+        np = lay[6] + 1
+        limited = 0
+        shared = 0
+        sides = 0
+        axis = 0
+        lo = _radial_cell(Q, free, inv_J, inv_h, W, bounds, lay, L0,
+                          _line_node(d, 0, a, b, o1, o2, o3), o)
+        for f in 0:n
+            Ll = L0 + f * sd
+            Lr = Ll + sd
+            hi = _radial_cell(Q, free, inv_J, inv_h, W, bounds, lay, Lr,
+                              _line_node(d, f + 1, a, b, o1, o2, o3), f + 1 + o)
+            flag = 0
+            θ = one(T)
+            if !((closed_lo && f == 0) || (closed_hi && f == n))
+                fold_face = fold && f == 0
+                wall_r = closed_hi && f == n - 1
+                Ā = areas[f+o]
+                G = _limiter_face_state(faces, Ll, lay)
+                Π = faces[np][Ll]
+                cl = !fold_face && lo.constrained
+                cr = hi.constrained
+                a_face = fold_face ? zero(T) : speeds[Ll]
+                ql, εl, sJl, shl = lo.q, lo.ε, lo.sJ, lo.sh
+                qr, εr, sJr, shr = hi.q, hi.ε, hi.sJ, hi.sh
+                # The low cell's part for its outer face.
+                kl = rates[Ll] / (sJl * Ā * a_face)
+                bl = _limiter_axpy(ql, kl * τ,
                                    _radial_vector(map(x -> Ā * x,
-                                                      _radial_flux(qr, ud[Ir], p[Ir])),
-                                                  p[Ir], sJr, shr, d))
-            end
-            Hr = _radial_vector(G, Π, sJr, shr, d)
-            okl = isfinite(kl)
-            okr = isfinite(kr)
-            need = (cl && !(okl && _limiter_admissible(_limiter_axpy(bl, -kl, Hl), εl))) ||
-                   (cr && !(okr && _limiter_admissible(_limiter_axpy(br, kr, Hr), εr)))
-            if need
-                # First order: τ Ā times the Rusanov flux, and τ {p}; at the
-                # fold 0 and τ p_1.
+                                                      _radial_flux(ql, ud[Ll], p[Ll])),
+                                                  p[Ll], sJl, shl, d))
+                Hl = _radial_vector(G, Π, sJl, shl, d)
+                # The high cell's part for its inner face.
                 if fold_face
-                    GL = (zero(T), zero(T), zero(T), zero(T), zero(T))
-                    ΠL = τ * p[Ir]
+                    Ā1 = areas[1+o]
+                    kr = rates[Lr] / (sJr * T(AXIS_SHARE) * Ā1 * speeds[Lr])
+                    br = _limiter_axpy(qr, -kr * τ, _radial_vector(
+                                       (zero(T), zero(T), zero(T), zero(T), zero(T)),
+                                       p[Lr], sJr, shr, d))
+                elseif wall_r
+                    Āw = areas[f+1+o]
+                    aw = speeds[Lr]
+                    γ = _limiter_gamma(ρ[Lr], c[Lr], p[Lr])
+                    kr = rates[Lr] / (sJr * (Ā * a_face + Āw * aw +
+                                             γ * max(ud[Lr], zero(T)) * (Āw - Ā)))
+                    br = _limiter_axpy(qr, -kr, _radial_vector(
+                                       _limiter_face_state(faces, Lr, lay), faces[np][Lr],
+                                       sJr, shr, d))
                 else
-                    Fl = _radial_flux(ql, ud[Il], p[Il])
-                    Fr = _radial_flux(qr, ud[Ir], p[Ir])
-                    GL = map((x, y, u, v) -> τ * Ā * ((x + y) / 2 - a_face * (v - u) / 2),
-                             Fl, Fr, ql, qr)
-                    ΠL = τ * (p[Il] + p[Ir]) / 2
+                    kr = rates[Lr] / (sJr * Ā * a_face)
+                    br = _limiter_axpy(qr, -kr * τ,
+                                       _radial_vector(map(x -> Ā * x,
+                                                          _radial_flux(qr, ud[Lr], p[Lr])),
+                                                      p[Lr], sJr, shr, d))
                 end
-                if cl
-                    t, ok = okl ? _limiter_side(bl, Hl, _radial_vector(GL, ΠL, sJl, shl, d),
-                                                -kl, εl) : (zero(T), false)
-                    θ = min(θ, t)
-                    (ok && τ * rates[Il] < 1) || (flag |= 1)
-                end
-                if cr
-                    t, ok = okr ? _limiter_side(br, Hr, _radial_vector(GL, ΠL, sJr, shr, d),
-                                                kr, εr) : (zero(T), false)
-                    θ = min(θ, t)
-                    (ok && τ * rates[Ir] < 1) || (flag |= 2)
+                Hr = _radial_vector(G, Π, sJr, shr, d)
+                okl = isfinite(kl)
+                okr = isfinite(kr)
+                need_l = cl && !(okl && _limiter_admissible(_limiter_axpy(bl, -kl, Hl), εl))
+                need = need_l ||
+                       (cr && !(okr && _limiter_admissible(_limiter_axpy(br, kr, Hr), εr)))
+                if need
+                    # First order: τ Ā times the Rusanov flux, and τ {p}; at the
+                    # fold 0 and τ p_1.
+                    if fold_face
+                        GL = (zero(T), zero(T), zero(T), zero(T), zero(T))
+                        ΠL = τ * p[Lr]
+                    else
+                        Fl = _radial_flux(ql, ud[Ll], p[Ll])
+                        Fr = _radial_flux(qr, ud[Lr], p[Lr])
+                        GL = map((x, y, u, v) ->
+                                     τ * Ā * ((x + y) / 2 - a_face * (v - u) / 2),
+                                 Fl, Fr, ql, qr)
+                        ΠL = τ * (p[Ll] + p[Lr]) / 2
+                    end
+                    if cl
+                        t, ok = okl ?
+                                _limiter_side(bl, Hl, _radial_vector(GL, ΠL, sJl, shl, d),
+                                              -kl, εl) : (zero(T), false)
+                        θ = min(θ, t)
+                        (ok && τ * rates[Ll] < 1) || (flag |= 1)
+                    end
+                    if cr
+                        t, ok = okr ?
+                                _limiter_side(br, Hr, _radial_vector(GL, ΠL, sJr, shr, d),
+                                              kr, εr) : (zero(T), false)
+                        θ = min(θ, t)
+                        (ok && τ * rates[Lr] < 1) || (flag |= 2)
+                    end
                 end
             end
+            theta[Ll] = θ
+            if θ < 1
+                (f >= 1 || fold) ? (limited += 1) : (shared += 1)
+                fold && f == 0 && (axis += 1)
+            end
+            f >= 1 && (flag & 1) != 0 && (sides += 1)
+            f <= n - 1 && (flag & 2) != 0 && (sides += 1)
+            lo = hi
         end
-        theta[Il] = θ
-        flags[Il] = flag
+        counts[1, a, b] = limited
+        counts[2, a, b] = shared
+        counts[3, a, b] = sides
+        counts[4, a, b] = axis
     end
     return nothing
+end
+
+# A radial cell's state and bound, its inverse Jacobian and inverse spacing
+# over its weight W[pw], and whether no face condition overwrites it: what a
+# θ pass reads of it at both its faces.
+Base.@propagate_inbounds function _radial_cell(Q, free, inv_J, inv_h, W, bounds, lay, L,
+                                               I, pw)
+    q = _limiter_state(Q, L, lay)
+    return (q=q, ε=_limiter_cell_bound(q, bounds), sJ=inv_J[L] / W[pw],
+            sh=inv_h[L] / W[pw], constrained=_limiter_constrained(free, I))
 end
 
 # The corrections at node pp of a radial line from its two faces, where either
@@ -1086,14 +1159,16 @@ end
 # on the radial momentum, by inv_h times the pressure's. Each enters dQ / (B dt)
 # and leaves its register, and a limited fold face enters the face register at
 # the fold, whose running sum the next stage starts from.
-@inline function _limiter_radial_correct_point!(dQ, regs, faces, theta, Q, uvw, c, p, ρ,
-                                                inv_J, inv_h, W, areas, anchor, d, τ,
-                                                scales, lay, fold, o1, o2, o3, pp, a, b)
+@inline function _limiter_radial_correct_point!(dQ, regs, faces, theta, Q, uvw, p,
+                                                inv_J, inv_h, W, areas, speeds, anchor, d,
+                                                τ, scales, lay, fold, o1, o2, o3, pp, a, b)
     @inbounds begin
         T = eltype(theta)
-        Im = _line_node(d, pp - 1, a, b, o1, o2, o3)
-        I = _line_node(d, pp, a, b, o1, o2, o3)
-        Ip = _line_node(d, pp + 1, a, b, o1, o2, o3)
+        n1, n2 = size(theta, 1), size(theta, 2)
+        I = _line_linear(d, pp, a, b, o1, o2, o3, n1, n2)
+        sd = _line_stride(d, n1, n2)
+        Im = I - sd
+        Ip = I + sd
         θm = theta[Im]
         θp = theta[I]
         (θm < 1 || θp < 1) || return nothing
@@ -1105,9 +1180,8 @@ end
         ud = uvw[d]
         Ām = areas[pp-1+o]
         Āp = areas[pp+o]
-        am = θm < 1 && !fold_face ?
-             _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Ām, Im, I) : zero(T)
-        ap = θp < 1 ? _radial_face_speed(ud, c, p, ρ, inv_J, inv_h, Āp, I, Ip) : zero(T)
+        am = θm < 1 && !fold_face ? speeds[Im] : zero(T)
+        ap = θp < 1 ? speeds[I] : zero(T)
         inv_W = one(T) / W[pp+o]
         for cc in 0:nc
             # cc = 0 is the pressure, kept in register nc + 1.
@@ -1140,7 +1214,7 @@ end
 
 # Component `cc` of the Rusanov flux per unit area between L and R at speed a,
 # the area-weighted flux without the pressure.
-@inline function _radial_lf_component(Q, ud, p, cc, L, R, a, ie)
+Base.@propagate_inbounds function _radial_lf_component(Q, ud, p, cc, L, R, a, ie)
     uL, uR = ud[L], ud[R]
     qL, qR = Q[L, cc], Q[R, cc]
     fL = qL * uL
@@ -1189,8 +1263,9 @@ function _limited_filter_state!(solver, Q)
         limited + shared > 0 || continue
         n = decomp.n_local[d]
         nA, nB = _transverse(decomp.n_local, d)
+        Ql = _LinearState(Q)
         pointwise!(_limiter_correct_point!, solver.tmp_a, n, nA, nB,
-                   Q, lim.register_fields[d], lim.faces, solver.tmp_b, Q,
+                   Ql, lim.register_fields[d], lim.faces, solver.tmp_b, Ql,
                    (solver.u, solver.v, solver.w), solver.c, solver.p,
                    lim.weights[d], d, solver.h[d], zero(w), 2, (one(w), one(w)),
                    _limiter_layout(solver),
@@ -1202,21 +1277,35 @@ function _limited_filter_state!(solver, Q)
 end
 
 # The pre-pass state of a filter pass, held per component in the workspace,
-# indexed as a conserved state is.
+# indexed as a `_LinearState` is.
 struct _BaseState{F}
     fields::F
 end
-Base.@propagate_inbounds Base.getindex(s::_BaseState, I::CartesianIndex{3}, c::Int) =
-    s.fields[c][I]
+Base.@propagate_inbounds Base.getindex(s::_BaseState, l::Int, c::Int) = s.fields[c][l]
+Adapt.adapt_structure(to, s::_BaseState) = _BaseState(adapt(to, s.fields))
+
+# The state a θ pass reads, in the linear form.
+_linear(Q::ConservedState) = _LinearState(Q)
+_linear(s::_BaseState) = s
 
 # --- Per-point bodies --------------------------------------------------------
 
-# r ← A r + dt div over the interior; RKA[1] = 0, and the first stage assigns,
-# so a register left non-finite by an abandoned step is forgotten.
-@inline function _limiter_register_point!(r, div, A, dt, o1, o2, o3, i, j, k)
+# The subtraction of a divergence from component `c` of dQ, as
+# `_subtract_div_point!` and `_subtract_jac_div_point!` make it, and the
+# register update r ← A r + dt div from the same read over the interior.
+# RKA[1] = 0, and the first stage assigns, so a register left non-finite by an
+# abandoned step is forgotten.
+@inline function _limiter_subtract_point!(dQ, r, div, inv_J, c, A, dt, o1, o2, o3,
+                                          i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        r[I] = ifelse(iszero(A), dt * div[I], A * r[I] + dt * div[I])
+        x = div[I]
+        if inv_J === nothing
+            dQ[I, c] -= x
+        else
+            dQ[I, c] -= inv_J[I] * x
+        end
+        r[I] = ifelse(iszero(A), dt * x, A * r[I] + dt * x)
     end
     return nothing
 end
@@ -1291,45 +1380,86 @@ end
 # mode 2 the filter correction −ω Δ with ω = W/h, and in mode 2 the filter's
 # face relation is measured at local face `j` when j > 0:
 # (Σ_s l_s S_{j+s} + w ψ_j) / Σ_s l_s. Where `volume` is set, a component
-# marked in `mask` sums −ω J Δ instead.
-@inline function _limiter_scan_point!(faces, regs, Q, base, W, hd, totals, aux,
+# marked in `mask` sums −ω J Δ instead. On a line this rank holds whole
+# (`ends[1]`) the offsets are the line's own, the stage's face register
+# `anchor` or the filter's measured constant, and the face values are
+# finished here as `_limiter_offset_point!` finishes them on a decomposed one,
+# scaled by `ends[3]`, the global low face's value at the high face of a
+# periodic line (`ends[2]`): a stage's in the same sweep as the sums, a
+# filter pass's after its measurement.
+@inline function _limiter_scan_point!(faces, regs, Q, base, W, hd, totals, aux, anchor,
                                       n_cons, n, d, mode, j, lhs, psi, wf, volume, mask,
-                                      inv_J, o1, o2, o3, a, b, _)
+                                      inv_J, ends, o1, o2, o3, _, a, b)
     @inbounds begin
         o = d == 1 ? o1 : d == 2 ? o2 : o3
         T = eltype(totals)
+        whole, wrap_high, scale = ends
+        n1, n2 = size(inv_J, 1), size(inv_J, 2)
+        sd = _line_stride(d, n1, n2)
+        L0 = _line_linear(d, 0, a, b, o1, o2, o3, n1, n2)
         for c in 1:n_cons
             fc = faces[c]
             S = zero(T)
-            fc[_line_node(d, 0, a, b, o1, o2, o3)] = S
             weighted = volume && mask[c]
-            for p in 1:n
-                I = _line_node(d, p, a, b, o1, o2, o3)
-                if mode == 1
-                    S += W[p+o] * regs[c][I]
-                elseif weighted
-                    S -= (W[p+o] / hd) / inv_J[I] * (Q[I, c] - base[c][I])
-                else
-                    S -= (W[p+o] / hd) * (Q[I, c] - base[c][I])
+            if mode == 1
+                rc = regs[c]
+                if whole
+                    off = anchor[c, a, b]
+                    fc[L0] = scale * ((off + S) - zero(T))
+                    for p in 1:n
+                        L = L0 + p * sd
+                        S += W[p+o] * rc[L]
+                        fc[L] = scale * ((off + S) - zero(T))
+                    end
+                    wrap_high && (fc[L0+n*sd] = scale * (off - zero(T)))
+                    totals[c, a, b] = S
+                    continue
                 end
-                fc[I] = S
+                fc[L0] = S
+                for p in 1:n
+                    L = L0 + p * sd
+                    S += W[p+o] * rc[L]
+                    fc[L] = S
+                end
+            else
+                bc = base[c]
+                fc[L0] = S
+                for p in 1:n
+                    L = L0 + p * sd
+                    if weighted
+                        S -= (W[p+o] / hd) / inv_J[L] * (Q[L, c] - bc[L])
+                    else
+                        S -= (W[p+o] / hd) * (Q[L, c] - bc[L])
+                    end
+                    fc[L] = S
+                end
             end
             totals[c, a, b] = S
             if mode == 2 && j > 0
                 q = length(lhs)
-                acc = fc[_line_node(d, j, a, b, o1, o2, o3)]
+                Lj = L0 + j * sd
+                acc = fc[Lj]
                 sum_l = one(T)
                 for s in 1:q
-                    acc += lhs[s] * (fc[_line_node(d, j - s, a, b, o1, o2, o3)] +
-                                     fc[_line_node(d, j + s, a, b, o1, o2, o3)])
+                    acc += lhs[s] * (fc[Lj-s*sd] + fc[Lj+s*sd])
                     sum_l += 2 * lhs[s]
                 end
                 M = length(psi) ÷ 2
                 ψ = zero(T)
+                bc = base[c]
                 for l in 1-M:M
-                    ψ += psi[l+M] * base[c][_line_node(d, j + l, a, b, o1, o2, o3)]
+                    ψ += psi[l+M] * bc[Lj+l*sd]
                 end
                 aux[c, a, b] = (acc + wf * ψ) / sum_l
+            end
+            whole || continue
+            # A filter pass: no offset, and the measured constant removed.
+            off = zero(T)
+            cstar = aux[c, a, b]
+            for f in 0:n
+                L = L0 + f * sd
+                v = wrap_high && f == n ? off : off + fc[L]
+                fc[L] = weighted ? scale * v : scale * (v - cstar)
             end
         end
     end
@@ -1354,7 +1484,7 @@ end
 end
 
 # Mixture density, momentum and total energy of a state.
-@inline function _limiter_state(Q, I, lay)
+Base.@propagate_inbounds function _limiter_state(Q, I, lay)
     ns, m1, m2, m3, ie, _ = lay
     ρ = zero(eltype(Q[I, 1]))
     for sp in 1:ns
@@ -1363,7 +1493,7 @@ end
     return (ρ, Q[I, m1], Q[I, m2], Q[I, m3], Q[I, ie])
 end
 
-@inline function _limiter_face_state(faces, I, lay)
+Base.@propagate_inbounds function _limiter_face_state(faces, I, lay)
     ns, m1, m2, m3, ie, _ = lay
     ρ = zero(eltype(faces[1]))
     for sp in 1:ns
@@ -1409,21 +1539,37 @@ end
     return (clamp(θ, zero(T), one(T)), true)
 end
 
-# Σ_d (|u_d| + c)/W_d at node I, the cell's total first-order rate, from the
-# inverse weights.
-@inline function _limiter_rate(uvw, c, inv_W, act, I)
+# Σ_d (|u_d| + c)/W_d at the node of linear index L and Cartesian index I, the
+# cell's total first-order rate, from the inverse weights.
+Base.@propagate_inbounds function _limiter_rate(uvw, c, inv_W, act, L, I)
     Λ = zero(eltype(c))
     for e in 1:3
         act[e] || continue
-        Λ += (abs(uvw[e][I]) + c[I]) * inv_W[e][I[e]]
+        Λ += (abs(uvw[e][L]) + c[L]) * inv_W[e][I[e]]
     end
     return Λ
 end
 
-@inline _limiter_constrained(free, I) = !(free[1][I[1]] | free[2][I[2]] | free[3][I[3]])
+Base.@propagate_inbounds _limiter_constrained(free, I) =
+    !(free[1][I[1]] | free[2][I[2]] | free[3][I[3]])
 
-# θ at face f = f1 − 1 of a line of direction d into `theta`, and its
-# unguaranteed sides into `flags` (1 the low cell, 2 the high one). A global
+# The half-state scale of a cell along d: 2Λ/(|u_d| + c) at a stage, its rate
+# over |u_d| + c along an area-weighted direction, Inf where that speed
+# vanishes, and 2/ω = 2h/W in a filter pass.
+Base.@propagate_inbounds function _limiter_scale(uvw, c, inv_W, act, rates, d, hd, mode,
+                                                 areal, L, I)
+    T = eltype(c)
+    if mode == 1
+        sp = abs(uvw[d][L]) + c[L]
+        sp > 0 || return T(Inf)
+        return areal ? rates[L] / sp : 2 * _limiter_rate(uvw, c, inv_W, act, L, I) / sp
+    end
+    return 2 * hd * inv_W[d][I[d]]
+end
+
+# θ at each face of a line of direction d into `theta`, the face f in place of
+# node f, and the line's tallies into `counts` (see `_limiter_tally!`), an
+# unguaranteed side flagged 1 for the low cell and 2 for the high one. A global
 # closed end is not limited; a fold's face is, from node 1's side alone, its
 # other cell node 1's mirror. Mode 1 is a stage (half states scaled by
 # 2Λ/(|u_d| + c) and the first-order flux τ F_LF); mode 2 a filter pass (2/ω,
@@ -1432,102 +1578,114 @@ end
 # stage along an area-weighted direction (`areal`) every component, whose
 # face values are A_d times a flux on a line of constant A_d = J, and in a
 # filter pass on a radial grid the components weighted by J. An areal stage
-# reads each cell's rate from `rates`, which the radial pass fills.
-@inline function _limiter_theta_point!(theta, flags, Q, faces, uvw, c, p, inv_W, free,
+# reads each cell's rate from `rates`, which the radial pass fills. A node's
+# state, bound, half-state scale s (s_d = 2Λ/(|u_d| + c) at a stage, the low
+# cell taking −s) and constraint serve both its faces: the sweep carries the
+# high cell's to the next face.
+@inline function _limiter_theta_point!(theta, counts, Q, faces, uvw, c, p, inv_W, free,
                                        act, d, n, closed, hd, τ, mode, bounds, lay,
                                        volume, vmask, inv_J, areal, rates,
-                                       o1, o2, o3, f1, a, b)
+                                       o1, o2, o3, _, a, b)
     @inbounds begin
         T = eltype(theta)
-        f = f1 - 1
-        Il = _line_node(d, f, a, b, o1, o2, o3)
-        Ir = _line_node(d, f + 1, a, b, o1, o2, o3)
-        G = _limiter_face_state(faces, Il, lay)
-        flag = 0
-        θ = one(T)
-        lo_bnd = closed[1] && f == 0
-        hi_bnd = closed[2] && f == n
-        fold_face = closed[3] && f == 0
         ud = uvw[d]
-        sl = zero(T); sr = zero(T)
-        if mode == 1
-            spl = abs(ud[Il]) + c[Il]
-            spr = abs(ud[Ir]) + c[Ir]
-            if areal
-                !lo_bnd && !fold_face && (sl = spl > 0 ? -rates[Il] / spl : T(-Inf))
-                !hi_bnd && (sr = spr > 0 ? rates[Ir] / spr : T(Inf))
-            else
-                !lo_bnd && (sl = spl > 0 ?
-                                 -2 * _limiter_rate(uvw, c, inv_W, act, Il) / spl :
-                                 T(-Inf))
-                !hi_bnd && (sr = spr > 0 ?
-                                 2 * _limiter_rate(uvw, c, inv_W, act, Ir) / spr :
-                                 T(Inf))
+        n1, n2 = size(theta, 1), size(theta, 2)
+        sd = _line_stride(d, n1, n2)
+        L0 = _line_linear(d, 0, a, b, o1, o2, o3, n1, n2)
+        limited = 0
+        shared = 0
+        sides = 0
+        I0 = _line_node(d, 0, a, b, o1, o2, o3)
+        q_lo = _limiter_state(Q, L0, lay)
+        ε_lo = _limiter_cell_bound(q_lo, bounds)
+        s_lo = _limiter_scale(uvw, c, inv_W, act, rates, d, hd, mode, areal, L0, I0)
+        free_lo = _limiter_constrained(free, I0)
+        for f in 0:n
+            Ll = L0 + f * sd
+            Lr = Ll + sd
+            Ir = _line_node(d, f + 1, a, b, o1, o2, o3)
+            q_hi = _limiter_state(Q, Lr, lay)
+            ε_hi = _limiter_cell_bound(q_hi, bounds)
+            s_hi = _limiter_scale(uvw, c, inv_W, act, rates, d, hd, mode, areal, Lr, Ir)
+            free_hi = _limiter_constrained(free, Ir)
+            G = _limiter_face_state(faces, Ll, lay)
+            flag = 0
+            θ = one(T)
+            lo_bnd = closed[1] && f == 0
+            hi_bnd = closed[2] && f == n
+            fold_face = closed[3] && f == 0
+            # The low cell takes −s; the sign change is exact, so −s is the
+            # low cell's own expression.
+            sl = lo_bnd || (mode == 1 && areal && fold_face) ? zero(T) : -s_lo
+            sr = hi_bnd ? zero(T) : s_hi
+            if !(lo_bnd || hi_bnd)
+                # The filter's row at a closed end is the identity, and its
+                # correction leaves the end node alone; so does the limiter.
+                wall_l = closed[1] && f == 1
+                wall_r = closed[2] && f == n - 1
+                cl = free_lo && !(mode == 2 && wall_l) && !fold_face
+                cr = free_hi && !(mode == 2 && wall_r)
+                qr = q_hi
+                # The state across a fold is node 1's mirror, its normal momentum
+                # reversed.
+                ql = fold_face ? _limiter_mirror(qr, d) : q_lo
+                uL = fold_face ? -ud[Lr] : ud[Ll]
+                cL = fold_face ? c[Lr] : c[Ll]
+                pL = fold_face ? p[Lr] : p[Ll]
+                εl = fold_face ? _limiter_cell_bound(ql, bounds) : ε_lo
+                εr = ε_hi
+                Gl = volume ? _limiter_volume(G, vmask, inv_J[Ll]) : G
+                Gr = volume ? _limiter_volume(G, vmask, inv_J[Lr]) : G
+                # At a stage, a cell on a closed end keeps its boundary face, which
+                # is never limited, in the same part as its interior face: one part
+                # of weight α_d, q + (G_boundary − G_interior)/(α_d W), in place of
+                # two halves, so the wall's flux enters at its own size, not twice.
+                bl = ql; br = qr
+                if mode == 1 && wall_l
+                    sl /= 2
+                    Gb = _limiter_face_state(faces, L0, lay)
+                    bl = _limiter_axpy(ql, -sl,
+                                       volume ? _limiter_volume(Gb, vmask, inv_J[Ll]) : Gb)
+                end
+                if mode == 1 && wall_r
+                    sr /= 2
+                    Gb = _limiter_face_state(faces, L0 + n * sd, lay)
+                    br = _limiter_axpy(qr, -sr,
+                                       volume ? _limiter_volume(Gb, vmask, inv_J[Lr]) : Gb)
+                end
+                need = (cl && !_limiter_admissible(_limiter_axpy(bl, sl, Gl), εl)) ||
+                       (cr && !_limiter_admissible(_limiter_axpy(br, sr, Gr), εr))
+                if need
+                    GL = (zero(T), zero(T), zero(T), zero(T), zero(T))
+                    a_face = zero(T)
+                    if mode == 1
+                        a_face = max(abs(uL) + cL, abs(ud[Lr]) + c[Lr])
+                        GL = _limiter_lf_state(ql, qr, uL, ud[Lr], pL, p[Lr], a_face, τ, d)
+                    end
+                    # A side whose first-order half state is not admissible, or
+                    # whose first-order bound τ a |s| ≤ 1 fails, is unguaranteed.
+                    if cl
+                        t, ok = _limiter_side(bl, Gl, GL, sl, εl)
+                        θ = min(θ, t)
+                        (ok && τ * a_face * abs(sl) <= 1) || (flag |= 1)
+                    end
+                    if cr
+                        t, ok = _limiter_side(br, Gr, GL, sr, εr)
+                        θ = min(θ, t)
+                        (ok && τ * a_face * abs(sr) <= 1) || (flag |= 2)
+                    end
+                end
             end
-        else
-            !lo_bnd && (sl = -2 * hd * inv_W[d][Il[d]])
-            !hi_bnd && (sr = 2 * hd * inv_W[d][Ir[d]])
+            theta[Ll] = θ
+            θ < 1 && ((f >= 1 || closed[3]) ? (limited += 1) : (shared += 1))
+            f >= 1 && (flag & 1) != 0 && (sides += 1)
+            f <= n - 1 && (flag & 2) != 0 && (sides += 1)
+            q_lo, ε_lo, s_lo, free_lo = q_hi, ε_hi, s_hi, free_hi
         end
-        if !(lo_bnd || hi_bnd)
-            # The filter's row at a closed end is the identity, and its
-            # correction leaves the end node alone; so does the limiter.
-            wall_l = closed[1] && f == 1
-            wall_r = closed[2] && f == n - 1
-            cl = _limiter_constrained(free, Il) && !(mode == 2 && wall_l) && !fold_face
-            cr = _limiter_constrained(free, Ir) && !(mode == 2 && wall_r)
-            qr = _limiter_state(Q, Ir, lay)
-            # The state across a fold is node 1's mirror, its normal momentum
-            # reversed.
-            ql = fold_face ? _limiter_mirror(qr, d) : _limiter_state(Q, Il, lay)
-            uL = fold_face ? -ud[Ir] : ud[Il]
-            cL = fold_face ? c[Ir] : c[Il]
-            pL = fold_face ? p[Ir] : p[Il]
-            εl = _limiter_cell_bound(ql, bounds)
-            εr = _limiter_cell_bound(qr, bounds)
-            Gl = volume ? _limiter_volume(G, vmask, inv_J[Il]) : G
-            Gr = volume ? _limiter_volume(G, vmask, inv_J[Ir]) : G
-            # At a stage, a cell on a closed end keeps its boundary face, which
-            # is never limited, in the same part as its interior face: one part
-            # of weight α_d, q + (G_boundary − G_interior)/(α_d W), in place of
-            # two halves, so the wall's flux enters at its own size, not twice.
-            bl = ql; br = qr
-            if mode == 1 && wall_l
-                sl /= 2
-                Gb = _limiter_face_state(faces, _line_node(d, 0, a, b, o1, o2, o3), lay)
-                bl = _limiter_axpy(ql, -sl,
-                                   volume ? _limiter_volume(Gb, vmask, inv_J[Il]) : Gb)
-            end
-            if mode == 1 && wall_r
-                sr /= 2
-                Gb = _limiter_face_state(faces, _line_node(d, n, a, b, o1, o2, o3), lay)
-                br = _limiter_axpy(qr, -sr,
-                                   volume ? _limiter_volume(Gb, vmask, inv_J[Ir]) : Gb)
-            end
-            need = (cl && !_limiter_admissible(_limiter_axpy(bl, sl, Gl), εl)) ||
-                   (cr && !_limiter_admissible(_limiter_axpy(br, sr, Gr), εr))
-            if need
-                GL = (zero(T), zero(T), zero(T), zero(T), zero(T))
-                a_face = zero(T)
-                if mode == 1
-                    a_face = max(abs(uL) + cL, abs(ud[Ir]) + c[Ir])
-                    GL = _limiter_lf_state(ql, qr, uL, ud[Ir], pL, p[Ir], a_face, τ, d)
-                end
-                # A side whose first-order half state is not admissible, or
-                # whose first-order bound τ a |s| ≤ 1 fails, is unguaranteed.
-                if cl
-                    t, ok = _limiter_side(bl, Gl, GL, sl, εl)
-                    θ = min(θ, t)
-                    (ok && τ * a_face * abs(sl) <= 1) || (flag |= 1)
-                end
-                if cr
-                    t, ok = _limiter_side(br, Gr, GL, sr, εr)
-                    θ = min(θ, t)
-                    (ok && τ * a_face * abs(sr) <= 1) || (flag |= 2)
-                end
-            end
-        end
-        theta[Il] = θ
-        flags[Il] = flag
+        counts[1, a, b] = limited
+        counts[2, a, b] = shared
+        counts[3, a, b] = sides
+        counts[4, a, b] = 0
     end
     return nothing
 end
@@ -1540,7 +1698,7 @@ end
 @inline _limiter_volume(G, vmask, inv_J) = map((g, m) -> m ? g * inv_J : g, G, vmask)
 
 # τ times component `cc` of the Lax–Friedrichs flux along d between L and R.
-@inline function _limiter_lf_component(Q, uvw, c, p, cc, L, R, τ, d, lay)
+Base.@propagate_inbounds function _limiter_lf_component(Q, uvw, c, p, cc, L, R, τ, d, lay)
     ns, m1, m2, m3, ie, _ = lay
     ud = uvw[d]
     uL, uR = ud[L], ud[R]
@@ -1574,9 +1732,10 @@ end
         # A filter pass leaves a closed end's node alone (see the face pass).
         mode == 2 && ((closed[1] && pp == 1) || (closed[2] && pp == n)) &&
             return nothing
-        Im = _line_node(d, pp - 1, a, b, o1, o2, o3)
-        I = _line_node(d, pp, a, b, o1, o2, o3)
-        Ip = _line_node(d, pp + 1, a, b, o1, o2, o3)
+        n1, n2 = size(theta, 1), size(theta, 2)
+        I = _line_linear(d, pp, a, b, o1, o2, o3, n1, n2)
+        Im = I - _line_stride(d, n1, n2)
+        Ip = I + _line_stride(d, n1, n2)
         θm = theta[Im]
         θp = theta[I]
         (θm < 1 || θp < 1) || return nothing
@@ -1617,7 +1776,7 @@ end
 
 # τ times component `cc` of the Lax–Friedrichs flux along d between node I's
 # mirror across a fold and node I.
-@inline function _limiter_lf_mirror(Q, uvw, c, p, cc, I, τ, d, lay)
+Base.@propagate_inbounds function _limiter_lf_mirror(Q, uvw, c, p, cc, I, τ, d, lay)
     ns, m1, m2, m3, ie, _ = lay
     md = d == 1 ? m1 : d == 2 ? m2 : m3
     u = uvw[d][I]
