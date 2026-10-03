@@ -11,48 +11,46 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 Defects found while building the Examples pages, filed here as found; each
 example they block is held until the item closes.
 
-- [ ] **N29 — Find the vorticity that grows at an NSCBC inflow face beside
-  the r-z axis.** In the vortex ring and shock configuration
-  (`examples/vortex_ring_shock.jl`: axisymmetric tube, a Mach 1.36 shock
-  fired from a Dirichlet top face through a `Ramp`, the face then switched to
-  an `NSCBCInflowBC` whose target follows the waves that leave), azimuthal
-  vorticity appears at the top face 1–1.6 mm from the axis just after the
-  shock reflected from the interface leaves through the face and the target
-  switches, and grows until it holds more circulation than the vortex ring
-  (1.1 m²/s within 10 mm of the axis, peak |ω| near 27 000 1/s, half a
-  millisecond after it forms). It forms on 112 × 384 nodes and not on
-  56 × 192. Continued 0.3 ms further, the 112 × 384 run loses positivity,
-  after the shock transmitted at reshock leaves through the same face;
-  whether the two are connected is not known. A plane shock leaving through an inflow face with
-  the same target switch, and a front curved by 5 mm near the axis, leave no
-  vorticity (`CompactLES_tutorial_protos/evidence/ex6_bug_axis_inflow.jl`),
-  so no reduced reproducer exists yet; the example page held in
-  `CompactLES_tutorial_protos/held/vortex_ring_shock/`, run at 1f841bc with
-  `mpiexec -n 8 julia --project=docs -t 1` from `examples/`, shows it. A
-  steady offset of 0.4% of the shock's pressure jump at the same face after
-  the switch, on every grid, may be a separate matter. Holds the Vortex ring
-  and shock example.
-  **Gate:** the held example to its original end time, 1.6 ms after the
-  shock reaches the interface, on 112 × 384 without the vorticity at the
-  face.
+- [ ] **N31 — Find the vorticity burst at the inflow face beside the axis.**
+  In the Vortex ring and shock example (`examples/vortex_ring_shock.jl`,
+  112 × 384), after the shock reflected from the interface leaves through
+  the top face and the inflow target switches, vorticity forms on the face
+  within 2 mm of the axis near 7.8 ms, peaks at 3700 1/s (509 1/s on
+  56 × 192), and decays to 2000 1/s as the inflow carries it down, seeding
+  the oblique lines the page's flow figure shows. It forms at N29's place and
+  time at a seventh of N29's peak and does not grow; the N29 fix does not
+  remove it. The step switch of the target against a slightly curved exit is the
+  first suspect.
+  **Gate:** the example's face row beside the axis below 100 1/s through
+  8.0 ms, or the source identified and recorded.
 
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
   converging shock.** A spherical shock converging on an r-z quadrant (axis
   and a symmetry plane at z = 0, 64² root, one level placed by the
   artificial-diffusivity tag, run to R ≈ 0.17) leaves a checkerboard in the
-  density of the shocked gas that the uniform grid at the level's spacing
-  does not have. The mean undivided fourth difference of ρ, over ρ, in the
-  shell behind the shock, against the uniform 192² run: one fixed box 1.0×,
-  fixed tiles of edge 8 1.6×, tiles placed by regridding 2.6×. So the tile
-  interfaces and the regrids each contribute; A18's moving-box disturbance
-  ahead of a shock is a separate measurement. At 128² root the refined run's
-  mass changes by about ninety times the uniform 384² run's, and at R = 0.03
-  its shock radius ranges from −1.9% to +1.7% of the mean around the
-  quadrant, against +1.3% on the two fold rays alone on the uniform grid.
-  Not checked on a Cartesian grid.
-  Reproducer: `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`
-  (argument `static` for fixed tiles), at d8c451a. Holds the Spherical
-  implosion example (`CompactLES_tutorial_protos/held/spherical_implosion/`).
+  shocked gas. The mean undivided fourth difference of ρ, over ρ, in the
+  shell behind the shock, against the uniform run on the level's nodes
+  (191²): one fixed box 1.00×, fixed tiles of edge 8 1.66×, tiles placed by
+  regridding 2.80×. Diagnosed by substituting each operator from a one-patch
+  box over the same nodes: at a shared tile face the strain sensor's δ⁴ taps
+  clamp, since the strain magnitude carries no ghosts, and its smoother
+  closes on boundary rows, so μ\* and β\* are up to half their peak wrong
+  within three nodes of the face where the shock crosses it. Exact
+  coefficients take fixed tiles from 1.66× to 1.21×, with about 15% fewer
+  steps; the rest is the explicit face rows of the filter and the
+  derivatives. Cheaper face rows for either were measured and do not help.
+  Regridding adds two causes: tiles first appear at step 4, interpolated from
+  the root's just-formed jump (tiles placed from the initial condition give
+  2.33×), and A18's disturbance from a cover too close to the shock
+  (`tag_buffer = 8` gives 1.78×).
+  Remaining: exchange the strain magnitude and the detector output between a
+  level's tiles before the coefficients are formed, at the cost of a second
+  gradient pass per stage or per-tile gradient storage, with the same for
+  D\*, the device stacks, subcycling and MPI; and place a sensor-tagged
+  level's first tiles from the initial condition. Both need a maintainer
+  decision. Reproducer: `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`.
+  Holds the Spherical implosion example
+  (`CompactLES_tutorial_protos/held/spherical_implosion/`).
   **Gate:** the three layouts within a small factor of the uniform grid on
   that measure, and the example's refined run consistent with uniform 384².
 
@@ -251,32 +249,53 @@ surface; H8 for a magnetized target.
   ambient pressure to within its resolved-grid value, or the decision
   recorded with its measurement.
 
+- [ ] **N30 — Carry the collapsed dimension's curvature in the outflow's
+  transverse terms.** The inflow's transverse terms carry the curvature part
+  of a collapsed transverse dimension (commit `f74b76f`); `NSCBCOutflowBC`
+  still omits it, so on an r-z face it leaves u_r/r in the incoming wave and
+  on a spherical radial face the collapsed φ's u_θ cot θ/r. Making the two
+  consistent moves the spherical-dipole reflection baseline, which is a
+  decision to record with the new value.
+  **Gate:** the outflow rows and the spherical-dipole reflection under the
+  changed terms, the baseline re-recorded and explained, and the r-z outflow
+  face's incoming acoustic rate falling with resolution as the inflow's does.
+
 ## Validation and verification
 
 - [ ] **V4 — Cut the gate's wall time.**
-  The core gate took about 36 minutes on the workstation. With the
-  inference barrier on `allocate_state` (commit `a8812af`), which removed a
-  threefold inference of the step tree wherever a function held a concretely
-  typed solver, it ran in about 20: the serial suite 8.0 min,
-  `test/convergence.jl` 2.2, the full MPI suite at two ranks 5.5 and the
-  eight-rank selection 3.8. CI built the package image twice per job
-  (fixed in commit `8ea9ebf`), and `runtests.jl timing=true` (commit
-  `725bf7d`) prints the compile and run time of every testset. Both suites
-  remain compile-bound: every MPI rank compiles each `Solver` type the image
-  lacks, and the serial suite's compile time is spread over its testsets,
-  none over a minute. Remaining:
-  1. Record the saving from the first CI run after these commits against
-     the run before them, per testset and per MPI phase.
-  2. Cut distinct `Solver` types where another testset covers the same
-     path: the C10 configuration of the two-slab device layout, the
-     checkpoint testsets' separate solvers, and the Float32 NASA-9 run beside
-     the device Float32 step; review the eight-rank list ("phase change", the
-     two wall-flux phases, "staggered operators", "composite budgets").
+  CI built the package image twice per job; with one build (commit
+  `8ea9ebf`) each Julia 1.13 serial job fell by about 6 min and the
+  numerics job from 49.1 to 44.5 min (run 37064699408 against 36870928283).
+  The inference barrier on `allocate_state` (commit `a8812af`) cut the serial
+  testsets by 3–6% and left the MPI suite's compile time unchanged.
+  `runtests.jl timing=true` (commit `725bf7d`) prints the compile and run
+  time of every testset. Both suites remain compile-bound: every MPI rank
+  compiles each `Solver` type the image lacks, and Julia 1.13 compiles the
+  serial suite at 2.1 times the cost of 1.10. Remaining:
+  1. Split CI's numerics job into convergence with the two-rank suite and
+     the eight-rank selection, which takes its wall from about 44.5 to about
+     30 min with no change of coverage; the `pre` job resolves to the same
+     Julia as `1` until the next prerelease.
+  2. Shorten the eight-rank selection where two ranks check the same: the
+     two wall-flux phases (about 130 s), `neutral_transport_domain_tests.jl`
+     at eight ranks (about 90 s), the uniform half of "phase change"; and
+     cut the C10 configuration of the two-slab device layout and the Float32
+     NASA-9 device run (about 25 s together).
   3. Hold the eight-rank phase list in one file instead of CI.yml and
      CLAUDE.md, and decide the depot's image limit
      (`JULIA_MAX_NUM_PRECOMPILE_FILES`).
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
+
+- [ ] **V5 — Make the full MPI suite pass at eight ranks.** The phase
+  "staged device exchange" raises "no process grid over 3 rank(s) gives every
+  rank ≥ 9 fine points per split dimension of a (25, 1, 26) fine patch" at
+  np = 8 after its printed checks pass, on main at `d11de11` as well; it
+  passes at 2 and 4 ranks, CI's eight-rank selection omits it, and every
+  phase after it goes unrun in a full eight-rank suite. Size the case so a
+  level's tiles admit the ranks it is given, or give the phase an owner
+  count the tile admits.
+  **Gate:** the full MPI suite at 2, 4 and 8 ranks.
 
 - [ ] **V1 — Complete independent solver and experiment comparisons.**
   Run CompactLES against Pyranda on Re = 1600 Taylor–Green and one
@@ -1040,6 +1059,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **N28** — `NSCBCOutflowBC` carries the first-order Bayliss–Turkel
   curvature term at an outer radial face, and the oscillating-sphere dipole
   reflects 0.05 of the plane form's 1/(2kR) (commit `6c97f4f`).
+- [x] **N29** — The inflow face's transverse terms carry the u_r/r of the
+  collapsed θ, so the r-z face beside the axis no longer grows vorticity
+  after a shock leaves through it (commit `f74b76f`).
 
 ### Filtering, regularization, boundaries and species
 

@@ -73,7 +73,7 @@ jobs:
                    test_args=["require=hdf5", "timing=true"])
 
   numerics:
-    name: Convergence and MPI
+    name: Convergence and MPI at 2 ranks
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -91,8 +91,8 @@ jobs:
       # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Neither
       # this step nor buildpkg precompiles: an image Pkg.instantiate built
       # here would predate the preference and be rebuilt by the first `using`
-      # (measured 330 s of every job), and the serial suite builds its own at
-      # -O1 with bounds checks in any case.
+      # (measured 330 s of every job). The first `using CompactLES`, in
+      # convergence.jl, builds the image every later process loads.
       - name: Set the device precompile preference
         shell: julia --project=. --color=yes {0}
         env:
@@ -107,13 +107,69 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       # Neither step below runs with `--check-bounds=yes`. That option gives
       # every package in the tree a second precompile cache, which this job
-      # would build from scratch before its first test, and it slows all
-      # fourteen processes the distributed step launches. The serial suite is
-      # already bounds-checked on three Julia versions by julia-runtest, and an
-      # index error in the distributed paths moves a convergence order or an
+      # would build from scratch before its first test, and it slows every
+      # process the distributed step launches. The serial suite is already
+      # bounds-checked on three Julia versions by julia-runtest, and an index
+      # error in the distributed paths moves a convergence order or an
       # interface error away from machine zero, so it does not pass unseen.
       - name: Run convergence guards
         run: julia --project=. --color=yes test/convergence.jl
+      # The full distributed suite runs at np = 2; the comment on the
+      # eight-rank job says why np = 8 runs a selection. Each wall-flux phase
+      # runs here only: at np = 2 each rank already lacks one wall, which is
+      # the case where a collective below an early return deadlocks. The
+      # neutral-transport domain tests also run at np = 2 only: their
+      # rank-local fault is on the last rank and their fine level sits on one
+      # rank at every rank count, so np = 8 adds no case. `-t 1` because a
+      # rank must not also fan out over threads it does not have.
+      - name: Run distributed suite at 2 ranks
+        shell: julia --project=. --color=yes {0}
+        run: |
+          using MPI, Printf
+          MPI.mpiexec() do mpiexec
+              julia = `$(Base.julia_cmd()) --project=. -t 1`
+              t = @elapsed run(`$mpiexec -n 2 $julia test/mpi_tests.jl`)
+              @printf("=== np = 2 finished in %.1f s ===\n", t)
+              run(`$mpiexec -n 2 $julia test/neutral_transport_domain_tests.jl`)
+              run(`$mpiexec -n 2 $julia test/substep_rate_tests.jl`)
+          end
+
+  mpi8:
+    name: MPI at 8 ranks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+          arch: x64
+      - uses: julia-actions/cache@v3
+      # As in the numerics job: the MPI device phases run here, and neither
+      # this step nor buildpkg precompiles, so that the one image build
+      # happens after the preference is set.
+      - name: Set the device precompile preference
+        shell: julia --project=. --color=yes {0}
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: "0"
+        run: |
+          using Pkg
+          Pkg.instantiate()
+          using Preferences
+          Preferences.set_preferences!(
+              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
+              "precompile_device" => true; force=true)
+      - uses: julia-actions/julia-buildpkg@v1
+      # One process builds the image before the launch, with the flags the
+      # ranks use, so that eight ranks do not wait on one precompile lock at
+      # their first `using` and the build is not timed as part of the first
+      # phase. No `--check-bounds=yes`, for the reason given in the numerics
+      # job.
+      - name: Build the package image
+        run: julia --project=. --color=yes -e 'using CompactLES'
       # The runner has four vCPUs. The bundled MPICH (ch4) waits in a
       # collective by spinning with sched_yield between polls, which under
       # Linux CFS does not hand the core to a runnable sibling, so at np = 8
@@ -129,27 +185,29 @@ jobs:
       # and with two physical cores even np = 4 pays for it (a full np = 4
       # leg measured 416 s against 58 s at np = 2, with 43 s of compile).
       #
-      # So the full suite runs at np = 2, and np = 8 runs the phases whose
-      # code path depends on the rank count, which four ranks would not add
-      # to. Most tests put all ranks on one dimension of SPLITN = 72 points
-      # via `splitdims`, and at np = 8 that is 9 points per rank, the C8
-      # filter's minimum block and the smallest the reduced-interface
-      # solves, the transfer operators, the fold butterfly and the
-      # positivity repair ever see: those phases run. Two grids change
-      # shape outright: the corner-halo check's default Dims_create grid
-      # (2x2x2 at np = 8, 2x1x1 at np = 2) and the tiled fine level's
-      # _amr_dims grid (4x2 against 2x1). A composite face's member mask splits
-      # across more ranks, and the deep-regrid levels fall onto rank subsets
-      # and move a tile only at np = 8. The level coupling's point-to-point
-      # messages pair different ranks at each count. The mode-truncation phase splits θ
-      # over np / 2 or np ranks and r in two. The slicing phase derives its
-      # over-coarse stride from np. The remaining phases (the timestepping
-      # runs, the writers, the checkpoint, the sensor comparisons) count
-      # ranks or change block sizes only, and they are the step-bound ones.
-      # The tiled phase is the leg's cost, ~470 s for twenty steps of a
-      # five-patch 2-D case. `-t 1` because a rank must not also fan out
-      # over threads it does not have.
-      - name: Run distributed suite at 2 ranks, rank-shape phases at 8
+      # So the full suite runs at np = 2 in the numerics job, and this job
+      # runs at np = 8 the phases whose code path depends on the rank count,
+      # which four ranks would not add to. Most tests put all ranks on one
+      # dimension of SPLITN = 72 points via `splitdims`, and at np = 8 that
+      # is 9 points per rank, the C8 filter's minimum block and the smallest
+      # the reduced-interface solves, the transfer operators, the fold
+      # butterfly, the positivity repair and the wall closures of "closed
+      # C6" ever see: those phases run. Two grids change shape outright: the
+      # corner-halo check's default Dims_create grid (2x2x2 at np = 8, 2x1x1
+      # at np = 2) and the tiled fine level's _amr_dims grid (4x2 against
+      # 2x1). A composite face's member mask splits across more ranks, and
+      # the deep-regrid levels fall onto rank subsets and move a tile only at
+      # np = 8. The level coupling's point-to-point messages pair different
+      # ranks at each count. The mode-truncation phase splits θ over np / 2
+      # or np ranks and r in two. The slicing phase derives its over-coarse
+      # stride from np. The remaining phases (the timestepping runs, the
+      # writers, the checkpoint, the sensor comparisons) count ranks or
+      # change block sizes only, and they are the step-bound ones.
+      # test/substep_rate_tests.jl runs here as well, because its check that
+      # the deepest level sits on a subset of the ranks applies only from
+      # np = 4. `-t 1` because a rank must not also fan out over threads it
+      # does not have.
+      - name: Run rank-shape phases at 8 ranks
         shell: julia --project=. --color=yes {0}
         run: |
           using MPI, Printf
@@ -159,8 +217,7 @@ jobs:
                         "AMR transfer pair", "staggered operators",
                         "halo consistency",
                         "off-rank folds", "mode truncation", "freestream",
-                        "no-slip wall flux",
-                        "slip wall flux", "symmetry plane",
+                        "symmetry plane",
                         "level at a symmetry plane", "level on the axis",
                         "NSCBC inflow",
                         "NSCBC level face",
@@ -169,13 +226,10 @@ jobs:
                         "placed levels", "folded regrid", "seam levels",
                         "phase change", "implicit conduction"), ',')
           MPI.mpiexec() do mpiexec
-              julia = Base.julia_cmd()
-              for (np, args) in ((2, String[]), (8, ["phases=" * eight]))
-                  t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl $args`)
-                  @printf("=== np = %d finished in %.1f s ===\n", np, t)
-                  run(`$mpiexec -n $np $julia --project=. -t 1 test/neutral_transport_domain_tests.jl`)
-                  run(`$mpiexec -n $np $julia --project=. -t 1 test/substep_rate_tests.jl`)
-              end
+              julia = `$(Base.julia_cmd()) --project=. -t 1`
+              t = @elapsed run(`$mpiexec -n 8 $julia test/mpi_tests.jl phases=$eight`)
+              @printf("=== np = 8 finished in %.1f s ===\n", t)
+              run(`$mpiexec -n 8 $julia test/substep_rate_tests.jl`)
           end
 
   docs:
