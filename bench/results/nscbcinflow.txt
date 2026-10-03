@@ -1,0 +1,134 @@
+=== julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow betas=0,0.15,0.3,0.5,0.7,0.85,1 etas=4,16,64
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, NT, Julia 1.11.4
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+
+pulse reflection at the inflow: M = 0.30, eps = 1.0e-03, incident amplitude at the plane 2.083e-04, t = 0.929
+  beta_t       max|dp|/inc   rms|dp|/inc    max|dω|/ω0    rms|dω|/ω0
+  0.00           2.197e-01     4.514e-02     3.447e-01     4.192e-02
+  0.15           1.261e-01     2.461e-02     1.045e-01     1.605e-02
+  0.30           4.662e-02     9.318e-03     1.780e-01     2.276e-02
+  0.50           2.466e-02     5.686e-03     1.234e-01     1.584e-02
+  0.70           4.345e-02     8.911e-03     7.489e-02     9.408e-03
+  0.85           6.884e-02     1.266e-02     3.834e-02     5.065e-03
+  1.00           9.326e-02     1.623e-02     3.532e-02     2.991e-03
+
+vortex entry through the inflow: M = 0.30, peak velocity 0.106 (0.30 of the stream), pressure depression 1.533e-02, t = 4.226
+  eta     beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  4.00    0.00           9.322e-01     1.677e-01     1.214e+00     9.718e-01
+  4.00    0.15           9.135e-01     1.661e-01     1.229e+00     9.710e-01
+  4.00    0.30           8.885e-01     1.633e-01     1.249e+00     9.652e-01
+  4.00    0.50           8.282e-01     1.516e-01     1.224e+00     9.474e-01
+  4.00    0.70           7.631e-01     1.369e-01     1.186e+00     9.174e-01
+  4.00    0.85           7.039e-01     1.232e-01     1.146e+00     8.831e-01
+  4.00    1.00           6.432e-01     1.069e-01     1.090e+00     8.320e-01
+  16.00   0.00           5.217e-01     1.066e-01     1.216e+00     6.724e-01
+  16.00   0.15           4.916e-01     9.910e-02     1.168e+00     6.391e-01
+  16.00   0.30           4.493e-01     9.078e-02     1.098e+00     6.003e-01
+  16.00   0.50           3.802e-01     7.798e-02     9.685e-01     5.462e-01
+  16.00   0.70           3.461e-01     6.476e-02     8.365e-01     4.844e-01
+  16.00   0.85           3.152e-01     5.450e-02     7.188e-01     4.269e-01
+  16.00   1.00           2.803e-01     4.415e-02     5.851e-01     3.623e-01
+  64.00   0.00           2.247e-01     3.572e-02     4.367e-01     3.960e-01
+  64.00   0.15           1.994e-01     3.195e-02     3.955e-01     3.544e-01
+  64.00   0.30           1.732e-01     2.809e-02     3.537e-01     3.106e-01
+  64.00   0.50           1.373e-01     2.274e-02     2.987e-01     2.460e-01
+  64.00   0.70           1.029e-01     1.774e-02     2.456e-01     1.817e-01
+  64.00   0.85           7.829e-02     1.440e-02     2.054e-01     1.356e-01
+  64.00   1.00           6.806e-02     1.174e-02     1.647e-01     9.054e-02
+
+pulse reflection at the outflow: M = 0.30, eps = 1.0e-03, incident amplitude at the plane 2.553e-04, t = 0.929
+  beta_t       max|dp|/inc   rms|dp|/inc
+  0.00           1.063e-01     1.473e-02
+  0.15           5.981e-02     7.903e-03
+  0.30           9.734e-02     6.695e-03
+  0.50           1.281e-01     1.390e-02
+  0.70           1.935e-01     2.219e-02
+  0.85           2.415e-01     2.800e-02
+  1.00           2.839e-01     3.324e-02
+
+vortex exit through the outflow: M = 0.30, peak velocity 0.106, pressure depression 1.533e-02, t = 4.226
+  beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  0.00           3.268e-02     1.346e-02     4.467e-02     6.939e-01
+  0.15           2.065e-02     8.795e-03     3.405e-02     5.024e-01
+  0.30           1.464e-02     6.456e-03     2.357e-02     2.726e-01
+  0.50           9.296e-03     4.298e-03     1.030e-02     1.014e-01
+  0.70           6.051e-03     2.554e-03     1.162e-03     4.951e-02
+  0.85           5.657e-02     7.069e-03     6.679e-02     9.777e-02
+  1.00           2.232e-02     3.415e-03     1.871e-02     1.017e-01
+
+=== julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.1 betas=0,-1,0.9,1 etas=16
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, NT, Julia 1.11.4
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+
+pulse reflection at the inflow: M = 0.10, eps = 1.0e-03, incident amplitude at the plane 2.275e-04, t = 0.854
+  beta_t       max|dp|/inc   rms|dp|/inc    max|dω|/ω0    rms|dω|/ω0
+  0.00           1.578e-01     3.083e-02     1.099e-01     7.663e-03
+  M (local)      9.302e-02     1.850e-02     1.316e-01     1.119e-02
+  0.90           8.980e-02     1.947e-02     5.341e-02     3.624e-03
+  1.00           1.042e-01     2.257e-02     5.358e-02     3.265e-03
+
+vortex entry through the inflow: M = 0.10, peak velocity 0.035 (0.30 of the stream), pressure depression 1.711e-03, t = 12.677
+  eta     beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  16.00   0.00           5.517e-01     8.555e-02     9.158e-01     9.351e-01
+  16.00   M (local)      5.163e-01     7.946e-02     8.576e-01     8.585e-01
+  16.00   0.90           1.160e-01     2.032e-02     2.870e-01     1.750e-01
+  16.00   1.00           9.150e-02     1.524e-02     2.101e-01     1.210e-01
+
+pulse reflection at the outflow: M = 0.10, eps = 1.0e-03, incident amplitude at the plane 2.430e-04, t = 0.854
+  beta_t       max|dp|/inc   rms|dp|/inc
+  0.00           1.866e-01     2.365e-02
+  M (local)      1.174e-01     1.663e-02
+  0.90           2.471e-01     2.761e-02
+  1.00           2.730e-01     3.111e-02
+
+vortex exit through the outflow: M = 0.10, peak velocity 0.035, pressure depression 1.711e-03, t = 12.677
+  beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  0.00           3.435e-04     2.989e-04     4.550e-05     3.186e-02
+  M (local)      1.116e-03     1.036e-03     3.444e-05     6.007e-03
+  0.90           3.957e-04     2.467e-04     1.580e-04     2.035e-02
+  1.00           3.265e-02     2.483e-03     3.372e-02     1.093e-01
+
+=== julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.5 betas=0,-1,0.5,1 etas=16
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, NT, Julia 1.11.4
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+
+pulse reflection at the inflow: M = 0.50, eps = 1.0e-03, incident amplitude at the plane 1.833e-04, t = 1.127
+  beta_t       max|dp|/inc   rms|dp|/inc    max|dω|/ω0    rms|dω|/ω0
+  0.00           3.761e-01     5.822e-02     3.191e-01     5.050e-02
+  M (local)      2.453e-02     6.676e-03     9.743e-02     1.701e-02
+  0.50           2.453e-02     6.677e-03     9.742e-02     1.701e-02
+  1.00           8.109e-02     1.072e-02     3.926e-02     2.832e-03
+
+vortex entry through the inflow: M = 0.50, peak velocity 0.177 (0.30 of the stream), pressure depression 4.216e-02, t = 2.535
+  eta     beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  16.00   0.00           6.642e-01     1.364e-01     1.117e+00     9.205e-01
+  16.00   M (local)      5.757e-01     1.138e-01     1.116e+00     7.884e-01
+  16.00   0.50           5.713e-01     1.130e-01     1.108e+00     7.763e-01
+  16.00   1.00           4.478e-01     7.354e-02     8.750e-01     6.071e-01
+
+pulse reflection at the outflow: M = 0.50, eps = 1.0e-03, incident amplitude at the plane 2.648e-04, t = 1.127
+  beta_t       max|dp|/inc   rms|dp|/inc
+  0.00           5.251e-02     7.615e-03
+  M (local)      1.309e-01     2.457e-02
+  0.50           1.309e-01     2.457e-02
+  1.00           2.793e-01     4.278e-02
+
+vortex exit through the outflow: M = 0.50, peak velocity 0.177, pressure depression 4.216e-02, t = 2.535
+  beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  0.00           8.696e-02     1.957e-02     9.471e-02     4.757e-01
+  M (local)      3.583e-02     8.443e-03     1.851e-02     1.908e-01
+  0.50           1.204e-02     2.906e-03     5.990e-03     6.389e-02
+  1.00           5.964e-02     1.320e-02     4.393e-02     3.712e-01
+
+=== julia --project=. -t 1 bench/nscbcinflow.jl vortex betas=0,0.5,1 etas=256,1024
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, NT, Julia 1.11.4
+[ Info: CompactLES set BLAS threads 12 -> 1. Set OPENBLAS_NUM_THREADS to override.
+
+vortex entry through the inflow: M = 0.30, peak velocity 0.106 (0.30 of the stream), pressure depression 1.533e-02, t = 4.226
+  eta     beta_t         max|du|/A     rms|du|/A     max|dv|/A   max|dp|/dp0
+  256.00  0.00           6.111e-02     9.318e-03     1.087e-01     1.089e-01
+  256.00  0.50           3.783e-02     5.787e-03     7.370e-02     6.494e-02
+  256.00  1.00           1.653e-02     2.968e-03     4.156e-02     2.396e-02
+  1024.00  0.00           1.647e-02     2.428e-03     2.675e-02     2.786e-02
+  1024.00  0.50           1.064e-02     1.543e-03     1.835e-02     1.715e-02
+  1024.00  1.00           5.206e-03     7.996e-04     1.044e-02     6.949e-03

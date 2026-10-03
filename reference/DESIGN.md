@@ -1638,7 +1638,9 @@ components.
   sources of the normal equations stay in the right-hand side as computed,
   like the viscous terms. The LODI derivation of each relaxation form and of each transverse
   term is spelled out in the source so the signs can be audited, and
-  `test/runtests.jl` checks the frozen-characteristic property at both faces.
+  `test/serial_suite.jl` checks at both faces that the incoming characteristic
+  variables follow their targets, the transverse velocity after the
+  −(1 − M)∇_t p/ρ the pressure weight leaves.
   The weights are measured in `reference/CALIBRATION_APPENDIX.md`.
 
 The full LODI algebra (the mapping from wave-amplitude deltas to conserved

@@ -11,19 +11,6 @@ in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 Defects found while building the Examples pages, filed here as found; each
 example they block is held until the item closes.
 
-- [ ] **N31 — Find the vorticity burst at the inflow face beside the axis.**
-  In the Vortex ring and shock example (`examples/vortex_ring_shock.jl`,
-  112 × 384), after the shock reflected from the interface leaves through
-  the top face and the inflow target switches, vorticity forms on the face
-  within 2 mm of the axis near 7.8 ms, peaks at 3700 1/s (509 1/s on
-  56 × 192), and decays to 2000 1/s as the inflow carries it down, seeding
-  the oblique lines the page's flow figure shows. It forms at N29's place and
-  time at a seventh of N29's peak and does not grow; the N29 fix does not
-  remove it. The step switch of the target against a slightly curved exit is the
-  first suspect.
-  **Gate:** the example's face row beside the axis below 100 1/s through
-  8.0 ms, or the source identified and recorded.
-
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
   converging shock.** A spherical shock converging on an r-z quadrant (axis
   and a symmetry plane at z = 0, 64² root, one level placed by the
@@ -40,9 +27,9 @@ example they block is held until the item closes.
   derivatives, for which cheaper rows were measured and do not help. The
   regridded remainder is mostly a cover too close to the shock, A18's
   mechanism (`tag_buffer = 8` gave 1.78× before these commits). Also
-  remaining: field output and diagnostics recompute the coefficients per
-  tile, so they show the old values on a tiled level; the sharpening flux's
-  filtered gradient is still smoothed per tile. Reproducer:
+  remaining: the sharpening flux's filtered gradient is still smoothed per
+  tile; field output and diagnostics report the level-wide coefficients
+  (commit `063495c`). Reproducer:
   `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`. Holds the
   Spherical implosion example
   (`CompactLES_tutorial_protos/held/spherical_implosion/`).
@@ -226,14 +213,51 @@ surface; H8 for a magnetized target.
   per direction under the low-storage integrator, together with the limit on
   each filter pass leaves no inadmissible point on Woodward–Colella and planar
   Noh with both guards held; either alone, or the stage limit without the
-  registers, does not. Remaining: the stage in `src/`, opt-in, Cartesian and
-  decomposed first, then the metrics, folds, interfaces and devices; with ε
-  relative to the initial minimum, since ε = 1e-13 lets the artificial
-  conductivity of cells held near ε add a third to half again the steps; and
-  a rule at a wall node, where the first-order bound fails above cfl ≈ 0.32.
+  registers, does not. `Numerics(positivity_limiter = true)` carries both
+  limits on the Cartesian metric, one patch, serial or decomposed, with ε at
+  1% of the minimum ρ and ρe entering `run!` (commits `305de3f`,
+  `0d05acd`); the other configurations are N32. Remaining: where the density
+  falls below ε, as in Sedov's core, cells are pushed to first order and left
+  unguaranteed, for which a per-cell bound min(ε, a fraction of the cell's
+  own value) is the candidate; wall nodes above cfl ≈ 0.32, where the
+  first-order bound fails; and the cost, 1.8 to 2.4 times the unlimited step,
+  which fusing the face pass with the offset and the count should reduce.
   **Gate:** the Sedov and Noh cases of `test/cases.jl` and the Supernova
   remnant tutorial under the default strict validity, their errors
   unchanged, and no inadmissible cell during the Woodward–Colella run.
+
+- [ ] **N33 — Measure the mass the r-z axis face carries.** On the
+  θ-collapsed axis fold the area-weighted mass and energy fluxes are even in
+  r, so the folded divergence's face at the axis carries a nonzero flux,
+  about −h² ρ u_r′(0)/12 by the operator's face relation (Python analysis of
+  the folded C6 operator, not yet measured in the solver): second order
+  globally, but near 17% of the first node's mass per unit time at every
+  resolution. On the spherical origin the fluxes are odd and the face carries
+  none. Measure the total mass drift of an r-z run with radial flow through
+  the axis region (a converging shock, an axis-crossing vortex) against a
+  closed Cartesian run, and decide whether the scheme should carry the axis
+  face flux explicitly.
+  **Gate:** the measured drift recorded, and the decision with it.
+
+- [ ] **N32 — Carry the positivity limiter to every configuration.** N26's
+  limiter starts on the Cartesian metric, one patch, host storage. The goal is
+  parity with the uniform Cartesian run on every supported configuration, and
+  on the refined and device paths a run time below it. In order: the r-z
+  metric with the axis fold, where the radial momentum takes its pressure as
+  a gradient and no first-order positivity proof exists, and the
+  one-dimensional spherical metric with the origin fold, both high priority;
+  then same-level patch interfaces and refined levels, anchoring the face
+  flux at a coarse-fine face and carrying the registers under subcycling;
+  then device storage and stacked tiles; then the remaining metrics and the
+  tabulated and NASA-9 equations of state, whose admissibility test is not
+  linear. Each extension's face weights come from its own rows: the metric's
+  face areas, the fold's mirrored rows, the interface rows.
+  **Depends on:** N26's stage in `src/`.
+  **Gate:** per configuration, no inadmissible point on its strong-shock
+  validation cases (Sedov and Noh ν = 2, 3 for the folds; the Noh level rows
+  and the A19 reproducer for refinement) with their guards held, bit-identity
+  with the limiter inactive, the device path bitwise against the host, and
+  the step's cost against the unlimited run.
 
 - [ ] **N27 — Decide the artificial species diffusivity's scale in slow flows.**
   The artificial species diffusivity scales with the sound speed times the
@@ -288,16 +312,6 @@ surface; H8 for a magnetized target.
      (`JULIA_MAX_NUM_PRECOMPILE_FILES`).
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
-
-- [ ] **V5 — Make the full MPI suite pass at eight ranks.** The phase
-  "staged device exchange" raises "no process grid over 3 rank(s) gives every
-  rank ≥ 9 fine points per split dimension of a (25, 1, 26) fine patch" at
-  np = 8 after its printed checks pass, on main at `d11de11` as well; it
-  passes at 2 and 4 ranks, CI's eight-rank selection omits it, and every
-  phase after it goes unrun in a full eight-rank suite. Size the case so a
-  level's tiles admit the ranks it is given, or give the phase an owner
-  count the tile admits.
-  **Gate:** the full MPI suite at 2, 4 and 8 ranks.
 
 - [ ] **V1 — Complete independent solver and experiment comparisons.**
   Run CompactLES against Pyranda on Re = 1600 Taylor–Green and one
@@ -1064,6 +1078,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **N29** — The inflow face's transverse terms carry the u_r/r of the
   collapsed θ, so the r-z face beside the axis no longer grows vorticity
   after a shock leaves through it (commit `f74b76f`).
+- [x] **N31** — The vorticity burst at the inflow face beside the axis was a
+  pressure pulse crossing the face while the face held u_r against its
+  radial gradient; the transverse pressure gradient of the inflow's
+  transverse terms now takes the weight min(β_t, M) (commit `7187b27`).
 
 ### Filtering, regularization, boundaries and species
 
@@ -1196,6 +1214,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   operator's interior order, two more under `interface_flux = :ghost` up to 10;
   order 10 is exact to degree 9 behind the four-node buffer, and a C6 run under
   the closure rows is unchanged (commit `decf45a`).
+- [x] **V5** — A tile takes only the rank counts its process grid admits,
+  which is not monotone in the count, so the full MPI suite passes at eight
+  ranks (commit `c4bbd8e`).
 
 ### API, state ownership, and reproducibility
 
