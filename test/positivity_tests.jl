@@ -126,6 +126,28 @@ end
         @test lim.eps_rho ≈ 0.01 && lim.eps_e ≈ 0.01 * 0.01 / 0.4
     end
 
+    @testset "a limited blast conserves on a periodic grid" begin
+        # Periodic in both directions, so W = h and the corrections conserve
+        # the plain sums; the filter conserves there too.
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 + (y - 0.5)^2) /
+                                                         0.004)))
+        s, Q = setup(prob, Numerics(n_global=(48, 48, 1), cfl=0.4,
+                                    art=ArtificialProperties(enabled=true),
+                                    control=StepControl(validity=:permissive),
+                                    positivity_limiter=true))
+        total(c) = sum(Q[CL.padded_index(s, i, j, 1), c] for i in 1:48, j in 1:48)
+        mass0, energy0 = total(1), total(5)
+        bad = pos_bad_points(s, Q; tfinal=1.0, nmax=40)
+        counts = CL.positivity_counts(s)
+        @test counts.stage_limited > 0 && counts.filter_limited > 0
+        @test bad == 0
+        @test abs(total(1) - mass0) / mass0 < 1e-13
+        @test abs(total(5) - energy0) / energy0 < 1e-13
+    end
+
     @testset "the bound follows the state entering run!" begin
         prob = Problem(eos=POS_GAS, domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),

@@ -109,8 +109,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
     # The positivity limiter (positivity.jl), or `nothing` without it. Read by
-    # `run!` alone, which steps a limited solver through `_limited_run_step!`.
-    positivity::Union{Nothing,PositivityLimiter{T}}
+    # `run!` alone, which steps a limited solver through `_limited_run_step!`
+    # behind a function barrier, so the field is untyped, as `inputs` is.
+    positivity::Any
     # The `Problem` and `Numerics` that `setup` built this solver from, as
     # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by
     # `Solver(; ...)`. Read only by the phase change, `setup(solver, Q; ...)`

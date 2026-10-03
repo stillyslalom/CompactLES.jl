@@ -965,10 +965,10 @@ keywords the ones given after it override.
   are outside the guarantee; so is a cell whose first-order step violates its
   own CFL bound, which at a wall node under the default closure rows happens
   above a CFL of about 0.32. The limiter acts in `run!`; a direct
-  [`step!`](@ref) takes the unlimited step. When on, it costs a node register
-  per conserved component and active direction and, per stage, one extra
-  divergence of each flux; [`positivity_counts`](@ref) reports how often it
-  acted. It requires an unstretched `CartesianMetric`, a single patch without
+  [`step!`](@ref) takes the unlimited step. When on, it holds a node register
+  per conserved component and active direction, about a fifth more memory in
+  three dimensions, and a step costs about twice the unlimited one;
+  [`positivity_counts`](@ref) reports how often it acted. It requires an unstretched `CartesianMetric`, a single patch without
   refinement or folds, the host backend, the ideal-gas EOS and the explicit
   integrator, and setup rejects any other configuration.
 

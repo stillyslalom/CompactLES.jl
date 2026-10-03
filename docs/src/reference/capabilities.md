@@ -95,8 +95,9 @@ tiled level with regridding and at most two levels.
 `Numerics(positivity_limiter = true)` is accepted on one host patch of an
 unstretched Cartesian grid, serial or decomposed along any dimension, in one,
 two or three dimensions, with the ideal-gas EOS and the explicit integrator.
-A closed line needs enough nodes for the filter's face relation, about 50 at
-the default schemes.
+A closed line needs enough nodes for the filter's face relation: 38 under the
+default derivative, 42 under [`lele_d1_8`](@ref) and 50 under
+[`lele_d1_10`](@ref).
 
 ## Checkpoints
 

@@ -376,7 +376,9 @@ function _limited_run_step!(solver, Q, workspace, dt, prepared::Bool)
             apply_bcs!(solver, Q)
             _ledger!(solver, Q, :wall_enforce)
         end
-        compute_rhs!(solver, Q, dQ, first_prepared)
+        T = eltype(lim.eps_rho)
+        compute_rhs!(solver, Q, _LimiterRHS(dQ, lim, T(RKA[stage]), T(dt)),
+                     first_prepared)
         _ledger_faces!(solver, 1)
         _limit_stage!(lim, solver, Q, dQ, stage, dt)
         _ledger_open!(solver, Q)
@@ -395,34 +397,64 @@ end
 # The time advance of stage k, c_{k+1} − c_k with c_6 = 1.
 _stage_advance(stage::Int) = (stage < 5 ? RKC[stage+1] : 1.0) - RKC[stage]
 
+# The right-hand side array a limited stage hands `compute_rhs!`: the
+# workspace's dQ, indexed through, with the divergence of each flux taken
+# once more out of the fused subtraction. `div_subtract_along!` on it runs the
+# derivative into scratch and subtracts it, the two-pass form the folds take,
+# bit for bit the fused one, and updates the direction's register
+# r_d ← A r_d + dt D_d F_d and the face register at the global low face from
+# the same derivative, so the registers cost no line solve of their own. Every
+# other phase of the right-hand side reads and writes it as dQ.
+struct _LimiterRHS{T,D<:AbstractArray{T,4},L} <: AbstractArray{T,4}
+    dQ::D
+    lim::L
+    A::T
+    dt::T
+end
+Base.parent(x::_LimiterRHS) = parent(x.dQ)
+Base.size(x::_LimiterRHS) = size(x.dQ)
+Base.axes(x::_LimiterRHS) = axes(x.dQ)
+Base.IndexStyle(::Type{<:_LimiterRHS{T,D}}) where {T,D} = IndexStyle(D)
+Base.@propagate_inbounds Base.getindex(x::_LimiterRHS, I...) = getindex(x.dQ, I...)
+Base.@propagate_inbounds Base.setindex!(x::_LimiterRHS, v, I...) =
+    setindex!(x.dQ, v, I...)
+Base.view(x::_LimiterRHS, I...) = view(x.dQ, I...)
+@inline _cpu_storage(x::_LimiterRHS) = _cpu_storage(x.dQ)
+@inline _kernel_arg(x::_LimiterRHS) = _kernel_arg(x.dQ)
+
+function div_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::SolverLike, d::Int,
+                             σf::Int, inv_J)
+    lim = dQ.lim
+    decomp = solver.decomp
+    nx, ny, nz = decomp.n_local
+    o1, o2, o3 = decomp.n_halo_d
+    div_along!(solver.tmp_a, f, solver, d, σf)
+    if inv_J === nothing
+        pointwise!(_subtract_div_point!, dQ.dQ, nx, ny, nz,
+                   dQ.dQ, solver.tmp_a, c, o1, o2, o3)
+    else
+        pointwise!(_subtract_jac_div_point!, dQ.dQ, nx, ny, nz,
+                   dQ.dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
+    end
+    pointwise!(_limiter_register_point!, solver.tmp_a, nx, ny, nz,
+               lim.registers[d, c], solver.tmp_a, dQ.A, dQ.dt, o1, o2, o3)
+    if decomp.coords[d] == 0
+        nA, nB = _transverse(decomp.n_local, d)
+        pointwise!(_limiter_anchor_point!, solver.tmp_a, nA, nB, 1,
+                   lim.anchor[d], f, solver.tmp_a, lim.weights[d], dQ.A, dQ.dt, c, d,
+                   lim.periodic[d], lim.anchor_face[d], lim.deriv_lhs, lim.deriv_rhs,
+                   o1, o2, o3)
+    end
+    return dQ
+end
+
 function _limit_stage!(lim::PositivityLimiter, solver, Q, dQ, stage::Int, dt)
     decomp = solver.decomp
     T = eltype(lim.eps_rho)
-    A, B = T(RKA[stage]), T(RKB[stage])
+    B = T(RKB[stage])
     dtt = T(dt)
     τ = T(_stage_advance(stage) * dt)
     o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    n_cons = solver.equations.n_cons
-    # The registers first, while the workspace's fluxes are those of this
-    # stage: r_d ← A r_d + dt D_d F_d, D_d F_d through the divergence plan the
-    # right-hand side used, and the face register at the global low face.
-    for d in 1:3
-        decomp.active[d] || continue
-        nA, nB = _transverse(decomp.n_local, d)
-        for c in 1:n_cons
-            div_along!(solver.tmp_a, solver.flux[d, c], solver, d, 1)
-            pointwise!(_limiter_register_point!, solver.tmp_a, nx, ny, nz,
-                       lim.registers[d, c], solver.tmp_a, A, dtt, o1, o2, o3)
-            if decomp.coords[d] == 0
-                pointwise!(_limiter_anchor_point!, solver.tmp_a, nA, nB, 1,
-                           lim.anchor[d], solver.flux[d, c], solver.tmp_a,
-                           lim.weights[d], A, dtt, c, d, lim.periodic[d],
-                           lim.anchor_face[d], lim.deriv_lhs, lim.deriv_rhs,
-                           o1, o2, o3)
-            end
-        end
-    end
     lim.active || return nothing
     inv_B = one(T) / B
     inv_Bdt = one(T) / (B * dtt)
@@ -774,7 +806,10 @@ end
 @inline _limiter_axpy(q, s, G) = map((x, y) -> x + s * y, q, G)
 
 @inline _limiter_internal(q) = q[5] - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4]) / (2 * q[1])
-@inline _limiter_admissible(q, ε) = q[1] >= ε[1] && _limiter_internal(q) >= ε[2]
+# ρ ≥ ε_ρ and ρe ≥ ε_e, the second multiplied through by 2ρ > 0.
+@inline _limiter_admissible(q, ε) =
+    q[1] >= ε[1] &&
+    2 * q[1] * q[5] - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4]) >= 2 * q[1] * ε[2]
 
 # τ times the Lax–Friedrichs flux of the aggregated state along d between
 # nodes L and R, whose wave speed is the larger of the two.

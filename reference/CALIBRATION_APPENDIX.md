@@ -2165,6 +2165,12 @@ them on Noh. The first-order bound 2τα/W reaches 0.938 at the wall node at cfl
 (0.31 inside) and 0.33 on Noh at cfl 0.15, so at the default cfl 0.5 it fails at a
 `:neutral3` wall node.
 
+`part=src` runs both cases through `run!` with `Numerics(positivity_limiter = true)`,
+the package's A + B at 1% of the initial minimum. Woodward–Colella takes 4366 steps with
+no inadmissible point after any step and L1 ρ 3.1519e-2, limiting 1.7% of stage faces and
+2.0% of pass faces; Noh takes 4759 steps with none, plateau 3.9989, wall deficit 24.6% and
+shock 0.2021, limiting 2.0% and 2.7%. Neither leaves an unguaranteed cell side.
+
 ## Directional bulk viscosity
 
 ```text
