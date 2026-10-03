@@ -1753,29 +1753,35 @@ end
         Āp = areas[pp+o]
         am = θm < 1 && !fold_face ? speeds[Im] : zero(T)
         ap = θp < 1 ? speeds[I] : zero(T)
-        # The neighbours replaced by this node's state in the first-order flux,
-        # as the face pass replaced them.
+        # The nodes replaced in the first-order flux, as the face pass replaced
+        # them: a neighbour the limiter does not hold whose state is not
+        # admissible by this node, and this node, if it is one, by the
+        # neighbour, so both nodes of a face take one flux (see
+        # `_limiter_correct_point!`).
         Jm = !fold_face && _limiter_unheld_bad(Q, free, Im,
                                                _line_node(d, pp - 1, a, b, o1, o2, o3),
                                                lay) ? I : Im
         Jp = _limiter_unheld_bad(Q, free, Ip, _line_node(d, pp + 1, a, b, o1, o2, o3),
                                  lay) ? I : Ip
+        own = _limiter_unheld_bad(Q, free, I, _line_node(d, pp, a, b, o1, o2, o3), lay)
+        Km = own ? Im : I
+        Kp = own ? Ip : I
         inv_W = one(T) / W[pp+o]
         for cc in 0:nc
             # cc = 0 is the pressure, kept in register nc + 1.
             slot = cc == 0 ? nc + 1 : cc
             change = zero(T)
             if θm < 1
-                gl = cc == 0 ? τ * (fold_face ? p[I] : (p[Jm] + p[I]) / 2) :
+                gl = cc == 0 ? τ * (fold_face ? p[I] : (p[Jm] + p[Km]) / 2) :
                      fold_face ? zero(T) :
-                     τ * Ām * _radial_lf_component(Q, ud, p, cc, Jm, I, am, ie)
+                     τ * Ām * _radial_lf_component(Q, ud, p, cc, Jm, Km, am, ie)
                 δ = (θm - 1) * (faces[slot][Im] - gl)
                 change += δ
                 fold_face && (anchor[slot, a, b] += δ * inv_B)
             end
             if θp < 1
-                gl = cc == 0 ? τ * (p[I] + p[Jp]) / 2 :
-                     τ * Āp * _radial_lf_component(Q, ud, p, cc, I, Jp, ap, ie)
+                gl = cc == 0 ? τ * (p[Kp] + p[Jp]) / 2 :
+                     τ * Āp * _radial_lf_component(Q, ud, p, cc, Kp, Jp, ap, ie)
                 change -= (θp - 1) * (faces[slot][I] - gl)
             end
             change *= inv_W
@@ -2445,31 +2451,39 @@ end
         # correction enters the face register at that end, as a fold's does.
         end_lo = closed[4] && pp == 1
         end_hi = closed[5] && pp == n
-        # A neighbour the limiter does not hold whose state is not admissible
-        # is replaced by this node's state in the first-order flux, as the
-        # face pass replaced it.
+        # A node the limiter does not hold whose state is not admissible is
+        # replaced by the other node of the face in the first-order flux, as
+        # the face pass replaced it: a neighbour by this node, and this node
+        # by the neighbour. Both nodes of a face then take one flux, and the
+        # corrections telescope; a face whose two corrections differed would
+        # leave their difference in the face register, carried by every later
+        # stage's running sum to the far end of the line.
         own_m = mode == 1 && !fold_face && !end_lo &&
                 !_limiter_constrained(free, _line_node(d, pp - 1, a, b, o1, o2, o3)) &&
                 !_limiter_positive(_limiter_state(Q, Im, lay))
         own_p = mode == 1 && !end_hi &&
                 !_limiter_constrained(free, _line_node(d, pp + 1, a, b, o1, o2, o3)) &&
                 !_limiter_positive(_limiter_state(Q, Ip, lay))
+        own = mode == 1 && !_limiter_constrained(free, _line_node(d, pp, a, b, o1, o2, o3)) &&
+              !_limiter_positive(_limiter_state(Q, I, lay))
         Jm = end_lo || own_m ? I : Im
+        Km = own && !end_lo ? Im : I
         Jp = end_hi || own_p ? I : Ip
+        Kp = own && !end_hi ? Ip : I
         anchor, anchor_hi = anchors
         for cc in 1:n_cons
             change = zero(T)
             if θm < 1
                 gl = mode == 2 ? zero(T) :
                      fold_face ? _limiter_lf_mirror(Q, uvw, c, pr, cc, I, τ, d, lay) :
-                     _limiter_lf_component(Q, uvw, c, pr, cc, Jm, I, τ, d, lay)
+                     _limiter_lf_component(Q, uvw, c, pr, cc, Jm, Km, τ, d, lay)
                 areal && (gl /= inv_J[I])
                 δ = (θm - 1) * (faces[cc][Im] - gl)
                 change += δ
                 mode == 1 && (fold_face || end_lo) && (anchor[cc, a, b] += δ * inv_B)
             end
             if θp < 1
-                gl = mode == 1 ? _limiter_lf_component(Q, uvw, c, pr, cc, I, Jp, τ, d,
+                gl = mode == 1 ? _limiter_lf_component(Q, uvw, c, pr, cc, Kp, Jp, τ, d,
                                                        lay) : zero(T)
                 areal && (gl /= inv_J[I])
                 δp = (θp - 1) * (faces[cc][I] - gl)
