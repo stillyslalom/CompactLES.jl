@@ -2111,9 +2111,59 @@ repair changes the total energy it adds 1.7% to 17% of the case's initial energy
 floor or a limit raises the negative half of the oscillation about the ambient state and
 leaves the positive half. The limits also change the mass, by +0.5% to +0.6% on
 Woodward–Colella, +0.2% on Noh and −0.1% on Sedov, since a limit scales the whole
-correction of the conserved state at a point. The repair not yet measured is a blend
-toward a first-order positivity-preserving flux (Hu, Adams & Shu 2013), which requires the
-compact divergence in face-flux form ([what is proved](DESIGN.md#what-is-proved)).
+correction of the conserved state at a point. A blend toward a first-order
+positivity-preserving flux (Hu, Adams & Shu 2013), which needs the compact divergence in
+face-flux form, is measured below.
+
+### The face-flux limiter
+
+```text
+julia --project=. -t 1 bench/positivity.jl
+julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
+```
+
+On a closed line the collocated divergence is a difference of face fluxes under node
+weights W with Σ W_i (D f)_i = f_N − f_1, so the face flux is a running sum of the
+derivative and needs no line solve. Solved from the solver's own `:neutral3` plan, W/h is
+0.2149, 1.5887, 0.6547, 0.9793, 1.0646, 0.9977, 1.0001 from either wall and 1 to 1.7e-13
+beyond the twelfth node; the running sum of a stage increment meets the far wall's flux to
+1e-14 with the artificial fluxes included. The limiter blends each face of a Runge–Kutta
+stage's increment toward the Lax–Friedrichs flux times the stage's time advance
+(c_{k+1} − c_k) Δt (variant A), and each face of a filter pass's correction toward zero
+(variant B), with θ per face from the half states of its two cells. Both act only at the
+faces they limit: a smooth acoustic pulse between slip walls with A + B on limits no face
+in 474 steps and is identical to the unlimited run. ε is the bound kept on ρ and ρe, the
+limiter's 1e-13 or a fraction of the initial minimum. Under the defaults, one dimension:
+
+```
+case  variant          bad points    min ρe       metric                        steps  faces limited
+                       pre / post    post pass                                         stage, pass
+WC    none             36657/37114   −31.1        L1 3.1527e-2                  4380
+WC    A                33170/35085   −10.5        L1 3.1472e-2                  4374   1.9%
+WC    B                27573/24645   −11.4        L1 3.1547e-2                  4374   –, 1.7%
+WC    A+B, 1e-13       0/0           1.0e-13      L1 3.1600e-2                  5727   0.43%, 0.68%
+WC    A+B, 0.01 min    0/0           2.5e-4       L1 3.1519e-2                  4366   1.7%, 2.0%
+WC    A-rhs+B, 0.01    179/175       −0.049       L1 3.1553e-2                  4364   1.6%, 2.0%
+Noh   none             30596/30308   −0.132       3.9988, 24.1%, 0.2021         3512
+Noh   A                14027/17150   −0.017       3.9992, 24.7%, 0.2021         4034   2.1%
+Noh   B                negative density at step 435
+Noh   A+B, 1e-13       0/0           1.0e-13      3.9992, 24.5%, 0.2021         5144   0.87%, 1.0%
+Noh   A+B, 0.01 min    0/0           1.5e-6       3.9989, 24.6%, 0.2021         4757   2.0%, 2.7%
+Noh   A+B, 0.1 min     0/0           1.5e-5       3.9990, 24.6%, 0.2021         4195   1.9%, 2.7%
+Noh   A-rhs+B, 0.01    947/615       −4.5e-4      3.9970, 32.5%, 0.1998         4458   1.8%, 2.7%
+```
+
+A + B leaves no inadmissible point at any stage or either side of any pass, holds both
+guards, and changes mass and energy by at most 1.8e-16 of the totals. Either half alone
+leaves the base states the other half makes bad. `A-rhs` limits only the stage's own
+right-hand side and leaves the low-storage history unlimited, the form that needs no face
+register in several dimensions; it carries no guarantee, leaves bad points, and moves Noh's
+wall deficit and shock. The extra steps at ε = 1e-13 come from cells held near ε, whose
+artificial conductivity κ\* = ρc/T sets the step on 2091 Noh and 1989 Woodward–Colella
+steps; ε at a fraction of the initial minimum removes them on Woodward–Colella and halves
+them on Noh. The first-order bound 2τα/W reaches 0.938 at the wall node at cfl 0.3
+(0.31 inside) and 0.33 on Noh at cfl 0.15, so at the default cfl 0.5 it fails at a
+`:neutral3` wall node.
 
 ## Directional bulk viscosity
 

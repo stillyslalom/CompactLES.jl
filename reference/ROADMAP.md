@@ -27,29 +27,24 @@ example they block is held until the item closes.
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
   converging shock.** A spherical shock converging on an r-z quadrant (axis
   and a symmetry plane at z = 0, 64² root, one level placed by the
-  artificial-diffusivity tag, run to R ≈ 0.17) leaves a checkerboard in the
+  artificial-diffusivity tag, run to R ≈ 0.17) left a checkerboard in the
   shocked gas. The mean undivided fourth difference of ρ, over ρ, in the
   shell behind the shock, against the uniform run on the level's nodes
   (191²): one fixed box 1.00×, fixed tiles of edge 8 1.66×, tiles placed by
-  regridding 2.80×. Diagnosed by substituting each operator from a one-patch
-  box over the same nodes: at a shared tile face the strain sensor's δ⁴ taps
-  clamp, since the strain magnitude carries no ghosts, and its smoother
-  closes on boundary rows, so μ\* and β\* are up to half their peak wrong
-  within three nodes of the face where the shock crosses it. Exact
-  coefficients take fixed tiles from 1.66× to 1.21×, with about 15% fewer
-  steps; the rest is the explicit face rows of the filter and the
-  derivatives. Cheaper face rows for either were measured and do not help.
-  Regridding adds two causes: tiles first appear at step 4, interpolated from
-  the root's just-formed jump (tiles placed from the initial condition give
-  2.33×), and A18's disturbance from a cover too close to the shock
-  (`tag_buffer = 8` gives 1.78×).
-  Remaining: exchange the strain magnitude and the detector output between a
-  level's tiles before the coefficients are formed, at the cost of a second
-  gradient pass per stage or per-tile gradient storage, with the same for
-  D\*, the device stacks, subcycling and MPI; and place a sensor-tagged
-  level's first tiles from the initial condition. Both need a maintainer
-  decision. Reproducer: `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`.
-  Holds the Spherical implosion example
+  regridding 2.80×. A tiled level now forms its artificial coefficients over
+  the whole level, exchanging the strain magnitude and the sensors across
+  shared tile faces (commit `1fc1fdb`), and a sensor-tagged level whose
+  criteria see nothing at rest starts from the density tag on the initial
+  condition (commit `c78eee8`): fixed tiles 1.19×, regridded tiles 2.39×.
+  The fixed-tile remainder is the explicit face rows of the filter and the
+  derivatives, for which cheaper rows were measured and do not help. The
+  regridded remainder is mostly a cover too close to the shock, A18's
+  mechanism (`tag_buffer = 8` gave 1.78× before these commits). Also
+  remaining: field output and diagnostics recompute the coefficients per
+  tile, so they show the old values on a tiled level; the sharpening flux's
+  filtered gradient is still smoothed per tile. Reproducer:
+  `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`. Holds the
+  Spherical implosion example
   (`CompactLES_tutorial_protos/held/spherical_implosion/`).
   **Gate:** the three layouts within a small factor of the uniform grid on
   that measure, and the example's refined run consistent with uniform 384².
@@ -222,11 +217,20 @@ surface; H8 for a magnetized target.
   properties reduce it without removing it. Every repair measured, a
   per-point limit on the filter's correction and both scopes of the
   positivity floor, moves a validation error outside its guard, so the cases
-  stay under `validity = :permissive`. Remaining, a design item: a
-  positivity-preserving blend toward a first-order flux where the high-order
-  update would be inadmissible (Hu, Adams and Shu 2013), which requires the
-  compact divergence written as differences of face fluxes. Decide whether
-  the scheme takes that form before implementing it.
+  stay under `validity = :permissive`. The divergence is already a
+  difference of face fluxes under node weights, so a blend toward a
+  first-order flux (Hu, Adams and Shu 2013) applies as a correction at the
+  faces it limits. In one dimension (`bench/positivity.jl`;
+  [the face-flux limiter](CALIBRATION_APPENDIX.md#the-face-flux-limiter)) the
+  limit on each Runge–Kutta stage's increment, which needs a face register
+  per direction under the low-storage integrator, together with the limit on
+  each filter pass leaves no inadmissible point on Woodward–Colella and planar
+  Noh with both guards held; either alone, or the stage limit without the
+  registers, does not. Remaining: the stage in `src/`, opt-in, Cartesian and
+  decomposed first, then the metrics, folds, interfaces and devices; with ε
+  relative to the initial minimum, since ε = 1e-13 lets the artificial
+  conductivity of cells held near ε add a third to half again the steps; and
+  a rule at a wall node, where the first-order bound fails above cfl ≈ 0.32.
   **Gate:** the Sedov and Noh cases of `test/cases.jl` and the Supernova
   remnant tutorial under the default strict validity, their errors
   unchanged, and no inadmissible cell during the Woodward–Colella run.
@@ -271,16 +275,14 @@ surface; H8 for a magnetized target.
   `runtests.jl timing=true` (commit `725bf7d`) prints the compile and run
   time of every testset. Both suites remain compile-bound: every MPI rank
   compiles each `Solver` type the image lacks, and Julia 1.13 compiles the
-  serial suite at 2.1 times the cost of 1.10. Remaining:
-  1. Split CI's numerics job into convergence with the two-rank suite and
-     the eight-rank selection, which takes its wall from about 44.5 to about
-     30 min with no change of coverage; the `pre` job resolves to the same
-     Julia as `1` until the next prerelease.
-  2. Shorten the eight-rank selection where two ranks check the same: the
-     two wall-flux phases (about 130 s), `neutral_transport_domain_tests.jl`
-     at eight ranks (about 90 s), the uniform half of "phase change"; and
-     cut the C10 configuration of the two-slab device layout and the Float32
-     NASA-9 device run (about 25 s together).
+  serial suite at 2.1 times the cost of 1.10. CI's numerics job is split
+  into convergence with the two-rank suite and the eight-rank selection,
+  which drops the two wall-flux phases and the eight-rank neutral-transport
+  launch (commit `fa10874`). Remaining:
+  1. Record the split's CI wall against the 44.5 min numerics job.
+  2. The uniform half of "phase change" at eight ranks; the C10
+     configuration of the two-slab device layout and the Float32 NASA-9
+     device run (about 25 s together).
   3. Hold the eight-rank phase list in one file instead of CI.yml and
      CLAUDE.md, and decide the depot's image limit
      (`JULIA_MAX_NUM_PRECOMPILE_FILES`).
