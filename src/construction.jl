@@ -1222,6 +1222,10 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # differences as the root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
                         ring, bulk)
+    # A tile of a level whose artificial coefficients are computed level-wide
+    # keeps the velocity gradients of that pass for its right-hand side. A
+    # stacked tile has them in its own block of the stack's set already.
+    n_sensed > 0 && (ws = _own_gradients(ws, g))
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm);
                              gradient_deriv=ghost_viscous ? deriv : nothing,

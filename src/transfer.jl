@@ -325,6 +325,47 @@ function _inject_interpolate!(tmp, coarse_field, plan::TransferPlan{T},
     return tmp
 end
 
+# `_inject_interpolate!` over the fine nodes of `box` alone, the interior node
+# ranges of the fine stage along all three dimensions (along `D` fine nodes,
+# along the other two the nodes the stages share). Each node takes the
+# arithmetic the full pass gives it, the coincident node its coarse value and
+# an intermediate node the same weighted sum in the same order, so the values
+# written are the full pass's bit for bit.
+function _inject_interpolate_box!(tmp, coarse_field, plan::TransferPlan{T},
+                                  ::Val{D}, box::NTuple{3,UnitRange{Int}}) where {T,D}
+    padf = plan.fine.n_halo_d
+    padc = plan.coarse.n_halo_d
+    nc = plan.coarse.n_local[D]
+    periodic = plan.coarse.periodic[D]
+    p = plan.interp_order
+    half = p ÷ 2
+    W = plan.weights
+    o1, o2 = _odims(Val(D))
+    line = box[D]
+    @threaded length(line)*length(box[o1])*length(box[o2]) for jk in
+            CartesianIndices((box[o1], box[o2]))
+        j, k = Tuple(jk)
+        @inbounds for n in line
+            sub = (n - 1) % 3
+            m = (n - 1) ÷ 3 + 1
+            if sub == 0
+                tmp[_gidx(Val(D), n, j, k, padf)] =
+                    coarse_field[_gidx(Val(D), m, j, k, padc)]
+                continue
+            end
+            js = periodic ? m - (half - 1) : clamp(m - (half - 1), 1, nc - p + 1)
+            r = m - js
+            acc = zero(T)
+            for jj in 1:p
+                acc += W[jj, sub, r + 1] *
+                       coarse_field[_gidx(Val(D), js + jj - 1, j, k, padc)]
+            end
+            tmp[_gidx(Val(D), n, j, k, padf)] = acc
+        end
+    end
+    return tmp
+end
+
 """
     restrict!(coarse_field, plan, fine_field, σ=1)
 
@@ -400,6 +441,27 @@ function interpolate!(fine_field, plan::TransferPlan, coarse_field)
         _inject_interpolate!(fine_field, coarse_field, plan, Val(2))
     else
         _inject_interpolate!(fine_field, coarse_field, plan, Val(3))
+    end
+    return fine_field
+end
+
+# `interpolate!` over the fine nodes of each box of `boxes` alone, each a
+# triple of interior node ranges of `fine_field`; the nodes outside them keep
+# what they held. A node inside takes the value the full pass writes there,
+# bit for bit, and a node two boxes share is written twice with that value.
+function interpolate!(fine_field, plan::TransferPlan, coarse_field,
+                      boxes::AbstractVector{NTuple{3,UnitRange{Int}}})
+    any(plan.folds) && _folded_interpolation_error(plan.dim)
+    exchange_dim!(coarse_field, plan.coarse, plan.dim)
+    d = plan.dim
+    for box in boxes
+        if d == 1
+            _inject_interpolate_box!(fine_field, coarse_field, plan, Val(1), box)
+        elseif d == 2
+            _inject_interpolate_box!(fine_field, coarse_field, plan, Val(2), box)
+        else
+            _inject_interpolate_box!(fine_field, coarse_field, plan, Val(3), box)
+        end
     end
     return fine_field
 end

@@ -105,7 +105,12 @@ sequence and every value in these arrays is consumed before the next patch's
 `compute_rhs!` begins, so one set serves them all; only the persistent state
 and geometry on [`Patch`](@ref) are per patch. A tiled level's lattice cells
 carry equal extents by construction, so its tiles hold one set between them,
-a cell clipped at the domain edge excepted.
+a cell clipped at the domain edge excepted. The exception is `grad_u` on a
+tile of a level that computes its artificial coefficients level-wide
+(`_level_artificial!`): that pass computes every tile's velocity gradients
+before any tile's right-hand side reads them, so each such tile holds its own
+(`_own_gradients`), and its right-hand side reads them rather than computing
+them again.
 
 Storage placement follows field lifetime. `mu_art`, `beta_art`, `kappa_art`,
 and `D_art` survive into the next step's [`max_rate`](@ref). The primitives
@@ -143,14 +148,25 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     # The patch whose gradient pass last wrote `grad_u` and whose artificial
     # pass last wrote `strain_mag` and `sensor`, recorded as that patch's
     # `covered` array: a host array every patch allocates for itself and
-    # `_repatch` carries over, so `===` on it identifies the patch without
-    # hashing an immutable `Patch`. `SCRATCH_UNFILLED` before the first pass.
+    # `_repatch` carries over, so `===` on it identifies the patch across the
+    # `Patch` a regrid replaces it with. `SCRATCH_UNFILLED` before the first
+    # pass.
     gradients_filled_by::Base.RefValue{Array{UInt8,3}}
     sensors_filled_by::Base.RefValue{Array{UInt8,3}}
 end
 
 # The mark of a workspace no pass has written yet.
 const SCRATCH_UNFILLED = zeros(UInt8, 0, 0, 0)
+
+# `ws` with velocity-gradient arrays of its own from the allocator `g()`, and
+# their own mark, sharing every other field and the sensor mark with `ws`:
+# the set of a tile whose gradients outlive the evaluation that wrote them
+# (`RHSWorkspace`).
+_own_gradients(ws::RHSWorkspace, g::F) where {F} =
+    RHSWorkspace([g() for _ in 1:3, _ in 1:3], ws.grad_T_ion, ws.grad_Y,
+                 ws.strain_mag, ws.sensor, ws.sensor_sp, ws.tmp_a, ws.tmp_b,
+                 ws.ring_buf, ws.flux, ws.grad_Q, Ref(SCRATCH_UNFILLED),
+                 ws.sensors_filled_by)
 
 RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
              tmp_b, ring_buf, flux, grad_Q) =
@@ -270,8 +286,16 @@ The plan tuples are the case where this does not pay, and the comment above
 parameters of their own for a third reason: `nothing` in either holds a whole
 operator path (the fold closures, the `:d8` detector) off the default
 configuration's inference path entirely.
+
+The struct is mutable, although no field is reassigned after construction,
+because of those dynamic calls and the `_cold` barriers: an argument passed
+through one is boxed, and an immutable `Patch`, held inline in its
+[`PatchSolver`](@ref) with the plans and the workspace it carries, would be
+copied whole into each box, and into every `PatchSolver` built from an entry
+of the solver's abstractly typed patch list. A mutable one is boxed as a
+reference.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
+mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node

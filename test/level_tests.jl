@@ -1085,19 +1085,25 @@ end
     # outlives the evaluation that filled it, so that scratch is pooled on the
     # padded local extent (patches.jl): a lattice level's tiles, whose extents
     # are equal by construction, hold one set between them. Nothing else in the
-    # gate moves if the pooling silently stops.
+    # gate moves if the pooling silently stops. The velocity gradients are the
+    # exception on a level that computes its artificial coefficients
+    # level-wide, as this one does: each tile holds its own.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                     refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
     padded(p) = ntuple(d -> p.decomp.n_local[d] + 2 * p.decomp.n_halo_d[d], 3)
     extents = unique(padded(p) for p in solver.patches)
-    sets = unique(objectid(p.rhs_workspace) for p in solver.patches)
+    sets = unique(objectid(p.rhs_workspace.tmp_a) for p in solver.patches)
+    tiles = solver.patches[2:end]
+    shared(f) = all(f(p.rhs_workspace) === f(tiles[1].rhs_workspace) for p in tiles)
     @test length(solver.patches) == 5          # the root slab plus four tiles
     @test length(extents) == 2                 # the root's extent and the tiles'
     @test length(sets) == length(extents)
-    @test all(p.rhs_workspace === solver.patches[2].rhs_workspace
-              for p in solver.patches[2:end])
-    @test solver.patches[1].rhs_workspace !== solver.patches[2].rhs_workspace
+    @test shared(w -> w.tmp_a) && shared(w -> w.flux) && shared(w -> w.sensor)
+    @test shared(w -> w.strain_mag) && shared(w -> w.sensors_filled_by)
+    @test length(unique(objectid(p.rhs_workspace.grad_u[1, 1]) for p in tiles)) == 4
+    @test all(p.field_tuples.grad_u[2, 1] === p.rhs_workspace.grad_u[2, 1] for p in tiles)
+    @test solver.patches[1].rhs_workspace.tmp_a !== solver.patches[2].rhs_workspace.tmp_a
     # Whatever a patch is handed carries that patch's own extent.
     @test all(size(p.rhs_workspace.tmp_a) == padded(p) for p in solver.patches)
     @test all(size(p.rhs_workspace.flux[1, 1]) == padded(p) for p in solver.patches)
@@ -1114,29 +1120,51 @@ end
 end
 
 @testset "tiled level: a scratch read names the patch that wrote it" begin
-    # The tiles below share one RHS workspace, so after a step its gradients
-    # and sensors are the last tile's. scalar_field refuses them for any other
-    # tile rather than return that tile's values.
+    # The tiles below share one RHS workspace, so after a step its sensors
+    # are the last tile's. scalar_field refuses them for any other tile rather
+    # than return that tile's values. Their velocity gradients are each
+    # tile's own, the level computing its artificial coefficients level-wide,
+    # so the fields derived from them read for every tile; with the artificial
+    # properties off the tiles share those too, and the read is refused.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    initial(x, y, z) =
+        Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0), p=1.0)
+    gradient_names = (:divergence, :qcriterion, :vorticity_magnitude)
     solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                     refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
     states = allocate_state(solver)
-    initialize!(solver, states, (x, y, z) ->
-        Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0), p=1.0))
+    initialize!(solver, states, initial)
     run!(solver, states; tfinal=1.0, nmax=1)
     patches = solver.patches
     first_tile, last_tile = patches[2], patches[end]
     ws = first_tile.rhs_workspace
-    @test ws === last_tile.rhs_workspace
-    @test ws.gradients_filled_by[] === last_tile.covered
+    @test ws.sensor === last_tile.rhs_workspace.sensor
+    @test ws.gradients_filled_by[] === first_tile.covered
+    @test last_tile.rhs_workspace.gradients_filled_by[] === last_tile.covered
     @test ws.sensors_filled_by[] === last_tile.covered
     @test patches[1].rhs_workspace.sensors_filled_by[] === patches[1].covered
     ps_first = CL.PatchSolver(solver, first_tile)
     ps_last = CL.PatchSolver(solver, last_tile)
-    for name in (:sensor, :strain_mag, :divergence, :qcriterion,
-                 :vorticity_magnitude)
+    for name in (:sensor, :strain_mag)
         @test_throws ArgumentError CL.scalar_field(ps_first, name)
         @test CL.scalar_field(ps_last, name) isa AbstractArray
+    end
+    for name in gradient_names
+        @test CL.scalar_field(ps_first, name) isa AbstractArray
+        @test CL.scalar_field(ps_last, name) isa AbstractArray
+    end
+    plain = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                   refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
+                   art=ArtificialProperties(enabled=false))
+    plain_states = allocate_state(plain)
+    initialize!(plain, plain_states, initial)
+    run!(plain, plain_states; tfinal=1.0, nmax=1)
+    plain_first, plain_last = plain.patches[2], plain.patches[end]
+    @test plain_first.rhs_workspace === plain_last.rhs_workspace
+    @test plain_first.rhs_workspace.gradients_filled_by[] === plain_last.covered
+    for name in gradient_names
+        @test_throws ArgumentError CL.scalar_field(CL.PatchSolver(plain, plain_first), name)
+        @test CL.scalar_field(CL.PatchSolver(plain, plain_last), name) isa AbstractArray
     end
     # What a silent read would have returned differs from the tile's own field.
     # The strain magnitude is a pointwise function of the tile's gradients, so

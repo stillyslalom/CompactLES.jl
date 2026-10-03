@@ -20,9 +20,9 @@
 # The sensors are held in the coefficient arrays themselves until the last
 # stage writes the coefficients over them, and the sensed fields in the tile's
 # `sensed_fields`. Each tile's right-hand side then runs with the coefficients
-# this leaves on the patch (`compute_rhs!` with `coefficients_current`), and
-# computes its gradients again, since the workspace the tiles share holds one
-# tile's at a time.
+# this leaves on the patch (`compute_rhs!` with `coefficients_current`) and
+# with the velocity gradients the pass computed, which each tile holds in
+# arrays of its own (`_own_gradients`) or in its block of a stack's.
 #
 # A coarse-fine face keeps the treatment a tile has without the pass, up to
 # the order of a sum, under the default detector and smoother. The sensed
@@ -140,8 +140,9 @@ The artificial coefficients of every tile of `lev` that this rank holds,
 computed as one patch spanning the level would compute them, and written into
 each tile's `mu_art`, `beta_art`, `kappa_art` and `D_art`. The primitives and
 the velocity gradients are computed here, the primitives skipped when
-`prepared` says the caller has refreshed them; on return the primitives are
-current for the tiles' right-hand sides, and the compression switch of a gated
+`prepared` says the caller has refreshed them; on return the primitives and
+each tile's velocity gradients are current for the tiles' right-hand sides,
+which read them (`_gradient_step!`), and the compression switch of a gated
 β* is left to them (`compute_rhs!`). A `Dict` `held` receives, by patch index,
 a copy of each tile's smoothed internal-energy sensor, which the shared
 workspace holds for one unit only (`_output_level_artificial!`).

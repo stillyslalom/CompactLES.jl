@@ -186,6 +186,13 @@ every rank uses this path.
 """
 selfwrap(decomp::Decomp, d::Int) = decomp.sub_size[d] == 1 && decomp.periodic[d]
 
+# True when dimension `d` is closed and undivided, so neither neighbour exists
+# and both phases of an exchange would send and receive nothing. A Sendrecv
+# with `PROC_NULL` at both ends is a local no-op, so returning before it moves
+# no data differently; it skips two MPI calls per field per dimension, which
+# the single-rank tiles of a refined level otherwise make on every exchange.
+_isolated(decomp::Decomp, d::Int) = decomp.neighbors[d] == (PNULL, PNULL)
+
 # One slab-onto-slab assignment inside a field: `copyto!` on host storage, a
 # broadcast on device storage, since the generic `copyto!` fallback between two
 # device views uses scalar indexing, which fails or incurs scalar-indexing
@@ -247,6 +254,7 @@ function exchange_dim!(f::AbstractArray{T,3}, decomp::Decomp{T},
         return f
     end
     selfwrap(decomp, d) && return wrap_dim!(f, decomp, d)
+    _isolated(decomp, d) && return f
     _staged_exchange(f) && return _exchange_dim_staged!(f, decomp, d)
     let n_halo = decomp.n_halo
         n = decomp.n_local[d]
@@ -446,6 +454,7 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp{T},
         end
         return fields
     end
+    _isolated(decomp, d) && return fields
     _staged_exchange(fields[1]) &&
         return _exchange_dim_batch_staged!(fields, decomp, d)
     n_halo = decomp.n_halo

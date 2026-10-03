@@ -516,9 +516,11 @@ GatherBuffers{T}() where {T} = GatherBuffers{T}(T[], T[])
 
 Geometry and staging of the fine shell ring: the slab ranges, the writers'
 `(lo, hi, offset)` table, the ring length, the replicated ring itself, the
-per-rank Allgatherv counts, and the ring's own buffers. All of it follows
-from the refined region and the fine decomposition, which do not change over
-a [`LevelTransfer`](@ref)'s life, so it is built once at setup. A subcycled
+per-rank Allgatherv counts, the ring's own buffers, and, per stage of the
+interpolation chain, the boxes of that stage the shell slots depend on
+(`_chain_boxes`). All of it follows from the refined region, the fine
+decomposition and the faces the parent feeds, which do not change over a
+[`LevelTransfer`](@ref)'s life, so it is built once at setup. A subcycled
 step imposes the shell about twenty times, so the geometry is not rebuilt
 per call.
 """
@@ -529,6 +531,7 @@ struct ShellRing{T}
     ring::Matrix{T}
     counts::Vector{Int}
     buffers::GatherBuffers{T}
+    boxes::Vector{Vector{NTuple{3,UnitRange{Int}}}} # per chain stage 1 .. K
 end
 
 """
@@ -1831,7 +1834,12 @@ end
 # The device interpolation of one chain stage over `n_owned` components:
 # the `_inject_interpolate!` arithmetic of transfer.jl as a per-point body,
 # one point per coarse node, its injection and its interval's two sub-nodes.
-function _interpolate_dev!(tmp, plan::TransferPlan{T}, coarse, n_owned::Int) where {T}
+# A `box` of interior node ranges of the fine stage limits the launch to the
+# coarse nodes whose intervals hold its nodes along the refined dimension and
+# to its ranges along the other two; each node written takes the value the
+# whole launch gives it.
+function _interpolate_dev!(tmp, plan::TransferPlan{T}, coarse, n_owned::Int,
+                           box=nothing) where {T}
     D = plan.dim
     padf = plan.fine.n_halo_d
     padc = plan.coarse.n_halo_d
@@ -1840,13 +1848,21 @@ function _interpolate_dev!(tmp, plan::TransferPlan{T}, coarse, n_owned::Int) whe
     p = plan.interp_order
     nintervals = periodic ? nc : nc - 1
     o1, o2 = D == 1 ? (2, 3) : D == 2 ? (1, 3) : (1, 2)
-    n1 = plan.coarse.n_local[o1]
-    n2 = plan.coarse.n_local[o2]
+    r1 = box === nothing ? (1:plan.coarse.n_local[o1]) : box[o1]
+    r2 = box === nothing ? (1:plan.coarse.n_local[o2]) : box[o2]
+    rm = box === nothing ? (1:nc) :
+                           (((first(box[D]) - 1) ÷ 3 + 1):((last(box[D]) - 1) ÷ 3 + 1))
+    n2 = length(r2)
     W = (plan.weights...,)
-    pointwise!(_interp_point!, tmp, nc, n1, n2 * n_owned,
-               tmp, coarse, W, p, nc, periodic, nintervals, padf, padc, n2, D)
+    pointwise!(_interp_point!, tmp, length(rm), length(r1), n2 * n_owned,
+               tmp, coarse, W, p, nc, periodic, nintervals, padf, padc, n2, D,
+               (first(rm) - 1, first(r1) - 1, first(r2) - 1))
     return tmp
 end
+
+# The smallest box holding every box of `boxes`.
+_bounding_box(boxes) =
+    ntuple(d -> minimum(b -> first(b[d]), boxes):maximum(b -> last(b[d]), boxes), 3)
 
 # Line coordinate `i` and orthogonal coordinates `j < k` along dimension
 # `D`, as `_gidx` (operators.jl) maps them, with `D` a plain integer: a
@@ -1858,9 +1874,11 @@ end
 end
 
 @inline function _interp_point!(tmp, coarse, W, p, nc, periodic, nintervals,
-                                padf, padc, n2, D, m, j, kb)
+                                padf, padc, n2, D, start, mi, ji, kb)
     b, kk = divrem(kb - 1, n2)
-    k = kk + 1
+    m = start[1] + mi
+    j = start[2] + ji
+    k = start[3] + kk + 1
     b += 1
     half = p ÷ 2
     @inbounds begin
@@ -2017,7 +2035,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
         slabs = NTuple{3,UnitRange{Int}}[]
         table, ringlen = _slab_table(slabs)
         shell = ShellRing{T}(slabs, table, ringlen, Matrix{T}(undef, 0, n_cons),
-                             Int[], GatherBuffers{T}())
+                             Int[], GatherBuffers{T}(),
+                             Vector{NTuple{3,UnitRange{Int}}}[])
     else
         slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
                             fine_decomp.n_halo_d, boundary, folded)
@@ -2025,9 +2044,17 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
         # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
         ring_counts = [ringlen * length((r+1):np_tile:n_cons)
                        for r in 0:np_tile-1]
+        fine_active = ntuple(d -> fine_decomp.active[d], 3)
+        _check_ring_cover(table, region, fine_active, fine_decomp.n_halo_d, imposed,
+                          boundary, folded)
+        boxes = _chain_boxes(_ring_slabs(region, fine_active, fine_decomp.n_halo_d,
+                                         boundary, folded, imposed),
+                             _box_shift(buffer, folded),
+                             _chain_extents(boxext, dims_to_refine), dims_to_refine,
+                             interpolation_order)
         shell = ShellRing{T}(slabs, table, ringlen,
                              Matrix{T}(undef, ringlen, n_cons), ring_counts,
-                             GatherBuffers{T}())
+                             GatherBuffers{T}(), boxes)
     end
     # The gradients are taken on the chain's fine box, whose ends lie
     # 3·LEVEL_BUFFER fine nodes beyond the patch, with the derivative
@@ -2637,23 +2664,72 @@ end
 # then high per active dimension. Slabs overlap at corners; both copies of a
 # corner value come from the same chain output, so the first match wins. A
 # face on the domain boundary (`boundary`) has no slab, and the other slabs
-# stop at its plane, since the box holds nothing beyond it.
+# stop at its plane, since the box holds nothing beyond it. `faces` selects
+# the faces whose slabs are returned, every one by default.
 function _ring_slabs(region::BlockRegion, active::NTuple{3,Bool},
                      pad::NTuple{3,Int},
                      boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                     folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
+                     folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     faces::NTuple{3,NTuple{2,Bool}}=((true, true), (true, true),
+                                                      (true, true)))
     Nf = fine_extent(region, active, folded)
     full = ntuple(d -> (boundary[d][1] ? 1 : 1 - pad[d]):
                        (boundary[d][2] ? Nf[d] : Nf[d] + pad[d]), 3)
     slabs = NTuple{3,UnitRange{Int}}[]
     for d in 1:3
         active[d] || continue
-        boundary[d][1] ||
+        boundary[d][1] || !faces[d][1] ||
             push!(slabs, ntuple(q -> q == d ? ((1 - pad[d]):1) : full[q], 3))
-        boundary[d][2] ||
+        boundary[d][2] || !faces[d][2] ||
             push!(slabs, ntuple(q -> q == d ? (Nf[d]:(Nf[d] + pad[d])) : full[q], 3))
     end
     return slabs
+end
+
+# The boxes of each stage of the interpolation chain that the shell slots
+# depend on, as interior node ranges of that stage, `boxes[k]` for the output
+# of plan `k`. A shell slot lies in the slab of a parent-fed face (`_in_shell`),
+# so the chain's last stage is needed over those slabs alone, `slabs`, carried
+# into the box by `shift`; each earlier stage over the coarse nodes the
+# Lagrange stencils of the next one read, which along the dimension plan `k`
+# refines are the injected node of a coincident fine node and the `order`
+# nodes of an intermediate one's stencil (`_inject_interpolate!`). `exts` are
+# the stages' extents (`_chain_extents`) and `dims` the dimension each plan
+# refines. A stage whose boxes add up to no fewer nodes than it holds is
+# taken whole.
+function _chain_boxes(slabs, shift::NTuple{3,Int}, exts, dims::Vector{Int},
+                      order::Int)
+    K = length(dims)
+    boxes = [NTuple{3,UnitRange{Int}}[] for _ in 1:K]
+    whole(k) = ntuple(d -> 1:exts[k+1][d], 3)
+    inside(b, k) = all(d -> 1 <= first(b[d]) && last(b[d]) <= exts[k+1][d], 1:3)
+    for s in slabs
+        b = ntuple(d -> (first(s[d]) + shift[d]):(last(s[d]) + shift[d]), 3)
+        for k in K:-1:1
+            # The box holds every shell slot; a slab reaching beyond it would
+            # break that invariant, and the whole chain is taken instead.
+            inside(b, k) || return [[whole(k)] for k in 1:K]
+            push!(boxes[k], b)
+            D = dims[k]
+            nc = exts[k][D]
+            lo, hi = typemax(Int), typemin(Int)
+            for n in b[D]
+                m = (n - 1) ÷ 3 + 1
+                if (n - 1) % 3 == 0
+                    lo, hi = min(lo, m), max(hi, m)
+                else
+                    js = clamp(m - (order ÷ 2 - 1), 1, nc - order + 1)
+                    lo, hi = min(lo, js), max(hi, js + order - 1)
+                end
+            end
+            b = ntuple(d -> d == D ? (lo:hi) : b[d], 3)
+        end
+    end
+    for k in 1:K
+        sum(b -> prod(length.(b)), boxes[k]; init=0) >= prod(length.(whole(k))) &&
+            (boxes[k] = [whole(k)])
+    end
+    return boxes
 end
 
 # Isbits slab table for the writers: (lo, hi, zero-based ring offset) per slab.
@@ -2670,12 +2746,10 @@ end
 # One-based ring offset of shell node (g1, g2, g3), or 0 when no slab holds
 # it. Invariant: the slabs of `_ring_slabs` cover every padded slot whose
 # patch-global index lies outside the strict interior, matching the shell test
-# both writers apply before calling here. A shell slot therefore always matches.
-# A 0 return indicates that the slab set and the shell test
-# have fallen out of step; `_write_shell_from_ring!` raises before indexing the
-# ring at 0 under its `@inbounds`. The device body cannot raise,
-# so the host path carries the check for both, running the identical
-# arithmetic on the identical table.
+# both writers apply. A shell slot therefore always matches. Both writers
+# visit the slabs' nodes rather than the patch's, so a slot outside every slab
+# would be skipped, not misread; `_check_ring_cover` raises at setup if the
+# slab set and the shell test have fallen out of step.
 @inline function _ring_offset(table, g1, g2, g3)
     for (lo, hi, base) in table
         if lo[1] <= g1 <= hi[1] && lo[2] <= g2 <= hi[2] && lo[3] <= g3 <= hi[3]
@@ -2688,9 +2762,27 @@ end
     return 0
 end
 
+# Whether some active face of the transfer's patch takes its shell from the
+# parent.
+_imposes_shell(lt::LevelTransfer) = any(d -> lt.active[d] && any(lt.imposed[d]), 1:3)
+
 @noinline _ring_miss(g1, g2, g3) =
     error("fine shell node ($g1, $g2, $g3) lies in no ring slab; the slab " *
           "set and the shell test disagree")
+
+# Raise unless every shell slot of the fine patch over `region`, with halo
+# `pad`, lies in a slab of `table`: the invariant both shell writers rest on.
+# One pass over the padded patch when a transfer is built.
+function _check_ring_cover(table, region::BlockRegion, active::NTuple{3,Bool},
+                           pad::NTuple{3,Int}, imposed, boundary, folded)
+    Nf = fine_extent(region, active, folded)
+    r = ntuple(d -> (1 - pad[d]):(Nf[d] + pad[d]), 3)
+    for g3 in r[3], g2 in r[2], g1 in r[1]
+        _in_shell(g1, g2, g3, Nf, active, imposed, boundary) || continue
+        _ring_offset(table, g1, g2, g3) == 0 && _ring_miss(g1, g2, g3)
+    end
+    return nothing
+end
 
 # Shared driver: run the chain for this rank's components with `fill`
 # (a `BoxFill` or a `HermiteFill`) supplying stage 0, replicate the shell
@@ -2707,9 +2799,13 @@ end
 # packed rings through the host. A tile with no parent-fed face reads no
 # gradient ring and takes none.
 function _impose_shell!(solver, states, lt::LevelTransfer, fill)
-    lt.gradients === nothing ||
-        !any(d -> lt.active[d] && any(lt.imposed[d]), 1:3) ||
-        return _impose_shell_gradients!(solver, states, lt, fill)
+    # A tile whose every face is shared with a same-level tile or lies on the
+    # domain boundary has no shell slot to write (`_in_shell`), and no reader
+    # of the ring, so the chain is skipped. `imposed` is a property of the
+    # transfer, the same on every rank of the tile's communicator, so the
+    # ranks skip the ring gather together.
+    _imposes_shell(lt) || return states
+    lt.gradients === nothing || return _impose_shell_gradients!(solver, states, lt, fill)
     patches = getfield(solver, :patches)
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
@@ -2739,8 +2835,11 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
                 # Interpolation, not deconvolution: the coarse solution is
                 # point samples, and `prolong!`'s deconvolution is exact only
                 # on data a `restrict!` produced (see the `interpolate!`
-                # docstring).
-                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+                # docstring). Only the boxes the shell slots read are filled;
+                # the ring entries packed from the rest of the last stage
+                # are stale and reach no slot.
+                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k],
+                             shell.boxes[k])
             end
             bf = lt.pstage[K+1]
             @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
@@ -2761,7 +2860,10 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
         stages = scratch.stages
         _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
         for k in 1:K
-            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
+            # One launch per stage, over the bounding box of the stage's
+            # boxes, rather than one per box.
+            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned,
+                              _bounding_box(shell.boxes[k]))
         end
         dsend = _device_send_stage(parent(Qf), ringlen * n_owned)
         pointwise!(_ring_pack_point!, parent(Qf), ringlen, n_owned, 1,
@@ -2995,21 +3097,28 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     imposed = lt.imposed
     boundary = lt.boundary
     if !_device_path(Qf)
-        r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
-        @inbounds for k in r[3], j in r[2], i in r[1]
-            g1, g2, g3 = i + off[1], j + off[2], k + off[3]
-            _in_shell(g1, g2, g3, Nf, active, imposed, boundary) || continue
-            at = _ring_offset(table, g1, g2, g3)
-            at == 0 && _ring_miss(g1, g2, g3)
-            for c in 1:n_cons
-                Qf[i + padf[1], j + padf[2], k + padf[3], c] = ring[at, c]
+        # Every shell slot lies in a slab (`_check_ring_cover`), so the slabs'
+        # nodes inside this rank's padded block are visited instead of the
+        # block; a slot two slabs share is written twice with one value.
+        lo_g = ntuple(d -> 1 - padf[d] + off[d], 3)
+        hi_g = ntuple(d -> nf[d] + padf[d] + off[d], 3)
+        @inbounds for (lo, hi, _) in table
+            r = ntuple(d -> max(lo[d], lo_g[d]):min(hi[d], hi_g[d]), 3)
+            for g3 in r[3], g2 in r[2], g1 in r[1]
+                _in_shell(g1, g2, g3, Nf, active, imposed, boundary) || continue
+                at = _ring_offset(table, g1, g2, g3)
+                i, j, k = g1 - off[1] + padf[1], g2 - off[2] + padf[2],
+                          g3 - off[3] + padf[3]
+                for c in 1:n_cons
+                    Qf[i, j, k, c] = ring[at, c]
+                end
             end
         end
         return Qf
     end
     # Device patch: the ring (thin) uploads, unless the chain packed it on
-    # the device already, and one kernel writes every component of every
-    # shell slot, far less traffic than the whole box.
+    # the device already, and one kernel over the ring's entries writes every
+    # component of every shell slot, far less traffic than the whole box.
     dev_ring = if _cpu_storage(ring)
         r = similar(parent(Qf), size(ring))
         copyto!(r, ring)
@@ -3017,23 +3126,39 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     else
         ring
     end
-    pointwise!(_shell_ring_point!, Qf,
-               nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
-               Qf, dev_ring, (table...,), off, padf, Nf, active, imposed, boundary,
-               n_cons)
+    ringlen = size(ring, 1)
+    pointwise!(_shell_ring_point!, Qf, ringlen, 1, 1,
+               Qf, dev_ring, (table...,), off, padf, nf, Nf, active, imposed,
+               boundary, n_cons)
     return Qf
 end
 
-@inline function _shell_ring_point!(Qf, ring, table, off, padf, Nf, active,
-                                    imposed, boundary, n_cons, i, j, k)
-    @inbounds begin
-        g1 = i - padf[1] + off[1]
-        g2 = j - padf[2] + off[2]
-        g3 = k - padf[3] + off[3]
-        if _in_shell(g1, g2, g3, Nf, active, imposed, boundary)
-            at = _ring_offset(table, g1, g2, g3)
-            for c in 1:n_cons
-                Qf[i, j, k, c] = ring[at, c]
+# One ring entry: the slab decode of `_ring_pack_field_point!` gives its
+# node, which is written, from the entry the host writer reads for it, where
+# it lies in this rank's padded block and in the shell. A slot that two slabs
+# share is written by both entries with one value.
+@inline function _shell_ring_point!(Qf, ring, table, off, padf, nf, Nf, active,
+                                    imposed, boundary, n_cons, at, _j, _k)
+    @inbounds for (lo, hi, sbase) in table
+        n1 = hi[1] - lo[1] + 1
+        n2 = hi[2] - lo[2] + 1
+        n3 = hi[3] - lo[3] + 1
+        if sbase < at <= sbase + n1 * n2 * n3
+            r = at - sbase - 1
+            g1 = lo[1] + r % n1
+            r ÷= n1
+            g2 = lo[2] + r % n2
+            g3 = lo[3] + r ÷ n2
+            i = g1 - off[1] + padf[1]
+            j = g2 - off[2] + padf[2]
+            k = g3 - off[3] + padf[3]
+            if 1 <= i <= nf[1] + 2 * padf[1] && 1 <= j <= nf[2] + 2 * padf[2] &&
+               1 <= k <= nf[3] + 2 * padf[3] &&
+               _in_shell(g1, g2, g3, Nf, active, imposed, boundary)
+                first_at = _ring_offset(table, g1, g2, g3)
+                for c in 1:n_cons
+                    Qf[i, j, k, c] = ring[first_at, c]
+                end
             end
         end
     end

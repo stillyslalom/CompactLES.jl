@@ -1408,6 +1408,17 @@ function compute_primitives_and_gradients!(solver::SolverLike, Q,
     return solver
 end
 
+# The primitives and velocity gradients of `compute_rhs!`, kept where the
+# coefficients were computed beforehand (`coefficients_current`): the
+# level-wide pass (`_level_artificial!`) computed both from this state, the
+# gradients into arrays of this patch's own (`_own_gradients`) or into its
+# block of a stack's, and nothing has written either since.
+function _gradient_step!(solver, Q, primitives_current::Bool,
+                         coefficients_current::Bool)
+    coefficients_current && return solver
+    return compute_primitives_and_gradients!(solver, Q, primitives_current)
+end
+
 # The artificial-property step of `compute_rhs!`: `compute_artificial!`, or,
 # where the coefficients were computed beforehand (`coefficients_current`),
 # only the compression switch of a gated β*, which reads this patch's velocity
@@ -1454,17 +1465,18 @@ primitives pass, and is valid only immediately after the caller performs both on
 this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`step!`](@ref)
 passes it for the first RK stage of a `prepared` step, where [`max_rate`](@ref)
 has done the work. A further trailing `coefficients_current = true` keeps the
-artificial coefficients the patch holds, applying only the compression switch
-of `beta_sensor = :gated_strain` or `:dilatation`, which reads the gradients
-this call computes; a tiled level passes it after computing the coefficients
-over the whole level (`_level_artificial!`). Both flags are positional, not
+artificial coefficients the patch holds, with the primitives and the velocity
+gradients they were computed from, applying only the compression switch of
+`beta_sensor = :gated_strain` or `:dilatation`; a tiled level passes it after
+computing the coefficients over the whole level (`_level_artificial!`), which
+leaves each tile's gradients in arrays of its own. Both flags are positional, not
 keywords, allowing `bench/audit.jl` to reach the body with `code_typed`, which
 returns only the forwarding method of a function with keywords.
 """
 function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
                       coefficients_current::Bool=false)
     decomp = solver.decomp
-    compute_primitives_and_gradients!(solver, Q, primitives_current)
+    _gradient_step!(solver, Q, primitives_current, coefficients_current)
     _validate_transport_state!(solver, Q; current=true)
     _artificial_step!(solver, Q, coefficients_current)
     for d in 1:3
