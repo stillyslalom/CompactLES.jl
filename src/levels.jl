@@ -515,7 +515,8 @@ GatherBuffers{T}() where {T} = GatherBuffers{T}(T[], T[])
     ShellRing
 
 Geometry and staging of the fine shell ring: the slab ranges, the writers'
-`(lo, hi, offset)` table, the ring length, the replicated ring itself, the
+`(lo, hi, offset)` table, the ring length, the replicated ring itself, its
+multilinear counterpart for the admissible fallback (`_shell_fallback`), the
 per-rank Allgatherv counts, the ring's own buffers, and, per stage of the
 interpolation chain, the boxes of that stage the shell slots depend on
 (`_chain_boxes`). All of it follows from the refined region, the fine
@@ -529,6 +530,7 @@ struct ShellRing{T}
     table::Vector{Tuple{NTuple{3,Int},NTuple{3,Int},Int}}
     len::Int
     ring::Matrix{T}
+    linear::Matrix{T}
     counts::Vector{Int}
     buffers::GatherBuffers{T}
     boxes::Vector{Vector{NTuple{3,UnitRange{Int}}}} # per chain stage 1 .. K
@@ -2035,7 +2037,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
         slabs = NTuple{3,UnitRange{Int}}[]
         table, ringlen = _slab_table(slabs)
         shell = ShellRing{T}(slabs, table, ringlen, Matrix{T}(undef, 0, n_cons),
-                             Int[], GatherBuffers{T}(),
+                             Matrix{T}(undef, 0, n_cons), Int[], GatherBuffers{T}(),
                              Vector{NTuple{3,UnitRange{Int}}}[])
     else
         slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
@@ -2053,6 +2055,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                              _chain_extents(boxext, dims_to_refine), dims_to_refine,
                              interpolation_order)
         shell = ShellRing{T}(slabs, table, ringlen,
+                             Matrix{T}(undef, ringlen, n_cons),
                              Matrix{T}(undef, ringlen, n_cons), ring_counts,
                              GatherBuffers{T}(), boxes)
     end
@@ -2826,7 +2829,14 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     # ascending order is the one the ring unpack below assumes.
     owned = (me+1):np:n_cons
     n_owned = length(owned)
-    sendbuf = _fit!(shell.buffers.send, ringlen * n_owned)
+    # The admissible fallback (`_shell_fallback`). On one rank every component
+    # is at hand, and a failed ring entry reads the parent's boxes directly; a
+    # decomposed patch's ranks hold their own components only, so each sends
+    # its multilinear rings after its chain rings, and the gathered rings are
+    # checked after the unpack.
+    fallback = _shell_fallback(solver)
+    gathered = fallback && np > 1
+    sendbuf = _fit!(shell.buffers.send, (gathered ? 2 : 1) * ringlen * n_owned)
     if !_device_path(Qf)
         pos = 0
         for c in owned
@@ -2852,9 +2862,14 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
             # Every component is this rank's, in order, so the send buffer
             # holds the ring column by column.
             copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
+            fallback && _shell_fallback!(ring, _linear_sources(fill, lt, owned), lt, fdcp,
+                                         solver)
             _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
             return states
         end
+        gathered && _shell_linear_ring!(sendbuf, ringlen * n_owned, ringlen, parent(Qf),
+                                        _linear_sources(fill, lt, owned), lt, fdcp,
+                                        n_owned)
     else
         scratch = fine.level_scratch
         stages = scratch.stages
@@ -2871,23 +2886,266 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
         if np == 1
             # The packed stage is the ring itself, column by column, and
             # stays on the device for the shell write.
-            _write_shell_from_ring!(Qf, reshape(dsend, ringlen, n_cons), table,
-                                    lt, fdcp, n_cons)
+            dring = reshape(dsend, ringlen, n_cons)
+            fallback && _shell_fallback!(dring, _linear_sources_dev(fill, scratch, lt, owned),
+                                         lt, fdcp, solver)
+            _write_shell_from_ring!(Qf, dring, table, lt, fdcp, n_cons)
             return states
         end
         _tracked_copy!(sendbuf, 1, dsend, 1, ringlen * n_owned)
+        if gathered
+            dlinear = _device_send_stage(parent(Qf), ringlen * n_owned)
+            _shell_linear_ring!(dlinear, 0, ringlen, parent(Qf),
+                                _linear_sources_dev(fill, scratch, lt, owned), lt, fdcp,
+                                n_owned)
+            _tracked_copy!(sendbuf, ringlen * n_owned + 1, dlinear, 1, ringlen * n_owned)
+        end
     end
-    counts = shell.counts
+    counts = gathered ? 2 .* shell.counts : shell.counts
     recv = _fit!(shell.buffers.recv, sum(counts))
     MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
     at = 0
-    for r in 0:np-1, c in (r+1):np:n_cons
-        copyto!(view(ring, :, c), view(recv, at+1:at+ringlen))
-        at += ringlen
+    for r in 0:np-1
+        for c in (r+1):np:n_cons
+            copyto!(view(ring, :, c), view(recv, at+1:at+ringlen))
+            at += ringlen
+        end
+        gathered || continue
+        for c in (r+1):np:n_cons
+            copyto!(view(shell.linear, :, c), view(recv, at+1:at+ringlen))
+            at += ringlen
+        end
     end
+    gathered && _select_admissible!(ring, shell.linear, lt, fdcp, solver)
     _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
     return states
 end
+
+# --- Admissible shell fallback ----------------------------------------------
+#
+# The Lagrange chain and, under subcycling, the cubic Hermite blend in time
+# overshoot across a shock, so they can set a shell node to ρ ≤ 0 or ρe ≤ 0
+# between admissible parent nodes. Such a node takes instead the multilinear
+# interpolant of the parent nodes bracketing it, blended linearly in time
+# between the two stored endpoint boxes under subcycling. Its weights are
+# nonnegative and sum to one, so the node is a convex combination of parent
+# states. The shell interpolates the conserved variables (ρY_k, m, E), in
+# which the set ρ > 0, ρe = E − |m|²/(2ρ) > 0 is convex: |m|²/ρ is jointly
+# convex for ρ > 0, so ρe is concave and its positive superlevel set convex.
+# The node is therefore admissible whenever its parent nodes are. A node the
+# chain leaves admissible keeps the chain's value bit for bit, and so does one
+# whose multilinear state is not admissible either (a parent state outside the
+# admissible set, which no interpolant repairs). The test is
+# the positivity limiter's: ρ and ρe, not the partial densities, whose
+# interface undershoots lie inside the species band. Only the ring entries a
+# shell slot reads are tested (`_in_shell`); the rest are stale where the
+# chain fills only the boxes the slots need.
+
+# Whether the shell takes the fallback: an ideal-gas mixture under the
+# single-temperature equations, whose admissible set is the convex one
+# above. The caloric inversion of a tabulated or NASA-9 model has no such
+# closed form, and its shell keeps the chain's values.
+_shell_fallback(solver) =
+    solver.eos isa IdealMixture &&
+    solver.equations.n_cons == solver.equations.n_species + 4
+
+# The sources of the multilinear values over this rank's components: the two
+# boxes blended in time at weight `w`, and the slot of component `owned[b]`
+# in them, `c1 + (b − 1) cstep`. The gathered box stands for both ends of an
+# imposition at one time; the Hermite endpoints are the parent's states at
+# the two ends of its step.
+_linear_sources(::BoxFill, lt::LevelTransfer{T}, owned) where {T} =
+    (lt.box_gather, lt.box_gather, zero(T), first(owned), step(owned))
+_linear_sources(hf::HermiteFill, lt::LevelTransfer{T}, owned) where {T} =
+    (lt.box_Q0, lt.box_Q1, T(hf.θ), first(owned), step(owned))
+# A device patch's: the uploaded box is stage 0 of its chain, its components
+# in slot order; the Hermite endpoints are the uploaded boxes.
+_linear_sources_dev(::BoxFill, scratch::LevelScratch, lt::LevelTransfer{T},
+                    owned) where {T} =
+    (scratch.stages[1], scratch.stages[1], zero(T), 1, 1)
+_linear_sources_dev(hf::HermiteFill, scratch::LevelScratch, lt::LevelTransfer{T},
+                    owned) where {T} =
+    (scratch.Q0, scratch.Q1, T(hf.θ), first(owned), step(owned))
+
+# The shell geometry the fallback bodies take over storage like `route`:
+# the slab table, the box shift, the patch's extent and resolved dimensions
+# and its imposed and boundary faces, as `_write_shell_from_ring!` takes
+# them; and the stage-0 box's halo pad and extent.
+function _fallback_geometry(lt::LevelTransfer, df::Decomp, route)
+    active = (df.active[1], df.active[2], df.active[3])
+    geometry = (_body_table(route, lt.shell.table), _box_shift(lt),
+                fine_extent(lt.region, active, lt.folded), active, lt.imposed,
+                lt.boundary)
+    box = lt.pdecomps[1]
+    return geometry, (box.n_halo_d, box.n_local)
+end
+
+# The slab table as a body reads it: the vector itself on host storage, and
+# on a device, whose kernels take no vector, an isbits tuple. A splatted
+# vector has no static length, so the launch on host storage, which runs at
+# every shell imposition, would otherwise be dispatched at run time.
+_body_table(::Array, table) = table
+_body_table(route, table) = (table...,)
+
+# On one rank: every shell entry of `ring` whose chain state is not
+# admissible takes its multilinear state from the sources `src`, which hold
+# every component.
+function _shell_fallback!(ring, src, lt::LevelTransfer, df::Decomp, solver)
+    src0, src1, w, c1, cstep = src
+    geometry, box = _fallback_geometry(lt, df, ring)
+    pointwise!(_shell_fallback_point!, ring, size(ring, 1), 1, 1,
+               ring, src0, src1, w, c1, cstep, geometry, box, _limiter_layout(solver))
+    return ring
+end
+
+@inline function _shell_fallback_point!(ring, src0, src1, w, c1, cstep, geometry, box,
+                                        lay, at, _j, _k)
+    @inbounds begin
+        table, shift, Nf, active, imposed, boundary = geometry
+        g = _ring_node(table, at)
+        if _in_shell(g[1], g[2], g[3], Nf, active, imposed, boundary) &
+           !_ring_admissible(ring, at, lay)
+            n = (g[1] + shift[1], g[2] + shift[2], g[3] + shift[3])
+            if _linear_admissible(src0, src1, w, n, active, box, c1, cstep, lay)
+                for c in 1:lay[6]
+                    ring[at, c] = _linear_value(src0, src1, w, n, active, box,
+                                                c1 + (c - 1) * cstep)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# On a decomposed patch: the multilinear rings of this rank's `n_owned`
+# components into `dst`, the b-th after linear index `base + (b − 1) stride`
+# in the chain ring's order, at its shell entries.
+function _shell_linear_ring!(dst, base::Int, stride::Int, route, src, lt::LevelTransfer,
+                             df::Decomp, n_owned::Int)
+    src0, src1, w, c1, cstep = src
+    geometry, box = _fallback_geometry(lt, df, route)
+    pointwise!(_shell_linear_point!, route, lt.shell.len, n_owned, 1,
+               dst, src0, src1, w, c1, cstep, geometry, box, base, stride)
+    return dst
+end
+
+@inline function _shell_linear_point!(dst, src0, src1, w, c1, cstep, geometry, box,
+                                      base, stride, at, b, _k)
+    @inbounds begin
+        table, shift, Nf, active, imposed, boundary = geometry
+        g = _ring_node(table, at)
+        if _in_shell(g[1], g[2], g[3], Nf, active, imposed, boundary)
+            n = (g[1] + shift[1], g[2] + shift[2], g[3] + shift[3])
+            dst[base + (b - 1) * stride + at] =
+                _linear_value(src0, src1, w, n, active, box, c1 + (b - 1) * cstep)
+        end
+    end
+    return nothing
+end
+
+# On a decomposed patch, after the gather: every shell entry of `ring` whose
+# chain state is not admissible takes its gathered multilinear state from
+# `linear`; both hold every component, one column each.
+function _select_admissible!(ring, linear, lt::LevelTransfer, df::Decomp, solver)
+    geometry, _ = _fallback_geometry(lt, df, ring)
+    pointwise!(_shell_select_point!, ring, size(ring, 1), 1, 1,
+               ring, linear, geometry, _limiter_layout(solver))
+    return ring
+end
+
+@inline function _shell_select_point!(ring, linear, geometry, lay, at, _j, _k)
+    @inbounds begin
+        table, _, Nf, active, imposed, boundary = geometry
+        g = _ring_node(table, at)
+        if _in_shell(g[1], g[2], g[3], Nf, active, imposed, boundary) &
+           !_ring_admissible(ring, at, lay) & _ring_admissible(linear, at, lay)
+            for c in 1:lay[6]
+                ring[at, c] = linear[at, c]
+            end
+        end
+    end
+    return nothing
+end
+
+# The shell node (g1, g2, g3) of ring entry `at`: the slab decode of
+# `_ring_pack_point!`. The slabs' offset ranges partition the ring.
+@inline function _ring_node(table, at)
+    g = (0, 0, 0)
+    @inbounds for (lo, hi, sbase) in table
+        n1 = hi[1] - lo[1] + 1
+        n2 = hi[2] - lo[2] + 1
+        n3 = hi[3] - lo[3] + 1
+        if sbase < at <= sbase + n1 * n2 * n3
+            r = at - sbase - 1
+            g = (lo[1] + r % n1, lo[2] + (r ÷ n1) % n2, lo[3] + r ÷ (n1 * n2))
+        end
+    end
+    return g
+end
+
+# ρ > 0 and ρe > 0 at ring entry `at`, the limiter's `_limiter_positive`
+# written with `&` for a device body.
+@inline function _ring_admissible(ring, at, lay)
+    ns, m1, m2, m3, ie, _ = lay
+    @inbounds begin
+        ρ = zero(eltype(ring))
+        for sp in 1:ns
+            ρ += ring[at, sp]
+        end
+        mx, my, mz = ring[at, m1], ring[at, m2], ring[at, m3]
+        return (ρ > 0) & (2 * ρ * ring[at, ie] - (mx * mx + my * my + mz * mz) > 0)
+    end
+end
+
+# Whether the multilinear state at node `n` of the chain's final box is
+# admissible, the test of `_ring_admissible`.
+@inline function _linear_admissible(src0, src1, w, n, active, box, c1, cstep, lay)
+    ns, m1, m2, m3, ie, _ = lay
+    value(c) = _linear_value(src0, src1, w, n, active, box, c1 + (c - 1) * cstep)
+    ρ = zero(eltype(src0))
+    for sp in 1:ns
+        ρ += value(sp)
+    end
+    mx, my, mz = value(m1), value(m2), value(m3)
+    return (ρ > 0) & (2 * ρ * value(ie) - (mx * mx + my * my + mz * mz) > 0)
+end
+
+# The multilinear value of component slot `c` at node `n` of the chain's
+# final box. Along a refined dimension the node lies at fraction f/3 of the
+# parent interval from stage-0 node m = (n − 1) ÷ 3 + 1, f = (n − 1) mod 3,
+# and the tensor product of the weights (3 − f)/3 and f/3 over the
+# bracketing parent nodes gives the value, at each end of the time blend. A
+# coincident node takes its parent node alone; the zero-weight corner is read
+# at a clamped index, so no read leaves the box.
+@inline function _linear_value(src0, src1, w, n, active, box, c)
+    pad0, ext0 = box
+    T = eltype(src0)
+    m1, f1 = _linear_bracket(n[1], active[1])
+    m2, f2 = _linear_bracket(n[2], active[2])
+    m3, f3 = _linear_bracket(n[3], active[3])
+    v0 = zero(T)
+    v1 = zero(T)
+    @inbounds for s3 in 0:1, s2 in 0:1, s1 in 0:1
+        wt = _linear_weight(T, f1, s1) * _linear_weight(T, f2, s2) *
+             _linear_weight(T, f3, s3)
+        I = CartesianIndex(clamp(m1 + s1, 1, ext0[1]) + pad0[1],
+                           clamp(m2 + s2, 1, ext0[2]) + pad0[2],
+                           clamp(m3 + s3, 1, ext0[3]) + pad0[3])
+        v0 += wt * src0[I, c]
+        v1 += wt * src1[I, c]
+    end
+    return (one(T) - w) * v0 + w * v1
+end
+
+# The parent node at or below final-box node `n` and the node's offset from
+# it in fine spacings, along a refined dimension; a collapsed one is
+# unrefined.
+@inline function _linear_bracket(n, refined)
+    m = (n - 1) ÷ 3 + 1
+    return (ifelse(refined, m, n), ifelse(refined, n - 1 - 3 * (m - 1), 0))
+end
+
+@inline _linear_weight(::Type{T}, f, s) where {T} = T(ifelse(s == 0, 3 - f, f)) / T(3)
 
 function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     patches = getfield(solver, :patches)
@@ -2908,10 +3166,15 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     shift = _box_shift(lt)
     owned = (me+1):np:n_cons
     n_owned = length(owned)
-    sendbuf = _fit!(shell.buffers.send, 4 * ringlen * n_owned)
+    # Under the fallback on a decomposed patch each component's rings are its
+    # value ring, its three gradient rings and its multilinear ring.
+    fallback = _shell_fallback(solver)
+    gathered = fallback && np > 1
+    per = gathered ? 5 : 4
+    sendbuf = _fit!(shell.buffers.send, per * ringlen * n_owned)
     if _device_path(Qf)
-        _impose_shell_gradients_dev!(fine, Qf, lt, fill, owned, sendbuf, shift,
-                                     n_cons)
+        _impose_shell_gradients_dev!(solver, fine, Qf, lt, fill, owned, sendbuf, shift,
+                                     n_cons, fallback)
         return states
     end
     bf = lt.pstage[K+1]
@@ -2945,12 +3208,17 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
             _pack_ring!(dst, at, src, slabs, shift, padb)
             pos += ringlen
         end
+        gathered && (pos += ringlen)
     end
     if direct
+        fallback && _shell_fallback!(ring, _linear_sources(fill, lt, owned), lt, fdcp,
+                                     solver)
         _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
         return states
     end
-    counts = 4 .* shell.counts
+    gathered && _shell_linear_ring!(sendbuf, 4 * ringlen, 5 * ringlen, parent(Qf),
+                                    _linear_sources(fill, lt, owned), lt, fdcp, n_owned)
+    counts = per .* shell.counts
     recv = _fit!(shell.buffers.recv, sum(counts))
     MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
     at = 0
@@ -2961,7 +3229,11 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
             copyto!(view(gring, :, 3 * (c - 1) + j), view(recv, at+1:at+ringlen))
             at += ringlen
         end
+        gathered || continue
+        copyto!(view(shell.linear, :, c), view(recv, at+1:at+ringlen))
+        at += ringlen
     end
+    gathered && _select_admissible!(ring, shell.linear, lt, fdcp, solver)
     _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
     return states
 end
@@ -2979,13 +3251,14 @@ end
 
 # The device form over the fine patch's scratch: the chain, the derivatives
 # through the scratch's plans, and a pack of each owned component's value and
-# gradient rings into one device buffer in the order the host path packs
-# them. The unpack writes the shell ring and the scratch's gradient ring from
-# that buffer, or, on a decomposed patch, from the gathered rings, which
-# stage through the host for the Allgatherv: one download of this rank's
-# rings and one upload of every rank's.
-function _impose_shell_gradients_dev!(fine, Qf, lt::LevelTransfer, fill, owned,
-                                      sendbuf, shift, n_cons::Int)
+# gradient rings, and under the fallback on a decomposed patch its
+# multilinear ring, into one device buffer in the order the host path packs
+# them. The unpack writes the shell ring, the scratch's gradient ring and the
+# multilinear ring from that buffer, or, on a decomposed patch, from the
+# gathered rings, which stage through the host for the Allgatherv: one
+# download of this rank's rings and one upload of every rank's.
+function _impose_shell_gradients_dev!(solver, fine, Qf, lt::LevelTransfer, fill, owned,
+                                      sendbuf, shift, n_cons::Int, fallback::Bool)
     fdcp = fine.decomp
     np = MPI.Comm_size(fdcp.comm)
     K = length(lt.pplans)
@@ -3002,11 +3275,13 @@ function _impose_shell_gradients_dev!(fine, Qf, lt::LevelTransfer, fill, owned,
         _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
     end
     route = parent(Qf)
-    dsend = _device_send_stage(route, 4 * ringlen * n_owned)
+    gathered = fallback && np > 1
+    per = gathered ? 5 : 4
+    dsend = _device_send_stage(route, per * ringlen * n_owned)
     for b in 1:n_owned
         bf = view(stages[K+1], :, :, :, b)
         for j in 0:3
-            base = (4 * (b - 1) + j) * ringlen
+            base = (per * (b - 1) + j) * ringlen
             if j == 0
                 pointwise!(_ring_pack_field_point!, route, ringlen, 1, 1,
                            dsend, bf, table, shift, padb, base)
@@ -3022,19 +3297,29 @@ function _impose_shell_gradients_dev!(fine, Qf, lt::LevelTransfer, fill, owned,
                        dsend, scratch.gtmp, table, shift, padb, base)
         end
     end
+    gathered && _shell_linear_ring!(dsend, 4 * ringlen, 5 * ringlen, route,
+                                    _linear_sources_dev(fill, scratch, lt, owned), lt,
+                                    fdcp, n_owned)
     recv = dsend
     if np > 1
-        counts = 4 .* shell.counts
+        counts = per .* shell.counts
         total = sum(counts)
-        _tracked_copy!(sendbuf, 1, dsend, 1, 4 * ringlen * n_owned)
+        _tracked_copy!(sendbuf, 1, dsend, 1, per * ringlen * n_owned)
         hrecv = _fit!(shell.buffers.recv, total)
         MPI.Allgatherv!(sendbuf, MPI.VBuffer(hrecv, counts), fdcp.comm)
         recv = _device_send_stage(route, total)
         _tracked_copy!(recv, 1, hrecv, 1, total)
     end
     ring = similar(route, ringlen, n_cons)
-    pointwise!(_ring_unpack_point!, route, ringlen, 4 * n_cons, 1,
-               ring, scratch.gring, recv, ringlen, np, n_cons)
+    linear = gathered ? similar(route, ringlen, n_cons) : ring
+    pointwise!(_ring_unpack_point!, route, ringlen, per * n_cons, 1,
+               ring, scratch.gring, linear, recv, ringlen, np, n_cons, per)
+    if gathered
+        _select_admissible!(ring, linear, lt, fdcp, solver)
+    elseif fallback
+        _shell_fallback!(ring, _linear_sources_dev(fill, scratch, lt, owned), lt, fdcp,
+                         solver)
+    end
     _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
     return Qf
 end
@@ -3061,13 +3346,14 @@ end
 end
 
 # One entry of the gathered rings: block `p − 1` holds, in the ranks'
-# order, the value ring (`j = 0`) or the gradient ring along `j` of the
+# order, the value ring (`j = 0`), the gradient ring along `j` (1 to 3) or,
+# with `per` = 5 rings to a component, the multilinear ring (`j = 4`) of the
 # component that position of the order names, rank r's components being
 # (r+1):np:n_cons.
-@inline function _ring_unpack_point!(ring, gring, recv, ringlen, np, n_cons,
-                                     at, p, _k)
+@inline function _ring_unpack_point!(ring, gring, linear, recv, ringlen, np, n_cons,
+                                     per, at, p, _k)
     @inbounds begin
-        blk, j = divrem(p - 1, 4)
+        blk, j = divrem(p - 1, per)
         c = 0
         for r in 0:np-1
             nr = r < n_cons ? (n_cons - r - 1) ÷ np + 1 : 0
@@ -3080,6 +3366,8 @@ end
         v = recv[(p - 1) * ringlen + at]
         if j == 0
             ring[at, c] = v
+        elseif j == 4
+            linear[at, c] = v
         else
             gring[at, 3 * (c - 1) + j] = v
         end
@@ -3171,13 +3459,16 @@ end
 Impose every refined patch's ghost ring and boundary-plane nodes from the
 Lagrange interpolation (`level_interpolation_order`) of the current state of
 its parent over the buffered box, per conserved component, and return
-`states`. Levels are visited from the root down, so a patch two levels deep
-reads a parent whose own shell has
-just been imposed. Runs after every RK stage update and inside the pre-step
-synchronization; a solver without refinement returns immediately.
-Communicates in two rank sets per level, so the loop is written over levels
-rather than over one flat transfer list: the box exchange reads the parent
-state and is entered by every rank owning the parent, point to point from
+`states`. For an ideal-gas mixture, a shell node the interpolation leaves
+with ρ ≤ 0 or ρe ≤ 0 takes instead the multilinear interpolant of the parent
+nodes around it, which is admissible wherever they are; every other node
+keeps the Lagrange value. Levels are visited from the root down, so a patch
+two levels deep reads a parent whose own shell has just been imposed. Runs
+after every RK stage update and inside the pre-step synchronization; a solver
+without refinement returns immediately. Communicates in two rank sets per
+level, so the loop is written over levels rather than over one flat
+transfer list: the box exchange reads the parent state and is entered by
+every rank owning the parent, point to point from
 the parent ranks holding each box to the owners of its tile; the chains and
 the ring Allgatherv of `_impose_shell!` run over each tile's own
 communicator, which only its owners enter. The name "prolong" refers to the
@@ -3527,7 +3818,9 @@ fraction `θ` of the parent step of size `dt`, through the same
 interpolation chain [`prolong_level_ghosts!`](@ref) uses. Requires both
 endpoint slots filled by [`save_level_boxes!`](@ref); at `θ = 0` the result is
 exactly the parent's `t^n` state and the imposition reduces to the
-unsubcycled one.
+unsubcycled one. A node the reconstruction leaves inadmissible takes the
+multilinear interpolant in space of the linear blend in time of the two
+endpoint states, as [`prolong_level_ghosts!`](@ref) describes.
 """
 function hermite_level_shell!(solver, states, lt::LevelTransfer, θ, dt)
     _impose_shell!(solver, states, lt, HermiteFill(θ, dt))

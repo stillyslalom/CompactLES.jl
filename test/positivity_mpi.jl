@@ -247,4 +247,48 @@ function test_positivity_limiter()
         sub && check("$tag, one rank: the limiter acted (expect > 0)",
                      crref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
     end
+
+    # The shell's admissible fallback on a box decomposed over its level's
+    # ranks, limiter off, subcycled: each rank gathers the multilinear rings of
+    # the others' components beside the chain's, against one rank, which reads
+    # the parent's boxes directly. The shell takes the fallback at 346 nodes
+    # by the last step of the one-rank run.
+    section("shell fallback: a decomposed box against one rank")
+    function boxed(comm_here)
+        s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                        per3[3]), eos=gas, transport=ConstantTransport(mu0=0.0),
+                   art=ArtificialProperties(enabled=true), cfl=0.4,
+                   control=StepControl(validity=:permissive),
+                   refine=BlockRegion((20, 18, 0), (10, 10, 1)), subcycle=true,
+                   comm=comm_here)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 +
+                                                           (y - 0.45)^2) / 0.004)))
+        run!(s, Q; tfinal=1.0, nmax=20)
+        return s, Q
+    end
+    bref, Qbref = boxed(MPI.COMM_SELF)
+    s, Q = boxed(comm)
+    boxes = [p for p in getfield(s, :patches) if p.level == 1]
+    span = isempty(boxes) ? 0 : MPI.Comm_size(boxes[1].decomp.comm)
+    check("decomposed box: the box spans several ranks (expect > 1)",
+          gmax(Float64(span)) > 1 ? 0.0 : 1.0, 0.5)
+    bpatches = getfield(bref, :patches)
+    worst = 0.0
+    for (ps, q) in CL.eachpatch(s, Q)
+        k = findfirst(p -> p.level == ps.patch.level, bpatches)
+        pr = CL.PatchSolver(bref, bpatches[k])
+        off = ps.decomp.offset
+        for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
+            n in 1:s.equations.n_cons
+            a = q[padded_index(ps, i, j, 1), n]
+            b = Qbref[k][padded_index(pr, i + off[1], j + off[2], 1), n]
+            worst = max(worst, abs(a - b))
+        end
+    end
+    scale = maximum(q -> maximum(abs, parent(q)), Qbref)
+    check("decomposed box: state against one rank (relative)", gmax(worst) / scale, 1e-8)
+    check("decomposed box: clock against one rank", abs(s.t - bref.t) / bref.t, 1e-8)
 end

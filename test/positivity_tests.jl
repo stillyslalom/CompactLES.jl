@@ -6,7 +6,8 @@
 # the fold's face value, a run it never acts in, a blast it keeps admissible
 # while conserving, and the Noh implosions under strict validity; on
 # same-level patches and on refined levels, a run it never acts in and a
-# strong shock it keeps admissible. The rejected
+# strong shock it keeps admissible, there with the shell's admissible
+# fallback on subcycled tiles. The rejected
 # configurations are in capability_tests.jl, the decomposed run in the MPI
 # suite's "positivity limiter" phase.
 #
@@ -553,6 +554,26 @@ end
             @test bads[1] > 0
             @test bads[2] == 0
         end
+    end
+
+    @testset "a limited blast on subcycled tiles leaves no inadmissible point" begin
+        # Across the shock the Lagrange chain and the cubic Hermite blend in
+        # time set shell nodes of the tiles' coarse-fine faces to ρe < 0
+        # between admissible parent nodes (two by the last step of this run
+        # without the fallback), and those nodes take the multilinear
+        # interpolant of the parent's endpoint states instead.
+        s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                        per3[3]), eos=POS_GAS, art=ArtificialProperties(enabled=true),
+                   cfl=0.4, control=StepControl(validity=:permissive),
+                   positivity_limiter=true, interface_flux=:closure,
+                   refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8, subcycle=true)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 +
+                                                           (y - 0.45)^2) / 0.004)))
+        @test pos_bad_points(s, Q; tfinal=0.25) == 0
+        @test completed(s, 0.25)
     end
 
     @testset "Noh through the axis on a level under strict validity" begin

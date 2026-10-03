@@ -298,6 +298,47 @@ end
         level_restriction=:filter, backend=DeviceBackend(cpu_ka))
 end
 
+@testset "device-resident refinement: the shell's admissible fallback" begin
+    # A blast whose shock crosses the coarse-fine faces of a box, at the
+    # global step and subcycled, inviscid and with molecular transport (the
+    # ghost fluxes' gradient ring): shell nodes the Lagrange chain or the
+    # Hermite blend leave with ρe < 0 take the multilinear interpolant, two in
+    # the last step of the global run and 346 and 100 by the end of the
+    # subcycled ones. Bitwise against the CPUBackend under FORCE_KA and
+    # FORCE_DEVICE_EXCHANGE.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    wall = (SlipWallBC(), SlipWallBC())
+    function blast(backend; nmax, kw...)
+        s = Solver(; n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall, wall, per), eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   art=ArtificialProperties(enabled=true), cfl=0.4,
+                   control=StepControl(validity=:permissive),
+                   refine=BlockRegion((20, 18, 0), (10, 10, 1)), backend=backend,
+                   merge((transport=ConstantTransport(mu0=0.0),), kw)...)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 +
+                                                           (y - 0.45)^2) / 0.004)))
+        run!(s, Q; tfinal=0.25, nmax)
+        return s, Q
+    end
+    for (nmax, kw) in ((40, (;)), (20, (subcycle=true,)),
+                       (20, (subcycle=true, transport=ConstantTransport(mu0=1e-4))))
+        s1, q1 = blast(CPUBackend(); nmax, kw...)
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s2, q2 = try
+            blast(DeviceBackend(cpu_ka); nmax, kw...)
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        @test s1.step == s2.step == nmax
+        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    end
+end
+
 @testset "device-resident refinement at a fold" begin
     # A level reaching a symmetry plane or the r-z axis on the device backend:
     # the folded box mirror uploaded to the device chain and the Hermite
@@ -834,7 +875,8 @@ const POINTWISE_BODIES = (
     :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_field_point!,
     :_ring_pack_point!, :_ring_unpack_point!, :_rk_point!,
     :_scale_grad_point!, :_scale_interior_point!, :_sharpen_flux_point!,
-    :_shell_ring_point!,
+    :_shell_fallback_point!, :_shell_linear_point!, :_shell_ring_point!,
+    :_shell_select_point!,
     :_slip_flux_point!, :_slip_wall_point!,
     :_species_bound_point!, :_species_diffusivity_point!, :_species_split_point!,
     :_strain_mag_point!,

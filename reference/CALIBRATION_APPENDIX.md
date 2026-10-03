@@ -2308,35 +2308,43 @@ parent's shell overwrites, is not held. Held to their cell bounds, the parent's 
 restriction overwrites fell to temperatures of 1e-12 under subcycling, where the parent steps
 them at up to the CFL number 0.75, and κ\* = ρc/T there set the root step: Woodward–Colella with a
 box took 3055 root steps against 1126 unlimited. Exempt, and kept out of their held neighbours'
-first-order fluxes where not admissible, as a shell node is, they took 1603; held at the global
-step, where they advance at the fine level's CFL number, the same run took 2632 steps against
-2367 exempt, and Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3216. The inadmissible
+first-order fluxes where not admissible, they took 1548; held at the global step, where they
+advance at the fine level's CFL number, the same run took 2632 steps against 2369 exempt, and
+Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3568. Both nodes of a face beside such
+a node take one first-order flux, with the node replaced by its held neighbour. Replaced only when
+the neighbour's correction was taken, the two corrections of the face differed, and the face
+register carried the difference to the far end of the line: of 31 perturbations of the subcycled
+box's initial pressure by 1e-14 to 3e-13, two left the right wall node at ρe ≈ −100 for about 50
+steps, and none do now. A shell node the interpolation leaves inadmissible between admissible
+parent nodes takes the multilinear, linear-in-time interpolant of the parent. The inadmissible
 point-steps after every step, those on a refined patch's coarse-fine plane apart:
 
 ```
 case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
-WC 200, box, global step               1950 / 2367      148, 14684             0, 0
-WC 200, box, subcycled                 1126 / 1603      133, 10281             0, 0
+WC 200, box, global step               1950 / 2369      147, 14704             0, 0
+WC 200, box, subcycled                 1126 / 1548      133, 10314             0, 0
 WC 200, regridded box                  3203 / 4204      0, 32799               0, 0
 WC 200, regridded tiles of 8           1094 / 1428      0, 8429                0, 0
 WC 200, regridded tiles, subcycled     1085 / 1398      0, 8432                0, 0
 Noh ν = 2, box over 85 nodes           6642 / 9220      0, 56724               0, 0
-Noh ν = 2, box over 43 nodes           6015 / 8097      477, 53933             0, 0
+Noh ν = 2, box over 43 nodes           6015 / 8150      478, 53942             0, 0
 Noh ν = 2, 85 nodes, subcycled         2214 / 2989      0, 18991               0, 0
-Noh ν = 2, 43 nodes, subcycled         2350 / 4059      216, 21802             0, 0
+Noh ν = 2, 43 nodes, subcycled         2349 / 4086      219, 21807             0, 0
 r-z converging shock, corner box       627 / 627        0, 903                 0, 0
-blast 64², tiles of 8                  227 / 255        3051, 11428            179, 0
-blast 64², tiles of 8, subcycled       139 / 241        2092, 8186             596, 0
+blast 64², tiles of 8                  227 / 255        2774, 11385            0, 0
+blast 64², tiles of 8, subcycled       139 / 210        1900, 8208             0, 0
 ```
 
 On the Noh level rows the limited box over 85 nodes gives plateau 15.6672, deficit 50.9%, shock
-0.2032 and mass +1.83e-7 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
-0.2032 and +1.79e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8301, 50.9%,
-0.2086 and −5.5e-5 (unlimited 14.9530, 52.4%, 0.2084, −1.3e-3). The 3216 unguaranteed sides
-there are the parent's, from the shock's arrival in its covered nodes. The inadmissible points
-the limiter leaves on the blast are shell nodes the parent's Lagrange interpolation sets between
-its nodes across the shock, along the face; no interior node of a tile or of the parent goes
-inadmissible. `part=levelcost`, as `part=cost`:
+0.2032 and mass −1.85e-6 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
+0.2032 and −4.4e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8311, 50.8%,
+0.2086 and −6.2e-5 (unlimited 14.9517, 52.4%, 0.2084, −1.3e-3). The 3568 unguaranteed sides
+there are the parent's, from the shock's arrival in its covered nodes. Unlimited, the shell
+nodes left inadmissible lie between parent nodes that are inadmissible themselves, which no
+interpolant repairs; the fallback took 2852 shell entries on the validation battery's Noh row
+over 43 nodes (6014 steps) and none over 85. `part=levelcost`, as `part=cost` (before the
+fallback, which costs a pass over the shell entries and is within the run-to-run spread on a
+tiled 2-D level, 1.01 subcycled and 0.93 at the global step over three process pairs):
 
 ```
 case                                   off, ms/step   on, ms/step   on/off

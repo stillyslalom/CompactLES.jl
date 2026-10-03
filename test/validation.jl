@@ -71,8 +71,8 @@
 #   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass -4.45e-7, 6640 steps):
 #     level over 85 nodes   plateau 15.6523  deficit 50.9%  shock 0.2033
 #                           mass -1.86e-6  max |rho - uniform| 5.7e-3  6641 steps
-#     level over 43 nodes   plateau 14.945   deficit 52.7%  shock 0.2084
-#                           mass -9.07e-4  6012 steps
+#     level over 43 nodes   plateau 14.942   deficit 52.7%  shock 0.2084
+#                           mass -8.96e-4  6014 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no
@@ -130,6 +130,14 @@
 # Brady-Livescu wall, the interface case and the two anisotropic Cartesian
 # rows. No guard moved; the deficit percentage above is the one printed
 # number that rounds differently.
+#
+# The level over 43 nodes moved when a shell node the Lagrange interpolation
+# leaves with rho e <= 0 took the multilinear interpolant of its parent nodes
+# where that is admissible: plateau 14.945 to 14.942, shock 0.20840 to
+# 0.20841, mass -9.07e-4 to -8.96e-4, 6012 to 6014 steps, and in the fourth
+# digit the pre-shock L1 (3.117e-4 to 3.112e-4) and the closing e_min
+# (-0.0406 to -0.0405). The level over 85 nodes takes no such node and held
+# bitwise. No guard moved.
 #
 # The four nu = 2 rows moved when the radial momentum of the r-z metric took
 # its pressure term as dp/dr instead of (1/r)D(r p) - p/r, the form that
