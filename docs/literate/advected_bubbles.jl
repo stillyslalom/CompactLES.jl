@@ -244,12 +244,14 @@ end
 # On the root grid alone, where ``w`` is one spacing, they are 0.09 to 0.11,
 # and the mole fraction of SF6 overshoots one by 0.005.
 #
-# Farther out, 100 to 150 mm from the center of each bubble, the lower panels
-# show disturbances, up to 0.0016 beside the helium bubble and 0.0007 beside
-# the others, which the uniform grid at the refined spacing does not produce:
-# there its difference from the exact solution stays below ``10^{-5}``. With
-# ``w = 30`` mm, an edge the root grid resolves, the refined run stays below
-# ``10^{-5}`` there as well.
+# Away from the edges the difference is at most ``4 \times 10^{-5}`` beside the
+# helium bubble and ``1.3 \times 10^{-5}`` beside the others, against
+# ``4 \times 10^{-6}`` on the uniform grid at the refined spacing. Under a tile
+# the root nodes hold the tile's solution, whose edge is too sharp for the root
+# grid, so the root's filter pass leaves out the covered nodes near the edge.
+# A pass over them as well spreads disturbances of up to 0.0016 along the
+# root's lines and from there through the tile boundaries onto the refined
+# nodes.
 #
 # ## Mass
 #
@@ -263,9 +265,8 @@ end
 
 # A uniform grid conserves the mass of every gas to round-off. The refined run
 # does not, since neither the transfers between the levels nor the
-# interpolation into newly covered nodes is conservative. With the tiles held
-# fixed over the paths of the bubbles, no gas changes by more than
-# ``3 \times 10^{-6}``, so most of the change comes with the regrids.
+# interpolation into newly covered nodes is conservative, and the mass of
+# each gas changes by up to ``2 \times 10^{-6}``.
 #
 # ## What this checks
 #
@@ -277,5 +278,6 @@ end
 #   uniform grid at the refined spacing.
 # - The tiles of a refined level follow three separate features across the
 #   periodic faces of the domain. Around an edge too sharp for the root grid
-#   the refined run has disturbances of up to 0.0016 in mole fraction, and
-#   the mass of each gas changes by less than ``10^{-4}``.
+#   the refined run stays within ``4 \times 10^{-5}`` in mole fraction of the
+#   exact solution away from the edges, and the mass of each gas changes by
+#   up to ``2 \times 10^{-6}``.

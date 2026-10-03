@@ -1577,7 +1577,7 @@ function test_unrefined_start()
     check("unrefined start: state vector aligned with the patches",
           gmax(length(states) != length(solver.patches)), 0.5)
     save_checkpoint(solver, states, "mpi_unref_after")
-    run!(solver, states; tfinal=1.0, nmax=80)
+    run!(solver, states; tfinal=1.0, nmax=110)
     regs = level_regions(solver, 1)
     check("unrefined start: tiles follow the shock as serial (4, 8, 16)",
           [r.offset[1] for r in regs] == [4, 8, 16] ? 0.0 : 1.0, 0.5)
@@ -1599,7 +1599,7 @@ function test_unrefined_start()
         want = stem == "before" ? BlockRegion[] : regs50
         check("unrefined start: restart $stem rebuilds the recorded tiles",
               level_regions(r, 1) == want ? 0.0 : 1.0, 0.5)
-        run!(r, rs; tfinal=1.0, nmax=80)
+        run!(r, rs; tfinal=1.0, nmax=110)
         check("unrefined start: restart $stem reaches the same time",
               gmax(abs(r.t - solver.t)), 1e-300)
         tracks = level_regions(r, 1) == regs &&
@@ -1725,17 +1725,25 @@ function test_deep_regrid_subsets()
     differ = 0
     subsets = 0
     moves = 0
-    # The first survivor moves near step 75 at np = 8.
-    for n in 3:3:81
-        owners0 = [(lt.region, o) for (lt, o) in
-                   zip(solver.levels[3].transfers, solver.levels[3].owners)]
-        run!(solver, states; tfinal=1.0, nmax=n)
-        run!(ref, rstates; tfinal=1.0, nmax=n)
-        differ += rank == 0 && layout(solver) != layout(ref)
-        subsets += solver.levels[3].level_comm.size < np
-        owners1 = Dict(lt.region => o for (lt, o) in
-                       zip(solver.levels[3].transfers, solver.levels[3].owners))
-        moves += count(((r, o),) -> haskey(owners1, r) && owners1[r] != o, owners0)
+    # The first survivor moves near step 75 at np = 8. The parent's pass runs
+    # over the covered nodes here (`MASK_CHILD_RESIDUAL`): the move rests on
+    # tiles leaving and re-entering the set, which the default pass, leaving
+    # out the residual of a covered shock, does not do within 240 steps.
+    CL.MASK_CHILD_RESIDUAL[] = false
+    try
+        for n in 3:3:81
+            owners0 = [(lt.region, o) for (lt, o) in
+                       zip(solver.levels[3].transfers, solver.levels[3].owners)]
+            run!(solver, states; tfinal=1.0, nmax=n)
+            run!(ref, rstates; tfinal=1.0, nmax=n)
+            differ += rank == 0 && layout(solver) != layout(ref)
+            subsets += solver.levels[3].level_comm.size < np
+            owners1 = Dict(lt.region => o for (lt, o) in
+                           zip(solver.levels[3].transfers, solver.levels[3].owners))
+            moves += count(((r, o),) -> haskey(owners1, r) && owners1[r] != o, owners0)
+        end
+    finally
+        CL.MASK_CHILD_RESIDUAL[] = true
     end
     _, rho = line_sample(solver, states, :rho)
     _, rho_ref = line_sample(ref, rstates, :rho)
@@ -2877,7 +2885,7 @@ function test_partitioned_coupling()
     run!(solver, states; tfinal=1.0, nmax=2)
     mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
     check("partitioned coupling: composite mass after two steps as serial",
-          abs(mass - 1.9874973678704124) / 2, 1e-14)
+          abs(mass - 1.9874974523602635) / 2, 1e-14)
 
     # One tile over every rank, up to eight: past five ranks some hold no
     # share of the chains' five components, so they receive no box and must
@@ -3054,9 +3062,9 @@ function test_tiled_level()
     # every five steps, a tile entering ahead of a survivor on the curve
     # shifts the survivor's owner range, and the survivor is rebuilt there
     # with its solution carried across. The tracked tile set and the time
-    # reached are the serial ones. Measured serially: the set goes 176/184 →
-    # 168..192 at step 6 → 168..184 at step 16 → 168..192 at step 31, with
-    # the default hysteresis and without it alike. The tag history
+    # reached are the serial ones. Measured serially: the set ends at
+    # 168..184 after 41 steps, with the default hysteresis and without it
+    # alike. The tag history
     # (`RegridSpec.created`, `checks`) is derived from the reduced flags and
     # must agree across ranks.
     let
@@ -3077,14 +3085,14 @@ function test_tiled_level()
         fin = all(all(isfinite, parent(Q)) for Q in states)
         check("tiled regrid under ownership: finite composite state",
               fin ? 0.0 : 1.0, 0.5)
-        check("tiled regrid under ownership: tile count tracks as serial (4)",
-              abs(gmax(length(regs)) - 4), 0.5)
+        check("tiled regrid under ownership: tile count tracks as serial (3)",
+              abs(gmax(length(regs)) - 3), 0.5)
         check("tiled regrid under ownership: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("tiled regrid under ownership: last tile tracks as serial (192)",
-              abs(gmax(last(offs)) - 192), 0.5)
+        check("tiled regrid under ownership: last tile tracks as serial (184)",
+              abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0064952435241686715), 1e-13)
+              abs(gmax(solver.t) - 0.006494946729794314), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -3158,7 +3166,7 @@ function test_tiled_level()
         check("stored ownership: no survivor moved with rebalance off",
               gmax(moved), 0.5)
         check("stored ownership: tile set tracks as serial",
-              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 192), 0.5)
+              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 184), 0.5)
         # The same run with the migration audit on: every moved tile is also
         # carried through the replicated gather, and the migrated state
         # must equal that reference at every slot.
@@ -3179,14 +3187,14 @@ function test_tiled_level()
               np >= 4 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
         check("migration: migrated state equals the gathered carry bitwise",
               gsum(audit.mismatches), 0.5)
-        check("rebalance on: tile count tracks as serial (4)",
-              abs(gmax(length(offs)) - 4), 0.5)
+        check("rebalance on: tile count tracks as serial (3)",
+              abs(gmax(length(offs)) - 3), 0.5)
         check("rebalance on: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("rebalance on: last tile tracks as serial (192)",
-              abs(gmax(last(offs)) - 192), 0.5)
+        check("rebalance on: last tile tracks as serial (184)",
+              abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.0064952435241686715), 1e-13)
+              abs(gmax(solver.t) - 0.006124304347596389), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -3310,7 +3318,7 @@ function test_level_subset()
           abs(firesL - 3), 0.5)
 
     # Regridding under subset ownership: the region grows from 8 coarse nodes
-    # (22 fine, two ranks) to 27 (79 fine, eight), so the subset is resized
+    # (22 fine, two ranks) to 23 (67 fine, seven), so the subset is resized
     # and the communicator it replaces is freed rather than left to the
     # garbage collector, as a dropped `Decomp` is.
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -3332,19 +3340,19 @@ function test_level_subset()
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regrid: setup subset is two ranks", abs(owners0 - min(np, 2)), 0.5)
     check("regrid: subset recomputed for the grown region",
-          abs(owners1 - min(np, 8)), 0.5)
+          abs(owners1 - min(np, 7)), 0.5)
     check("regrid: the replaced level communicator was freed",
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
     # Serial values under the default hold band. The root step follows the
     # uncovered nodes, the level's interior held to a CFL ceiling, so the
     # times reached here and in the regridded Sod case are those of that rule.
-    check("regrid under subsets: region offset tracks as serial (170)",
-          abs(gmax(region.offset[1]) - 170), 0.5)
-    check("regrid under subsets: region extent tracks as serial (27)",
-          abs(gmax(region.extent[1]) - 27), 0.5)
+    check("regrid under subsets: region offset tracks as serial (171)",
+          abs(gmax(region.offset[1]) - 171), 0.5)
+    check("regrid under subsets: region extent tracks as serial (23)",
+          abs(gmax(region.extent[1]) - 23), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.006910904008790315), 1e-13)
+          abs(gmax(solver.t) - 0.006940327824845496), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

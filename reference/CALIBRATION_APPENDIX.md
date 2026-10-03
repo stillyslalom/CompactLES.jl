@@ -46,7 +46,7 @@ section that moved it says so in one sentence and the older figure is gone.
 20. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
 21. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
-    `test/level_tests.jl`, `bench/amrwin.jl`)
+    `test/level_tests.jl`, `bench/amrwin.jl`, `bench/movinglevel.jl`)
 22. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 23. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
@@ -6902,6 +6902,123 @@ spacing, the covered root nodes fall steadily to −0.26, and the box takes 339
 root steps where the root-only run takes 92. With the edge at one root
 spacing the box stays above −0.021, and the tiles stay above −0.015 at a
 third of a spacing.
+
+### bench/movinglevel.jl: disturbances a moving level carries
+
+`julia --project=. -t 1 bench/movinglevel.jl`, one rank and one thread on the
+i9-12900K under Julia 1.11.4. Two reduced tutorial configurations: one helium
+bubble in air, 48² root nodes 10 mm apart, edge width w = 10 mm (one root
+spacing), tiles of edge 12 following it 60 mm along the diagonal; and the
+Imploding shock tutorial's 256-node r-z line with one subcycled sensor-placed
+box. The disturbance is the largest difference from the exact solution (the
+bubble's mole fraction more than 4w beyond its radius) or from the gas at rest
+ahead of the shock (|ρ − 1| more than 0.02 and more than 0.05 inside the shock
+radius, over 0.02 < R < 0.3), over composite nodes at the end (bubble) or over
+every step (shock). `-plain` filters the parent's covered nodes as well
+(`MASK_CHILD_RESIDUAL[] = false`). The shock runs accept the state at the
+axis near t_c, which can carry a negative internal energy at a few nodes
+(`validity = :permissive`). Single runs, package at the commit that adds the
+script, under the overwritten-node CFL ceiling.
+
+| bubble | away, root | away, level | He mass | layout changes |
+|---|---|---|---|---|
+| coarse | 5.86e-3 | | 4.9e-15 | |
+| fine | 3.97e-6 | | 4.4e-14 | |
+| moving | 1.97e-6 | 3.91e-5 | −3.8e-6 | 2 |
+| moving-plain | 2.56e-4 | 1.19e-3 | −2.9e-4 | 14 |
+| fixed | 3.95e-8 | 3.94e-6 | −3.1e-6 | 0 |
+| fixed-plain | 2.94e-6 | 3.94e-6 | −3.2e-6 | 0 |
+
+| shock | root steps | beyond 0.02 | beyond 0.05 | layout changes |
+|---|---|---|---|---|
+| fine | 2023 | 2.91e-4 | 2.69e-7 | 0 |
+| moving | 762 | 1.08e-2 | 6.28e-4 | 114 |
+| moving-plain | 763 | 5.29e-2 | 2.48e-2 | 173 |
+| fixed | 797 | 2.21e-4 | 1.71e-7 | 0 |
+| fixed-plain | 798 | 3.35e-4 | 2.44e-7 | 0 |
+
+The shock's columns take the larger of the root and the level. The fixed
+covers carry the uniform fine grid's disturbance to within a factor of two
+with either pass; the moving ones carry 300 (bubble) and 9.2e4 (shock,
+beyond 0.05) times it under the plain pass and 10 and 2.3e3 times it under
+the mask. The mass change of the plain bubble run accrues mostly between
+regrids, 7.6e-6 of its 2.9e-4 in the steps that changed the layout.
+
+**Attribution.** A scratch script (not kept) replaced the state at regrids,
+reset parent nodes to the exact solution after each step, or switched the
+filter pass per level, on the plain bubble run (level, away: 1.19e-3); this
+and the next table were taken at `d5fd609`, before the overwritten-node
+ceiling, which leaves the bubble rows above unchanged:
+
+| change | level, away |
+|---|---|
+| exact solution in every new tile at each regrid | 9.6e-4 |
+| uncovered root nodes reset to the exact solution after each step | 1.7e-3 |
+| every root node beyond R + 5w reset after each step | 4.6e-4 |
+| no filter pass on the refined level | 1.2e-3 |
+| restriction before the root's pass as well as after | 1.0e-3 |
+| no filter pass on the root | 5.3e-5 |
+| no filter anywhere (uniform fine grid without it: 3.6e-5) | 6.4e-5 |
+| root pass without the residual of every fully covered node | 2.8e-5 |
+| the same, the masked set eroded by 4 nodes | 9.0e-4 |
+| every fully covered node masked, root reset beyond R + 5w after each step | 3.9e-6 |
+
+The root's filter pass is the cause: its residual at the covered nodes, where
+the restricted bubble edge is a jump on the root spacing, spreads along the
+root's lines into the uncovered nodes and into the covered ones the tiles'
+ghost layers are interpolated from. Neither the regrid fill nor the level's
+own pass matters at this level.
+
+**The resolution test.** Dropping the residual at every fully covered node
+moves the smooth level rows of `test/convergence.jl`: the cascade-filter
+interface row's N = 48 error rises from 1.43e-6 to 1.59e-6 and the r-z axis
+row's N = 96 and 192 errors by 2.7 times, the pass being weaker on the
+covered side of the face than on the other. The mask therefore takes a
+covered node only where the relative undivided fourth difference of the
+density along the line exceeds a threshold within a reach of nodes:
+
+| threshold, reach | bubble level, away | shock beyond 0.02 / 0.05, level | convergence level rows |
+|---|---|---|---|
+| 0 (every covered node) | 2.8e-5 | 1.5e-2 / 6.7e-4 | move |
+| 0.001, 0 | 6.8e-5 | 1.9e-2 / 1.4e-3 | |
+| 0.01, 0 | 1.55e-4 | 1.1e-2 / 2.8e-4 | unchanged |
+| 0.02, 0 | 1.74e-4 | 1.3e-2 / 2.7e-4 | |
+| 0.003, 2 | 4.05e-5 | 1.7e-2 / 1.4e-4 | move |
+| 0.01, 2 (default) | 3.91e-5 | 4.3e-2 / 1.1e-4 | unchanged |
+
+"Unchanged" is every printed digit of every row from the interface window to
+the temporal order section; under the overwritten-node ceiling the default
+leaves them unchanged as well. The shock's maximum beyond 0.02 varies between
+1.1e-2 and 4.5e-2 over these settings without a trend; it is the precursor
+that the regrid fill and the root's own derivatives place ahead of the shock. With
+every covered node masked, filling the newly covered nodes ahead of the shock
+with the state at rest lowers it to 4.8e-3, and `tag_buffer` 6 and 8 to
+9.0e-3 and 3.5e-3; both buffers end the run with a negative internal energy
+at the axis at t = 0.221. Interpolation order 2, the global step and a regrid
+check every step leave it between 1.1e-2 and 1.6e-2.
+
+**The tutorial configuration.** The Advected bubbles tutorial itself (96²
+root, three bubbles, tiles of 12, against the uniform 288² grid): the largest
+difference from the exact solution more than 4w beyond every bubble's radius,
+helium / SF6 / krypton, and each gas's mass change.
+
+| run | away from each bubble | mass change, air / He / SF6 / Kr |
+|---|---|---|
+| refined | 3.9e-5 / 4.9e-6 / 1.3e-5 | 1.2e-8 / −1.1e-6 / 7.4e-7 / −1.6e-6 |
+| refined, plain pass | 1.6e-3 / 4.7e-4 / 7.8e-4 | 7.3e-7 / −5.5e-5 / −9.7e-6 / −6.1e-5 |
+| uniform 288² | 4.0e-6 / 3.9e-6 / 3.9e-6 | round-off |
+
+**Regrid churn.** On the tiled Sod fixture of the level tests (201 nodes,
+tiles of 8, checks every 5 steps) the first check to create a tile beside a
+survivor follows step 8 under the plain pass and step 65 under the mask. On
+the tiled run whose first tiles a Dirichlet inflow's shock creates, the mask
+adds a tile at the checks after steps 20, 40, 95, 140 and 185 and drops
+none; at `d5fd609` the plain pass dropped and re-created the leading tile
+four times in 160 steps. On the 121-node Sod tube of the MPI suite's deep
+regrid (tiles of 4, three levels, np = 8) no level-2 tile changes owner
+within 240 steps under the mask, so that phase runs the plain pass. The
+refined tutorial run took 35 s against the plain pass's 40 s, on 23 tiles at
+the end against 25, single runs.
 
 ### bench/amr_balance.jl: rebalance and migration mechanics
 

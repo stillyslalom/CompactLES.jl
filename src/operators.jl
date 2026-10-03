@@ -371,6 +371,74 @@ function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
 end
 
 """
+    solve_along!(out, plan, rhs, decomp)
+
+Solve the left-hand side of `plan` along `plan.dim` with `rhs` as the
+right-hand side, writing the solution into the interior of `out` and returning
+`out`: [`apply_along!`](@ref) with the explicit stencil replaced by the
+identity, so `rhs` needs no halos. `out` may be `rhs`. Collective along a
+decomposed `plan.dim`, as `apply_along!` is.
+"""
+function solve_along!(out, plan::AbstractDirPlan, rhs, decomp::Decomp)
+    d = plan.dim
+    if d == 1
+        _gather_lines!(plan.B, plan, rhs, decomp, Val(1))
+        solve_lines!(plan.B, plan.line_solver)
+        _scatter_lines!(out, plan.B, plan, decomp, Val(1))
+    elseif d == 2
+        _gather_t!(plan.B, plan, rhs, decomp, Val(2))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t!(out, plan.B, plan, decomp, Val(2))
+    else
+        _gather_t!(plan.B, plan, rhs, decomp, Val(3))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t!(out, plan.B, plan, decomp, Val(3))
+    end
+    return out
+end
+
+# The inverses of `_scatter_lines!` and `_scatter_t!`: the interior of `f`
+# into the line buffer, one value per row.
+function _gather_lines!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    n = plan.n
+    o1, _ = _odims(Val(D))
+    n1 = decomp.n_local[o1]
+    @threaded plan.lines*n for l in 1:plan.lines
+        kk, jj = divrem(l - 1, n1)
+        j = jj + 1
+        k = kk + 1
+        @inbounds for i in 1:n
+            B[i, l] = f[_gidx(Val(D), i, j, k, n_halo_d)]
+        end
+    end
+    return B
+end
+
+function _gather_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
+    o1, o2, o3 = decomp.n_halo_d
+    n = plan.n
+    nx = decomp.n_local[1]
+    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
+    @threaded nout*n*nx for jk in outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        @inbounds begin
+            base = (kk - 1) * nx
+            if D == 2
+                for i in 1:nx
+                    B[base+i, jr] = f[i+o1, jr+o2, kk+o3]
+                end
+            else
+                for i in 1:nx
+                    B[base+i, jr] = f[i+o1, kk+o2, jr+o3]
+                end
+            end
+        end
+    end
+    return B
+end
+
+"""
     filter_field!(f, solver; σf=1)
 
 Apply the compact filter to `f` in place along every active dimension in

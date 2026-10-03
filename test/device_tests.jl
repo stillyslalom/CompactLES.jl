@@ -372,10 +372,10 @@ end
     # and the tag sweep evaluates on the device and downloads the tag bytes.
     # Bitwise against the CPUBackend under FORCE_KA, tiles and tag history
     # included, with the artificial properties live. By t = 0.025, after 15
-    # regrid checks, the regrid under the default tags has dropped a tile and
-    # created one outside the initial set, so a fresh tile fills from the
-    # device chain; a longer run doubles the device runtime and reaches no
-    # further path.
+    # regrid checks, the regrid under the default tags has dropped two tiles
+    # of the initial set and created one of them again (at check 13), so a
+    # fresh tile fills from the device chain; a longer run doubles the device
+    # runtime and reaches no further path.
     cpu_ka = CL.KernelAbstractions.CPU()
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
@@ -408,8 +408,8 @@ end
         @test s1.step == s2.step
         @test level_regions(s1, 1) == level_regions(s2, 1)
         @test length(level_regions(s1, 1)) > 1
-        # Under the default tags the level holds a tile outside its initial set.
-        isempty(kw) && @test !issubset(level_regions(s1, 1), initial)
+        # Under the default tags the level holds a tile a regrid created.
+        isempty(kw) && @test any(>(0), values(getfield(s1, :regrid).created))
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
         # The device level's tiles take stacked storage: one stack (every
@@ -797,7 +797,9 @@ end
 const POINTWISE_BODIES = (
     :_area_flux_less_point!, :_area_flux_point!, :_blend_interior_point!,
     :_body_force_point!,
-    :_bulk_flux_point!, :_coarse_fine_flux_point!, :_copy_component_point!,
+    :_bulk_flux_point!, :_child_mask_point!, :_child_residual_point!,
+    :_coarse_fine_flux_point!,
+    :_copy_component_point!,
     :_copy_interior_point!, :_delta4_point!, :_delta4_signed_point!,
     :_dilatation_point!, :_dilatation_switch_point!, :_edge_fill_point!,
     :_edge_fill_z_point!, :_extrapolation_point!, :_face_pick_point!,
@@ -826,7 +828,7 @@ const POINTWISE_BODIES = (
     :_slip_flux_point!, :_slip_wall_point!,
     :_species_bound_point!, :_species_diffusivity_point!, :_split_flux_point!,
     :_strain_mag_point!,
-    :_subtract_div_point!,
+    :_subtract_div_point!, :_subtract_interior_point!,
     :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,
     :_tag_rho_point!, :_tag_sensor_point!, :_tag_vorticity_point!,
     :_transport_status_point!,

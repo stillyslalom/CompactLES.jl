@@ -451,24 +451,22 @@ promotion.
   `test/convergence.jl` unchanged or better.
 
 - [ ] **A18 — Remove the disturbances a moving refined level leaves behind.**
-  A level that moves carries disturbances the uniform grid at its spacing
-  does not have. In the Imploding shock tutorial
-  (`docs/literate/imploding_shock.jl`, one sensor-placed box following a
-  converging cylindrical shock) the level carries density disturbances of a
-  few percent ahead of the shock, about fifty times the uniform fine grid's
-  there; a fixed box carries a tenth of that, and neither regridding every
-  step, `level_interpolation_order = 2` nor the global step removes them. In
-  the Advected bubbles tutorial (`docs/literate/advected_bubbles.jl`, tiles
-  following bubbles whose edges the root does not resolve) the tiles leave
-  mole-fraction disturbances beside each bubble as large as the error at
-  its edge, three orders above the uniform grid's, and each gas's mass
-  changes by up to 0.006%, mostly at regrids; with the edge resolved on the
-  root both vanish. Both point at the root's under-resolved copy of the
-  feature and the interpolation into newly covered fine nodes. The density
-  sensor then tags the disturbances and widens the cover, A17's second
-  cause.
-  **Gate:** on both tutorial configurations, the refined run's disturbances
-  away from the feature within a small factor of the uniform fine grid's.
+  The parent's filter pass spread the residual of an under-resolved
+  restricted feature from the covered nodes along the parent's lines, into
+  uncovered nodes and the level's ghost data; it now leaves that residual
+  out where the density is unresolved (commit `1fe960a`;
+  [measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+  The Advected bubbles tutorial's disturbance away from the bubbles is now 1
+  to 10 times the uniform fine grid's, and the largest mass change of a gas
+  falls from 6e-5 to 2e-6. The converging shock of the Imploding shock
+  tutorial still carries |ρ − 1| of 1e-2 within 0.02 of the front, 40 times
+  the fine grid's, from the regrid fill and the root's derivatives at the
+  edge of the cover. Candidates: fill newly covered nodes from a limited or
+  one-sided reconstruction, or let the cover lead the shock by more than
+  the buffer once the axis state stays valid (`tag_buffer` 6 and 8 shrink
+  the precursor but end with an invalid state at the axis).
+  **Gate:** on the shock configuration, the level's |ρ − 1| more than 0.02
+  inside the front within a small factor of the uniform fine grid's.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   `bench/amrwin.jl` times warm root-only, box, tiled and uniform-fine runs

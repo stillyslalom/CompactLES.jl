@@ -942,6 +942,106 @@ end
     end
 end
 
+@testset "a parent's filter pass drops the residual of the nodes a child covers" begin
+    # The pass on the root of a refined run is f + A⁻¹ M (B − A) f along each
+    # line, M zero at a fully covered node where the density is not resolved;
+    # checked against dense periodic operators on a field of noise, for the
+    # tridiagonal and the banded filter, with the resolution threshold and its
+    # reach at zero so that every covered node of the noise takes the mask.
+    threshold, reach = CL.CHILD_MASK_THRESHOLD[], CL.CHILD_MASK_REACH[]
+    CL.CHILD_MASK_THRESHOLD[], CL.CHILD_MASK_REACH[] = 0.0, 0
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    for filt in (compact_filter(0.47), pyranda_filter())
+        s = Solver(n_global=(24, 20, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
+                   filt=filt, refine=BlockRegion((6, 5, 0), (9, 8, 1)))
+        states = allocate_state(s)
+        ps = CL.PatchSolver(s, s.patches[1])
+        Q = states[1]
+        n = ps.decomp.n_local
+        o = ps.decomp.n_halo_d
+        rng = Random.MersenneTwister(7)
+        interior = ntuple(d -> o[d]+1:o[d]+n[d], 3)
+        view(parent(Q), interior..., :) .= 1 .+ 0.1 .* rand(rng, n..., size(Q, 4))
+        expected = Array(parent(Q)[interior..., :])
+        keep = ps.patch.covered[interior...] .!= 0xff
+        @test count(!, keep) > 0
+        for d in 1:2
+            scheme = CL._plan_at(ps.filter_plans, d).scheme
+            lhs = scheme isa CL.CompactScheme ? [scheme.alpha] : scheme.lhs
+            m = n[d]
+            circ(c0, c) = [i == j ? c0 : (k = mod(i - j, m); k = min(k, m - k);
+                           1 <= k <= length(c) ? c[k] : 0.0) for i in 1:m, j in 1:m]
+            A = circ(1.0, lhs)
+            B = circ(scheme.a0, scheme.coeffs)
+            for c in axes(expected, 4), line in CartesianIndices(d == 1 ? (n[2],) : (n[1],))
+                sel = d == 1 ? (:, line[1], 1, c) : (line[1], :, 1, c)
+                mk = d == 1 ? keep[:, line[1], 1] : keep[line[1], :, 1]
+                f = expected[sel...]
+                expected[sel...] = f + A \ (mk .* ((B - A) * f))
+            end
+        end
+        filter_state!(ps, Q)
+        @test maximum(abs, parent(Q)[interior..., :] .- expected) < 1e-12
+    end
+    # On the radial line of an r-z run, a level at the axis: the root's line
+    # folds at the axis and closes at the wall, and A and B are probed from
+    # the plan of each parity, so the mirrored rows and the closure rows the
+    # mask leaves alone are checked as the plan solves them.
+    per = (PeriodicBC(), PeriodicBC())
+    s = Solver(n_global=(40, 1, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=((AxisBC(), SlipWallBC()), per, per), metric=CylindricalMetric(),
+               refine=BlockRegion((0, 0, 0), (13, 1, 1)))
+    states = allocate_state(s)
+    ps = CL.PatchSolver(s, s.patches[1])
+    Q = states[1]
+    o = ps.decomp.n_halo_d
+    n = ps.decomp.n_local[1]
+    rows = o[1]+1:o[1]+n
+    rng = Random.MersenneTwister(11)
+    view(parent(Q), rows, 1 + o[2], 1 + o[3], :) .= 1 .+ 0.1 .* rand(rng, n, size(Q, 4))
+    f0 = Array(parent(Q)[rows, 1 + o[2], 1 + o[3], :])
+    covered = ps.patch.covered[rows, 1 + o[2], 1 + o[3]] .== 0xff
+    @test count(covered) > 0
+    fold = ps.folds[1]
+    expected = similar(f0)
+    probe = similar(parent(Q), size(parent(Q))[1:3])
+    out = similar(probe)
+    for c in axes(f0, 2)
+        σ = CL.cons_parity(ps, 1, c)
+        plan = CL._fold_plan(fold, σ, Val(:filter), 1, false)
+        F = zeros(n, n)
+        Ainv = zeros(n, n)
+        for j in 1:n
+            fill!(probe, 0)
+            probe[o[1] + j, 1 + o[2], 1 + o[3]] = 1
+            CL.fold_fill!(probe, ps.decomp, 1, fold.lo, fold.hi, σ)
+            CL.apply_along!(out, plan, probe, ps.decomp)
+            F[:, j] = out[rows, 1 + o[2], 1 + o[3]]
+            CL.solve_along!(out, plan, probe, ps.decomp)
+            Ainv[:, j] = out[rows, 1 + o[2], 1 + o[3]]
+        end
+        A = inv(Ainv)
+        mk = [covered[i] && i <= n - length(plan.chi) ? 0.0 : 1.0 for i in 1:n]
+        f = f0[:, c]
+        expected[:, c] = f + Ainv * (mk .* ((A * F - A) * f))
+    end
+    filter_state!(ps, Q)
+    @test maximum(abs, parent(Q)[rows, 1 + o[2], 1 + o[3], :] .- expected) < 1e-12
+    CL.CHILD_MASK_THRESHOLD[], CL.CHILD_MASK_REACH[] = threshold, reach
+    # A resolved field under the default threshold takes the plain pass, bit
+    # for bit.
+    smooth(r, θ, z) = Prim(rho=1 + 0.1 * cospi(r), u=(0.0, 0.0, 0.0), p=1.0)
+    initialize!(s, states, smooth)
+    plain = copy(parent(Q))
+    CL.MASK_CHILD_RESIDUAL[] = false
+    try
+        filter_state!(ps, ConservedState(plain))
+    finally
+        CL.MASK_CHILD_RESIDUAL[] = true
+    end
+    filter_state!(ps, Q)
+    @test parent(Q)[rows, :, :, :] == plain[rows, :, :, :]
+end
 
 @testset "tiled level: multi-tile corner consensus and corner ghosts" begin
     # Four tiles meet at one fine node. Pairwise averaging in one flat pass
@@ -1160,16 +1260,17 @@ end
     N = 201
     # The unrelaxed filter (filter_cfl = 0): the regrid below has to create a
     # fresh tile beside a survivor at exactly this step, which the tag state
-    # at step 8 does under it (the run's own check at step 5 leaves three
+    # at step 65 does under it (the run's own checks before it leave three
     # tiles, and this one adds a fourth). The step depends on the default
-    # filter strength and on the root step size.
+    # filter strength, on the root step size and on the parent's pass over
+    # the covered nodes (8 under `MASK_CHILD_RESIDUAL[] = false`).
     sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.2, subcycle=true, filter_cfl=0.0,
                 regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
                 tile=8)
     states = allocate_state(sa)
     initialize!(sa, states, ic)
-    run!(sa, states; tfinal=1.0, nmax=8)
+    run!(sa, states; tfinal=1.0, nmax=65)
     before = level_regions(sa, 1)
     # Perturb a survivor's interior so the seeding is visible: the plane a
     # fresh tile shares with it must carry the survivor's value exactly.
@@ -1854,8 +1955,9 @@ end
     s, states = setup(prob, num)
     @test empty_level(s, states)
     dir = mktempdir()
-    # Measured: the first tile appears at the check of step 25 (t = 0.048),
-    # a second by step 45 and a third by step 75, the last holding the shock.
+    # Measured: the first tile appears at the check after step 20
+    # (t = 0.043), a second after step 40 and a third after step 95, the
+    # last holding the shock.
     run!(s, states; tfinal=1.0, nmax=15)
     @test empty_level(s, states)
     save_checkpoint(s, states, joinpath(dir, "before"))
@@ -1863,7 +1965,7 @@ end
     regs50 = level_regions(s, 1)
     @test !isempty(regs50) && length(states) == length(s.patches) == 1 + length(regs50)
     save_checkpoint(s, states, joinpath(dir, "after"))
-    run!(s, states; tfinal=1.0, nmax=80)
+    run!(s, states; tfinal=1.0, nmax=110)
     regs = level_regions(s, 1)
     # The shock is the first root node below the mean of the two densities.
     root = CL.PatchSolver(s, s.patches[1])
@@ -1878,7 +1980,7 @@ end
         r, rs = setup(prob, num)
         load_checkpoint!(r, rs, joinpath(dir, stem))
         @test level_regions(r, 1) == (stem == "before" ? BlockRegion[] : regs50)
-        run!(r, rs; tfinal=1.0, nmax=80)
+        run!(r, rs; tfinal=1.0, nmax=110)
         @test r.t == s.t && level_regions(r, 1) == regs
         @test getfield(r, :regrid).created == getfield(s, :regrid).created
         @test length(rs) == length(states) &&

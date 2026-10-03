@@ -2146,6 +2146,16 @@ goes through `solver.tmp_a`, and its filtered image lands in the interior of
 the weighting, so there the pass is the unweighted operator bit for bit, as
 it is under the default `:none` everywhere.
 
+On a patch with a child level, the unweighted pass leaves out the
+high-pass residual of the covered nodes where the parent spacing does not
+resolve the child's solution: the filtered state is `f + A⁻¹ M (B − A) f`
+for the filter `A f̄ = B f`, with `M` zero at a fully covered node of an
+interior row within two nodes of which the density has a relative undivided
+fourth difference along the line above 0.01, and one elsewhere. Features of
+the restricted child solution thinner than the parent spacing then do not
+spread along the parent's lines. On such a patch the pass costs one more
+line solve per component and direction.
+
 Neither form conserves the volume integrals of the state on a closed line:
 the defect of a pass is the closure rows' and is the same on a uniform and
 on a clustered grid, and the unweighted operator preserves a uniform state
@@ -2160,18 +2170,20 @@ function filter_state!(solver::SolverLike, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
     weighted = _weighted_filter(solver)
+    masked = _masked_filter(solver, Q, weighted)
     for d in 1:3
         decomp.active[d] || continue
         w = filter_weight(solver, d)
         exchange_dim_batch!(comps, decomp, d)
         weighted && _filter_volume!(solver, d)
+        mask = _child_mask!(solver, Q, comps, d, masked)
         for c in 1:solver.equations.n_cons
             σ = cons_parity(solver, d, c)
             if weighted
                 _filter_weighted!(comps[c], solver, d, σ, w)
                 continue
             end
-            filt_along!(solver.tmp_a, comps[c], solver, d, σ)
+            _filter_line!(solver.tmp_a, comps[c], solver, d, σ, mask)
             # w == 1 takes the original path exactly, so a pass at or above the reference
             # CFL stays bit-identical to the unrelaxed solver.
             if w == 1
@@ -2182,6 +2194,203 @@ function filter_state!(solver::SolverLike, Q)
         end
     end
     return Q
+end
+
+# --- The filter on a parent level ---------------------------------------------
+#
+# A pass of the compact filter is f + A⁻¹(B − A)f: the residual (B − A)f is an
+# explicit high-pass stencil, local to a few nodes, and A⁻¹ spreads it along
+# the line, decaying by about 0.7 per node at αf = 0.47. On a parent level the
+# nodes a child covers carry the child's restricted solution. Where that
+# solution holds a feature thinner than the parent spacing, the residual is
+# large, and A⁻¹ carried it to the uncovered parent nodes and to the covered
+# ones the child's ghost layers are interpolated from. From there it entered
+# the child through those layers and through the fill of newly covered nodes
+# at a regrid, and the density tag marked it. The pass on a patch with a child
+# level therefore drops the residual at the nodes a child covers fully (mask
+# byte 0xFF) where the parent spacing does not resolve the density along the
+# line, at the node or within two nodes of it: f + A⁻¹ M (B − A) f, with M
+# zero there and one elsewhere, formed as the plain pass less A⁻¹ applied to
+# the dropped residual. The restriction that follows overwrites most of the
+# covered nodes' own values. Where the restricted solution is smooth its
+# residual is kept: dropping it there makes the pass weaker on one side of the
+# coarse-fine face than on the other, a step that raised the error of smooth
+# waves through a level by up to a factor of three. Closure rows keep their
+# residual, so the mask applies on the interior rows only, and a line with no
+# masked node takes the plain pass unchanged. The measurements are under
+# bench/movinglevel.jl in reference/CALIBRATION_APPENDIX.md.
+
+# Test and bench toggle: `false` gives every patch the plain pass, the
+# comparison in bench/movinglevel.jl.
+const MASK_CHILD_RESIDUAL = Ref(true)
+
+# The resolution test of the mask: the undivided fourth difference of the
+# density along the line, relative to the density, above the threshold at the
+# node or at one of `CHILD_MASK_REACH` nodes on either side of it. The
+# threshold is the default density tag's halved, the tag's hold level, on one
+# dimension; the reach takes in the tails of a feature, whose residual the
+# threshold alone left to spread. Both are measured, with the smooth level
+# rows of test/convergence.jl unchanged under them; test and bench toggles.
+const CHILD_MASK_THRESHOLD = Ref(0.01)
+const CHILD_MASK_REACH = Ref(2)
+
+# Whether the pass on this patch takes the mask: the patch has a child level
+# holding a patch. The test reads the level hierarchy, which every rank of the
+# patch holds, so every rank of a line takes the extra solve or none does. A
+# stacked level takes the plain pass.
+_has_child(solver::SolverLike, Q) = false
+function _has_child(ps::PatchSolver, Q)
+    MASK_CHILD_RESIDUAL[] || return false
+    levels = getfield(ps.solver, :levels)
+    child = ps.patch.level + 2
+    child <= length(levels) && !isempty(levels[child].transfers) || return false
+    return !(parent(Q) isa StackedArray)
+end
+
+@inline _fully_covered(m::UInt8) = m == 0xff
+@inline _fully_covered(m) = !iszero(m)
+
+# M along `d` as ones where the residual is dropped, in the free scratch
+# `sensor_sp`, or `nothing` on a dimension a pair fold carries (its pass runs
+# through the butterfly and stays plain). The halos of `Q` along `d` are
+# current; at a self-paired fold the partial densities are mirror-filled here,
+# as their own pass would. On device storage the covered bytes are uploaded
+# into the scratch first and the body reads them back from it.
+_masked_filter(solver::SolverLike, Q, weighted::Bool) =
+    !weighted & _has_child(solver, Q)
+
+# The pass's mask along `d`, `nothing` when the pass takes none, and the pass
+# of one component under it. Kept out of `filter_state!` so that its body
+# carries no branches on the mask, which bench/audit.jl's inference count
+# reads as non-concrete control-flow values.
+_child_mask!(solver::SolverLike, Q, comps, d::Int, masked::Bool) =
+    masked ? _child_mask!(solver, Q, comps, d) : nothing
+
+function _filter_line!(out, f, solver::SolverLike, d::Int, σ::Int, mask)
+    filt_along!(out, f, solver, d, σ)
+    mask === nothing || _drop_child_residual!(out, f, solver, d, σ, mask)
+    return nothing
+end
+
+_child_mask!(solver::SolverLike, Q, comps, d::Int) = nothing
+function _child_mask!(ps::PatchSolver, Q, comps, d::Int)
+    fold = ps.folds[d]
+    fold === nothing || fold.pair === nothing || return nothing
+    decomp = ps.decomp
+    ns = ps.equations.n_species
+    if fold !== nothing
+        for c in 1:ns
+            fold_fill!(comps[c], decomp, d, fold.lo, fold.hi, cons_parity(ps, d, c))
+        end
+    end
+    m = ps.sensor_sp
+    covered = ps.patch.covered
+    cov = covered
+    if _device_path(parent(Q))
+        T = eltype(m)
+        _upload!(m, T[b == 0xff ? one(T) : zero(T) for b in covered])
+        cov = m
+    end
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    reach = clamp(CHILD_MASK_REACH[], 0, decomp.n_halo_d[d] - 2)
+    pointwise!(_child_mask_point!, m, nx, ny, nz, m, cov, parent(Q), ns,
+               eltype(m)(CHILD_MASK_THRESHOLD[]), reach, d, o1, o2, o3)
+    return m
+end
+
+@inline function _density_at(Q, J, ns)
+    acc = zero(eltype(Q))
+    for s in 1:ns
+        acc += @inbounds Q[J, s]
+    end
+    return acc
+end
+
+@inline function _child_mask_point!(m, cov, Q, ns, thr, reach, d, o1, o2, o3,
+                                    i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(Int(d == 1), Int(d == 2), Int(d == 3))
+        under = false
+        for t in -reach:reach
+            J = I + t * e
+            ρ0 = _density_at(Q, J, ns)
+            δ4 = _density_at(Q, J - 2e, ns) - 4 * _density_at(Q, J - e, ns) + 6 * ρ0 -
+                 4 * _density_at(Q, J + e, ns) + _density_at(Q, J + 2e, ns)
+            under |= abs(δ4) > thr * abs(ρ0)
+        end
+        drop = _fully_covered(cov[I]) & under
+        m[I] = ifelse(drop, one(eltype(m)), zero(eltype(m)))
+    end
+    return nothing
+end
+
+# The interior row of the residual (B − A)f: `r[1]` at the node and `r[m + 1]`
+# on its two neighbors at distance m, for the plan's own prescaled
+# right-hand side and left-hand side.
+_residual_stencil(plan::DevicePlan) = _residual_stencil(plan.host)
+_residual_stencil(plan::DirPlan) =
+    _residual_stencil(plan.a0, plan.ci, (plan.scheme.alpha,))
+_residual_stencil(plan::BandPlan) = _residual_stencil(plan.a0, plan.ci, plan.scheme.lhs)
+function _residual_stencil(a0::T, ci, lhs) where {T}
+    length(ci) <= 4 && length(lhs) <= 4 ||
+        error("the masked filter pass takes a half-width of at most 4")
+    at(v, m) = m <= length(v) ? T(v[m]) : zero(T)
+    return ntuple(m -> m == 1 ? a0 - one(T) : at(ci, m - 1) - at(lhs, m - 1), 5)
+end
+
+_rows_closed(plan::DevicePlan) = _rows_closed(plan.host)
+_rows_closed(plan) = (plan.lo_closed ? length(plan.clo) : 0,
+                      plan.hi_closed ? length(plan.chi) : 0)
+
+# The residual at the nodes of the interior rows along `d` the mask selects,
+# zero elsewhere. `f` carries current halos along `d`, exchanged or
+# mirror-filled.
+@inline function _child_residual_point!(s, f, mask, r, M, d, row_lo, row_hi,
+                                        o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(Int(d == 1), Int(d == 2), Int(d == 3))
+        acc = r[1] * f[I]
+        for m in 1:M
+            acc += r[m + 1] * (f[I + m * e] + f[I - m * e])
+        end
+        row = d == 1 ? i : d == 2 ? j : k
+        s[I] = ifelse((row_lo <= row) & (row <= row_hi) & _fully_covered(mask[I]),
+                      acc, zero(acc))
+    end
+    return nothing
+end
+
+@inline function _subtract_interior_point!(dst, src, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        dst[I] -= src[I]
+    end
+    return nothing
+end
+
+# `out` holds the plain pass of `f` along `d`; subtract A⁻¹ of the residual
+# the mask drops, through `solver.tmp_b`. A pair fold's pass runs through its
+# butterfly and is left plain.
+function _drop_child_residual!(out, f, solver::SolverLike, d::Int, σ::Int, mask)
+    fold = solver.folds[d]
+    fold === nothing || fold.pair === nothing || return out
+    plan = fold === nothing ? _plan_at(solver.filter_plans, d) :
+                              _fold_plan(fold, σ, Val(:filter), 1, false)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    nlo, nhi = _rows_closed(plan)
+    r = _residual_stencil(plan)
+    M = something(findlast(m -> !iszero(r[m + 1]), 1:4), 0)
+    s = solver.tmp_b
+    pointwise!(_child_residual_point!, s, nx, ny, nz, s, f, mask, r, M, d,
+               nlo + 1, decomp.n_local[d] - nhi, o1, o2, o3)
+    solve_along!(s, plan, s, decomp)
+    pointwise!(_subtract_interior_point!, out, nx, ny, nz, out, s, o1, o2, o3)
+    return out
 end
 
 # Whether this solver's state filter weights by the cell volume: the option is

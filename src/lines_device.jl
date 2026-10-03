@@ -302,6 +302,14 @@ end
         B[((t - 1) * n_o2 + (b - 1)) * n_o1 + a, i]
 end
 
+# The scatter's inverse, the fill of `solve_along!`.
+@kernel function _dev_gather_kernel!(B, f, n_o1, n_o2, stride, pad,
+                                     ::Val{D}) where {D}
+    a, b, i, t = @index(Global, NTuple)
+    @inbounds B[((t - 1) * n_o2 + (b - 1)) * n_o1 + a, i] =
+        f[_gidx(Val(D), i, a, b, pad, (t - 1) * stride)]
+end
+
 # One thread per line, the sweep loop inside the thread. Consecutive threads
 # read and write consecutive rows of B at every sweep position.
 @kernel function _dev_thomas_kernel!(B, lmul, dinv, c, n)
@@ -418,6 +426,17 @@ function _dev_scatter!(out, plan::DevicePlan, decomp::Decomp, ::Val{D}) where {D
     return nothing
 end
 
+function _dev_gather!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D}
+    o1, o2 = _odims(Val(D))
+    n_o1 = decomp.n_local[o1]
+    n_o2 = decomp.n_local[o2]
+    _dev_gather_kernel!(plan.backend)(
+        plan.B, _kernel_arg(f), n_o1, n_o2, plan.stride, decomp.n_halo_d, Val(D);
+        ndrange=(n_o1, n_o2, plan.n, plan.ntiles))
+    _maybe_sync(plan.backend)
+    return nothing
+end
+
 function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
     ls = plan.host.line_solver
     ls.explicit && return nothing   # identity LHS: the fill is the answer
@@ -489,6 +508,24 @@ function apply_along!(out, plan::DevicePlan, f, decomp::Decomp)
         _dev_scatter!(out, plan, decomp, Val(2))
     else
         _dev_fill!(plan, f, decomp, Val(3))
+        _dev_solve!(plan, plan.sweep)
+        _dev_scatter!(out, plan, decomp, Val(3))
+    end
+    return out
+end
+
+function solve_along!(out, plan::DevicePlan, rhs, decomp::Decomp)
+    d = plan.dim
+    if d == 1
+        _dev_gather!(plan, rhs, decomp, Val(1))
+        _dev_solve!(plan, plan.sweep)
+        _dev_scatter!(out, plan, decomp, Val(1))
+    elseif d == 2
+        _dev_gather!(plan, rhs, decomp, Val(2))
+        _dev_solve!(plan, plan.sweep)
+        _dev_scatter!(out, plan, decomp, Val(2))
+    else
+        _dev_gather!(plan, rhs, decomp, Val(3))
         _dev_solve!(plan, plan.sweep)
         _dev_scatter!(out, plan, decomp, Val(3))
     end
