@@ -224,7 +224,8 @@ jobs:
                         "positivity floor", "slicing", "composite budgets",
                         "composite face", "deep regrid subsets",
                         "placed levels", "folded regrid", "seam levels",
-                        "phase change", "implicit conduction"), ',')
+                        "phase change", "implicit conduction",
+                        "positivity limiter"), ',')
           MPI.mpiexec() do mpiexec
               julia = `$(Base.julia_cmd()) --project=. -t 1`
               t = @elapsed run(`$mpiexec -n 8 $julia test/mpi_tests.jl phases=$eight`)
