@@ -75,6 +75,13 @@ include("capability_cases.jl")
                                metric=CylindricalMetric(), ic=C.ic_shell))
             @test C.advances(prob, Numerics(n_global=(16, 32, 1), polar_truncation=2.0))
         end
+        # The positivity limiter: host, one patch, Cartesian, closed and periodic
+        # lines, one to three dimensions, one or two species.
+        for (eos, ic) in (C.EOSES[1][2:3], C.EOSES[2][2:3]), n in ((64, 1, 1), (64, 16, 1),
+                                                                 (56, 12, 12))
+            @test C.advances(C.problem(bcs=(C.wall, C.per, C.per), eos=eos, ic=ic),
+                             Numerics(n_global=n, positivity_limiter=true))
+        end
     end
 
     @testset "layouts × backend × precision" begin

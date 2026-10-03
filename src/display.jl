@@ -102,6 +102,7 @@ function Base.show(io::IO, ::MIME"text/plain", num::Numerics)
     end
     println(io, "  artificial properties: ", num.art.enabled ? "enabled" : "disabled")
     println(io, "  CFL: ", num.cfl)
+    num.positivity_limiter && println(io, "  positivity limiter: on")
     print(io, "  process grid: ")
     dims = num.execution.dims
     dims === nothing ? print(io, "automatic") : _show_dimensions(io, dims)

@@ -187,6 +187,26 @@ include("capability_cases.jl")
         rejects("polar_truncation runs on the host backend only", cyl,
                 Numerics(n_global=(16, 32, 1), polar_truncation=2.0,
                          execution=Execution(backend=C.device())))
+        closed = C.problem(bcs=(wall, per, per))
+        limited(; kw...) = Numerics(; n_global=(64, 1, 1), positivity_limiter=true, kw...)
+        rejects("positivity_limiter: supports an unstretched CartesianMetric only", cyl,
+                Numerics(n_global=(24, 1, 1), positivity_limiter=true))
+        rejects("positivity_limiter: supports an unstretched CartesianMetric only", closed,
+                limited(stretch=stretched))
+        rejects("positivity_limiter: supports a single patch without refinement", closed,
+                limited(execution=Execution(patch_grid=(2, 1, 1))))
+        rejects("positivity_limiter: supports a single patch without refinement", closed,
+                limited(amr=box))
+        rejects("positivity_limiter: runs on the host backend only", closed,
+                limited(execution=Execution(backend=C.device())))
+        rejects("positivity_limiter: supports the ideal-gas EOS",
+                C.problem(bcs=(wall, per, per), eos=C.EOSES[3][2]), limited())
+        rejects("positivity_limiter: does not combine with implicit conduction", closed,
+                limited(implicit=ImplicitConduction()))
+        rejects("positivity_limiter: does not support folded ends",
+                C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)), limited())
+        rejects("the face relation of the filter needs at least", closed,
+                Numerics(n_global=(32, 1, 1), positivity_limiter=true))
         rejects("the solver components carry different floating-point types", gas,
                 Numerics(n_global=(32, 1, 1), deriv=lele_d1_6(Float32)))
 

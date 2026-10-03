@@ -4409,6 +4409,7 @@ end
 
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
+include("positivity_mpi.jl")
 
 const SUITE = (
     ("periodic C6", test_periodic_c6),
@@ -4446,6 +4447,7 @@ const SUITE = (
     ("bulk species channel", test_bulk_decomposition),
     ("d8 detector decomposition", test_ring_detector_decomposition),
     ("positivity floor", test_positivity_floor),
+    ("positivity limiter", test_positivity_limiter),
     ("state validity", test_state_validity),
     ("callback consistency", test_callback_consistency),
     ("observation and clock", test_observation_clock),

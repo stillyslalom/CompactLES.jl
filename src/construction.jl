@@ -293,10 +293,20 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance_persist::Int=2,
                 max_levels::Union{Nothing,Int}=nothing,
                 level_boundaries::Bool=true,
-                implicit::Union{Nothing,ImplicitConduction}=nothing) where {T}
+                implicit::Union{Nothing,ImplicitConduction}=nothing,
+                positivity_limiter::Bool=false) where {T}
     bcs = _face_conditions(bcs)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
+    if positivity_limiter
+        _validate_positivity(bcs, metric, stretch, patch_grid,
+                             something(max_levels, refine === nothing ? 1 :
+                                       refine isa BlockRegion ? 2 : length(refine) + 1),
+                             backend, eos,
+                             implicit, equations === nothing ? NavierStokes1T(eos) :
+                                       equations,
+                             deriv, filt, n_global, n_halo, L_domain, T)
+    end
     if implicit !== nothing
         _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
         # The explicit half carries the molecular transport without its
@@ -957,10 +967,11 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, truncation, nothing, nothing)
+                  interface_flux, schemes, truncation, nothing, nothing, nothing)
         init_geometry!(solver)
         # The conduction stage reads the metric, so it is built last.
         implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
+        positivity_limiter && (solver.positivity = PositivityLimiter(solver))
         return solver
     end
     # --- Refined patches and their couplings (levels.jl) ------------------
@@ -1157,7 +1168,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, ModeTruncation{T}(), nothing, nothing)
+                  interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
+                  nothing)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1752,7 +1764,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, ModeTruncation{T}(), nothing, nothing)
+                  interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
+                  nothing)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

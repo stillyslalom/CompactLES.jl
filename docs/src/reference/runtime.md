@@ -23,6 +23,7 @@ step!
 run!
 CompactLES.positivity_floors
 CompactLES.apply_positivity_floor!
+CompactLES.positivity_counts
 filter_state!
 CompactLES.filter_weight
 mpi_main

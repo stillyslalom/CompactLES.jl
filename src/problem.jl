@@ -884,7 +884,7 @@ Execution(base::Execution; kw...) = _with(base, kw)
              art=ArtificialProperties(), cfl=0.5, control=nothing,
              patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
              polar_truncation=0.0, stretch=(nothing, nothing, nothing),
-             implicit=nothing)
+             implicit=nothing, positivity_limiter=false)
     Numerics(base::Numerics; keywords...)
     Numerics(preset::NamedTuple; keywords...)
 
@@ -948,6 +948,29 @@ keywords the ones given after it override.
   integrator, or an [`ImplicitConduction`](@ref), which integrates the
   molecular heat conduction implicitly and every other term explicitly, so
   that the conductive rate no longer limits the step.
+- `positivity_limiter`: `false`, the default, or `true` to keep the mixture
+  density and the internal energy per volume ρe = E − ½|m|²/ρ above a bound
+  at every Runge–Kutta stage and after every filter pass, where the
+  high-order scheme undershoots ahead of a strong shock. Each stage's
+  increment and each filter pass's correction are written as differences of
+  face fluxes, and a face where a neighbouring cell would leave the bound is
+  blended toward the first-order Lax–Friedrichs flux of the stage (toward no
+  correction for a filter pass), after Hu, Adams and Shu (J. Comput. Phys.
+  242, 2013). The correction conserves mass, momentum and energy, and leaves
+  every face it does not limit unchanged, so a run in which it never acts is
+  the unlimited run bit for bit. The bound is 1% of the minimum density and
+  the minimum ρe of the state entering each [`run!`](@ref), taken again by a
+  continued run, after a restart and after a phase change. The partial
+  densities are not bounded, and source terms and the NSCBC boundary terms
+  are outside the guarantee; so is a cell whose first-order step violates its
+  own CFL bound, which at a wall node under the default closure rows happens
+  above a CFL of about 0.32. The limiter acts in `run!`; a direct
+  [`step!`](@ref) takes the unlimited step. When on, it costs a node register
+  per conserved component and active direction and, per stage, one extra
+  divergence of each flux; [`positivity_counts`](@ref) reports how often it
+  acted. It requires an unstretched `CartesianMetric`, a single patch without
+  refinement or folds, the host backend, the ideal-gas EOS and the explicit
+  integrator, and setup rejects any other configuration.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a
@@ -990,6 +1013,7 @@ struct Numerics
     polar_truncation::Float64
     stretch::NTuple{3,Union{Nothing,Stretch}}
     implicit::Union{Nothing,ImplicitConduction}
+    positivity_limiter::Bool
     n_halo::Int
     legacy_amr::NamedTuple
 end
@@ -1027,7 +1051,8 @@ Numerics(preset::NamedTuple; kw...) = Numerics(; merge(preset, values(kw))...)
 
 function Numerics(base::Numerics; kw...)
     fields = (:n_global, :deriv, :filter, :art, :cfl, :control, :patch_interfaces,
-              :execution, :amr, :polar_truncation, :stretch, :implicit, :n_halo)
+              :execution, :amr, :polar_truncation, :stretch, :implicit,
+              :positivity_limiter, :n_halo)
     inherited = NamedTuple{fields}(map(f -> getfield(base, f), fields))
     return _numerics(base.legacy_amr; merge(inherited, values(kw))...)
 end
@@ -1036,8 +1061,8 @@ function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
                    filter=StateFilter(), art=ArtificialProperties(), cfl=0.5,
                    control=nothing, patch_interfaces=PatchInterfaces(),
                    execution=Execution(), amr=nothing, polar_truncation=0.0,
-                   stretch=(nothing, nothing, nothing), implicit=nothing, n_halo=4,
-                   flat...)
+                   stretch=(nothing, nothing, nothing), implicit=nothing,
+                   positivity_limiter::Bool=false, n_halo=4, flat...)
     execution isa Execution ||
         throw(ArgumentError("Numerics: execution must be an Execution, got " *
                             "$(typeof(execution))"))
@@ -1068,7 +1093,8 @@ function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
                      "write them in `amr = AMR(...)`.", :Numerics; force=true)
     return Numerics(n_global, deriv, groups[:filter], art, cfl, control,
                     groups[:patch_interfaces], groups[:execution], amr,
-                    polar_truncation, stretch, implicit, n_halo, legacy_amr)
+                    polar_truncation, stretch, implicit, positivity_limiter, n_halo,
+                    legacy_amr)
 end
 
 _legacy_amr_keywords(num::Numerics) = num.legacy_amr
@@ -1125,6 +1151,9 @@ function _setup(prob::Problem, num::Numerics)
         num.implicit === nothing ||
             throw(ArgumentError("implicit conduction runs on a single patch without " *
                                 "refinement; remove amr or implicit"))
+        num.positivity_limiter &&
+            throw(ArgumentError("positivity_limiter: supports a single patch " *
+                                "without refinement; remove amr or the limiter"))
         legacy == _AMR_LEGACY_DEFAULTS ||
             throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
                                 "not both"))
@@ -1162,6 +1191,7 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                filter_cfl=num.filter.cfl,
                filter_weighting=num.filter.weighting,
                polar_truncation=num.polar_truncation, implicit=num.implicit,
+               positivity_limiter=num.positivity_limiter,
                dims=num.execution.dims, n_halo=num.n_halo, comm=num.execution.comm,
                patch_grid=num.execution.patch_grid, backend=num.execution.backend,
                interface_rhs=num.patch_interfaces.rhs,

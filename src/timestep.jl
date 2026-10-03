@@ -112,7 +112,9 @@ returning.
 The clock is advanced by [`run!`](@ref). This function does not advance
 `solver.t` or `solver.step`, and it does not apply the state filter, the
 callbacks, the positivity failsafe or the state validation, all of which
-`run!` performs between steps. A driver that
+`run!` performs between steps. Nor does it apply the positivity limiter of
+`Numerics(positivity_limiter = true)`, which `run!` applies inside its own
+step and filter pass. A driver that
 calls it directly advances the clock itself, `solver.t += dt` and
 `solver.step += 1`, before the next call. Otherwise every stage of the next
 step is evaluated at the old time, and anything scheduled on `solver.t` or
@@ -1695,6 +1697,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
     attempts = 0
     dt_seen = 0.0
     rho_floor, e_floor = positivity_floors(solver, Q, control)
+    # The positivity limiter's bounds, from the same state; false without the
+    # limiter. Reduced, so every rank takes the limited path or none does.
+    limiting = _positivity_setup!(solver, Q)
     # The floors come from the state entering the run, so they are derived
     # before it is validated: a repair mode needs scales from a state that was
     # still valid, and this is the last point at which that is known.
@@ -1886,7 +1891,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                 "whose spacing at this t is $(eps(solver.t))"))
         end
         prepared = true         # see the apply_bcs!/max_rate note above
-        failure = _run_step!(solver, Q, workspace, dt, prepared, control)
+        failure = limiting ?
+                  _limited_run_step!(_cold(solver), Q, workspace, dt, prepared)::Nothing :
+                  _run_step!(solver, Q, workspace, dt, prepared, control)
         if failure !== nothing
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
                                   save, failure, attempts, rank)::Int
@@ -1900,7 +1907,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         solver.filter_rate_prev = filter_rate
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             _ledger_open!(solver, Q)
-            filter_state!(solver, Q)
+            limiting ? _limited_filter_state!(_cold(solver), Q) : filter_state!(solver, Q)
             _ledger!(solver, Q, :filter)
         end
         # Once per step, after the filter and before the failsafe; see

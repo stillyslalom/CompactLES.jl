@@ -6,6 +6,7 @@
 #   julia --project=. -t 1 bench/positivity.jl                     # every part
 #   julia --project=. -t 1 bench/positivity.jl part=weights,pulse
 #   julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
+#   julia --project=. -t 1 bench/positivity.jl part=src
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -55,6 +56,10 @@
 #             none, A, A-nostore, A-rhs, B, A+B or A-rhs+B, each optionally
 #             followed by `@r` for bounds of r times the initial minimum ρ and
 #             ρe (A+B@0.01)
+#   src       each case through `run!` with `Numerics(positivity_limiter)`
+#             off and on, the package's form of A+B@0.01: the points with
+#             ρ ≤ 0 or ρe ≤ 0 after each step, the metric, the steps, what the
+#             limiter did and the wall time
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -88,7 +93,7 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const CASES = (:woodward, :noh)
-const PARTS = ("weights", "identity", "pulse", "variants")
+const PARTS = ("weights", "identity", "pulse", "variants", "src")
 const VARIANTS = ("none", "A", "A-nostore", "A-rhs", "B", "A+B", "A-rhs+B")
 const WC_AMBIENT = 0.01
 # Hu, Adams & Shu take ε = min(1e-13, the initial minimum) for ρ and for ρe.
@@ -130,22 +135,24 @@ function pulse_problem()
 end
 
 # The case's numerics with the filter left to the loop (`interval = 0`), under
-# `validity = :permissive` as in bench/shockfoot.jl.
-function build(case)
-    filter = StateFilter(compact_filter(); cfl=0.35, interval=0)
+# `validity = :permissive` as in bench/shockfoot.jl. `interval = 1` gives the
+# filter back to `run!`, and `limiter` sets `Numerics(positivity_limiter)`.
+function build(case; interval=0, limiter=false)
+    filter = StateFilter(compact_filter(); cfl=0.35, interval)
     control = StepControl(validity=:permissive)
     art = ArtificialProperties(enabled=true)
     case === :woodward &&
         return setup(woodward_problem(),
                      Numerics(n_global=(WC_N, 1, 1), art=art, cfl=0.3, filter=filter,
-                              control=control))
+                              control=control, positivity_limiter=limiter))
     case === :noh &&
         return setup(noh_problem(1),
                      Numerics(n_global=(Dict(NOH_N)[1], 1, 1), art=art, cfl=NOH_CFL,
-                              filter=filter, control=control))
+                              filter=filter, control=control,
+                              positivity_limiter=limiter))
     return setup(pulse_problem(),
                  Numerics(n_global=(PULSE_N, 1, 1), art=art, cfl=0.3, filter=filter,
-                          control=control))
+                          control=control, positivity_limiter=limiter))
 end
 
 # --- the face weights ---------------------------------------------------------
@@ -926,6 +933,28 @@ function pulse_part()
             b.T.closure_mismatch, b.T.offset_spread)
 end
 
+function src_part(cases)
+    println("\n=== src: run! with Numerics(positivity_limiter) ===")
+    for case in cases, limiter in (false, true)
+        solver, Q = build(case; interval=1, limiter)
+        bad = Ref(0)
+        count_bad = (s, q) -> (r = state_report(s, q);
+                               bad[] += r.negative_density + r.inadmissible; nothing)
+        wall = @elapsed run!(solver, Q; tfinal=end_time(case), callback=count_bad)
+        text = completed(solver, end_time(case)) ? metric(case, solver, Q) :
+               "did not reach the end time"
+        @printf("  %-9s %-4s %5d steps, bad post %6d, %s, %.1f s\n", case,
+                limiter ? "on" : "off", solver.step, bad[], text, wall)
+        if limiter
+            c = CL.positivity_counts(solver)
+            @printf("  %-9s %-4s faces limited: stage %.2e, pass %.2e; unguaranteed \
+                     sides %d\n", "", "", c.stage_limited / c.stage_faces,
+                    c.filter_limited / c.filter_faces, c.unguaranteed)
+        end
+        flush(stdout)
+    end
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
@@ -944,6 +973,7 @@ function main(args)
     weights = "weights" in parts ? weights_part(cases) : Dict{Symbol,Vector{Float64}}()
     "identity" in parts && identity_part(cases, opt.identity_steps, weights)
     "pulse" in parts && pulse_part()
+    "src" in parts && src_part(cases)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []
