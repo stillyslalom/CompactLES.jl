@@ -959,10 +959,12 @@ keywords the ones given after it override.
   242, 2013). The correction conserves mass, momentum and energy, and leaves
   every face it does not limit unchanged, so a run in which it never acts is
   the unlimited run bit for bit. The bound on a cell is 1% of the smaller of
-  its own density (ρe) and the minimum density (ρe) of the state entering
-  each [`run!`](@ref), taken again by a continued run, after a restart and
-  after a phase change, so a cell the flow has emptied, as in the core of a
-  blast, is held to a fraction of its own state. The partial densities are
+  its own density (ρe) and the minimum positive density (ρe) of the state
+  entering each [`run!`](@ref), taken again by a continued run, after a
+  restart and after a phase change, so a cell the flow has emptied, as in the
+  core of a blast, is held to a fraction of its own state, and a cell that
+  enters a run inadmissible takes first-order fluxes where it needs them
+  while the rest of the grid keeps its bound. The partial densities are
   not bounded. On a Cartesian grid source terms and the NSCBC boundary terms
   are outside the guarantee; on a radial grid they are a part of each cell's
   update and inside it, except where they alone would take the cell below

@@ -347,4 +347,37 @@ end
         run!(s, Q; tfinal=1.0, nmax=3)
         @test lim.eps_rho ≈ 0.02 * ρmin rtol = 0.05
     end
+
+    @testset "a marginally inadmissible point entering run! leaves it on" begin
+        # A limited run can return a cell its node terms alone took just below
+        # zero. The run continued from that state keeps the limiter, with the
+        # bound of the admissible points, and returns an admissible state.
+        prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                            p=1e-3 + exp(-((x - 0.5)^2 + (y - 0.5)^2) /
+                                                         0.004)))
+        N = 32
+        s, Q = setup(prob, Numerics(n_global=(N, N, 1), cfl=0.4,
+                                    art=ArtificialProperties(enabled=true),
+                                    control=StepControl(validity=:permissive),
+                                    positivity_limiter=true))
+        run!(s, Q; tfinal=1.0, nmax=10)
+        idx(i, j) = CL.padded_index(s, i, j, 1)
+        internal(I) = Q[I, 5] - (Q[I, 2]^2 + Q[I, 3]^2) / (2 * Q[I, 1])
+        I = idx(3, 5)
+        Q[I, 5] = (Q[I, 2]^2 + Q[I, 3]^2) / (2 * Q[I, 1]) - 1e-21
+        @test internal(I) < 0
+        emin = minimum(internal(idx(i, j)) for i in 1:N, j in 1:N if (i, j) != (3, 5))
+        total(c) = sum(Q[idx(i, j), c] for i in 1:N, j in 1:N)
+        mass0, energy0 = total(1), total(5)
+        run!(s, Q; tfinal=1.0, nmax=20)
+        lim = getfield(s, :positivity)
+        @test lim.active
+        @test lim.eps_e ≈ 0.01 * emin
+        report = state_report(s, Q)
+        @test report.inadmissible == 0 && report.negative_density == 0
+        @test abs(total(1) - mass0) / mass0 < 1e-13
+        @test abs(total(5) - energy0) / energy0 < 1e-13
+    end
 end

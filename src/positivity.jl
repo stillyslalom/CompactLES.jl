@@ -478,9 +478,15 @@ Adapt.adapt_structure(to, s::_LinearState) = _LinearState(adapt(to, s.data), s.s
 
 # ε from the state entering `run!`, the same rule at a restart and after a
 # phase change: `LIMITER_FRACTION` of the global minimum of ρ and of ρe over
-# the interior. Collective over the solver's communicator. Returns whether the
-# limiter acts in this run; a state whose minimum is not positive gives no
-# scale, and the run proceeds unlimited with a warning, as the failsafe does.
+# the interior points where each is positive. Collective over the solver's
+# communicator. Returns whether the limiter acts in this run. A limited run
+# can end with a point marginally below zero, a cell whose node terms alone
+# took it there, and the next run starts from that state; the point's bound is
+# zero (`_limiter_cell_bound`), so its faces take the first-order flux where
+# its half states need it and it is counted unguaranteed, and the rest of the
+# grid keeps the scale of its own state. Only a state without a positive
+# density or internal energy anywhere gives no scale, and the run then
+# proceeds unlimited with a warning, as the failsafe does.
 _positivity_setup!(solver, Q) = false
 function _positivity_setup!(solver, Q::ConservedState)
     lim = getfield(solver, :positivity)
@@ -503,20 +509,21 @@ function _positivity_bounds!(lim::PositivityLimiter, solver, Q)
         for sp in 1:ns
             ρ += Q[I, sp]
         end
-        ρmin = min(ρmin, ρ)
         ρ > 0 || continue
-        emin = min(emin, Q[I, ie] - (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ))
+        ρmin = min(ρmin, ρ)
+        e = Q[I, ie] - (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
+        e > 0 && (emin = min(emin, e))
     end
     red = MPI.Allreduce([ρmin, emin], min, solver.comm)
     T = eltype(lim.eps_rho)
-    lim.active = red[1] > 0 && red[2] > 0
+    lim.active = isfinite(red[1]) && isfinite(red[2])
     if lim.active
         lim.eps_rho = T(LIMITER_FRACTION * red[1])
         lim.eps_e = T(LIMITER_FRACTION * red[2])
     elseif MPI.Comm_rank(solver.comm) == 0
-        @warn "run!: the positivity limiter is inactive in this run. The minimum " *
-              "density or internal energy of the state entering it is not " *
-              "positive, so there is no bound to scale."
+        @warn "run!: the positivity limiter is inactive in this run. No point " *
+              "of the state entering it has a positive density and internal " *
+              "energy, so there is no bound to scale."
     end
     return lim.active
 end
