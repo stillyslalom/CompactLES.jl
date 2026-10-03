@@ -1402,6 +1402,21 @@ function compute_primitives_and_gradients!(solver::SolverLike, Q,
     return solver
 end
 
+# The artificial-property step of `compute_rhs!`: `compute_artificial!`, or,
+# where the coefficients were computed beforehand (`coefficients_current`),
+# only the compression switch of a gated β*, which reads this patch's velocity
+# gradients and so cannot be applied before them, the shared workspace holding
+# one patch's at a time. The branch sits here rather than in `compute_rhs!`,
+# whose unoptimized body bench/audit.jl reads: there each branch statement
+# counts as a value of type `Any`.
+function _artificial_step!(solver, Q, coefficients_current::Bool)
+    if coefficients_current
+        _gated(solver.art) && gate_beta!(solver)
+        return solver
+    end
+    return compute_artificial!(solver, Q)
+end
+
 """
     compute_rhs!(solver, Q, dQ, primitives_current=false, coefficients_current=false)
 
@@ -1445,13 +1460,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
     decomp = solver.decomp
     compute_primitives_and_gradients!(solver, Q, primitives_current)
     _validate_transport_state!(solver, Q; current=true)
-    if coefficients_current
-        # The compression switch reads this patch's velocity gradients, which
-        # the shared workspace holds only from the pass just above.
-        _gated(solver.art) && gate_beta!(solver)
-    else
-        compute_artificial!(solver, Q)
-    end
+    _artificial_step!(solver, Q, coefficients_current)
     for d in 1:3
         decomp.active[d] || continue
         deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)

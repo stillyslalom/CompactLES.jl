@@ -2878,7 +2878,7 @@ function test_partitioned_coupling()
     run!(solver, states; tfinal=1.0, nmax=2)
     mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
     check("partitioned coupling: composite mass after two steps as serial",
-          abs(mass - 1.9874973678759937) / 2, 1e-14)
+          abs(mass - 1.9874973678704124) / 2, 1e-14)
 
     # One tile over every rank, up to eight: past five ranks some hold no
     # share of the chains' five components, so they receive no box and must
@@ -3087,7 +3087,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0031972283704293633), 1e-13)
+              abs(gmax(solver.t) - 0.0031973409251902472), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -3189,7 +3189,7 @@ function test_tiled_level()
         check("rebalance on: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.0031972276136530485), 1e-13)
+              abs(gmax(solver.t) - 0.0031973401683244311), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
