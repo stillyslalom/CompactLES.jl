@@ -68,11 +68,11 @@
 #   Noh aligned N=100 AR=4    plateau 4.0030/4   deficit 33%   shock 0.2084   4925 steps
 #   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.895  745 steps
 #   Noh nu=2 on a level at the axis, N=256, against the uniform run on 767 nodes
-#   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass +1.68e-7, 6640 steps):
+#   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass -4.45e-7, 6640 steps):
 #     level over 85 nodes   plateau 15.6523  deficit 50.9%  shock 0.2033
-#                           mass +1.74e-7  max |rho - uniform| 7.0e-3  6642 steps
-#     level over 43 nodes   plateau 14.798   deficit 60.9%  shock 0.2094
-#                           mass -1.52e-3  6168 steps
+#                           mass -1.86e-6  max |rho - uniform| 5.7e-3  6641 steps
+#     level over 43 nodes   plateau 14.945   deficit 52.7%  shock 0.2084
+#                           mass -9.07e-4  6012 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no

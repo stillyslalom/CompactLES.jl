@@ -4,9 +4,10 @@
 # A diagnostic for `bench/interfaceconservation.jl` and its tests, private
 # like `_conserved_budget`, whose quadrature it shares: trapezoid weights,
 # one half at a node-centered edge and at a patch's interface end, the metric
-# Jacobian, and on a composite solver the covered fraction of each coarse
-# node's cell. Every driver that writes the state brackets the write with two
-# hooks: `_ledger_open!` before it and `_ledger!(…, phase)` after it. A hook
+# Jacobian with its edge factor (the quadrature note in `diagnostics.jl`), and
+# on a composite solver the covered fraction of each coarse node's cell.
+# Every driver that writes the state brackets the write with two hooks:
+# `_ledger_open!` before it and `_ledger!(…, phase)` after it. A hook
 # recomputes the budget of the patches it names and adds the change since
 # that patch's previous hook to `(phase, patch level)`; the opening hook
 # names the phase `:unattributed`, so a write no bracket covers lands there,
@@ -205,11 +206,11 @@ end
 # covered mask removes from the composite. A face counts on a node-centered
 # end only: a
 # periodic dimension has none, and a folded end is half a cell from its
-# plane. The face node's flux times the transverse trapezoid weights, the
-# in-plane uncovered fraction and the transverse cell measure is the term
-# the flux divergence integrates to at that end; an interface end under
-# `interface_flux = :ghost` differences more than this flux, so there its
-# column is the closure flux only.
+# plane. The face node's flux times the transverse weights of the budget,
+# edge factors included, the in-plane uncovered fraction and the
+# transverse cell measure is the term the flux divergence integrates to at
+# that end; an interface end under `interface_flux = :ghost` differences
+# more than this flux, so there its column is the closure flux only.
 @noinline function _ledger_capture!(L::BudgetLedger, @nospecialize(solver), pi::Int)
     patch = getfield(solver, :patches)[pi]
     ps = PatchSolver(solver, patch)
@@ -238,9 +239,9 @@ end
         for k in rng[3], j in rng[2], i in rng[1]
             I = CartesianIndex(i + o[1], j + o[2], k + o[3])
             w = 1.0
-            d == 1 || (w *= quad_weight(ps, 1, i))
-            d == 2 || (w *= quad_weight(ps, 2, j))
-            d == 3 || (w *= quad_weight(ps, 3, k))
+            d == 1 || (w *= quad_weight(ps, 1, i) * _edge_factor(ps, 1, i, I))
+            d == 2 || (w *= quad_weight(ps, 2, j) * _edge_factor(ps, 2, j, I))
+            d == 3 || (w *= quad_weight(ps, 3, k) * _edge_factor(ps, 3, k, I))
             if masked
                 m = ps.covered[I]
                 m == 0 || (w *= uncovered_plane_fraction(m, d))

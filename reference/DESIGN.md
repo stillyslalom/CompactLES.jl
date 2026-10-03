@@ -1555,7 +1555,9 @@ momenta and the energy: trapezoid weights, one half at a node-centered
 physical edge and at each patch's interface end (so a shared plane counts
 once between its two patches), one at a folded half-offset edge and on
 periodic and collapsed dimensions, the physical cell volume
-Πh_d / inv_J, and on a parent patch the fraction of each node's cell no
+Πh_d / inv_J, at a physical edge node the factor removing the Jacobian's
+share of the edge error (the quadrature note in `src/diagnostics.jl`), and
+on a parent patch the fraction of each node's cell no
 child covers (`uncovered_fraction` of `Patch.covered`). This is
 `_conserved_budget`, the instrument of `bench/interfaceconservation.jl`.
 

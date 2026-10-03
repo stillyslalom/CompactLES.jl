@@ -1308,7 +1308,8 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                 # dV / inv_J is the physical cell volume, since inv_J carries any
                 # stretching. This follows `volume_integral`'s convention, so a
                 # tally is comparable with an integral of the field it perturbs.
-                vol = wj * quad_weight(solver, 1, i) * dV / solver.inv_J[I]
+                vol = wj * quad_weight(solver, 1, i) * _edge_factors(solver, i, j, k, I) *
+                      dV / solver.inv_J[I]
                 repaired = false
                 if clip && ρ >= rho_floor
                     repaired = true

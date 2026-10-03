@@ -4411,8 +4411,9 @@ end
 @testset "diagnostics: quadrature, plane averages, mixing measures" begin
     # The quadrature is the load-bearing part: every mixing number is a ratio of
     # two of these integrals, so a wrong edge weight biases θ and W silently
-    # rather than failing. Cartesian must be exact; curvilinear is O(h²) at a
-    # node-centered edge by construction (see the note in diagnostics.jl).
+    # rather than failing. Cartesian must be exact, and so must a constant over
+    # a linear or quadratic Jacobian once the metric's share of each edge term
+    # is removed (see the note in diagnostics.jl).
     solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                     art=ArtificialProperties(enabled=false))
@@ -4433,16 +4434,36 @@ end
     @test maximum(abs, prof .- xs) < 1e-12
     @test sum(profile_spacing(solver, 1)) ≈ 2.0 atol = 1e-12
 
-    # Cylindrical with the axis fold: half-offset cells carry full weight, so
-    # the error is the O(h²) edge term at the outer wall only.
+    # Cylindrical with the axis fold, spherical with the origin fold. The
+    # midpoint rule at the axis and the trapezoid rule at the outer wall err by
+    # h²/24 and h²/12 on ∫r dr; the axis node's weight, 11/12 of the
+    # midpoint's, and the wall node's remove both, so the linear J = r and the
+    # quadratic J = r² integrate exactly. The origin has no such term.
+    rz(N) = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   metric=CylindricalMetric(),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                   art=ArtificialProperties(enabled=false))
     cyl = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 1.0),
                  metric=CylindricalMetric(),
                  bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                  art=ArtificialProperties(enabled=false))
     ones_c = CL.field(cyl.decomp); fill!(ones_c, 1.0)
-    h = cyl.h[1]
-    @test volume_integral(cyl, ones_c) ≈ 0.5 rtol = 1e-3    # ∫r dr dθ dz, θ collapsed
-    @test volume_integral(cyl, ones_c) - 0.5 < h^2          # the edge term, not more
+    @test volume_integral(cyl, ones_c) ≈ 0.5 atol = 1e-14  # ∫r dr dθ dz, θ collapsed
+    @test CL._edge_factor(cyl, 1, 1, padded_index(cyl, 1, 1, 1)) ≈ 11 / 12
+    sph = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                 metric=SphericalMetric(), origin=(0.0, π / 2 - 0.5, 0.0),
+                 bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
+                 art=ArtificialProperties(enabled=false))
+    @test CL._edge_factor(sph, 1, 1, padded_index(sph, 1, 1, 1)) == 1.0
+    @test domain_volume(sph) ≈ sin(xcoord(sph, 2, 1)) / 3 atol = 1e-14
+    # A field even across the axis whose derivative vanishes at the wall
+    # converges at fourth order: ∫ r (2 + cos πr) dr = 1 − 2/π².
+    function rz_error(N)
+        s = rz(N)
+        f = fillf!(s, CL.field(s.decomp), (r, θ, z) -> 2 + cos(π * r))
+        return abs(volume_integral(s, f) - (1 - 2 / π^2))
+    end
+    @test rz_error(32) / rz_error(64) > 12
 
     # Mixing measures against states whose answers are definitional.
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),

@@ -2609,7 +2609,7 @@ const RZ_LEVEL_TOL = 1e-6
     # drift, the level's coarse-fine flux and the parent's flux into the
     # covered region cancel to the drift's order, and the drift is the
     # Cartesian coupling's (1.20e-5 for this case on the Cartesian metric,
-    # 1.19e-5 here).
+    # 1.14e-5 here).
     s = rz((37, 1, 36); bcs=(wall, per, per),
            refine=BlockRegion((12, 0, 12), (12, 1, 12)),
            art=ArtificialProperties(enabled=false), cfl=0.5, filter_interval=0)
@@ -2842,15 +2842,16 @@ const AXIS_FILTER_TOL = 2e-5
     @test CL._box_buffer(lt)[1] == (CL.LEVEL_BUFFER, CL.LEVEL_BUFFER)
     @test first(CL._restrict_window(lt)[1]) == 1
     # The composite quadrature: the root's node at h/2 is covered on both
-    # halves of [0, h], the tile's node at h/6 weighs (h/6)(h/3), the exact
-    # r-weighted measure of [0, h/3], and only the coarse-fine face departs
-    # from the root alone, by the half cells (h/6 inside, h/2 outside) that
-    # the midpoint weights of the linear r miss there: h²/72 − h²/8 = −h²/9.
+    # halves of [0, h], and the tile's node at h/6 carries the axis edge
+    # factor of its own spacing, as the root alone carries its own. Only the
+    # coarse-fine face departs from the root alone, by the trapezoid edge
+    # terms of its two sides on the linear r, ((h/3)² − h²)/12 = −2h²/27.
     @test CL.uncovered_fraction(root.covered[padded_index(root, 1, 1, 1)]) == 0
     @test CL.quad_weight(fine, 1, 1) == 1.0
+    @test CL._edge_factor(fine, 1, 1, padded_index(fine, 1, 1, 1)) ≈ 11 / 12
     alone = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) - h^2 / 9 atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) - 2h^2 / 27 atol = 1e-15
     # Against the uniform run at the level's spacing in the same equal steps,
     # the tile differs by the refinement's error alone.
     n = 3N
@@ -2923,7 +2924,7 @@ const AXIS_FILTER_TOL = 2e-5
     m = lt.region.extent[3]
     alone = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, zplane),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) - h^2 / 9 * (m - 0.5) * h atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) - 2h^2 / 27 * (m - 0.5) * h atol = 1e-15
     # A uniform state at rest stays at rest to round-off through both folds,
     # the viscous ghost fluxes, the artificial properties, the d8 detector and
     # the filter.

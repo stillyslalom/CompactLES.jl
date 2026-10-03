@@ -1638,7 +1638,8 @@ J·q and divides by a cell volume passed through the same filter (`filter` in
 the cylindrical volume is odd across the axis. It sits behind `filter_weighting = :volume`.
 
 **What conservation is, discretely.** A directional pass is a matrix M on each component
-along a line, and `volume_integral` weights node i by V_i = w_i J_i h, w trapezoidal. The
+along a line, and the node quadrature weights node i by V_i = w_i J_i h, w trapezoidal
+(`quad_weight`, without the edge factor `volume_integral` applies at a curved face). The
 pass conserves Σ V_i q_i for every q exactly when Mᵀ V = V, so d = Mᵀ V − V is one pass's
 defect and d_i / V_i the fraction of node i's content created or destroyed. Constant
 preservation, M 1 = 1, is a different property both forms hold to 1e-15 on every line below.
@@ -5099,18 +5100,19 @@ of W J is the midpoint rule on f = r q, whose Euler–Maclaurin error is (h²/24
 Subtracting (h²/24) q_1 from the W J total, a node-1 weight of 11h²/24 per radian in place
 of h²/2, leaves the fourth-order remainder of the corrected column above. Closed runs to t = 1
 (slip wall at r = 1, cfl 0.5, the default filter and artificial properties), relative change
-of the total mass: the trapezoid column is `volume_integral`'s total, the others the
-right-hand side's part under W J (the filter's share removed), the time integral of Ĝ_0 over
-the steps, and the corrected total's right-hand-side part:
+of the total mass: the first column is `volume_integral`'s total under the edge-corrected
+weights described below, the others the right-hand side's part under W J (the filter's share
+removed), the time integral of Ĝ_0 over the steps, and the corrected total's right-hand-side
+part:
 
 ```
-case     N     trapezoid   W J rhs     ∫ Ĝ_0 dt    corrected rhs
-pulse    64    -6.81e-06   -6.27e-06   -6.26e-06   -2.36e-08
-pulse    128   -1.80e-06   -1.55e-06   -1.55e-06   -1.46e-09
-pulse    256   -4.51e-07   -3.87e-07   -3.87e-07   -9.10e-11
-implode  64    +3.88e-06   -8.40e-06   -8.40e-06   -5.72e-10
-implode  128   +1.00e-06   -2.09e-06   -2.09e-06   -4.28e-11
-implode  256   +2.52e-07   -5.19e-07   -5.19e-07   -3.03e-12
+case     N     vol. int.   W J rhs     ∫ Ĝ_0 dt    corrected rhs
+pulse    64    +4.81e-07   -6.27e-06   -6.26e-06   -2.36e-08
+pulse    128   +1.47e-08   -1.55e-06   -1.55e-06   -1.46e-09
+pulse    256   +5.89e-10   -3.87e-07   -3.87e-07   -9.10e-11
+implode  64    -2.21e-07   -8.40e-06   -8.40e-06   -5.72e-10
+implode  128   -1.31e-08   -2.09e-06   -2.09e-06   -4.28e-11
+implode  256   -7.24e-10   -5.19e-07   -5.19e-07   -3.03e-12
 ```
 
 In all 24 r-z runs, filter and artificial properties each on or off, the right-hand side's
@@ -5118,11 +5120,38 @@ part under W J equals the time integral of the axis face to the accuracy of the 
 rule in time (1.6e-3 relative at N = 64, 4.8e-5 at 256), and the corrected part falls by a
 factor of 14 to 44 between N = 128 and 256; the energy totals follow the same pattern. On
 the spherical origin, the symmetry plane and the line between two slip walls the same mass
-column is round-off (under 2e-14), and the drift under W J is the filter's alone. The
-diagnostics' trapezoid quadrature drifts at second order on the sphere as well (+1.32e-5,
-+3.27e-6, +8.15e-7 on the implosion), because its half weight at a curved outer wall is an
-O(h²) rule (the quadrature note in `src/diagnostics.jl`), so under `volume_integral` the
-axis face and the outer edge contribute errors of the same size.
+column is round-off (under 2e-14), and the drift under W J is the filter's alone.
+
+**The diagnostics' edge correction.** `volume_integral`, `domain_volume`, the conserved
+budget and its ledger, and the positivity floor's tally take the same correction in a form
+that reads only the metric (the quadrature note in `src/diagnostics.jl`). Their rule is the
+trapezoid rule on f = J q in ξ, the midpoint rule along a folded dimension, whose
+Euler–Maclaurin edge terms are −(h²/12) ∂ₙf and +(h²/24) ∂ₙf with ∂ₙf = q ∂ₙJ + J ∂ₙq;
+the edge node's weight removes q ∂ₙJ, with ∂ₙJ from the node and its two inward neighbours.
+At the axis that is the node-1 weight above, 11/12 of the midpoint's; at the spherical
+origin ∂ₙJ = 0 and nothing changes; at a curved or stretched node-centred face the half
+weight becomes ½(1 + h ∂ₙJ/(6J)). The term left is the Cartesian trapezoid's −(h²/12) J ∂ₙq,
+zero for a field even about the face. Errors of smooth fields against their exact integrals
+(`parts=quadrature`), at N = 64, 128 and 256 along r (and along θ between the poles):
+
+```
+case                                 N = 64      N = 128     N = 256     order
+axis, q = 2 + cos πr                 +2.845e-09  +1.751e-10  +1.086e-11  4.01
+axis, q = exp(−r²)                   -1.520e-05  -3.772e-06  -9.392e-07  2.01
+annulus, q = 2 + cos π(r − ½)        -5.222e-09  -3.162e-10  -1.945e-11  4.02
+origin, q = 2 + cos πr               -5.059e-09  -3.112e-10  -1.930e-11  4.01
+poles, q = 2 + cos π(r − ½) cos 2θ   -9.505e-07  -5.947e-08  -3.718e-09  4.00
+stretched, q = 2 + cos πx            -2.996e-07  -1.770e-08  -1.075e-09  4.04
+stretched, q = exp(x)                +4.581e-05  +1.122e-05  +2.781e-06  2.01
+```
+
+A field with a normal derivative at a node-centred face keeps the second order of the
+Cartesian rule. On exp(−r²) the uncorrected rule erred less, by h²/24 − h²/(12e) against
+h²/(6e), its axis and wall terms having opposite signs. In the closed runs the corrected
+total of the spherical implosion changes by +3.00e-8, −3.01e-9 and −2.54e-10, and of the
+spherical pulse by +7.96e-7, +3.70e-8 and +1.48e-9, at or below the trapezoid total of the
+pulse between two Cartesian slip walls (+4.31e-6, +3.98e-7 and +2.49e-8), whose drift is
+the trapezoid weights' departure from W at the walls.
 
 **Decision.** The options and their size:
 
@@ -5132,17 +5161,14 @@ axis face and the outer edge contribute errors of the same size.
   adds an O(h²) error at every node of the region. The face value itself is local to the
   rank holding the fold, through the mirrored face relation there.
 - Change the quadrature: the end correction (h²/24) q_1 conserves the r-z totals to fourth
-  order with no change to the solution. In `volume_integral` and the budget ledger it would
-  leave the second-order half weight at a curved outer wall in place unless the far end
-  took W's closed tail as well.
+  order with no change to the solution.
 - Leave it: the second-order drift is the change of the reporting quadrature's leading
   error term, and the corrected total shows the solution's mass conserved to fourth order.
 
 The scheme is left as it is: the measured drift is a property of the quadrature, and
-carrying the face would replace it with an order-one error in node 1's rate. Whether the
-diagnostics take the end correction is open; the recommendation is to keep
-`volume_integral` as it is, second order like its documented edge rule at curved walls, and
-to apply the correction where a conservation statement for an r-z run is wanted.
+carrying the face would replace it with an order-one error in node 1's rate. The
+diagnostics take the end correction at every edge whose Jacobian varies along the line, as
+above.
 
 ## Operator and step cost
 

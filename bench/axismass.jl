@@ -9,9 +9,11 @@
 #   julia --project=. -t 1 bench/axismass.jl parts=runs N=64,128 tfinal=0.5
 #   julia --project=. -t 1 bench/axismass.jl parts=runs variants=on:on,off:off
 #
-# Parts: face (one right-hand side on the θ- and z-collapsed lines), vortex
-# (the same on the resolved (r, θ) grid of the axis-crossing vortex, at half of
-# each N radially and `ntheta` azimuthally) and runs (closed runs to `tfinal`).
+# Parts: quadrature (`volume_integral` of smooth fields on the curvilinear and
+# stretched lines, against their exact integrals), face (one right-hand side on
+# the θ- and z-collapsed lines), vortex (the same on the resolved (r, θ) grid of
+# the axis-crossing vortex, at half of each N radially and `ntheta`
+# azimuthally) and runs (closed runs to `tfinal`).
 #
 # The face form. Under the node weights W of the positivity limiter
 # (src/positivity.jl) the compact divergence of a closed line telescopes,
@@ -46,10 +48,12 @@
 # separately. Every run prints the relative change of the total mass
 # and energy over the run under three quadratures, with the filter's share of
 # each: the diagnostics' (`volume_integral`: trapezoid weights, a full weight
-# at a fold), W J, and W J less (h²/24) q_1 at a cylindrical axis. The fold
-# side of W J is the midpoint rule on f = r q, whose Euler–Maclaurin error is
-# (h²/24) f'(0) = (h²/24) q(0), and its time derivative at q = ρ is
-# −(h²/24) ∇·(ρu)(0) = −h² ρ u_r'(0)/12, the axis face; the corrected total
+# at a fold, each edge node's weight corrected for the metric's share of the
+# edge term as in src/diagnostics.jl), W J, and W J less (h²/24) q_1 at a
+# cylindrical axis. The fold side of W J is the midpoint rule on f = r q, whose
+# Euler–Maclaurin error is (h²/24) f'(0) = (h²/24) q(0), and its time
+# derivative at q = ρ is −(h²/24) ∇·(ρu)(0) = −h² ρ u_r'(0)/12, the axis face;
+# the corrected total
 # removes that term. The mass table also prints the time integral of the axis
 # face from the state at each step (trapezoid rule in time), which under W J
 # is the whole right-hand-side part of the mass change.
@@ -63,7 +67,7 @@ const CL = CompactLES
 using Printf
 using Random: Xoshiro
 
-const OPTS = CL.script_args(ARGS, (parts="face,vortex,runs", N="64,128,256",
+const OPTS = CL.script_args(ARGS, (parts="quadrature,face,vortex,runs", N="64,128,256",
                                    geometries="rz,sphere,plane,walls",
                                    cases="pulse,implode",
                                    variants="on:on,off:off,on:off,off:on",
@@ -360,9 +364,9 @@ function runs_part(Ns, geometries, o)
     printf("tfinal %.2f, cfl %.2f, implode amplitude %.2f; each change relative to the " *
            "initial total; rhs = change - filter\n", o.tfinal, o.cfl, o.amplitude)
     for (k, quantity) in enumerate(("mass", "energy"))
-        println("\n$quantity: trapezoid (volume_integral), W J, and W J with the axis " *
+        println("\n$quantity: volume_integral, W J, and W J with the axis " *
                 "end correction" * (k == 1 ? "; ∫axis dt the axis face over the run" : ""))
-        println("geometry case       N  flt art status    t     trapezoid    filter" *
+        println("geometry case       N  flt art status    t     vol. int.    filter" *
                 "       W J    filter       rhs  corrected      rhs" *
                 (k == 1 ? "   ∫axis dt  rel. gap" : ""))
         for r in permutedims(results, (4, 3, 2, 1))[:]
@@ -376,11 +380,69 @@ function runs_part(Ns, geometries, o)
     end
 end
 
+# --- quadrature: manufactured integrals ---------------------------------------
+
+const REST = (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0)
+
+# (label, metric, domain, bcs, stretch, θ resolved, q(x1, x2), exact ∫ q dV)
+const QUADRATURE_CASES = [
+    ("axis, q = 2 + cos πr", CylindricalMetric(), ((0.0, 1.0), (0.0, 1.0)),
+     (AxisBC(), SlipWallBC()), nothing, false, (r, t) -> 2 + cos(π * r), 1 - 2 / π^2),
+    ("axis, q = exp(-r²)", CylindricalMetric(), ((0.0, 1.0), (0.0, 1.0)),
+     (AxisBC(), SlipWallBC()), nothing, false, (r, t) -> exp(-r^2), (1 - exp(-1)) / 2),
+    ("annulus, q = 2 + cos π(r - ½)", CylindricalMetric(), ((0.5, 1.5), (0.0, 1.0)),
+     (SlipWallBC(), SlipWallBC()), nothing, false, (r, t) -> 2 + cos(π * (r - 0.5)),
+     2 - 2 / π^2),
+    ("origin, q = 2 + cos πr", SphericalMetric(), ((0.0, 1.0), (π / 2, π / 2 + 1)),
+     (OriginBC(), SlipWallBC()), nothing, false, (r, t) -> 2 + cos(π * r),
+     2 / 3 - 2 / π^2),
+    ("poles, q = 2 + cos π(r - ½) cos 2θ", SphericalMetric(), ((0.5, 1.5), (0.0, π)),
+     (SlipWallBC(), SlipWallBC()), nothing, true,
+     (r, t) -> 2 + cos(π * (r - 0.5)) * cos(2t), 13 / 3 + 8 / (3π^2)),
+    ("stretched, q = 2 + cos πx", CartesianMetric(), ((0.0, 1.0), (0.0, 1.0)),
+     (SlipWallBC(), SlipWallBC()), sine_cluster(0.0, 1.0, 0.3, 0.4), false,
+     (x, t) -> 2 + cos(π * x), 2.0),
+    ("stretched, q = exp(x)", CartesianMetric(), ((0.0, 1.0), (0.0, 1.0)),
+     (SlipWallBC(), SlipWallBC()), sine_cluster(0.0, 1.0, 0.3, 0.4), false,
+     (x, t) -> exp(x), exp(1) - 1),
+]
+
+# `volume_integral` of a smooth q against its exact value, on N nodes along the
+# first dimension (and N along a resolved θ between two poles).
+function quadrature_part(Ns)
+    println("\n=== volume_integral of smooth fields: error and order by refinement ===")
+    println("case                                   N     error      order")
+    for (label, metric, (dom1, dom2), bcs1, stretch, polar, q, exact) in QUADRATURE_CASES
+        previous = nothing
+        for N in Ns
+            problem = Problem(name="quadrature", eos=IdealSpecies("gas"; R=1.0, gamma=GAMMA),
+                              metric=metric, domain=(dom1, dom2, (0.0, 1.0)),
+                              bcs=(bcs1, polar ? (PoleBC(), PoleBC()) : PERIODIC,
+                                   PERIODIC), ic=REST)
+            solver, _ = setup(problem, Numerics(n_global=(N, polar ? N : 1, 1),
+                                                stretch=(stretch, nothing, nothing),
+                                                art=ArtificialProperties(enabled=false)))
+            decomp = solver.decomp
+            o1, o2, o3 = decomp.n_halo_d
+            f = zeros(size(solver.inv_J))
+            for j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
+                f[i+o1, j+o2, 1+o3] = q(CL.xcoord(solver, 1, i), CL.xcoord(solver, 2, j))
+            end
+            e = volume_integral(solver, f) - exact
+            printf("%-36s %4d  %+.3e  %6.2f\n", label, N, e,
+                   previous === nothing ? NaN : log(previous[1] / abs(e)) /
+                                                log(N / previous[2]))
+            previous = (abs(e), N)
+        end
+    end
+end
+
 function main(o)
     Ns = parse.(Int, split(o.N, ','))
     geometries = split(o.geometries, ',')
     parts = split(o.parts, ',')
-    for (name, part) in (("face", () -> face_part(Ns, geometries)),
+    for (name, part) in (("quadrature", () -> quadrature_part(Ns)),
+                         ("face", () -> face_part(Ns, geometries)),
                          ("vortex", () -> vortex_part([n ÷ 2 for n in Ns], o.ntheta)),
                          ("runs", () -> runs_part(Ns, geometries, o)))
         name in parts || continue

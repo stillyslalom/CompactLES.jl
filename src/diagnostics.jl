@@ -11,20 +11,34 @@
 # volume integral. Every rank in the applicable communicator must call each
 # routine, and each rank receives the same result.
 #
-# Quadrature. The computational grid is uniform, so the integrals are midpoint
-# sums with the metric Jacobian as the weight, times a half weight at a
-# node-centered physical edge. Half-offset (folded) edges take a full weight,
-# because those grids are cell-centered by construction and the first node
-# sits half a cell in.
+# Quadrature. The computational grid is uniform, so an integral is a sum over
+# the nodes of f = J q in the computational coordinate ξ, J the metric
+# Jacobian: the trapezoid rule along a dimension closed on a node (half weight
+# at the edge node) and the midpoint rule along one folded at a half-offset
+# edge (full weight, the first node half a cell in). Their Euler–Maclaurin
+# edge terms are −(h²/12) ∂ₙf and +(h²/24) ∂ₙf, ∂ₙ the ξ-derivative into the
+# domain at the edge, and ∂ₙf = q ∂ₙJ + J ∂ₙq. The conserving integrals
+# (`volume_integral`, `domain_volume`, the conserved budget and its ledger,
+# the positivity floor's tally) remove the metric's share q ∂ₙJ through the
+# edge node's weight (`_edge_factor`), with ∂ₙJ from the node and its two
+# inward neighbors and q read at the edge node. A J constant along the
+# dimension leaves the weight bit for bit as it was.
 #
-# That is exact for a constant on a Cartesian grid, which is the property the
-# test asserts. It is not exact in curvilinear coordinates: at a node-centered
-# edge the half cell is sampled at its boundary, not its midpoint, so the
-# varying Jacobian is approximated to O(h²); e.g. a cylindrical domain closed at
-# r = R integrates to (R²/2)(1 + h²/4R²). Second order is well below the O(h)
-# statistical noise of the mixing quantities these feed, and the alternative is
-# a metric-specific edge rule for a diagnostic. A folded edge has no such term,
-# since every one of its cells is a full cell sampled at its midpoint.
+# What remains is the Cartesian rule's own term. At a node-centered edge it is
+# −(h²/12) J ∂ₙq, which vanishes for a field even about the face and is
+# otherwise second order. At a fold J is even (a symmetry plane, the spherical
+# origin), where ∂ₙJ = 0 and the weight is unchanged, or odd (the r-z axis, a
+# spherical pole), where J = 0 on the fold and the metric term is the whole
+# edge term: the axis node's weight is 11/12 of the midpoint's. Reading q on
+# the fold as q at the first node leaves an O(h⁴) term for a field even across
+# the fold and an O(h³) one for an odd field (a velocity component normal to
+# the axis), at an edge where the midpoint rule was exact for that field. An
+# interface end of a patch keeps its half weight, since the conserving
+# integrals sum both sides. The rule is exact for a constant and a linear
+# function on a Cartesian grid and for J linear or quadratic along the
+# dimension (a cylinder, a sphere), constant q. Plane averages and the
+# composition PDF keep the uncorrected weights; they are not conserved
+# quantities.
 #
 # Collapsed dimensions contribute a factor of one: a 2-D run integrates per unit
 # depth and an axisymmetric run per radian, the same convention the flux
@@ -52,7 +66,9 @@
 
 Quadrature weight of local interior index `i` along dimension `d`: 1 in the
 interior and on any folded (half-offset) edge, ½ on a node-centered physical
-edge, 1 on collapsed and periodic dimensions.
+edge, 1 on collapsed and periodic dimensions. The conserving integrals
+multiply an edge node's weight by the metric edge factor (see the quadrature
+note in `src/diagnostics.jl`).
 """
 @inline function quad_weight(solver::SolverLike, d::Int, i::Int)
     decomp = solver.decomp
@@ -62,6 +78,44 @@ edge, 1 on collapsed and periodic dimensions.
     g == 1 && return (fold !== nothing && fold.lo) ? 1.0 : 0.5
     g == decomp.n_global[d] && return (fold !== nothing && fold.hi) ? 1.0 : 0.5
     return 1.0
+end
+
+# The factor on `quad_weight(solver, d, il)` at padded node `I` that removes
+# the metric's share of the edge term (the quadrature note above); 1 away
+# from a physical edge of the patch along `d`.
+@inline function _edge_factor(solver::SolverLike, d::Int, il::Int, I::CartesianIndex{3})
+    decomp = solver.decomp
+    (decomp.active[d] && !decomp.periodic[d]) || return 1.0
+    g = decomp.offset[d] + il
+    g == 1 && return _edge_factor_at(solver, d, 1, I)
+    g == decomp.n_global[d] && return _edge_factor_at(solver, d, 2, I)
+    return 1.0
+end
+
+# The three factors of interior node (i, j, k) at padded index `I`.
+@inline _edge_factors(solver::SolverLike, i::Int, j::Int, k::Int, I::CartesianIndex{3}) =
+    _edge_factor(solver, 1, i, I) * _edge_factor(solver, 2, j, I) *
+    _edge_factor(solver, 3, k, I)
+
+# h ∂ₙJ from the edge node and its two inward neighbors, exact for a quadratic
+# J: on nodes 0, h, 2h from a node-centered edge, and on nodes h/2, 3h/2, 5h/2
+# from a fold. Written in differences, so a J constant along `d` gives exactly
+# zero. `inv_J` is filled analytically over the padded array, so a neighbor in
+# the halo of a thin block is the same value its owner holds.
+@noinline function _edge_factor_at(solver::SolverLike, d::Int, side::Int,
+                                   I::CartesianIndex{3})
+    solver.bcs[d][side] isa InterfaceBC && return 1.0
+    fold = solver.folds[d]
+    folded = fold !== nothing && (side == 1 ? fold.lo : fold.hi)
+    folded && volume_parity(solver.metric, d) == 1 && return 1.0
+    step = CartesianIndex(ntuple(t -> t == d ? (side == 1 ? 1 : -1) : 0, 3))
+    inv_J = solver.inv_J
+    J1 = 1 / Float64(inv_J[I])
+    J2 = 1 / Float64(inv_J[I + step])
+    J3 = 1 / Float64(inv_J[I + 2step])
+    # Fold: weight h J₁ less (h²/24) ∂ₙJ; node: h J₁/2 plus (h²/12) ∂ₙJ.
+    folded && return 1 - (2 * (J2 - J1) - (J3 - J2)) / (24 * J1)
+    return 1 + (2 * (J2 - J1) - (J3 - J1) / 2) / (6 * J1)
 end
 
 "Computational cell measure Πh_d over active dimensions (collapsed dims give 1)."
@@ -81,9 +135,15 @@ _composite(::PatchSolver) = false
 
 ∫ f dV over the global domain, with `f` a full padded scalar array. Only the
 interior is read, so halo values do not enter the result. Every rank in
-`solver.comm` must call this function. See the quadrature note at the top of
-this file for the edge treatment. This is the single-patch quadrature; use the
-`Vector` form below on a refined run.
+`solver.comm` must call this function. The rule is the trapezoid rule in the
+computational coordinate, the midpoint rule along a folded dimension, with the
+metric Jacobian's share of each edge error removed at the edge node. It is
+fourth order for a field whose normal derivative vanishes on each
+node-centered face and which is even across each fold, on Cartesian,
+stretched, cylindrical and spherical grids alike, and second order otherwise,
+as the Cartesian trapezoid rule is; see the quadrature note at the top of this
+file. This is the single-patch quadrature; use the `Vector` form below on a
+refined run.
 """
 function volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
     return MPI.Allreduce(_local_volume_integral(solver, f, false), +, solver.comm)
@@ -111,8 +171,7 @@ function volume_integral(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}})
 end
 
 # One patch's interior contribution. `masked` applies the covered mask
-# (the composite forms); the single-patch forms leave it off and are
-# bit-identical to the quadrature before the masks existed.
+# (the composite forms); the single-patch forms leave it off.
 function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3},
                                 masked::Bool)
     decomp = solver.decomp
@@ -127,7 +186,7 @@ function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3},
             wj = wk * quad_weight(solver, 2, j)
             for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                w = wj * quad_weight(solver, 1, i)
+                w = wj * quad_weight(solver, 1, i) * _edge_factors(solver, i, j, k, I)
                 if masked
                     m = covered[I]
                     m == 0 || (w *= uncovered_fraction(m))
@@ -179,7 +238,7 @@ function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
-            quad_weight(solver, 3, k)
+            quad_weight(solver, 3, k) * _edge_factors(solver, i, j, k, I)
         if masked
             m = covered[I]
             m == 0 || (w *= uncovered_fraction(m))
@@ -233,7 +292,7 @@ function _local_domain_volume(solver::SolverLike, masked::Bool)
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
-            quad_weight(solver, 3, k)
+            quad_weight(solver, 3, k) * _edge_factors(solver, i, j, k, I)
         if masked
             m = covered[I]
             m == 0 || (w *= uncovered_fraction(m))
