@@ -38,10 +38,13 @@
 #   compared with the rate `run!` records for that step; the two differ only
 #   across a regrid check, which refreshes the coefficients.
 #
-# The profile and the step-size account each take one more run of the
+# The profile and the step-size account share one more run of the
 # configuration, since a profiler perturbs the wall and a per-step callback
-# makes `run!` repeat the restriction before the next step. The callback's
-# run is checked against the timed run's step count and final root state.
+# makes `run!` repeat the restriction before the next step. The profile leaves
+# out the callback's samples and those of that repeated restriction, and the
+# milliseconds per step it prints scale its shares by the timed run's wall.
+# The callback's run is checked against the timed run's step count and final
+# root state.
 #
 #   julia --project=. -t 1 bench/amrwin.jl quick=true
 #   julia --project=. -t 1 bench/amrwin.jl problems=sod
@@ -82,8 +85,8 @@ const opt = CompactLES.script_args(ARGS, (
     problems = "sod,blobs,shock,blob3d", configs = "coarse,box,tiles,fine",
     quick = false, warm = 12, nmax = 100_000, profile = true, diagnose = true,
     art = true, delay = 0.002,
-    sod_n = 201, sod_ny = 17, sod_tile = 8, sod_t = 0.15,
-    blobs_n = 64, blobs_tile = 16, blobs_t = 0.4,
+    sod_n = 201, sod_ny = 17, sod_tile = 8, sod_t = 0.1,
+    blobs_n = 64, blobs_tile = 16, blobs_t = 0.2,
     shock_n = 256, shock_tile = 16, shock_t = 0.221,
     blob3d_n = 24, blob3d_tile = 8, blob3d_t = 1.0))
 
@@ -172,7 +175,7 @@ end
 
 function problem_spec(name)
     q = opt.quick
-    name == "sod" && return q ? sod_spec(61, 9, 8, 0.02) :
+    name == "sod" && return q ? sod_spec(61, 13, 8, 0.02) :
                                 sod_spec(opt.sod_n, opt.sod_ny, opt.sod_tile, opt.sod_t)
     name == "blobs" && return q ? blobs_spec(32, 8, 0.03) :
                                   blobs_spec(opt.blobs_n, opt.blobs_tile, opt.blobs_t)
@@ -485,7 +488,11 @@ function frame_names(ip)
 end
 
 # Samples of the main thread inside `run!`, binned by phase and by the depth of
-# `_advance_level!` (0 outside it, 1 at the root, ℓ + 1 on level ℓ).
+# `_advance_level!` (0 outside it, 1 at the root, ℓ + 1 on level ℓ). Samples in
+# a callback, and in the restriction `run!` repeats before a step because a
+# callback ran, are counted apart and left out of the shares. The lines of
+# `_advance_level!` under the right-hand-side phases are tallied, so that the
+# endpoint's attribution can be checked against the source.
 function phase_profile()
     data = Profile.fetch(include_meta=false)
     stacks = Dict{Vector{UInt64},Int}()
@@ -502,6 +509,11 @@ function phase_profile()
     endpoint = endpoint_lines()
     counts = zeros(Int, length(PHASES), 5)
     total = 0
+    excluded = 0
+    rhs_lines = Dict{Int,Int}()
+    rhs_phases = (ENDPOINT, findfirst(p -> p[1] == "RHS", PHASES),
+                  findfirst(p -> p[1] == "level sensors", PHASES),
+                  findfirst(p -> p[1] == "ghost-flux divergence", PHASES))
     for (stack, count) in stacks
         funcs = Symbol[]
         depth = 0
@@ -516,6 +528,10 @@ function phase_profile()
             end
         end
         :run! in funcs || continue
+        if :run_callbacks! in funcs || (:_presync! in funcs && :restrict_level! in funcs)
+            excluded += count
+            continue
+        end
         phase = OTHER
         for (q, (label, names)) in enumerate(PHASES)
             if q == ENDPOINT
@@ -527,8 +543,11 @@ function phase_profile()
         end
         counts[phase, min(depth, 4)+1] += count
         total += count
+        depth > 0 && phase in rhs_phases &&
+            (rhs_lines[innermost_line] = get(rhs_lines, innermost_line, 0) + count)
     end
-    return (; counts, total, endpoint_found=!isempty(endpoint))
+    return (; counts, total, excluded, rhs_lines, endpoint,
+            endpoint_found=!isempty(endpoint))
 end
 
 # ---------------------------------------------------------------------------
@@ -538,8 +557,10 @@ row(problem, config, key, value) = println("row,", problem, ",", config, ",", ke
                                            value)
 
 function print_profile(spec, config, prof, wall, steps)
-    @printf("\nphase profile, %s %s: %d samples of run!, run wall %.2f s, %d root steps\n",
+    @printf("\nphase profile, %s %s: %d samples of run!, timed wall %.2f s, %d root steps\n",
             spec.name, config, prof.total, wall, steps)
+    @printf("  (%d samples in the callback and the repeated restriction left out)\n",
+            prof.excluded)
     prof.endpoint_found ||
         println("  (endpoint line not found in the loaded timestep.jl; the endpoint " *
                 "RHS is counted under RHS)")
@@ -556,6 +577,15 @@ function print_profile(spec, config, prof, wall, steps)
         end
         println()
         row(spec.name, config, "phase:" * label, round(share; sigdigits=4))
+    end
+    isempty(prof.rhs_lines) && return
+    @printf("  right-hand-side samples by line of _advance_level! (endpoint at %s):\n",
+            join(prof.endpoint, ", "))
+    file = joinpath(dirname(pathof(CompactLES)), "timestep.jl")
+    source = isfile(file) ? readlines(file) : String[]
+    for (line, c) in first(sort(collect(prof.rhs_lines), by=x -> -x[2]), 6)
+        text = 1 <= line <= length(source) ? strip(source[line]) : ""
+        @printf("    %5d %6.1f%%  %s\n", line, 100c / prof.total, first(text, 60))
     end
 end
 
@@ -686,14 +716,21 @@ function run_problem(spec, configs)
     # The census and the step-size account of each refined configuration, and
     # of the coarse run for its own bound.
     censuses = Dict{String,Census}()
+    profiles = Dict{String,Any}()
+    opt.profile && Profile.init(n=10_000_000, delay=opt.delay)
     for config in filter(c -> haskey(results, c), order)
         (refined(config) || config == "coarse") || continue
         opt.diagnose || break
         census = Census()
+        profiled = opt.profile && refined(config)
+        profiled && Profile.clear()
         r = attempt(config, "census run") do
-            timed_run(spec, config; callback=census_callback(census, true))
+            timed_run(spec, config; callback=census_callback(census, true),
+                      profiled=profiled)
         end
         r === nothing && continue
+        profiled && (profiles[config] = (phase_profile(), results[config]["wall"],
+                                         results[config]["steps"]))
         censuses[config] = census
         res = results[config]
         same = r.solver.step == res["steps"] &&
@@ -708,14 +745,12 @@ function run_problem(spec, configs)
         res = results[config]
         res["point_steps"] = Float64(res["points"] * res["steps"])
     end
-    profiles = Dict{String,Any}()
-    if opt.profile
-        Profile.init(n=10_000_000, delay=opt.delay)
+    if opt.profile && !opt.diagnose
         for config in filter(c -> haskey(results, c) && refined(c), order)
             Profile.clear()
             r = attempt(config, "profiled run") do
                 run = timed_run(spec, config; profiled=true)
-                (phase_profile(), run.solver.wall_total, run.solver.step)
+                (phase_profile(), results[config]["wall"], results[config]["steps"])
             end
             r === nothing || (profiles[config] = r)
         end
