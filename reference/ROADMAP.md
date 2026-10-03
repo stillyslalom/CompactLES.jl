@@ -480,11 +480,14 @@ promotion.
   The box is below the fine wall on the Sod tube and the 3-D blob; the tiles
   are above it on all four, and on the blob problems only the tiles reach
   the fine answer. The remaining work, by measured share:
-  1. The level's step count, 1.6 to 2.6 times the fine run's. Covered root
-     nodes, carrying the restricted solution's artificial diffusivity, bound
-     most root steps; leaving them out of `max_rate` predicts the fine run's
-     count on the Sod tube, the shock and the tiled blobs. On the box blobs
-     and the 3-D runs the level's own artificial rate then holds 1.5 to 2.5.
+  1. The level's step count. A parent's nodes that restriction overwrites,
+     more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
+     0.75 rather than the solver's (commit `f1d420c`; excluding them made
+     the axis shock run away): the Sod level takes the fine run's step count,
+     the tiled Sod tube runs at 0.73 of the fine wall, the shock falls from
+     1115 to 763 root steps. On the box blobs and the 3-D runs the level's
+     own artificial rate holds 1.5 to 2.5 times the fine count; the 3-D blob
+     is not re-measured.
   2. The tiles' cost per point, about twice the fine grid's: the level-wide
      artificial coefficients (a fifth to a quarter of the step), the
      Hermite shell fill (a fifth to a third, about twice the box's cost per

@@ -2773,9 +2773,8 @@ function test_refined_decomposed()
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
         Prim(u=(0, 0, 0), p=0.1, rho=0.125))
     # Sixty-one steps: three regrids, at steps 21, 41 and 61. Measured
-    # serially, the region goes 160/60 → 161/39 → 160/41 → 159/43
-    # (offset/extent), so the third regrid is the first to leave the region
-    # both moved and grown, and both numbers are checked. The run used to go
+    # serially, the region ends at 157/48 (offset/extent) from 160/60, moved
+    # and resized, and both numbers are checked. The run used to go
     # to t = 0.03 (265 steps, offset 149), which is the same test many more
     # times over: every regrid is a replicated tag-and-rebuild over the same
     # collectives, and on an oversubscribed runner the phase cost is linear in
@@ -2786,17 +2785,17 @@ function test_refined_decomposed()
     region = CL.refined_region(solver)
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    check("regridded Sod: region offset tracks as serial (159)",
-          abs(gmax(region.offset[1]) - 159), 0.5)
-    check("regridded Sod: region extent tracks as serial (43)",
-          abs(gmax(region.extent[1]) - 43), 0.5)
+    check("regridded Sod: region offset tracks as serial (157)",
+          abs(gmax(region.offset[1]) - 157), 0.5)
+    check("regridded Sod: region extent tracks as serial (48)",
+          abs(gmax(region.extent[1]) - 48), 0.5)
     # The step count is nmax by construction; the time reached is not. It is
     # the sum of 61 global dt decisions through three regrids, so a rank-count
     # dependence anywhere in the coarse–fine CFL reduction or the regridded
     # level's spacing moves it. Serial value at step 61; the tolerance is the
     # Allreduce round-off tier.
     check("regridded Sod: time reached matches serial",
-          abs(gmax(solver.t) - 0.005505030961213709), 1e-14)
+          abs(gmax(solver.t) - 0.009761548245685925), 1e-14)
     # The regrids dropped the setup-time fine patch. Decomposed over more
     # than one rank, or over a split communicator, its decomposition owns
     # Cartesian communicators, which must be freed at the drop and not left
@@ -3311,7 +3310,7 @@ function test_level_subset()
           abs(firesL - 3), 0.5)
 
     # Regridding under subset ownership: the region grows from 8 coarse nodes
-    # (22 fine, two ranks) to 25 (73 fine, eight), so the subset is resized
+    # (22 fine, two ranks) to 27 (79 fine, eight), so the subset is resized
     # and the communicator it replaces is freed rather than left to the
     # garbage collector, as a dropped `Decomp` is.
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -3337,15 +3336,15 @@ function test_level_subset()
     check("regrid: the replaced level communicator was freed",
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    # Serial values under the default hold band (171/24 without it, at the
-    # same time reached). Fresh coefficients after each regrid change the CFL
-    # sequence from the prior stale-array measurement.
+    # Serial values under the default hold band. The root step follows the
+    # uncovered nodes, the level's interior held to a CFL ceiling, so the
+    # times reached here and in the regridded Sod case are those of that rule.
     check("regrid under subsets: region offset tracks as serial (170)",
           abs(gmax(region.offset[1]) - 170), 0.5)
-    check("regrid under subsets: region extent tracks as serial (25)",
-          abs(gmax(region.extent[1]) - 25), 0.5)
+    check("regrid under subsets: region extent tracks as serial (27)",
+          abs(gmax(region.extent[1]) - 27), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.0055075390598579594), 1e-13)
+          abs(gmax(solver.t) - 0.006910904008790315), 1e-13)
 end
 
 # ---------------------------------------------------------------------------
