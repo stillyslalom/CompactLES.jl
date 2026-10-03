@@ -9,6 +9,11 @@
 # names are the first elements of SUITE at the bottom of this file):
 #   mpiexec -n 8 julia --project=. -t 1 test/mpi_tests.jl "phases=halo consistency"
 #
+# `rank_shape=true` runs the phases whose code path depends on the rank count
+# (RANK_SHAPE_PHASES, beside SUITE), the selection CI and the core gate run at
+# eight ranks:
+#   mpiexec -n 8 julia --project=. -t 1 test/mpi_tests.jl rank_shape=true
+#
 # This suite targets the code paths that ONLY execute when a dimension is
 # split across more than one rank and are therefore UNREACHABLE from the serial
 # suite (which runs at np == 1):
@@ -1422,9 +1427,8 @@ end
 #     evaluates for itself, and the checkpoint restart into the same next
 #     phase, bitwise. A phase switching the artificial properties on, and
 #     one switching them off, continue bitwise as the solver of that setting
-#     started from the carried state. The tiled, regridded, subcycled Sod of
-#     the hierarchy checkpoint phase then changes its high wall the same way,
-#     against its own checkpoint restart.
+#     started from the carried state. Nothing here depends on the rank count
+#     beyond one rank owning the plane and one not, which two ranks give.
 # ---------------------------------------------------------------------------
 function test_phase_change()
     section("phase change: one decision, bitwise as a checkpoint restart")
@@ -1499,9 +1503,21 @@ function test_phase_change()
     run!(ref_off, rq_off; tfinal=1e9, nmax=20)
     check("art switched off vs the art-off solver: state difference",
           gmax(gap(aq_off, rq_off)) + gmax(abs(a_off.t - ref_off.t)), 1e-300)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_phase"), readdir()))
+    MPI.Barrier(comm)
+end
 
-    # The hierarchy: the phase change rebuilds the tiles on their stored
-    # owner ranges and continues, regrids and all, as the restart does.
+# ---------------------------------------------------------------------------
+# 7a'''. The phase change of a hierarchy, decomposed. The tiled, regridded,
+#     subcycled Sod of the hierarchy checkpoint phase changes its high wall to
+#     an NSCBC outflow: the phase change rebuilds the tiles on their stored
+#     owner ranges and continues, regrids and all, as its own checkpoint
+#     restart does. The owner ranges and the tiles a rank holds depend on the
+#     rank count.
+# ---------------------------------------------------------------------------
+function test_hierarchy_phase_change()
+    section("hierarchy phase change: tiles carried on their owners")
     wall2 = (SlipWallBC(), SlipWallBC())
     sod = (x, y, z) -> x < 0.45 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                                   Prim(u=(0, 0, 0), p=0.1, rho=0.125)
@@ -4463,6 +4479,7 @@ const SUITE = (
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("phase change", test_phase_change),
+    ("hierarchy phase change", test_hierarchy_phase_change),
     ("unrefined start", test_unrefined_start),
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),
@@ -4472,15 +4489,51 @@ const SUITE = (
     ("bulk patched layout", test_bulk_patched),
 )
 
+# The phases whose code path depends on the rank count, which `rank_shape=true`
+# selects. CI and the core gate in CLAUDE.md run them at eight ranks, a count
+# that oversubscribes the CI runner (see .github/workflows/CI.yml), where the
+# full suite costs minutes per rank. Most tests put all ranks on one dimension
+# of SPLITN = 72 points via `splitdims`, and at np = 8 that is 9 points per
+# rank, the C8 filter's minimum block and the smallest the reduced-interface
+# solves, the transfer operators, the fold butterfly, the positivity repair
+# and the wall closures of "closed C6" ever see: those phases run. Two grids
+# change shape outright: the corner-halo check's default Dims_create grid
+# (2x2x2 at np = 8, 2x1x1 at np = 2) and the tiled fine level's _amr_dims grid
+# (4x2 against 2x1). A composite face's member mask splits across more ranks,
+# and the deep-regrid levels fall onto rank subsets and move a tile only at
+# np = 8. The level coupling's point-to-point messages pair different ranks at
+# each count, and so do the owner ranges a hierarchy's phase change carries.
+# The mode-truncation phase splits θ over np / 2 or np ranks and r in two. The
+# slicing phase derives its over-coarse stride from np. The remaining phases
+# (the timestepping runs, the writers, the checkpoint, the sensor comparisons,
+# the phase change of a uniform grid) count ranks or change block sizes only,
+# and they are the step-bound ones.
+# The wall-flux phases are absent: a collective below an early return
+# deadlocks once a rank lacks a wall, which every rank does at two ranks.
+const RANK_SHAPE_PHASES = (
+    "periodic C6", "pentadiagonal C10", "closed C6", "device line solves",
+    "tiled refinement", "partitioned coupling", "AMR transfer pair",
+    "staggered operators", "implicit conduction", "halo consistency",
+    "off-rank folds", "mode truncation", "symmetry plane",
+    "level at a symmetry plane", "level on the axis", "folded regrid",
+    "NSCBC inflow", "NSCBC level face", "composite face", "freestream",
+    "composite budgets", "positivity floor", "positivity limiter", "slicing",
+    "hierarchy phase change", "deep regrid subsets", "placed levels",
+    "seam levels",
+)
+
 # `phases=` selects phases by name from SUITE, comma-separated and in SUITE's
-# order; empty runs everything. CI uses it to run only the phases whose code
-# path depends on the rank count at a count that oversubscribes the runner
-# (see .github/workflows/CI.yml), where a compiled suite costs minutes per
-# rank. An unknown name is an error on every rank, not a silently empty run.
-const OPTS = script_args(ARGS, (phases = "",))
+# order, and `rank_shape=true` selects RANK_SHAPE_PHASES; with neither given,
+# every phase runs. An unknown name is an error on every rank, not a silently
+# empty run.
+const OPTS = script_args(ARGS, (phases = "", rank_shape = false))
 const SELECTED = let names = first.(SUITE),
-    wanted = isempty(OPTS.phases) ? collect(names) :
+    wanted = OPTS.rank_shape ? collect(RANK_SHAPE_PHASES) :
+             isempty(OPTS.phases) ? collect(names) :
              strip.(split(OPTS.phases, ','))
+    OPTS.rank_shape && !isempty(OPTS.phases) &&
+        throw(ArgumentError("phases= and rank_shape=true select a phase set each; " *
+                            "give one"))
     unknown = setdiff(wanted, names)
     isempty(unknown) ||
         throw(ArgumentError("phases= names no phase of SUITE: " *

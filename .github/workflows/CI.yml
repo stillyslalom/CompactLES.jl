@@ -105,6 +105,20 @@ jobs:
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
               "precompile_device" => true; force=true)
       - uses: julia-actions/julia-buildpkg@v1
+      # Whether the restored depot holds a loadable image of this source, with
+      # the CPU name and the loader's reason for each CompactLES image it
+      # rejects. On runs whose source had not changed, the eight-rank job
+      # reused its cached image every time and this job rebuilt its own in
+      # four of six, at 7 min each. The image limit does not account for it:
+      # an eviction removes the least recently loaded image, and the image the
+      # previous run built is the most recently loaded one.
+      - name: Report the restored package image
+        env:
+          JULIA_DEBUG: loading
+        run: |
+          ls -l ~/.julia/compiled/v*/CompactLES || true
+          julia --project=. -e 'println(Sys.CPU_NAME, ": image current = ",
+              Base.isprecompiled(Base.identify_package("CompactLES")))'
       # Neither step below runs with `--check-bounds=yes`. That option gives
       # every package in the tree a second precompile cache, which this job
       # would build from scratch before its first test, and it slows every
@@ -163,6 +177,14 @@ jobs:
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
               "precompile_device" => true; force=true)
       - uses: julia-actions/julia-buildpkg@v1
+      # As in the numerics job, for comparison with it.
+      - name: Report the restored package image
+        env:
+          JULIA_DEBUG: loading
+        run: |
+          ls -l ~/.julia/compiled/v*/CompactLES || true
+          julia --project=. -e 'println(Sys.CPU_NAME, ": image current = ",
+              Base.isprecompiled(Base.identify_package("CompactLES")))'
       # One process builds the image before the launch, with the flags the
       # ranks use, so that eight ranks do not wait on one precompile lock at
       # their first `using` and the build is not timed as part of the first
@@ -187,22 +209,9 @@ jobs:
       #
       # So the full suite runs at np = 2 in the numerics job, and this job
       # runs at np = 8 the phases whose code path depends on the rank count,
-      # which four ranks would not add to. Most tests put all ranks on one
-      # dimension of SPLITN = 72 points via `splitdims`, and at np = 8 that
-      # is 9 points per rank, the C8 filter's minimum block and the smallest
-      # the reduced-interface solves, the transfer operators, the fold
-      # butterfly, the positivity repair and the wall closures of "closed
-      # C6" ever see: those phases run. Two grids change shape outright: the
-      # corner-halo check's default Dims_create grid (2x2x2 at np = 8, 2x1x1
-      # at np = 2) and the tiled fine level's _amr_dims grid (4x2 against
-      # 2x1). A composite face's member mask splits across more ranks, and
-      # the deep-regrid levels fall onto rank subsets and move a tile only at
-      # np = 8. The level coupling's point-to-point messages pair different
-      # ranks at each count. The mode-truncation phase splits θ over np / 2
-      # or np ranks and r in two. The slicing phase derives its over-coarse
-      # stride from np. The remaining phases (the timestepping runs, the
-      # writers, the checkpoint, the sensor comparisons) count ranks or
-      # change block sizes only, and they are the step-bound ones.
+      # which four ranks would not add to. `rank_shape=true` selects them:
+      # RANK_SHAPE_PHASES in test/mpi_tests.jl lists them and gives the
+      # reasons, and the core gate in CLAUDE.md runs the same selection.
       # test/substep_rate_tests.jl runs here as well, because its check that
       # the deepest level sits on a subset of the ranks applies only from
       # np = 4. `-t 1` because a rank must not also fan out over threads it
@@ -211,24 +220,9 @@ jobs:
         shell: julia --project=. --color=yes {0}
         run: |
           using MPI, Printf
-          eight = join(("periodic C6", "pentadiagonal C10", "closed C6",
-                        "device line solves", "tiled refinement",
-                        "partitioned coupling",
-                        "AMR transfer pair", "staggered operators",
-                        "halo consistency",
-                        "off-rank folds", "mode truncation", "freestream",
-                        "symmetry plane",
-                        "level at a symmetry plane", "level on the axis",
-                        "NSCBC inflow",
-                        "NSCBC level face",
-                        "positivity floor", "slicing", "composite budgets",
-                        "composite face", "deep regrid subsets",
-                        "placed levels", "folded regrid", "seam levels",
-                        "phase change", "implicit conduction",
-                        "positivity limiter"), ',')
           MPI.mpiexec() do mpiexec
               julia = `$(Base.julia_cmd()) --project=. -t 1`
-              t = @elapsed run(`$mpiexec -n 8 $julia test/mpi_tests.jl phases=$eight`)
+              t = @elapsed run(`$mpiexec -n 8 $julia test/mpi_tests.jl rank_shape=true`)
               @printf("=== np = 8 finished in %.1f s ===\n", t)
               run(`$mpiexec -n 8 $julia test/substep_rate_tests.jl`)
           end

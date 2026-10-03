@@ -58,13 +58,17 @@ end
     # CPU backend the staged copies are the host copies element for
     # element, so the two-patch run is bitwise against the CPUBackend one.
     # The viscous case keeps the interface rows live through the gradients.
+    # The layout runs C6 only: a C10 layout stages the same records, and the
+    # pentadiagonal device plans are compared bitwise against the host plans
+    # by the "device line solves" testset, and with the C10 interface rows
+    # across a rank boundary by the MPI suite's phase of that name.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
-    function slabs(backend; deriv=lele_d1_6(), n_halo=4, interface_flux=:closure)
+    function slabs(backend; interface_flux=:closure)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
                    art=ArtificialProperties(enabled=false),
                    transport=ConstantTransport(mu0=2e-2),
-                   patch_grid=(2, 1, 1), backend=backend, deriv=deriv, n_halo=n_halo,
+                   patch_grid=(2, 1, 1), backend=backend,
                    interface_flux=interface_flux)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
@@ -73,7 +77,7 @@ end
         run!(s, states; tfinal=0.3)
         return s, states
     end
-    for kw in ((;), (deriv=lele_d1_10(),), (interface_flux=:ghost,))
+    for kw in ((;), (interface_flux=:ghost,))
         s1, q1 = slabs(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -696,19 +700,23 @@ end
     # both fits between the hot core and the isothermal wall, so the
     # recovery, the fluxes, the sensors' mole fractions and the wall's
     # internal energy all evaluate on both sides of it through the mirror.
+    # The run is Float64 only: the Float32 mirror is compared bitwise against
+    # the host mixture in every evaluation a launch makes by the recovery
+    # testset above, and a Float32 step on the device path by the Float32
+    # step testset.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
-    function wall_case(backend, T, n2)
-        eos = Nasa9Mixture(T, ["N2", "CO2"])
-        s = Solver(n_global=(32, n2, 1), L_domain=(T(0.1), T(0.04), T(1)),
-                   eos=eos, precision=T, backend=backend, cfl=0.4,
+    function wall_case(backend)
+        eos = Nasa9Mixture(["N2", "CO2"])
+        s = Solver(n_global=(32, 12, 1), L_domain=(0.1, 0.04, 1.0),
+                   eos=eos, backend=backend, cfl=0.4,
                    bcs=((NoSlipWallBC(Twall=800.0), SlipWallBC()), per, per),
                    transport=ConstantTransport(mu0=2e-5))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
-            θ = (1 + tanh((x - T(0.05)) / T(0.008))) / 2
-            Prim(Y=(1 - θ, θ), p=1e5, T_ion=900 + 700 * sin(π * x / T(0.1)),
-                 u=(0.0, 20 * sin(2π * y / T(0.04)), 0.0))
+            θ = (1 + tanh((x - 0.05) / 0.008)) / 2
+            Prim(Y=(1 - θ, θ), p=1e5, T_ion=900 + 700 * sin(π * x / 0.1),
+                 u=(0.0, 20 * sin(2π * y / 0.04), 0.0))
         end)
         return s, Q
     end
@@ -747,8 +755,7 @@ end
         return s1.step == s2.step == nmax && all(isfinite, parent(b[1])) &&
                all(parent(a[i]) == parent(b[i]) for i in eachindex(a))
     end
-    @test compare(backend -> wall_case(backend, Float64, 12); nmax=6)
-    @test compare(backend -> wall_case(backend, Float32, 1); nmax=6)
+    @test compare(wall_case; nmax=6)
     @test compare(level_case; nmax=4)
 end
 

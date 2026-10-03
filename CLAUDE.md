@@ -135,11 +135,11 @@ julia --project=. -O1 test/runtests.jl   # compile-bound; see the note there
 julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
-"$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,partitioned coupling,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,symmetry plane,level at a symmetry plane,level on the axis,NSCBC inflow,NSCBC level face,positivity floor,slicing,composite budgets,composite face,deep regrid subsets,placed levels,folded regrid,seam levels,phase change,implicit conduction,positivity limiter"
+"$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl rank_shape=true
 ```
 
-The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
+The 8-rank selection is `RANK_SHAPE_PHASES` in `test/mpi_tests.jl`, which
+`.github/workflows/CI.yml` runs through the same `rank_shape=true`.
 It exercises rank-dependent block sizes and process-grid shapes.
 
 For the full gate, replace the two MPI commands with full-suite runs at
