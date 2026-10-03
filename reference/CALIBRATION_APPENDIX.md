@@ -41,7 +41,8 @@ section that moved it says so in one sentence and the older figure is gone.
 17. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
     (`bench/noh_transverse.jl`)
 18. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
-19. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
+19. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`,
+    `bench/axismass.jl`)
 20. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
 21. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
@@ -4939,6 +4940,91 @@ solution requires 64× compression to appear at r = 0 instantaneously; in the ar
 completed only at 0.05. A warm start from the exact solution at t = 0.3 integrates to 0.6,
 testing maintenance of the solution through the origin without the initialization
 singularity. The cylindrical axis accepts the cold start at 16× compression.
+
+### Mass through the cylindrical axis face
+
+```text
+julia --project=. -t 1 bench/axismass.jl
+```
+
+The transcript is `bench/results/axismass.txt`.
+
+Under the node weights W of the positivity limiter (h on the fold's half of the line,
+the closed line's tail at the far end) the folded divergence telescopes to
+Σ W (D g) = g_N − Ĝ_0, Ĝ_0 the face value at the fold, so the right-hand side changes
+Σ W J ρ by Ĝ_0 alone on a line closed by a slip wall. Ĝ_0 is round-off (under 5e-16) for
+the odd area-weighted fluxes at the spherical origin and at a face-centred symmetry plane.
+For the even mass and energy fluxes at the cylindrical axis, measured from one right-hand
+side on a converging profile with ρ(0) = 1.5 and u_r'(0) = −1, per radian, against the
+prediction −h² ρ u_r'(0)/12 (and (E + p) in place of ρ), with "corrected" the mass face less
+(h²/24) dρ_1/dt:
+
+```
+N      mass face    /prediction   /node-1 rate   corrected    energy face /prediction
+64     +3.103e-05   1.0008        0.0835         +6.456e-08   1.0007
+128    +7.691e-06   1.0002        0.0834         +3.995e-09   1.0002
+256    +1.915e-06   1.0001        0.0833         +2.481e-10   1.0000
+```
+
+The face carries one twelfth of node 1's mass rate W_1 J_1 dρ_1/dt at every resolution, the
+ratio of −h² ρ u_r'(0)/12 to (h²/2)(−2ρ u_r'(0)) for any smooth flow; on this profile it is
+one sixth of node 1's mass per unit time. The even folded divergence annihilates a
+constant (max |D 1| ≤ 2.8e-14) where Σ W (D 1) would have to equal 1, so no node weights,
+positive or not, conserve the r-z mass exactly. With θ resolved the faces of all lines sum
+to −(π h²/12) ∇·(ρu)(0), the collapsed value times 2π: on the axis-crossing vortex with its
+centre at x = −0.15 the ratio to that prediction is 1.0072, 1.0020 and 1.0005 at N = 32, 64
+and 128, and the sum is round-off with the centre on the axis, where ∇·(ρu)(0) = 0.
+
+**The face is the rate of change of the quadrature's own error at the axis.** The fold side
+of W J is the midpoint rule on f = r q, whose Euler–Maclaurin error is (h²/24) f'(0) =
+(h²/24) q(0); at q = ρ its rate is −(h²/24) ∇·(ρu)(0) = −h² ρ u_r'(0)/12, the face.
+Subtracting (h²/24) q_1 from the W J total, a node-1 weight of 11h²/24 per radian in place
+of h²/2, leaves the fourth-order remainder of the corrected column above. Closed runs to t = 1
+(slip wall at r = 1, cfl 0.5, the default filter and artificial properties), relative change
+of the total mass: the trapezoid column is `volume_integral`'s total, the others the
+right-hand side's part under W J (the filter's share removed), the time integral of Ĝ_0 over
+the steps, and the corrected total's right-hand-side part:
+
+```
+case     N     trapezoid   W J rhs     ∫ Ĝ_0 dt    corrected rhs
+pulse    64    -6.81e-06   -6.27e-06   -6.26e-06   -2.36e-08
+pulse    128   -1.80e-06   -1.55e-06   -1.55e-06   -1.46e-09
+pulse    256   -4.51e-07   -3.87e-07   -3.87e-07   -9.10e-11
+implode  64    +3.88e-06   -8.40e-06   -8.40e-06   -5.72e-10
+implode  128   +1.00e-06   -2.09e-06   -2.09e-06   -4.28e-11
+implode  256   +2.52e-07   -5.19e-07   -5.19e-07   -3.03e-12
+```
+
+In all 24 r-z runs, filter and artificial properties each on or off, the right-hand side's
+part under W J equals the time integral of the axis face to the accuracy of the trapezoid
+rule in time (1.6e-3 relative at N = 64, 4.8e-5 at 256), and the corrected part falls by a
+factor of 14 to 44 between N = 128 and 256; the energy totals follow the same pattern. On
+the spherical origin, the symmetry plane and the line between two slip walls the same mass
+column is round-off (under 2e-14), and the drift under W J is the filter's alone. The
+diagnostics' trapezoid quadrature drifts at second order on the sphere as well (+1.32e-5,
++3.27e-6, +8.15e-7 on the implosion), because its half weight at a curved outer wall is an
+O(h²) rule (the quadrature note in `src/diagnostics.jl`), so under `volume_integral` the
+axis face and the outer edge contribute errors of the same size.
+
+**Decision.** The options and their size:
+
+- Carry the axis face explicitly: subtracting Ĝ_0 at node 1 conserves Σ W J ρ exactly but
+  changes node 1's rate by one twelfth at every resolution, an order-one error at the node
+  whose fold windows above converge at 6 to 7; spreading it over a fixed region instead
+  adds an O(h²) error at every node of the region. The face value itself is local to the
+  rank holding the fold, through the mirrored face relation there.
+- Change the quadrature: the end correction (h²/24) q_1 conserves the r-z totals to fourth
+  order with no change to the solution. In `volume_integral` and the budget ledger it would
+  leave the second-order half weight at a curved outer wall in place unless the far end
+  took W's closed tail as well.
+- Leave it: the second-order drift is the change of the reporting quadrature's leading
+  error term, and the corrected total shows the solution's mass conserved to fourth order.
+
+The scheme is left as it is: the measured drift is a property of the quadrature, and
+carrying the face would replace it with an order-one error in node 1's rate. Whether the
+diagnostics take the end correction is open; the recommendation is to keep
+`volume_integral` as it is, second order like its documented edge rule at curved walls, and
+to apply the correction where a conservation statement for an r-z run is wanted.
 
 ## Operator and step cost
 
