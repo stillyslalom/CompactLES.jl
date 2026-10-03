@@ -1172,7 +1172,8 @@ end
 # the `ConservedState` wrappers, which are already on the heap, and rewrap
 # them here: the immutable wrapper itself would be boxed crossing the dynamic
 # call, 16 B per argument per call.
-_cold_bulk_gradients!(solver, q) = _bulk_gradients!(solver, ConservedState(q))
+_cold_bulk_gradients!(solver, q, level_smoothed::Bool) =
+    _bulk_gradients!(solver, ConservedState(q), level_smoothed)
 _cold_ghost_flux_divergence!(dq, c::Int, Fdc, solver, q, d::Int) =
     _ghost_flux_divergence!(ConservedState(dq), c, Fdc, solver, ConservedState(q), d)
 
@@ -1217,7 +1218,9 @@ end
 # 1 + n_species of `compute_rhs!`, whose n_species `_species_gradients_skipped`
 # may remove. Every rank enters the solves. `tmp_a` is free
 # at this point of the evaluation and holds the component being differenced.
-function _bulk_gradients!(solver::SolverLike, Q)
+# `level_smoothed` is true where the level-wide pass has already smoothed the
+# sharpening flux's gradients (`_sharpening_fluxes!`).
+function _bulk_gradients!(solver::SolverLike, Q, level_smoothed::Bool=false)
     decomp = solver.decomp
     n1f, n2f, n3f = padded_extent(decomp)
     # `:partial_density` differences the partial densities alone.
@@ -1233,7 +1236,7 @@ function _bulk_gradients!(solver::SolverLike, Q)
     end
     # A setup constant identical on every rank, so every rank enters the
     # sharpening flux's line solves or none does.
-    _sharpening(solver) && _sharpening_fluxes!(solver)
+    _sharpening(solver) && _sharpening_fluxes!(solver, level_smoothed)
     return solver
 end
 
@@ -1255,24 +1258,31 @@ end
 # Σ_k ∇V_k = 0 holds pointwise and not only to the truncation error of the
 # derivative. `tmp_a` is free once the partial densities are differenced, and
 # `smooth!` exchanges halos, so every rank enters this or none does.
-function _sharpening_fluxes!(solver::SolverLike)
+#
+# On a tiled level with shared faces the smoothed gradients come from the
+# level-wide pass instead (`level_smoothed`, `_level_sharpening_gradients!`),
+# which smooths them across the faces as one patch spanning the tiles would;
+# smoothed tile by tile, they take the closure rows of a field without ghosts
+# at a shared face, and the gate and the normals then change along the tile
+# lattice.
+function _sharpening_fluxes!(solver::SolverLike, level_smoothed::Bool=false)
     decomp = solver.decomp
     N = solver.equations.n_species
-    n1f, n2f, n3f = padded_extent(decomp)
     for sp in 1:(N - 1)
-        pointwise!(_volume_fraction_point!, solver.tmp_a, n1f, n2f, n3f,
-                   solver.tmp_a, solver.eos, solver.field_tuples.Y, sp, N)
-        for d in 1:3
-            decomp.active[d] || continue
-            deriv_scaled_along!(solver.grad_Q[d, N + sp], solver.tmp_a, solver, d, 1)
-        end
+        _volume_fraction_gradients!(ntuple(d -> solver.grad_Q[d, N + sp], 3), solver,
+                                    sp)
         # After every direction's derivative: `smooth!` takes `tmp_a` as its
         # scratch, and `tmp_a` holds the fraction being differenced.
         for d in 1:3
             decomp.active[d] || continue
             filtered = solver.grad_Q[d, 2N - 1 + sp]
-            copy_interior!(filtered, solver.grad_Q[d, N + sp], decomp)
-            smooth!(filtered, solver)
+            if level_smoothed
+                copy_interior!(filtered, _sharpen_gradient(solver, solver.art, sp, d),
+                               decomp)
+            else
+                copy_interior!(filtered, solver.grad_Q[d, N + sp], decomp)
+                smooth!(filtered, solver)
+            end
         end
     end
     o1, o2, o3 = decomp.n_halo_d
@@ -1283,6 +1293,22 @@ function _sharpening_fluxes!(solver::SolverLike)
                solver.inv_h[2], solver.inv_h[3], solver.h, decomp.active, N,
                _sharpening_constants(solver), o1, o2, o3)
     return solver
+end
+
+# The gradient of the volume fraction of species `sp` along every active
+# dimension `d` into `out[d]`, through `tmp_a`, which holds the fraction on
+# return. Collective over the patch's communicator.
+function _volume_fraction_gradients!(out, solver::SolverLike, sp::Int)
+    decomp = solver.decomp
+    n1f, n2f, n3f = padded_extent(decomp)
+    pointwise!(_volume_fraction_point!, solver.tmp_a, n1f, n2f, n3f,
+               solver.tmp_a, solver.eos, solver.field_tuples.Y, sp,
+               solver.equations.n_species)
+    for d in 1:3
+        decomp.active[d] || continue
+        deriv_scaled_along!(out[d], solver.tmp_a, solver, d, 1)
+    end
+    return out
 end
 
 # The gate of the sharpening flux as a function of θ = ε_g/ℓ, ℓ the local
@@ -1556,7 +1582,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
     # below it unreached. Behind a function barrier so that the default
     # path's inferred body (bench/audit.jl) does not carry the branch.
     _shared_species_diffusivity(solver) &&
-        _cold_bulk_gradients!(_cold(solver), parent(Q))
+        _cold_bulk_gradients!(_cold(solver), parent(Q), coefficients_current)
     assemble_fluxes!(solver, Q)
     # Physical wall fluxes must enter the compact divergence, including its
     # near-wall rows. All ranks visit the hooks in the same order; the wall

@@ -22,7 +22,9 @@
 # `sensed_fields`. Each tile's right-hand side then runs with the coefficients
 # this leaves on the patch (`compute_rhs!` with `coefficients_current`) and
 # with the velocity gradients the pass computed, which each tile holds in
-# arrays of its own (`_own_gradients`) or in its block of a stack's.
+# arrays of its own (`_own_gradients`) or in its block of a stack's. The
+# smoothed volume-fraction gradients of the sharpening flux take the same
+# stages after the coefficients (`_level_sharpening_gradients!`).
 #
 # A coarse-fine face keeps the treatment a tile has without the pass, up to
 # the order of a sum, under the default detector and smoother. The sensed
@@ -50,19 +52,34 @@ _dilatation_sensed(art::ArtificialProperties) =
     art.beta_sensor === :dilatation || art.beta_sensor === :ungated_dilatation
 
 """
-    _sensed_field_count(art, tile) -> Int
+    _sensed_field_count(art, tile, n_species) -> Int
+    _sensed_field_count(solver, tile) -> Int
 
 The number of sensed fields a tile of a level of lattice edge `tile` holds for
 the level's artificial-property pass (`Patch.sensed_fields`): the strain
 magnitude, which `scalar_field` reads whichever sensors are selected, and the
-dilatation where β* is built from it, in that order. Zero on a level of one
-patch (`tile = 0`), which never takes the pass, and with the artificial
-properties off.
+dilatation where β* is built from it, in that order; then, where the
+sharpening flux is on, the smoothed volume-fraction gradients of its first
+n_species − 1 species, three per species (`_sharpen_gradient`). Zero on a
+level of one patch (`tile = 0`), which never takes the pass, and with the
+artificial properties off.
 """
-function _sensed_field_count(art::ArtificialProperties, tile::Int)
+function _sensed_field_count(art::ArtificialProperties, tile::Int, n_species::Int)
     (tile > 0 && art.enabled) || return 0
-    return 1 + Int(_dilatation_sensed(art))
+    sharpened = _sharpening(art, n_species) ? 3 * (n_species - 1) : 0
+    return _sensor_field_count(art) + sharpened
 end
+_sensed_field_count(solver, tile::Int) =
+    _sensed_field_count(solver.art, tile, solver.equations.n_species)
+
+# The sensed fields the sensors are detected from, which lead the list.
+_sensor_field_count(art::ArtificialProperties) = 1 + Int(_dilatation_sensed(art))
+
+# The smoothed gradient along `d` of the volume fraction of species `sp` that
+# a tile of a level taking the pass holds for its sharpening flux, the slot
+# kept along a collapsed dimension as well.
+_sharpen_gradient(p, art::ArtificialProperties, sp::Int, d::Int) =
+    p.sensed_fields[_sensor_field_count(art) + 3 * (sp - 1) + d]
 
 # The coefficient arrays of patch `p` that hold the level's sensors between
 # detection and the coefficients: the μ* sensor in `mu_art` unless β* shares
@@ -101,6 +118,8 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
         end
     end
     _level_artificial!(solver, lev, states, prepared)
+    # A setup constant, the same on every rank holding the level.
+    _sharpening(solver) && _level_sharpening_gradients!(solver, lev, states)
     if stacked
         for st in lev.stacks
             compute_rhs!(PatchSolver(solver, st.patch), _stack_state(st, states),
@@ -183,6 +202,47 @@ function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
     end
     _each_unit(solver, lev, states) do ps, Q
         _level_coefficients!(ps)
+    end
+    return nothing
+end
+
+"""
+    _level_sharpening_gradients!(solver, lev, states)
+
+The smoothed volume-fraction gradients the sharpening flux builds its pair
+normals and its gate from (`_sharpening_fluxes!`), computed over the whole of
+`lev` as the sensors are: each tile differences the fractions with its own
+interface ghosts, and each directional smoothing pass reads the neighbor's
+gradients, smoothed along the previous directions, across a shared face. The
+results stay in each tile's `sensed_fields` (`_sharpen_gradient`), and the
+tile's right-hand side uses them instead of smoothing its own when its
+coefficients are current. Runs after `_level_artificial!`, whose primitives it
+reads, on the same ranks at the same point.
+"""
+function _level_sharpening_gradients!(solver::Solver, lev::Level, states)
+    art = solver.art
+    N = solver.equations.n_species
+    _each_unit(solver, lev, states) do ps, Q
+        for sp in 1:(N - 1)
+            _volume_fraction_gradients!(ntuple(d -> _sharpen_gradient(ps, art, sp, d), 3),
+                                        ps, sp)
+        end
+    end
+    # The active gradients of every species in one exchange per direction:
+    # at most 3(N − 1) fields, within the n_cons = N + 4 a record's buffer
+    # holds for N ≤ `SHARPEN_MAX_SPECIES`.
+    gradients(p) = [_sharpen_gradient(p, art, sp, d)
+                    for sp in 1:(N - 1) for d in 1:3 if p.decomp.active[d]]
+    n_global = solver.n_global
+    for d in 1:3
+        n_global[d] > 1 || continue
+        _sync_sensor_fields!(solver, lev, gradients, false, d:d)
+        _each_unit(solver, lev, states) do ps, Q
+            for f in gradients(ps)
+                smooth_along!(ps.tmp_a, f, ps, d, 1, true)
+                copy_interior!(f, ps.tmp_a, ps.decomp)
+            end
+        end
     end
     return nothing
 end

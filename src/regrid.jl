@@ -1309,7 +1309,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              ring=_ring_detector(solver),
                                              boundaries, bcs=root.bcs,
                                              root_folds=root.folds,
-                                             n_sensed=_sensed_field_count(solver.art,
+                                             n_sensed=_sensed_field_count(solver,
                                                                           spec.tile))
         append!(new_patches, built)
         resize!(new_states, length(held))
@@ -1354,7 +1354,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       ring=_ring_detector(solver),
                                       boundary=boundaries[ti], bcs=root.bcs,
                                       root_folds=root.folds,
-                                      n_sensed=_sensed_field_count(solver.art,
+                                      n_sensed=_sensed_field_count(solver,
                                                                    spec.tile))
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
@@ -1771,7 +1771,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                   ring=_ring_detector(solver),
                                   boundary=boundaries[ti], bcs=rbcs,
                                   root_folds=patches[1].folds,
-                                  n_sensed=_sensed_field_count(solver.art, spec.tile))
+                                  n_sensed=_sensed_field_count(solver, spec.tile))
             Q = _state_like(p.rho, n_cons)
             push!(new_patches, p)
             push!(new_states, Q)

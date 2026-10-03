@@ -1280,6 +1280,77 @@ end
                     field_array(sb, qb, :sensor)[2]) < 1e-13
 end
 
+@testset "tiled level: sharpening gradients across shared faces" begin
+    # The sharpening flux builds its pair normals and its gate from smoothed
+    # volume-fraction gradients. A level with shared faces smooths them over
+    # the whole level (`_level_sharpening_gradients!`), as one patch over the
+    # same region does, but for the tiles' own derivative rows at the shared
+    # faces; smoothed tile by tile they take the closure rows of a field
+    # without ghosts there.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    art = ArtificialProperties(C_sharpen=0.5)
+    # A heavy-gas band at uniform p and T, its volume fraction `v`.
+    function ic(x, y, z)
+        v = 0.5 + 0.5tanh((sin(x) + 0.5cos(y)) / 0.3)
+        rho = (1 - v) + 5v
+        return Prim(Y=((1 - v) / rho, 5v / rho), rho=rho, u=(0.1, 0.0, 0.0), p=1.0)
+    end
+    mk(tile, region) = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                              eos=eos, art=art, refine=region, tile=tile)
+    st = mk(6, BlockRegion((18, 18, 0), (12, 12, 1)))
+    regs = level_regions(st, 1)
+    lo = ntuple(d -> minimum(r.offset[d] for r in regs), 3)
+    hi = ntuple(d -> maximum(r.offset[d] + r.extent[d] for r in regs), 3)
+    sb = mk(0, BlockRegion(lo, hi .- lo))
+    qt, qb = allocate_state(st), allocate_state(sb)
+    initialize!(st, qt, ic)
+    initialize!(sb, qb, ic)
+    @test CL._level_sensors(st, st.levels[2])
+    # The strain magnitude, then one gradient slot per dimension.
+    @test all(length(p.sensed_fields) == 4 for p in st.patches[2:end])
+    @test isempty(sb.patches[2].sensed_fields)
+    CL._prime_coefficients!(st, qt, Workspace(qt))
+    CL._prime_coefficients!(sb, qb, Workspace(qb))
+    # The smoothed gradients a patch forms alone, from its current primitives.
+    function own(ps)
+        g = ntuple(_ -> zero(ps.rho), 3)
+        CL._volume_fraction_gradients!(g, ps, 1)
+        foreach(d -> CL.smooth!(g[d], ps), 1:2)
+        return g
+    end
+    box = sb.patches[2]
+    reference = own(CL.PatchSolver(sb, box))
+    inner(p) = ntuple(d -> p.decomp.n_halo_d[d] .+ (1:p.decomp.n_local[d]), 3)
+    # The largest difference from the box over the tiles along `d`, relative
+    # to the box's peak.
+    function deviation(gradient, d)
+        ib = inner(box)
+        B = reference[d]
+        peak = maximum(abs, view(B, ib...))
+        worst = 0.0
+        for p in st.patches
+            p.level == 1 || continue
+            it = inner(p)
+            o = p.region.offset .- box.region.offset
+            A = gradient(p)
+            for j in eachindex(it[2]), i in eachindex(it[1])
+                b = B[ib[1][o[1] + i], ib[2][o[2] + j], ib[3][1]]
+                worst = max(worst, abs(A[it[1][i], it[2][j], it[3][1]] - b) / peak)
+            end
+        end
+        return worst
+    end
+    level = [deviation(p -> CL._sharpen_gradient(p, art, 1, d), d) for d in 1:2]
+    tiles = [deviation(p -> own(CL.PatchSolver(st, p))[d], d) for d in 1:2]
+    @info "tiled sharpening gradients against one patch" level tiles
+    # Measured 4.7e-6 along x over the level, from the tiles' derivative rows,
+    # and 4.0e-16 along y, against 0.047 and 0.044 tile by tile.
+    @test maximum(level) < 3e-5
+    @test minimum(tiles) > 0.02
+end
+
 @testset "tiled regrid seeds fresh tiles from surviving neighbors" begin
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())

@@ -1087,7 +1087,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                                     transport),
                                                  ring=_ring_detector(art, n_species),
                                                  boundaries, bcs, root_folds=folds,
-                                                 n_sensed=_sensed_field_count(art, tile))
+                                                 n_sensed=_sensed_field_count(art, tile,
+                                                                              n_species))
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)

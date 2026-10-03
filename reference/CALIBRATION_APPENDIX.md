@@ -46,7 +46,8 @@ section that moved it says so in one sentence and the older figure is gone.
 20. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
 21. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
-    `test/level_tests.jl`, `bench/amrwin.jl`, `bench/movinglevel.jl`)
+    `test/level_tests.jl`, `bench/amrwin.jl`, `bench/movinglevel.jl`,
+    `bench/levelpattern.jl`)
 22. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 23. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
@@ -7189,6 +7190,60 @@ regrid (tiles of 4, three levels, np = 8) no level-2 tile changes owner
 within 240 steps under the mask, so that phase runs the plain pass. The
 refined tutorial run took 35 s against the plain pass's 40 s, on 23 tiles at
 the end against 25, single runs.
+
+### bench/levelpattern.jl: the grid-scale pattern of a refined level
+
+`julia --project=. -t 8 bench/levelpattern.jl` and `julia --project=. -t 8
+bench/levelpattern.jl problems=interface configs=uniform,box,tiles`, one rank
+and eight threads on the i9-12900K under Julia 1.11.4, single runs, package at
+the commit that adds the script unless a row says otherwise. The pattern is
+the mean undivided fourth difference of the density over the shell behind a
+converging shock, relative to the density, or of the helium mass fraction over
+a sharpened interface; the script's header defines both and the problems.
+
+**The converging shock**, 64² root, t = 0.165 (R = 0.167, 740 shell nodes).
+The plain pass filters the parent's covered nodes with their residual
+(`mask=false`). The last column counts the nodes the state report finds
+inadmissible at the end.
+
+| configuration | root steps | pattern | ratio | inadmissible |
+|---|---|---|---|---|
+| uniform 191² | 629 | 1.119e-2 | 1.00 | 5 |
+| box | 628 | 1.118e-2 | 1.00 | 5 |
+| tiles of 8 | 628 | 1.331e-2 | 1.19 | 12 |
+| regridded tiles of 8 | 630 | 1.335e-2 | 1.19 | 12 |
+| tiles, plain pass | 628 | 1.330e-2 | 1.19 | 12 |
+| regridded tiles, plain pass | 646 | 2.634e-2 | 2.35 | 13 |
+
+The same measure, with snapshots every 0.015 of simulated time, gave the
+regridded tiles 2.39 at `ce1f513`, before the overwritten-node ceiling
+(`f1d420c`) and the mask of the covered nodes' residual (`04d3cff`). The
+plain-pass rows place the change at the mask, which moves the fixed tiles in
+the fourth digit only. Fixed and regridded tiles then carry the same
+remainder. Over the run (`dsnap=0.015`) the regridded tiles' pattern is 1.38
+times the uniform run's at t = 0.03 and 1.13 times it at 0.045, between 1.00
+and 1.04 times it from 0.06 to 0.12, and 1.07, 1.16 and 1.19 times it at the
+last three snapshots.
+
+**The sharpened interface**, 48² root, w = 10 mm, `C_sharpen = 1`, tiles of
+8, 980 steps in every run, 500 band nodes. The uniform 144² run's pattern is
+3.066e-2. Mean and largest difference of the helium mass fraction from the
+uniform run over the band:
+
+| configuration | ratio | mean | largest |
+|---|---|---|---|
+| box | 1.00 | 1.03e-7 | 9.23e-7 |
+| tiles, gradients smoothed per tile (`7d6b0ba`) | 0.98 | 1.79e-2 | 4.60e-2 |
+| tiles, gradients smoothed over the level | 1.00 | 1.75e-4 | 1.19e-3 |
+| tiles, `C_sharpen = 0` (245 steps) | 1.00 | 8.68e-5 | 5.03e-4 |
+
+Smoothed tile by tile, the flux's filtered gradients took at a shared face
+the smoother's rows for a field without ghosts, and the gate and the pair
+normals changed along the tile lattice. Smoothed over the level
+(`_level_sharpening_gradients!`), they leave the tiles twice the difference
+the tiles carry without the flux. The level test `tiled level: sharpening
+gradients across shared faces` checks the smoothed gradients against one
+patch over the same region.
 
 ### bench/amr_balance.jl: rebalance and migration mechanics
 
