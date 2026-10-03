@@ -1139,8 +1139,9 @@ rank range, and the subset's size is the union of the ranges
 
 - With at least as many ranks as tiles, each tile takes its own range,
   sized by weight through largest-remainder rounding, at least one rank
-  and at most the count the tile admits under the 9-point scheme minimum
-  (`_rank_counts`); ranks beyond the cap total hold nothing on the level.
+  and at most the count the tile admits under the 9-point scheme minimum,
+  and only at a count it admits, since admission is not monotone in the
+  count (`_rank_counts`); ranks left over hold nothing on the level.
   A one-tile level therefore reduces to `_level_ranks`.
 - With more tiles than ranks, each tile takes one rank: the curve is cut into
   `np` runs of about equal weight, by the position of each tile's weight

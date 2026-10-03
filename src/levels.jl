@@ -237,36 +237,48 @@ _sfc_order(regions::Vector{BlockRegion}) =
     sortperm(regions; by=r -> _morton(r.offset))
 
 """
-    _rank_counts(weights, caps, np) -> Vector{Int}
+    _rank_counts(weights, caps, np; admits) -> Vector{Int}
 
 Ranks per tile when the ranks are at least as many as the tiles: proportional
 to `weights` by largest remainder, at least one each and at most `caps[t]`,
-the count tile `t` admits under the scheme minimum, summing to `np` unless
-every tile sits at its cap, when the sum is the cap total and the remaining
-ranks hold nothing on the level. Deterministic, so every rank computes the
-same partition without communication.
+the largest count tile `t` admits under the scheme minimum, summing to `np`
+unless no tile can move to its next admitted count without passing its cap
+or the rank total, when the remaining ranks hold nothing on the level. A
+count below the cap need not be admitted itself (a 25 × 25 fine tile takes
+two ranks or four, never three), so every count is one for which
+`admits(t, count)` holds, and a tile grows from one admitted count to the
+next. Deterministic, so every rank computes the same
+partition without communication.
 """
-function _rank_counts(weights::AbstractVector{<:Real}, caps::Vector{Int}, np::Int)
+function _rank_counts(weights::AbstractVector{<:Real}, caps::Vector{Int}, np::Int;
+                      admits=(t, count) -> true)
     n = length(weights)
     np >= n || error("$np ranks cannot each take a tile of $n")
     total = sum(weights)
     share = [np * w / total for w in weights]
-    counts = [clamp(floor(Int, share[t]), 1, caps[t]) for t in 1:n]
+    # One rank always fits, so the step down to an admitted count ends.
+    admitted_below(t, count) = something(findlast(c -> admits(t, c), 1:count), 1)
+    counts = [admitted_below(t, clamp(floor(Int, share[t]), 1, caps[t])) for t in 1:n]
     # The floor of a share below one rounds up to the one rank a tile must
     # have, which can overshoot; the largest counts give the excess back.
     while sum(counts) > np
-        counts[argmax(counts)] -= 1
+        t = argmax(counts)
+        counts[t] = admitted_below(t, counts[t] - 1)
     end
     while sum(counts) < np
         best = 0
         bestgap = -Inf
+        bestnext = 0
         for t in 1:n
-            counts[t] < caps[t] || continue
+            next = findfirst(c -> admits(t, c), (counts[t] + 1):caps[t])
+            next === nothing && continue
+            next += counts[t]
+            sum(counts) - counts[t] + next <= np || continue
             gap = share[t] - counts[t]
-            gap > bestgap && (best = t; bestgap = gap)
+            gap > bestgap && (best = t; bestgap = gap; bestnext = next)
         end
         best == 0 && break
-        counts[best] += 1
+        counts[best] = bestnext
     end
     return counts
 end
@@ -302,7 +314,10 @@ function _tile_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
         cap = Dict{NTuple{3,Int},Int}()
         caps = [get!(() -> _level_ranks([r], active, np), cap, r.extent)
                 for r in regions]
-        counts = _rank_counts(weights, caps, np)
+        seen = Dict{Tuple{NTuple{3,Int},Int},Bool}()
+        admits(t, count) = get!(() -> _admits(regions[t], active, count), seen,
+                                (regions[t].extent, count))
+        counts = _rank_counts(weights, caps, np; admits)
         at = 0
         for t in order
             owners[t] = at:(at + counts[t] - 1)
@@ -330,7 +345,7 @@ it, and a fresh tile is placed by the rule [`_tile_owners`](@ref) applies to
 a whole level, restricted to the ranks the survivors leave free. The free
 ranks are dealt to the fresh tiles as if they were contiguous, and a range
 that would straddle a gap between free ranks is cut at the gap, so a group
-stays a contiguous rank range; when the survivors leave no rank free, a
+stays a contiguous rank range, and down to a count the tile admits; when the survivors leave no rank free, a
 fresh tile joins the group of the survivor nearest it on the space-filling
 curve among the groups whose rank count admits the tile, and the level is
 partitioned afresh when none does. With no survivor the level is partitioned
@@ -372,10 +387,7 @@ function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
             # answer depends on the extent and the count alone, and a level
             # holds a handful of each.
             seen = Dict{Tuple{NTuple{3,Int},Int},Bool}()
-            admits(r, g) = get!(seen, (r.extent, g)) do
-                ext = fine_extent(r, active)
-                _amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3), g) !== nothing
-            end
+            admits(r, g) = get!(() -> _admits(r, active, g), seen, (r.extent, g))
             for t in fresh
                 fit = [s for s in survivors if admits(regions[t], length(owners[s]))]
                 isempty(fit) && return _tile_owners(regions, active, np)
@@ -391,6 +403,10 @@ function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
                 for i in (first(v) + 1):last(v)
                     free[i + 1] == hi + 1 || break
                     hi += 1
+                end
+                # A cut range can fall on a count the tile does not admit.
+                while hi > lo && !_admits(regions[t], active, hi - lo + 1)
+                    hi -= 1
                 end
                 owners[t] = lo:hi
             end
@@ -2506,13 +2522,18 @@ function _level_ranks(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
         prod(ext[d] > 1 ? max(ext[d] ÷ 9, 1) : 1 for d in 1:3)
     end
     for p in min(np, admitted):-1:1
-        fits = all(regions) do r
-            ext = fine_extent(r, active)
-            _amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3), p) !== nothing
-        end
-        fits && return p
+        all(r -> _admits(r, active, p), regions) && return p
     end
     return 1
+end
+
+# Whether a refined patch over `region` (parent-level node space) admits a
+# process grid of `np` ranks under the 9-point minimum. The extent is the
+# coincident lattice's; a folded face adds a node, which keeps every block
+# at least as large, so a count admitted here is admitted by the folded tile.
+function _admits(region::BlockRegion, active::NTuple{3,Bool}, np::Int)
+    ext = fine_extent(region, active)
+    return _amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3), np) !== nothing
 end
 
 # --- Prolongation: coarse state → fine ghost ring and boundary planes -------

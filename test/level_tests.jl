@@ -490,6 +490,12 @@ end
     @test CL._tile_owners([t(1), t(2)], act, 4; weights=[1.0, 9.0]) == ([0:1, 2:3], 4)
     @test CL._rank_counts([1.0, 9.0], [2, 2], 4) == [2, 2]
     @test CL._rank_counts([1.0, 9.0], [4, 4], 4) == [1, 3]
+    # Admission is not monotone in the rank count: three 25 × 25 fine tiles
+    # over eight ranks admit two ranks each or four, never three, so the
+    # shares of 8/3 round to 4 : 2 : 2 rather than 3 : 3 : 2.
+    lattice = [BlockRegion((8k, 0, 0), (9, 1, 9)) for k in 0:2]
+    @test CL._tile_owners(lattice, (true, false, true), 8) ==
+          ([0:3, 4:5, 6:7], 8)
     # Configuration guards.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
