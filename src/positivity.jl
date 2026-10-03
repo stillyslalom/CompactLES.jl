@@ -1635,13 +1635,18 @@ Base.@propagate_inbounds function _limiter_node_increment(Q, dQ, du, regs, inv_J
     md = d == 1 ? m1 : d == 2 ? m2 : m3
     T = typeof(B)
     out = (zero(T), zero(T), zero(T), zero(T), zero(T))
+    # The directions' register sets differ in length (the radial pressure's
+    # is one longer), so the tuple is read at literal positions: a runtime
+    # index into it does not compile for a device.
     for cc in 1:nc
         x = iszero(A) ? dt * dQ[I, cc] : A * du[I, cc] + dt * dQ[I, cc]
-        for e in 1:3
-            act[e] || continue
-            x += inv_J[I] * regs[e][cc][I]
+        act[1] && (x += inv_J[I] * regs[1][cc][I])
+        act[2] && (x += inv_J[I] * regs[2][cc][I])
+        act[3] && (x += inv_J[I] * regs[3][cc][I])
+        if cc == md
+            r = d == 1 ? regs[1][nc+1][I] : d == 2 ? regs[2][nc+1][I] : regs[3][nc+1][I]
+            x += inv_h[I] * r
         end
-        cc == md && (x += inv_h[I] * regs[d][nc+1][I])
         x *= B
         slot = cc <= ns ? 1 : cc == m1 ? 2 : cc == m2 ? 3 : cc == m3 ? 4 : cc == ie ? 5 : 0
         slot > 0 && (out = Base.setindex(out, out[slot] + x, slot))
