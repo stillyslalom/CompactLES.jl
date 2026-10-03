@@ -2207,6 +2207,30 @@ in one process). The Supernova remnant tutorial completes with the limiter on un
 validity in 2126 steps (2009 off), inferring 0.963, 0.975 and 0.982 × 10⁵¹ erg at 5, 10
 and 20 kyr against 0.963, 0.976 and 0.982 off.
 
+`part=rz N=96` (and `N=128`) runs the same Sedov on the r-z quarter plane, folded at the
+axis and by a symmetry plane at z = 0, against the spherical line at the same spacing:
+
+```
+                      steps   bad point-steps   R_s along r / z / diagonal   peak ρ
+r-z 96², off          1737    732282            0.8176 / 0.8167 / 0.8192     4.358
+r-z 96², on           2047    0                 0.8192 / 0.8174 / 0.8167     4.379
+sphere 96, on         1351    0                 0.8177                        4.138
+r-z 128², off         2269    1246063           0.8138 / 0.8132 / 0.8150     4.652
+r-z 128², on          2873    0                 0.8158 / 0.8135 / 0.8136     4.668
+sphere 128, on        1719    0                 0.8137                        4.587
+```
+
+The limited r-z radii agree with the sphere's to 0.25% along every direction. The face at the
+axis is limited at 18705 of 982560 axis line-stages at N = 96 and 26245 of 1838720 at 128
+(1.9% and 1.4%), and kept within the guarantee: that face carries the scheme's own O(h²)
+flux, up to a twelfth of node 1's rate, and the radius along the axis is the sphere's. The
+307011 unguaranteed sides at N = 128 (183977 at 96) are, as on the line, cells whose node
+terms alone leave their bound; a diagnostic run at N = 64 found every one of them there,
+none at the plane, the axis or a first-order half state. A limited r-z step costs about 2.5
+times the unlimited one (single runs). The spherical line at N = 64, the deposit three
+nodes wide, fails at step 28 unlimited and at step 43 limited: the node terms at the
+origin need the whole cell from step 15.
+
 ## Directional bulk viscosity
 
 ```text

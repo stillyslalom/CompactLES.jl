@@ -216,12 +216,12 @@ surface; H8 for a magnetized target.
   registers, does not. `Numerics(positivity_limiter = true)` carries both
   limits on the Cartesian metric, one patch, serial or decomposed, with ε at
   1% of the minimum ρ and ρe entering `run!` (commits `305de3f`,
-  `0d05acd`); the other configurations are N32. Remaining: where the density
-  falls below ε, as in Sedov's core, cells are pushed to first order and left
-  unguaranteed, for which a per-cell bound min(ε, a fraction of the cell's
-  own value) is the candidate; wall nodes above cfl ≈ 0.32, where the
-  first-order bound fails; and the cost, 1.8 to 2.4 times the unlimited step,
-  which fusing the face pass with the offset and the count should reduce.
+  `0d05acd`); the other configurations are N32. Each cell's bound is 1% of
+  the smaller of that minimum and its own value (commit `4d7fc5a`), which
+  cuts the unguaranteed sides of a 2-D Sedov quadrant by two orders.
+  Remaining: wall nodes above cfl ≈ 0.32, where the first-order bound fails;
+  and the cost, 1.8 to 2.4 times the unlimited step, which fusing the face
+  pass with the offset and the count should reduce.
   **Gate:** the Sedov and Noh cases of `test/cases.jl` and the Supernova
   remnant tutorial under the default strict validity, their errors
   unchanged, and no inadmissible cell during the Woodward–Colella run.
@@ -229,11 +229,15 @@ surface; H8 for a magnetized target.
 - [ ] **N32 — Carry the positivity limiter to every configuration.** N26's
   limiter starts on the Cartesian metric, one patch, host storage. The goal is
   parity with the uniform Cartesian run on every supported configuration, and
-  on the refined and device paths a run time below it. In order: the r-z
-  metric with the axis fold, where the radial momentum takes its pressure as
-  a gradient and no first-order positivity proof exists, and the
-  one-dimensional spherical metric with the origin fold, both high priority;
-  then same-level patch interfaces and refined levels, anchoring the face
+  on the refined and device paths a run time below it. The one-dimensional
+  radial lines folded at r = 0, the spherical origin and the θ-collapsed
+  axis, carry it (commits `4d7fc5a`, `71f4fb1`): Sedov, Noh ν = 2, 3 and the
+  Supernova remnant tutorial run under strict validity with no inadmissible
+  point, at about twice the unlimited step. The r-z plane carries it with
+  the axis, a symmetry plane at z = 0 and their corner (commits `d50697d`,
+  `f5f09c2`): Sedov leaves no inadmissible point and its shock radius is
+  within 0.25% of the spherical line's in every direction, at about 2.5
+  times the unlimited step. In order: same-level patch interfaces and refined levels, anchoring the face
   flux at a coarse-fine face and carrying the registers under subcycling;
   then device storage and stacked tiles; then the remaining metrics and the
   tabulated and NASA-9 equations of state, whose admissibility test is not
@@ -263,17 +267,6 @@ surface; H8 for a magnetized target.
   **Gate:** the tutorial's growth rate on the coarse grid independent of the
   ambient pressure to within its resolved-grid value, or the decision
   recorded with its measurement.
-
-- [ ] **N30 — Carry the collapsed dimension's curvature in the outflow's
-  transverse terms.** The inflow's transverse terms carry the curvature part
-  of a collapsed transverse dimension (commit `f74b76f`); `NSCBCOutflowBC`
-  still omits it, so on an r-z face it leaves u_r/r in the incoming wave and
-  on a spherical radial face the collapsed φ's u_θ cot θ/r. Making the two
-  consistent moves the spherical-dipole reflection baseline, which is a
-  decision to record with the new value.
-  **Gate:** the outflow rows and the spherical-dipole reflection under the
-  changed terms, the baseline re-recorded and explained, and the r-z outflow
-  face's incoming acoustic rate falling with resolution as the inflow's does.
 
 ## Validation and verification
 
@@ -1072,6 +1065,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   first node's mass rate and the rate of change of the midpoint rule's own
   error at the axis; the scheme is unchanged, and with an (h²/24) q₁ end
   correction the r-z mass is conserved to fourth order (commit `3742897`).
+- [x] **N30** — The outflow's transverse terms carry a collapsed transverse
+  dimension's curvature row, as the inflow's do; the default dipole
+  reflection is unchanged at four figures (commit `d5fd609`).
 
 ### Filtering, regularization, boundaries and species
 

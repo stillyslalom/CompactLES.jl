@@ -8,6 +8,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
 #   julia --project=. -t 1 bench/positivity.jl part=src
 #   julia --project=. -t 1 bench/positivity.jl part=src cases=sedov,noh2,noh3
+#   julia --project=. -t 1 bench/positivity.jl part=rz N=96
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -64,6 +65,14 @@
 #             did and the wall time. It also takes the radial cases of
 #             test/cases.jl, Sedov and Noh ν = 2, 3, folded at r = 0, whose
 #             metric is the validation battery's
+#   rz        Sedov of test/cases.jl on the r-z plane, N × N nodes over the
+#             quarter plane folded at the axis and by a symmetry plane at z = 0,
+#             limiter off and on, against the spherical line on N nodes with
+#             the limiter on: the shock radius (the outermost crossing of
+#             ρ = 2) along the axis, along the plane and along the diagonal,
+#             the peak density, the inadmissible point-steps, and the stage
+#             faces limited at the axis. Not in `part=all`; about two minutes
+#             at N = 96
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -979,15 +988,65 @@ function src_part(cases)
     end
 end
 
+# Sedov on the r-z quarter plane and on the spherical line at the same spacing.
+function rz_part(N)
+    println("\n=== rz: Sedov on the r-z plane against the spherical line ===")
+    R = 1.2
+    γ = 1.4
+    pin = SEDOV_E * (γ - 1) / (π^1.5 * SEDOV_S^3)
+    prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
+                   transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
+                   domain=((0.0, R), (0.0, 1.0), (0.0, R)),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
+                   ic=(r, θ, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                        p=1e-5 + pin * exp(-(r^2 + z^2) / SEDOV_S^2)))
+    exact = sedov_shock_radius(SEDOV_E, SEDOV_T, 3, γ)
+    numerics(on, n) = Numerics(n_global=n, art=ArtificialProperties(enabled=true), cfl=0.3,
+                               filter=StateFilter(compact_filter(); cfl=0.35),
+                               control=StepControl(validity=:permissive),
+                               positivity_limiter=on)
+    for on in (false, true)
+        solver, Q = setup(prob, numerics(on, (N, 1, N)))
+        bad = Ref(0)
+        count_bad = (s, q) -> (r = state_report(s, q);
+                               bad[] += r.negative_density + r.inadmissible; nothing)
+        wall = @elapsed run!(solver, Q; tfinal=SEDOV_T, callback=count_bad)
+        ρ(i, k) = Q[padded_index(solver, i, 1, k), 1]
+        x(i) = xcoord(solver, 1, i)
+        z(k) = xcoord(solver, 3, k)
+        along_r = front_position([x(i) for i in 1:N], [ρ(i, 1) for i in 1:N], 2.0)
+        along_z = front_position([z(k) for k in 1:N], [ρ(1, k) for k in 1:N], 2.0)
+        diagonal = front_position([hypot(x(i), z(i)) for i in 1:N],
+                                  [ρ(i, i) for i in 1:N], 2.0)
+        @printf("  r-z %d², %-3s %5d steps, bad %6d, R_s along r %.4f, along z %.4f, \
+                 diagonal %.4f (exact %.4f), peak ρ %.3f, %.1f s\n", N,
+                on ? "on" : "off", solver.step, bad[], along_r, along_z, diagonal, exact,
+                maximum(ρ(i, k) for i in 1:N, k in 1:N), wall)
+        if on
+            c = CL.positivity_counts(solver)
+            @printf("  %24s faces limited: stage %.2e, pass %.2e; unguaranteed \
+                     sides %d; axis faces limited at %d of %d line-stages\n", "",
+                    c.stage_limited / c.stage_faces, c.filter_limited / c.filter_faces,
+                    c.unguaranteed, c.axis_limited, 5 * solver.step * N)
+        end
+        flush(stdout)
+    end
+    solver, Q = setup(sedov_problem(), numerics(true, (N, 1, 1)))
+    run!(solver, Q; tfinal=SEDOV_T)
+    xs, ρs, _, _ = case_line_profile(solver, Q)
+    @printf("  sphere %d, on: %5d steps, R_s %.4f, peak ρ %.3f\n", N, solver.step,
+            front_position(xs, ρs, 2.0), maximum(ρs))
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
-                                identity_steps=300))
+                                identity_steps=300, N=96))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     for p in parts
-        p in PARTS ||
-            throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", "))"))
+        p in PARTS || p == "rz" ||
+            throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")) or rz"))
     end
     for c in cases
         c in CASES ||
@@ -1000,6 +1059,7 @@ function main(args)
     "identity" in parts && identity_part(cases, opt.identity_steps, weights)
     "pulse" in parts && pulse_part()
     "src" in parts && src_part(cases)
+    "rz" in parts && rz_part(opt.N)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []
