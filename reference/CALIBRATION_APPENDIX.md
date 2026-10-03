@@ -6773,10 +6773,13 @@ near-discontinuous interface.
 ### bench/amrwin.jl: time to solution against the uniform fine grid
 
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
-process, package at `4a1f0b4`, one rank and one thread on the i9-12900K under
-Julia 1.11.4. Each problem runs warm as the root grid alone (coarse), the root
-with one subcycled regridded box, the same with lattice tiles, and the uniform
-grid at the refined spacing (fine). The error is the composite L1 norm of ρ
+process, one rank and one thread on the i9-12900K under Julia 1.11.4. The
+refined rows of the Sod tube, the blobs and the shock are with the parent's
+overwritten nodes held to `OVERWRITTEN_CFL` (the root step, below); the
+coarse rows, the 3-D blob and the profile are at `4a1f0b4`, before it. Each
+problem runs warm as the root grid alone (coarse), the root with one
+subcycled regridded box, the same with lattice tiles, and the uniform grid at
+the refined spacing (fine). The error is the composite L1 norm of ρ
 against the fine run at coincident nodes. Single runs; read the ratios to two
 figures.
 
@@ -6794,50 +6797,66 @@ substep, and its points are the time average of the level-1 nodes.
 | problem | run | wall / fine | point-steps / fine | per point-step / fine | level steps / fine | level points / fine | L1 ρ |
 |---|---|---|---|---|---|---|---|
 | sod | coarse | 0.042 | 0.041 | 1.03 | | | 2.6e-3 |
-| sod | box | 0.611 | 0.456 | 1.34 | 1.56 | 0.25 | 1.38e-4 |
-| sod | tiles | 1.19 | 0.506 | 2.34 | 1.56 | 0.29 | 1.08e-4 |
+| sod | box | 0.391 | 0.299 | 1.31 | 1.00 | 0.26 | 1.35e-4 |
+| sod | tiles | 0.734 | 0.320 | 2.29 | 1.00 | 0.28 | 1.25e-4 |
 | blobs | coarse | 0.045 | 0.047 | 0.96 | | | 4.5e-2 |
-| blobs | box | 3.03 | 2.04 | 1.48 | 2.61 | 0.75 | 1.09e-2 |
-| blobs | tiles | 4.32 | 2.26 | 1.91 | 2.13 | 1.02 | 4.35e-4 |
+| blobs | box | 2.99 | 2.00 | 1.50 | 2.55 | 0.75 | 1.08e-2 |
+| blobs | tiles | 3.39 | 1.79 | 1.89 | 1.69 | 1.02 | 4.34e-4 |
 | shock | coarse | 0.103 | 0.111 | 0.93 | | | 1.6e-2 |
-| shock | box | 2.21 | 0.976 | 2.26 | 1.65 | 0.48 | 1.53e-3 |
-| shock | tiles | 3.54 | 0.876 | 4.04 | 1.65 | 0.42 | 2.11e-3 |
+| shock | box | 1.70 | 0.659 | 2.57 | 1.13 | 0.47 | 1.01e-3 |
+| shock | tiles | 1.96 | 0.566 | 3.46 | 1.12 | 0.39 | 2.09e-3 |
 | blob3d | coarse | 0.016 | 0.016 | 0.97 | | | 4.9e-3 |
 | blob3d | box | 0.864 | 0.524 | 1.65 | 2.16 | 0.23 | 1.97e-3 |
 | blob3d | tiles | 4.43 | 1.90 | 2.33 | 1.90 | 0.98 | 4.43e-4 |
 
-The tiled shock ran in a later process under `validity=permissive`, against
-that process's own fine run (1.48 s): under the default policy its final
-state is rejected, with a negative internal energy (−0.57) at 3 of its 649
-points, and its L1 ρ is 4.6e-3 on the level against 6.6e-4 on the root.
+The shock ran under `validity=permissive`: under the default policy the
+tiled run's final state is rejected, with a negative internal energy (−0.50)
+at 3 of its 600 points, and its L1 ρ is 6.6e-3 on the level against 6.5e-4
+on the root. Its runs take one to three seconds, and the wall per point-step
+moves with them: another process of the same box run measured 1.08 of the
+fine wall where this one measured 1.70, at the same 763 root steps.
 
-The mixedness ∫Y(1−Y)dV against the fine run's is +122% coarse, +12.6% box
-and +0.19% tiles on the blobs, and +114%, +78% and +1.6% on the 3-D blob. On
+The mixedness ∫Y(1−Y)dV against the fine run's is +122% coarse, +12.3% box
+and +0.23% tiles on the blobs, and +114%, +78% and +1.6% on the 3-D blob. On
 both blob problems only the tiles come near the fine answer, and the box's
 lower wall on the 3-D blob comes with four times the tiles' error.
 
-**The root step.** Root steps against the root-only run, the rate class that
-bounded the next root step, and the level's steps against the fine run's
-predicted from the recomputed rates with the covered root nodes left out of
-`max_rate`. The recomputed rate matched the rate `run!` recorded for the next
-step to 7.1e-13 or better on every pair without a regrid check between.
+**The root step.** At `4a1f0b4` the covered root nodes, carrying the
+artificial diffusivity the root's sensor takes on the restricted fine
+solution, bounded 99.4–100% of the root steps on the Sod tube, the shock and
+the tiled blobs, 73% and 86% on the 3-D blob and 30% on the box blobs, with
+the artificial diffusivity above half the bound on 56–100% of them. `max_rate` now holds a parent's overwritten nodes, those covered and
+at least `LEVEL_BUFFER` nodes from any node a child does not fully cover, to
+a CFL number of 0.75 where the solver's is lower. Root steps against the
+root-only run and the level's steps against the fine run's, before and
+after, and the class bounding the root step after:
 
-| run | root steps / root-only | bounding class, share of steps | artificial above half the bound | level steps / fine, predicted |
-|---|---|---|---|---|
-| sod box | 1.48 | root covered 99.4% | 99.9% | 0.99 |
-| sod tiles | 1.48 | root covered 99.4% | 99.7% | 0.99 |
-| blobs box | 2.03 | level 60%, root covered 30%, root uncovered 10% | 87–95% | 2.50 |
-| blobs tiles | 1.66 | root covered 100% | 93% | 1.05 |
-| shock box | 1.66 | root covered 100% | 88% | 0.96 |
-| shock tiles | 1.65 | root covered 99.8% | 89% | 0.96 |
-| blob3d box | 1.63 | root covered 73%, level 23%, root uncovered 4% | 94–100% | 1.98 |
-| blob3d tiles | 1.44 | root covered 86%, level 14% | 56–58% | 1.53 |
+| run | root steps / root-only, before | after | level steps / fine, before | after | bounding class after |
+|---|---|---|---|---|---|
+| sod box | 1.48 | 0.943 | 1.56 | 1.00 | level 98.9% |
+| sod tiles | 1.48 | 0.945 | 1.56 | 1.00 | level 97.8% |
+| blobs box | 2.03 | 1.99 | 2.61 | 2.55 | level 59%, root covered 21%, root uncovered 16% |
+| blobs tiles | 1.66 | 1.32 | 2.13 | 1.69 | overwritten 97.5% |
+| shock box | 1.66 | 1.13 | 1.65 | 1.13 | overwritten 74%, level 24% |
+| shock tiles | 1.65 | 1.12 | 1.65 | 1.12 | overwritten 75%, level 26% |
 
-Leaving the covered root nodes out, or keeping them with their artificial
-diffusivity left out, predicts the same counts. On Sod, the shock and the
-tiled blobs that brings the level to the fine run's step count; on the box
-blobs and both 3-D runs the level's own rate, mostly artificial, keeps it at
-1.5–2.5 times.
+At cfl 0.2 the Sod tube's overwritten nodes ran at up to 2.8 times the
+solver's CFL number, under the 3.75 the ceiling allows, so the ceiling never
+bound there. The composite L1 ρ before was 1.38e-4 and 1.08e-4 on the Sod box
+and tiles, 1.09e-2 and 4.35e-4 on the blobs and 1.53e-3 and 2.11e-3 on the
+shock. The Sod values move by that much with the step sequence alone: held
+to twice the solver's CFL number instead, the overwritten nodes bound a few
+steps (452 and 450 root steps) and the box and tiles measured 1.45e-4 and
+1.12e-4. With the overwritten nodes left out of the rate altogether the
+tiled blobs took 90 root steps (2.55 of the fine wall, L1 ρ 4.24e-4) and
+the shock box 673, but on the shock the covered nodes nearest the axis ran
+away within one root step at the focus: their rate after the step reached
+1.85e6 times the step's rate on the box, from 3.7 the step before, and 36
+times on the tiles, from 19. Held to a CFL number of 1.0 the box run's step
+then collapsed at t = 0.22096 and the tiles' rate reached 9.6e4 times; held
+to 0.9 or 0.75 both runs completed, with the rate after the last step at
+most 28 times. On the 3-D blob the level's own rate, mostly artificial,
+bounded 23% and 14% of the steps before, and the rule is not rerun there.
 
 **Where the tiled overhead goes.** Milliseconds per root step of the box and
 the tiles, from the sampling profile scaled by the timed wall, and the

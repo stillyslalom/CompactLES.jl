@@ -131,6 +131,14 @@ const LEVEL_BUFFER = 4
 # both the closure rows' footprint and the imposed plane's neighborhood.
 const RESTRICT_MARGIN = 2
 
+# The CFL number `max_rate` holds a parent's overwritten nodes to where the
+# solver's own is smaller (`Patch.overwritten`, `_fill_overwritten!` in
+# patches.jl). It stays below the strong-shock ceiling: on the converging
+# shock at the r-z axis of bench/amrwin.jl, covered nodes at the axis left
+# out of the rate ran away within one parent step at the focus, and held to
+# 1.0 they still did, where held to 0.9 or 0.75 they did not.
+const OVERWRITTEN_CFL = 0.75
+
 # --- Level ownership ----------------------------------------------------------
 
 """

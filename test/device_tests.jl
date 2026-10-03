@@ -371,11 +371,11 @@ end
     # the ring pack as kernels), a fresh tile fills from the device chain,
     # and the tag sweep evaluates on the device and downloads the tag bytes.
     # Bitwise against the CPUBackend under FORCE_KA, tiles and tag history
-    # included, with the artificial properties live. By t = 0.03 the regrid
-    # under the default tags has dropped a tile and created one outside the
-    # initial set (measured: at checks 20 and 25 of 27), so a fresh tile
-    # fills from the device chain; a longer run doubles the device runtime
-    # and reaches no further path.
+    # included, with the artificial properties live. By t = 0.025, after 15
+    # regrid checks, the regrid under the default tags has dropped a tile and
+    # created one outside the initial set, so a fresh tile fills from the
+    # device chain; a longer run doubles the device runtime and reaches no
+    # further path.
     cpu_ka = CL.KernelAbstractions.CPU()
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
@@ -389,7 +389,7 @@ end
         states = allocate_state(s)
         initialize!(s, states, ic)
         initial = level_regions(s, 1)
-        run!(s, states; tfinal=0.03, nmax=400)
+        run!(s, states; tfinal=0.025, nmax=400)
         return s, states, initial
     end
     for kw in ((;), (tag_sensor_threshold=0.05,),

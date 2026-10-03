@@ -69,7 +69,7 @@
 #   sensed_fields   within one level's artificial-property pass.
 #   inv_J area_d inv_h inv_r cot_over_r cot_over_r_gcl   geometry, written once
 #       by `init_geometry!`.
-#   covered   `_fill_covered!` at setup and at every regrid.
+#   covered overwritten   `_fill_covered!` at setup and at every regrid.
 #   ghost_flux   written and consumed within one level's right-hand side.
 #   level_scratch   within one parent step.
 #   pairbuf pairout   within one line operation.
@@ -321,6 +321,11 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
     # every regrid from the child regions every rank of this level's subset
     # holds, so a diagnostic on this level's ranks alone reads it.
     covered::Array{UInt8,3}
+    # Nonzero at the interior nodes deep inside a child level, which its
+    # restriction overwrites after every step and `max_rate` holds to
+    # `OVERWRITTEN_CFL` (`_fill_overwritten!`). Zero-extent on a patch of a
+    # solver with one level.
+    overwritten::A
     # The device scratch of this patch's level transfer (`LevelScratch`,
     # levels.jl): the Hermite boxes and the interpolation chain's stages on
     # the backend, so a device-resident refined patch's shell is built
@@ -360,7 +365,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
                inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-               rhs_workspace, covered, level_scratch, ghost_flux,
+               rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
                sensed_fields=empty(Y))
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
@@ -371,8 +376,8 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-                 rhs_workspace, covered, level_scratch, ghost_flux, sensed_fields,
-                 field_tuples)
+                 rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
+                 sensed_fields, field_tuples)
 end
 
 # --- Covered masks ----------------------------------------------------------
@@ -404,19 +409,26 @@ _covered_mask(decomp::Decomp) =
 Rewrite `patch.covered` from the child regions `regions`, given in this
 patch's level node space (a `LevelTransfer.region` of the level below), a
 region across a periodic seam covering through its images under `period`
-(that node space's period, `_level_period`). Rank-local: it reads the regions
-and the patch's own block placement, both of which every rank of the patch's
-level holds.
+(that node space's period, `_level_period`), and with it `patch.overwritten`
+(`_fill_overwritten!`). Rank-local: it reads the regions and the patch's own
+block placement, both of which every rank of the patch's level holds.
 """
 function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
                         period::NTuple{3,Int}=(0, 0, 0))
     regions = [_shifted(r, σ) for r in regions for σ in _images(period)]
     covered = patch.covered
-    fill!(covered, zero(UInt8))
+    overwritten = patch.overwritten
     decomp = patch.decomp
     o = decomp.n_halo_d
     n = decomp.n_local
     base = ntuple(d -> patch.region.offset[d] + decomp.offset[d], 3)
+    # The mask bytes over the interior and, where `overwritten` is formed,
+    # `LEVEL_BUFFER` nodes beyond it on every active side, which its erosion
+    # reads: those nodes may lie on another rank or another tile, so they are
+    # evaluated from the regions, not exchanged.
+    pad = ntuple(d -> decomp.active[d] && !isempty(overwritten) ? LEVEL_BUFFER : 0,
+                 3)
+    bits_ext = zeros(UInt8, ntuple(d -> n[d] + 2 * pad[d], 3))
     # The patch's own edge nodes along each dimension, and whether the face
     # there closes the domain. A node on such a face has no cell beyond it,
     # so a child reaching the face covers the outer half as well, and the
@@ -428,9 +440,10 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
     for r in regions
         lo = ntuple(d -> r.offset[d] + 1, 3)
         hi = ntuple(d -> r.offset[d] + r.extent[d], 3)
-        # Local interior indices of the nodes the region meets.
+        # Local indices of the nodes the region meets.
         rng = ntuple(d -> decomp.active[d] ?
-                     (max(lo[d] - base[d], 1):min(hi[d] - base[d], n[d])) :
+                     (max(lo[d] - base[d], 1 - pad[d]):min(hi[d] - base[d],
+                                                          n[d] + pad[d])) :
                      (1:1), 3)
         any(isempty, rng) && continue
         @inbounds for k in rng[3], j in rng[2], i in rng[1]
@@ -449,11 +462,76 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
                     (s3 == 1 ? plus[3] : minus[3]) || continue
                 bits |= UInt8(1) << b
             end
-            I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-            covered[I] |= bits
+            bits_ext[i + pad[1], j + pad[2], k + pad[3]] |= bits
         end
     end
+    fill!(covered, zero(UInt8))
+    interior = CartesianIndices(n)
+    @inbounds for J in interior
+        covered[J + CartesianIndex(o)] = bits_ext[J + CartesianIndex(pad)]
+    end
+    isempty(overwritten) ||
+        _fill_overwritten!(overwritten, bits_ext, pad, base, edge_lo, edge_hi,
+                           closed, decomp)
     return patch
+end
+
+# The parent nodes `max_rate` holds to `OVERWRITTEN_CFL`: those a child
+# level's restriction overwrites after every step, less those whose values
+# within the step reach the child's ghost layers or outlive the step. A
+# covered node carries the restricted fine solution, at which the parent's
+# artificial coefficients, sensed at the parent spacing, take the diffusivity
+# of a feature thinner than that spacing; at the solver's CFL number the
+# rate there bounded most root steps of the refined runs measured and made
+# them about 1.5 times as short as the uncovered solution needs. A node
+# qualifies when every node within `LEVEL_BUFFER` of it along each active
+# dimension is covered over its whole cell (mask byte 0xFF) or lies beyond a
+# face closing the domain. The set then starts `LEVEL_BUFFER + 1` nodes inside
+# every face a child shares with its parent: past the `RESTRICT_MARGIN`
+# nodes the restriction does not write, which carry the parent's solution
+# into the next step, and past the Lagrange stencils of the shell fill, which
+# reach `interp_order ÷ 2` ≤ 5 nodes in, so the child's ghost layers read
+# only nodes advanced at the solver's CFL number.
+function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
+                            pad::NTuple{3,Int}, base, edge_lo, edge_hi, closed,
+                            decomp::Decomp)
+    n = decomp.n_local
+    o = decomp.n_halo_d
+    active = decomp.active
+    full = falses(size(bits_ext))
+    @inbounds for J in CartesianIndices(full)
+        g = ntuple(d -> base[d] + J[d] - pad[d], 3)
+        beyond = any(d -> active[d] && ((g[d] < edge_lo[d] && closed[d][1]) ||
+                                        (g[d] > edge_hi[d] && closed[d][2])), 1:3)
+        full[J] = beyond || bits_ext[J] == 0xff
+    end
+    # Erosion by a box of half-width `LEVEL_BUFFER`, one active dimension at a
+    # time. A node in the pad takes a truncated window, and no interior node's
+    # result reads such a node along a dimension already eroded.
+    for d in 1:3
+        active[d] || continue
+        src = copy(full)
+        m = size(full, d)
+        @inbounds for J in CartesianIndices(full)
+            ok = src[J]
+            if ok
+                for s in -LEVEL_BUFFER:LEVEL_BUFFER
+                    q = J[d] + s
+                    1 <= q <= m || continue
+                    K = CartesianIndex(ntuple(e -> e == d ? q : J[e], 3))
+                    src[K] || (ok = false; break)
+                end
+            end
+            full[J] = ok
+        end
+    end
+    T = eltype(overwritten)
+    host = zeros(T, size(overwritten))
+    @inbounds for J in CartesianIndices(n)
+        full[J + CartesianIndex(pad)] && (host[J + CartesianIndex(o)] = one(T))
+    end
+    _upload!(overwritten, host)
+    return overwritten
 end
 
 "Fraction of a node's quadrature cell no child covers, from its mask byte."
@@ -503,6 +581,7 @@ end
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
     n === :cot_over_r || n === :cot_over_r_gcl || n === :covered ||
+    n === :overwritten ||
     n === :field_tuples || _is_workspace_prop(n)
 
 # The read behind both forwards: a workspace name takes one further hop.

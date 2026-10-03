@@ -34,12 +34,14 @@
 #   function is on its stack;
 # - for a refined run, the step-size account: root steps against the coarse
 #   run's, which rate class bounded each root step (root nodes uncovered,
-#   partly covered or covered by the child level, or a refined level at its
-#   3^level-scaled rate) and whether the artificial diffusivity or the
-#   hyperbolic rate dominated there, and the root step count predicted if the
-#   covered root nodes were left out of `max_rate`, or kept with their
-#   artificial diffusivity left out. The rate is recomputed from the state
-#   after each step, the state the next step's `max_rate` sizes from, and is
+#   partly covered or covered by the child level, a refined level at its
+#   3^level-scaled rate, or the nodes of any level `max_rate` holds to
+#   `OVERWRITTEN_CFL`, `Patch.overwritten`) and whether the artificial
+#   diffusivity or the hyperbolic rate dominated there, the root step count
+#   predicted if the covered root nodes were left out of `max_rate`, or kept
+#   with their artificial diffusivity left out, and the CFL number the
+#   overwritten nodes took against the solver's. The rate is recomputed from
+#   the state after each step, the state the next step's `max_rate` sizes from, and is
 #   compared with the rate `run!` records for that step; the two differ only
 #   across a regrid check, which refreshes the coefficients.
 #
@@ -358,7 +360,11 @@ end
 # Step-size account and census, from a callback after every step
 
 const CLASSES = ("root uncovered", "root partly covered", "root covered",
-                 "level 1", "level 2", "level 3")
+                 "level 1", "level 2", "level 3", "overwritten")
+# The classes whose rate enters `max_rate` unscaled; the last holds the nodes
+# of any level it holds to `OVERWRITTEN_CFL` (`Patch.overwritten`), and "root
+# covered" the covered root nodes outside it.
+const COUNTED = 1:6
 
 mutable struct ClassMax
     rate::Float64          # largest rate in the class (scaled for a level)
@@ -392,6 +398,7 @@ function patch_rates!(classes, ps, Q, scale, zero_cache)
     sharp = CL._sharpening_constants(ps)
     level = ps.patch.level
     covered = ps.covered
+    overwritten = ps.overwritten
     for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         ρ = ps.rho[I]
@@ -415,7 +422,8 @@ function patch_rates!(classes, ps, Q, scale, zero_cache)
         ν0 = CL._diffusive_rate(ps.eos, ρ, ps.p[I], ps.T_ion[I], cp, molecular,
                                 Z, Z, Z, Dz, I, nsp)
         acc += CL._sharpening_rate(sharp, c, ps.inv_h, ps.h, act, I)
-        cls = level > 0 ? 3 + min(level, 3) :
+        cls = !isempty(overwritten) && overwritten[I] != 0 ? 7 :
+              level > 0 ? 3 + min(level, 3) :
               covered[I] == 0x00 ? 1 : covered[I] == 0xff ? 3 : 2
         record!(classes[cls], acc + 2 * ν * dsum, acc + 2 * ν0 * dsum, scale)
     end
@@ -648,11 +656,14 @@ function print_census(spec, config, census, steps, coarse_steps)
                 "covered root nodes without artificial diffusivity" => 0.0,
                 "no artificial diffusivity anywhere" => 0.0)
     mismatch = Float64[]
+    held = Float64[]
+    weight = CL._overwritten_weight(spec.cfl)
     for (i, cl) in enumerate(census.steps)
-        rates = [c.rate for c in cl]
+        rates = [[c.rate for c in cl[COUNTED]]; weight * cl[7].rate]
         R = maximum(rates)
         R > 0 || continue
         b = argmax(rates)
+        cl[7].rate > 0 && push!(held, cl[7].rate / R)
         bind[b] += 1
         cl[b].art_at > 0.5 && (bind_art[b] += 1)
         unc, part = cl[1].rate, cl[2].rate
@@ -661,7 +672,8 @@ function print_census(spec, config, census, steps, coarse_steps)
         pred["partly covered ones too"] += max(unc, levels) / R
         pred["covered root nodes without artificial diffusivity"] +=
             max(unc, part, cl[3].rate_noart, levels) / R
-        pred["no artificial diffusivity anywhere"] += maximum(c.rate_noart for c in cl) / R
+        pred["no artificial diffusivity anywhere"] +=
+            maximum(c.rate_noart for c in cl[COUNTED]) / R
         if i < nsteps && census.regrid_checks[i+1] == census.regrid_checks[i]
             push!(mismatch, abs(census.rate_next[i+1] / R - 1))
         end
@@ -682,6 +694,13 @@ function print_census(spec, config, census, steps, coarse_steps)
         @printf("    %-50s %8.1f  (%.3f of root-only)\n", label, s,
                 s / max(coarse_steps, 1))
         row(spec.name, config, "predicted_steps:" * label, round(s; digits=1))
+    end
+    if !isempty(held)
+        sort!(held)
+        @printf("  overwritten nodes, CFL number over the solver's (at most %.2f): %s\n",
+                1 / weight, @sprintf("median %.2f, max %.2f",
+                                     held[(length(held) + 1) ÷ 2], held[end]))
+        row(spec.name, config, "overwritten_cfl_ratio_max", round(held[end]; sigdigits=4))
     end
     if !isempty(mismatch)
         sort!(mismatch)

@@ -758,6 +758,17 @@ Multi-patch form: the per-patch exchange, primitives pass and interior sweep
 run patch by patch, and the quantities reduce over `solver.comm`, the whole
 rank set, exactly once, hoisted outside the patch loop as the collective
 discipline requires.
+
+On a refined run a parent's nodes deep inside a child level, which the
+child's restriction overwrites after every step, are held to a CFL number of
+`OVERWRITTEN_CFL` = 0.75 rather than the solver's, when the solver's is the
+smaller: their rate enters scaled by `cfl / OVERWRITTEN_CFL`. There the
+parent's artificial coefficients, sensed at the parent spacing on the
+restricted fine solution, would otherwise size the parent's step. A node is
+held so when every node within `LEVEL_BUFFER` of it is fully covered, which
+leaves every node that outlives the step or feeds the child's ghost layers
+at the solver's CFL number. The density minimum and the direction rates
+take every node unscaled.
 """
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
     _validate_transport_state!(solver, states)
@@ -836,9 +847,9 @@ end
                               parr, Tarr, carr, cparr, eos, mu_art, beta_art,
                               kappa_art, D_art, inv_h1, inv_h2, inv_h3, inv_r,
                               cot_over_r, metric, act, hh, transport, Y,
-                              n_species, sharp, o1, o2, o3, i, j, k)
+                              n_species, sharp, held, o, i, j, k)
     @inbounds begin
-        I = CartesianIndex(i + o1, j + o2, k + o3)
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         T = eltype(rho)
         ρQ = zero(T)
         for sp in 1:n_species
@@ -866,10 +877,21 @@ end
         ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, molecular,
                             mu_art, beta_art, kappa_art, D_art, I, n_species)
         acc += _sharpening_rate(sharp, c, ih, hh, act, I)
-        rate_out[I] = acc + 2 * ν * dsum
+        rate_out[I] = (acc + 2 * ν * dsum) * _rate_weight(held, I)
     end
     return nothing
 end
+
+# The factor on the rate at node `I`: `held = (overwritten, weight)` with the
+# patch's `overwritten` mask and `_overwritten_weight`, or `nothing` on a
+# patch with no overwritten node, whose launch then reads no mask.
+@inline _rate_weight(::Nothing, I) = true
+@inline _rate_weight(held, I) =
+    @inbounds ifelse(held[1][I] != 0, held[2], one(held[2]))
+
+# The factor `max_rate` scales an overwritten node's rate by, so that the
+# node is held to `OVERWRITTEN_CFL` where the solver's CFL number is lower.
+_overwritten_weight(cfl) = min(one(cfl), cfl / oftype(cfl, OVERWRITTEN_CFL))
 
 function _local_max_rate_launch(solver::SolverLike, Q)
     decomp = solver.decomp
@@ -878,6 +900,7 @@ function _local_max_rate_launch(solver::SolverLike, Q)
     tr = solver.transport
     ft = solver.field_tuples
     dir_out = solver.grad_T_ion
+    overwritten = solver.overwritten
     pointwise!(_rate_point!, solver.tmp_a, nx, ny, nz,
                solver.tmp_a, solver.tmp_b, dir_out, Q, solver.rho, solver.u,
                solver.v, solver.w, solver.p, solver.T_ion, solver.c,
@@ -886,7 +909,10 @@ function _local_max_rate_launch(solver::SolverLike, Q)
                solver.inv_h[3], solver.inv_r, solver.cot_over_r, solver.metric,
                decomp.active, solver.h,
                tr, ft.Y, solver.equations.n_species,
-               _sharpening_constants(solver), o1, o2, o3)
+               _sharpening_constants(solver),
+               isempty(overwritten) ? nothing :
+                   (overwritten, _overwritten_weight(eltype(Q)(solver.cfl))),
+               (o1, o2, o3))
     interior = (o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
     rates = view(solver.tmp_a, interior...)
     rhos = view(solver.tmp_b, interior...)
@@ -909,6 +935,9 @@ function _local_max_rate_loop(solver::SolverLike, Q)
     rate = zero(T)
     ρ_min = T(Inf)
     r1 = zero(T); r2 = zero(T); r3 = zero(T)
+    overwritten = solver.overwritten
+    masked = !isempty(overwritten)
+    weight = _overwritten_weight(T(solver.cfl))
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         ρQ = zero(T)
@@ -957,6 +986,10 @@ function _local_max_rate_loop(solver::SolverLike, Q)
                             solver.equations.n_species)
         acc += _sharpening_rate(sharp, c, solver.inv_h, solver.h, decomp.active, I)
         acc += 2 * ν * dsum
+        # An overwritten node's rate is scaled (`Patch.overwritten`); its
+        # density and its direction rates above, which the positivity check
+        # and the filter's relaxation read, are not.
+        masked && overwritten[I] != 0 && (acc *= weight)
         rate = max(rate, acc)
     end
     return (rate, ρ_min, (r1, r2, r3))

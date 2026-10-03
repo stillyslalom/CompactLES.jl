@@ -1136,7 +1136,8 @@ end
 function _copy_tile!(pnew::Patch, Qnew, pold::Patch, Qold)
     _assign!(parent(Qnew), parent(Qold))
     for name in (:rho, :u, :v, :w, :p, :T_ion, :c, :cp_mix, :mu_art, :beta_art,
-                 :kappa_art, :inv_J, :inv_r, :cot_over_r, :cot_over_r_gcl)
+                 :kappa_art, :inv_J, :inv_r, :cot_over_r, :cot_over_r_gcl,
+                 :overwritten)
         _assign!(getfield(pnew, name), getfield(pold, name))
     end
     for name in (:Y, :D_art, :area_d, :inv_h)

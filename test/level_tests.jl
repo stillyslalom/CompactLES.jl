@@ -1160,16 +1160,16 @@ end
     N = 201
     # The unrelaxed filter (filter_cfl = 0): the regrid below has to create a
     # fresh tile beside a survivor at exactly this step, which the tag state
-    # at step 10 does under it (steps 15 to 50 leave the four tiles as they
-    # are, and step 55 adds a fifth). The step depends on the default filter
-    # strength: it was 30 at αf = 0.45.
+    # at step 8 does under it (the run's own check at step 5 leaves three
+    # tiles, and this one adds a fourth). The step depends on the default
+    # filter strength and on the root step size.
     sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.2, subcycle=true, filter_cfl=0.0,
                 regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
                 tile=8)
     states = allocate_state(sa)
     initialize!(sa, states, ic)
-    run!(sa, states; tfinal=1.0, nmax=10)
+    run!(sa, states; tfinal=1.0, nmax=8)
     before = level_regions(sa, 1)
     # Perturb a survivor's interior so the seeding is visible: the plane a
     # fresh tile shares with it must carry the survivor's value exactly.

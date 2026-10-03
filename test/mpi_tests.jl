@@ -3055,11 +3055,9 @@ function test_tiled_level()
     # every five steps, a tile entering ahead of a survivor on the curve
     # shifts the survivor's owner range, and the survivor is rebuilt there
     # with its solution carried across. The tracked tile set and the time
-    # reached are the serial ones. Measured serially with the default
-    # hysteresis: the set goes 176/184 → 168..192 at step 6 → 168..184 at
-    # step 26, the tile ahead of the shock held one check longer than
-    # without the band (dropped at step 21, re-created at 41) and then not
-    # re-created on the slightly different trajectory. The tag history
+    # reached are the serial ones. Measured serially: the set goes 176/184 →
+    # 168..192 at step 6 → 168..184 at step 16 → 168..192 at step 31, with
+    # the default hysteresis and without it alike. The tag history
     # (`RegridSpec.created`, `checks`) is derived from the reduced flags and
     # must agree across ranks.
     let
@@ -3080,14 +3078,14 @@ function test_tiled_level()
         fin = all(all(isfinite, parent(Q)) for Q in states)
         check("tiled regrid under ownership: finite composite state",
               fin ? 0.0 : 1.0, 0.5)
-        check("tiled regrid under ownership: tile count tracks as serial (3)",
-              abs(gmax(length(regs)) - 3), 0.5)
+        check("tiled regrid under ownership: tile count tracks as serial (4)",
+              abs(gmax(length(regs)) - 4), 0.5)
         check("tiled regrid under ownership: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("tiled regrid under ownership: last tile tracks as serial (184)",
-              abs(gmax(last(offs)) - 184), 0.5)
+        check("tiled regrid under ownership: last tile tracks as serial (192)",
+              abs(gmax(last(offs)) - 192), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0031973409251902472), 1e-13)
+              abs(gmax(solver.t) - 0.0064952435241686715), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -3161,7 +3159,7 @@ function test_tiled_level()
         check("stored ownership: no survivor moved with rebalance off",
               gmax(moved), 0.5)
         check("stored ownership: tile set tracks as serial",
-              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 184), 0.5)
+              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 192), 0.5)
         # The same run with the migration audit on: every moved tile is also
         # carried through the replicated gather, and the migrated state
         # must equal that reference at every slot.
@@ -3182,14 +3180,14 @@ function test_tiled_level()
               np >= 4 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
         check("migration: migrated state equals the gathered carry bitwise",
               gsum(audit.mismatches), 0.5)
-        check("rebalance on: tile count tracks as serial (3)",
-              abs(gmax(length(offs)) - 3), 0.5)
+        check("rebalance on: tile count tracks as serial (4)",
+              abs(gmax(length(offs)) - 4), 0.5)
         check("rebalance on: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("rebalance on: last tile tracks as serial (184)",
-              abs(gmax(last(offs)) - 184), 0.5)
+        check("rebalance on: last tile tracks as serial (192)",
+              abs(gmax(last(offs)) - 192), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.0031973401683244311), 1e-13)
+              abs(gmax(solver.t) - 0.0064952435241686715), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports

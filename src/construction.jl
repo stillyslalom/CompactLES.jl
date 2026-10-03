@@ -953,6 +953,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   [f() for _ in 1:n_species],
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
                   ws_root, _covered_mask(decomp),
+                  nlev > 1 ? f() : empty_field(backend, T),
                   _empty_level_scratch(empty_field(backend, T)),
                   ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
     if nlev == 1
@@ -1426,6 +1427,7 @@ function _patch_arrays(g::F, n_species::Int, n_sensed::Int=0) where {F}
             Y=Y, mu_art=g(), beta_art=g(), kappa_art=g(),
             D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
             inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g(),
+            overwritten=g(),
             sensed_fields=append!(empty(Y), (g() for _ in 1:n_sensed)))
 end
 
@@ -1440,7 +1442,7 @@ _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
           a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
-          ws, covered, scratch, gflux, a.sensed_fields)
+          ws, covered, a.overwritten, scratch, gflux, a.sensed_fields)
 
 # --- Stacked tiles of a device level ------------------------------------------
 #
@@ -1590,6 +1592,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
                        cot_over_r=v(arrays.cot_over_r),
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl),
+                       overwritten=v(arrays.overwritten),
                        # Typed as `Y`'s views also when there is none.
                        sensed_fields=append!(empty(map(v, arrays.Y)),
                                              (v(a) for a in arrays.sensed_fields)))
@@ -1742,7 +1745,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               g(), g(), g(),
               [g() for _ in 1:n_species],
               g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-              ws, _covered_mask(dcp), _empty_level_scratch(empty3),
+              ws, _covered_mask(dcp), empty3, _empty_level_scratch(empty3),
               _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
                                  similar(empty3, T, 0, 0, 0, 0),
                                  ntuple(d -> _ghost_viscous(interface_flux, transport) &&
