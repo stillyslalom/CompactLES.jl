@@ -222,7 +222,8 @@ operators 6.04 / 6.07 / 5.97 / 6.06 periodic (D_s, G, interpolation, L) and
 (spherical origin), 5.33 (spherical poles) and 1.00 (curved wall), wall
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
-shear mode 4.67),
+shear mode 4.67), a pulse on slip walls 4.88 (Cartesian line) / 4.62 (r-z
+annulus), against the run at a third of the spacing,
 symmetry-plane evolution 4.46 (one-sided filter 4.69, C8 4.00, C10 4.00,
 viscous slip with a tangential shear 6.04),
 interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01

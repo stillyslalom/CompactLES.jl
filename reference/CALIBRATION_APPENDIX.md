@@ -69,6 +69,8 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/axisspectrum.jl`, `bench/axisrunaway.jl`)
 33. [The outflow face on a radial grid](#the-outflow-face-on-a-radial-grid)
     (`bench/sphereoutflow.jl`, `test/sphere_dipole.jl`)
+34. [The slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)
+    (`bench/annuluswall.jl`, `test/convergence.jl`)
 
 ## The shock battery
 
@@ -6679,13 +6681,9 @@ on the Cartesian metric and 4.9e-7 and −7.2e-8 for the root alone; the
 ledger closes to 1.2e-16, and the level's coarse-fine flux and the parent's
 flux into the covered region cancel to 3e-6 of the mass. Settled: the
 conserved variables are interpolated. A standing wave touching the annulus
-walls was not used for the rows: a single level converges there at about
-second order in the interior (2.0e-5, 7.6e-6, 2.3e-6, 6.8e-7 at N = 25 to
-193 against the uniform run at a third of the spacing, where the Cartesian
-line gives 1.8e-6 to 2.0e-10). The pulse, which reaches no wall by t = 0.2,
-converges on a single level as on the Cartesian line (1.5e-8 against 9.3e-9
-in the interior at 193), so the loss is set at the curved slip walls, not
-by the level; it is not diagnosed further.
+walls was not used for the rows: its data violate a compatibility condition
+of the curved wall, which caps its order near two on any grid
+([the slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)).
 
 **NSCBC faces on a level.** The instrument is the convergence row's case
 (`outflow_level_case`: an acoustic pulse of amplitude 0.01 and width 0.1 on a
@@ -9206,3 +9204,81 @@ the tile against the uniform run at the tile's spacing (49 root nodes, 411
 equal steps to t = 0.5, halfway through the exit) differs by 6.6e-7, while
 the uniform run under the plane form differs from it by 1.0e-3
 (`test/level_tests.jl`).
+
+## The slip wall of the r-z annulus
+
+```text
+julia --project=. -t 1 bench/annuluswall.jl
+```
+
+A standing wave between the slip walls of the axisymmetric annulus converged
+near second order where the Cartesian line converges near fourth. The
+instrument runs the inviscid case on r ∈ [r0, r0 + 1] (θ and z collapsed),
+unfiltered and without artificial properties unless a row says otherwise.
+Every grid of a row (N = 25, 49, 97, 193) takes the same equal steps as a
+reference on 769 nested nodes, so the difference is spatial. Errors are
+maximum norms over the wall nodes, the rest of the four-node wall windows and
+the interior; orders are fitted over the four grids.
+
+**The right-hand side on exact data.** Truncation of the assembled
+right-hand side on the standing wave, against the exact axisymmetric Euler
+right-hand side, at N = 193:
+
+| | ρ at the wall node | order | ρu in the wall window | order |
+|---|---|---|---|---|
+| Cartesian line | 6.08e-9 | 3.99 | 1.91e-7 | 2.98 |
+| annulus, r0 = 0.5 | 5.19e-7 | 2.94 | 1.89e-7 | 2.97 |
+| annulus, r0 = 5 | 4.65e-8 | 2.84 | 1.90e-7 | 2.98 |
+
+The wall rows, the area weighting and the curvature source together
+truncate at the closure rows' third order on the annulus as on the line. The
+line's fourth order in the density is the parity of ρu about the wall, which
+r ρu does not have.
+
+**Evolution.** Density at N = 193 and its fitted order:
+
+| case | wall window | order | interior | order |
+|---|---|---|---|---|
+| standing wave, Cartesian line | 1.83e-10 | 4.66 | 2.99e-10 | 4.42 |
+| standing wave, annulus r0 = 0.5 | 8.19e-8 | 2.78 | 5.41e-7 | 2.00 |
+| standing wave, annulus r0 = 5 | 1.37e-8 | 2.83 | 7.17e-8 | 2.17 |
+| standing wave, annulus r0 = 50 | 1.51e-9 | 3.68 | 7.22e-9 | 2.85 |
+| standing wave with u_xx ≠ 0 at the walls, Cartesian line | 1.21e-7 | 2.67 | 8.35e-7 | 1.96 |
+| cosine at rest, annulus r0 = 0.5 | 5.81e-9 | 3.46 | 9.59e-9 | 3.30 |
+| cosine at rest, annulus r0 = 5 | 8.48e-10 | 3.95 | 1.76e-9 | 3.55 |
+| pulse on the walls (t = 0.45), Cartesian line | 1.52e-7 | 4.64 | 6.33e-7 | 3.73 |
+| pulse on the walls (t = 0.45), annulus r0 = 0.5 | 1.59e-7 | 4.82 | 6.09e-7 | 3.77 |
+| pulse reflected (t = 0.7), Cartesian line | 2.36e-7 | 4.44 | 6.32e-7 | 4.27 |
+| pulse reflected (t = 0.7), annulus r0 = 0.5 | 2.76e-7 | 4.67 | 6.63e-7 | 4.25 |
+| reflected, default filter every step, Cartesian line | 2.34e-9 | 5.61 | 3.03e-7 | 4.21 |
+| reflected, default filter every step, annulus | 4.37e-9 | 5.37 | 2.95e-7 | 4.29 |
+| reflected, C6 `:brady_livescu`, Cartesian line | 2.23e-9 | 6.08 | 2.77e-8 | 5.20 |
+| reflected, C6 `:brady_livescu`, annulus | 2.50e-9 | 6.06 | 3.09e-8 | 5.18 |
+
+The pulse (`annulus_wall_case`, width 0.1 at the middle of the gap) spans
+2.4 nodes per width at N = 25, so its fitted orders include a pre-asymptotic
+point.
+
+The order is set by the data, not by the scheme. A slip wall holds u_r = 0
+at every time, so a solution smooth up to the wall requires ∂ₜᵏ(ρu) = 0
+there for every k. For the standing wave ∂ₜ(ρu) = −p_r vanishes at the
+wall, but ∂ₜ²(ρu) = γp(u_rr + u_r/r − u/r²) = ±γpπb/r does not: the
+curvature term u_r/r breaks the second condition, and the solution carries a
+jump in its second derivatives along the characteristics from the walls at
+t = 0. The data at rest break only the third condition,
+γp(p_rrr + p_rr/r)/ρ ≠ 0, and converge one order faster. The Cartesian line
+with u = b sin πx − πb x(1 − x), whose u_xx at the walls equals the
+annulus's u_r/r at r0 = 0.5, loses the same order with no curvature anywhere
+in the scheme, and the loss on the annulus recedes as r0 grows, since the
+defect scales with 1/r0. On the pulse, whose data vanish at the walls, the
+annulus reproduces the line's error to within a factor of two at every grid
+from N = 97, unfiltered, filtered and under the `:brady_livescu` rows. No
+candidate at the curved wall (the wall rows, the area weighting, the
+curvature source at the wall node, the filter's wall rows) therefore adds to
+the Cartesian wall's own error, and none was switched off separately.
+
+**The convergence row.** `test/convergence.jl` reads the pulse's wall window
+at t = 0.45 against the same case on nested nodes at a third of the spacing,
+in 4(N − 1) equal steps: 2.51e-4, 8.60e-6, 2.91e-7 on the Cartesian line at
+N = 49, 97, 193 (order 4.88) and 2.77e-4, 1.01e-5, 4.60e-7 on the annulus
+(order 4.62).

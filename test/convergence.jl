@@ -77,7 +77,9 @@
 #   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
-#   shear mode 4.67
+#   shear mode 4.67 | a pulse on slip walls (wall window against the run
+#   at a third of the spacing, equal steps, t = 0.45): Cartesian line 4.88 |
+#   r-z annulus 4.62
 #   symmetry-plane evolution (window max norm, t = 0.4, against the fine
 #   folded mirror): inviscid C6 4.46 | C6 onesided filter 4.69 | C8 4.00 |
 #   C10 4.00 | viscous slip with shear C6 6.04
@@ -115,7 +117,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those eighty-six numbers are also passed to each study as `recorded` and
+# Those eighty-eight numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -878,6 +880,24 @@ evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
                 s -> analytic_reference(s.equations, shear_profile(0.1, 0.005; t=s.t));
                 primary=:wall, comp=3, tfinal=0.4, expect=4.7, tol=0.8,
                 recorded=4.67)
+
+# A pulse on the slip walls of the r-z annulus at t = 0.45, and the same pulse
+# on the Cartesian line, against the run at a third of the spacing in the same
+# equal steps. The standing wave above has no annulus form for this row: its
+# data violate a compatibility condition of the curved wall, which caps any
+# scheme near second order (`annulus_wall_case`).
+annulus_wall_reference(cartesian) = s -> begin
+    fine, states = annulus_wall_case(3 * (s.n_global[1] - 1) + 1; cartesian=cartesian)
+    fixed_step_run!(fine, states, 0.45, 4 * (s.n_global[1] - 1))
+    NodeReference(fine, states)
+end
+for (name, cartesian, recorded) in (("pulse on slip walls, Cartesian line", true, 4.88),
+                                    ("pulse on slip walls, r-z annulus", false, 4.62))
+    evolution_study(name, WALL_NS, N -> annulus_wall_case(N; cartesian=cartesian),
+                    annulus_wall_reference(cartesian);
+                    primary=:wall, tfinal=0.45, steps=N -> 4 * (N - 1),
+                    expect=4.6, tol=0.8, recorded=recorded)
+end
 
 # The same wave between symmetry planes, against the fine folded mirror. The
 # wall window has no closure row and reads what the interior reads: on the

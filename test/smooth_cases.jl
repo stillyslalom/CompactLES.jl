@@ -327,6 +327,36 @@ function annulus_level_case(N; refined=true, viscous=false, mu=0.002, Pr=0.7, op
 end
 
 """
+    annulus_wall_case(N; cartesian=false, r0=0.5, sigma=0.1, opts...)
+
+A pulse at rest at the middle of the gap between two slip walls, ρ = 1 + 0.05
+exp(−((s − ½)/σ)²) with s the distance from the inner wall and isentropic p,
+on the axisymmetric annulus r ∈ [r0, r0 + 1] with N nodes (θ and z
+collapsed), or on the Cartesian line [0, 1] under `cartesian`. Its two halves
+reach the walls near t = 0.42. The reference is the same case on nested
+nodes in equal steps (`fixed_step_run!`).
+
+The data vanish at the walls to the measured precision, so they satisfy the
+compatibility conditions of the wall, ∂ₜᵏ u = 0 there for every k, and the
+solution is smooth up to the wall. The standing wave of `standing_profile`
+satisfies them on the Cartesian line by its parity, but on the annulus its
+second time derivative of the radial momentum at the wall is γpπb/r ≠ 0, and
+the solution then carries a jump in its second derivatives along the
+characteristics leaving the walls at t = 0, which caps every scheme's order
+near two.
+"""
+function annulus_wall_case(N; cartesian=false, r0=0.5, sigma=0.1, opts...)
+    prof = r -> begin
+        rho = 1 + 0.05 * exp(-((r - (cartesian ? 0 : r0) - 0.5) / sigma)^2)
+        (rho, zero(r), zero(r), rho^1.4)
+    end
+    geometry = cartesian ? (;) : (metric=CylindricalMetric(), origin=(r0, 0.0, 0.0))
+    wall = SlipWallBC()
+    _smooth_solver((N, 1, 1), 1.0, ((wall, wall), per3[2], per3[3]), prof;
+                   merge(SMOOTH_DEFAULTS, (cfl=0.9,), geometry, values(opts))...)
+end
+
+"""
     seam_level_case(N; refined=true, opts...)
 
 The entropy wave of `entropy_profile` on the periodic [0, 2π) with N root
