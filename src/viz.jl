@@ -68,17 +68,24 @@ refreshed copy of the named field per patch this rank holds, aligned with
 of [`line_profile`](@ref), [`line_sample`](@ref) and [`field_slice`](@ref) call
 it. Every rank must call it. The primitives are refreshed from `states`, and the
 artificial coefficient arrays are restored as in the single-state form.
+On a refined level of several tiles the artificial coefficients and
+`:sensor` are those the level's right-hand side computes over the whole level,
+which differ from a tile's own within a few nodes of a face shared with
+another tile.
 """
 function field_array(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
                      species::Int=1)
     patches = getfield(solver, :patches)
     return preserving_artificial(solver, _wants_artificial(name)) do
+        held = _wants_artificial(name) ? _output_level_artificial!(solver, states) :
+                                         Dict{Int,Any}()
         map(eachindex(patches)) do li
             ps = PatchSolver(solver, patches[li])
             Q = states[li]
             if _wants_gradients(name) || _wants_artificial(name)
                 compute_primitives_and_gradients!(ps, Q)
-                _wants_artificial(name) && compute_artificial!(ps, Q)
+                _wants_artificial(name) &&
+                    _output_artificial!(ps, Q, get(held, li, nothing))
             else
                 refresh_primitives!(ps, Q)
             end
@@ -549,7 +556,10 @@ grid. The second takes the state vector of a refined or patch-partitioned
 solver and returns one snapshot per patch, ordered by level and then by node
 offset; each carries its level, its offset in that level's index space, and
 the nodes a finer level covers. Abutting root patches share their interface
-plane, which appears in both.
+plane, which appears in both. On a refined level of several tiles the
+artificial coefficients and `:sensor` are those the level's right-hand side
+computes over the whole level, which differ from a tile's own within a few
+nodes of a face shared with another tile.
 
 Where the partial densities of the state do not sum to a positive density,
 `:rho` holds that sum as it is and every other field is `NaN`. The recovered
@@ -616,12 +626,15 @@ function _snapshot(solver::Solver, states, fields, plane=nothing)
     allunique(names) ||
         throw(ArgumentError("field_snapshot: fields $names repeat a name"))
     patches = getfield(solver, :patches)
-    blocks = preserving_artificial(solver, any(_wants_artificial, names)) do
+    wants_artificial = any(_wants_artificial, names)
+    blocks = preserving_artificial(solver, wants_artificial) do
+        held = wants_artificial ? _output_level_artificial!(solver, states) :
+                                  Dict{Int,Any}()
         # Patch order is the collective order of the derived fields, as in
         # the patch-layout `save_vtk`.
         map(eachindex(patches)) do li
             ps = PatchSolver(solver, patches[li])
-            _prepare_fields!(ps, states[li], names)
+            _prepare_fields!(ps, states[li], names, get(held, li, nothing))
             # The plane as the node of this patch's level coinciding with it.
             at = plane === nothing ? nothing :
                  (plane[1], _level_node(solver.n_global, patches[li].level, plane...))

@@ -1033,16 +1033,20 @@ end
         @test CL.scalar_field(ps_last, name) isa AbstractArray
     end
     # What a silent read would have returned differs from the tile's own field.
-    stale = Array(CL.scalar_field(ps_last, :sensor))
-    own = field_array(solver, states, :sensor)
-    @test own[2] != stale
+    # The strain magnitude is a pointwise function of the tile's gradients, so
+    # the tile's own pass reproduces the level's in the interior.
+    nodes = ntuple(d -> first_tile.decomp.n_halo_d[d] .+
+                        (1:first_tile.decomp.n_local[d]), 3)
+    stale = Array(CL.scalar_field(ps_last, :strain_mag))
+    own = field_array(solver, states, :strain_mag)
+    @test own[2][nodes...] != stale[nodes...]
     # Recomputed for the first tile, the read is that tile's and passes.
     fresh = CL.preserving_artificial(solver) do
         CL.compute_primitives_and_gradients!(ps_first, states[2])
         CL.compute_artificial!(ps_first, states[2])
-        Array(CL.scalar_field(ps_first, :sensor))
+        Array(CL.scalar_field(ps_first, :strain_mag))
     end
-    @test fresh == own[2]
+    @test fresh[nodes...] == own[2][nodes...]
     @test_throws ArgumentError CL.scalar_field(ps_last, :sensor)
     # A surviving tile keeps its identity through a regrid's repatching.
     @test CL._repatch(first_tile, 99, first_tile.faces, first_tile.bcs).covered ===
@@ -1088,15 +1092,16 @@ end
     inner(p) = ntuple(d -> p.decomp.n_halo_d[d] .+ (1:p.decomp.n_local[d]), 3)
     # The largest difference from the box over the four tiles, relative to
     # the box's peak.
-    function deviation(name)
-        B = getfield(box, name)
+    function deviation(name, tiles=[getfield(p, name) for p in st.patches],
+                       B=getfield(box, name))
         ib = inner(box)
         peak = maximum(abs, view(B, ib...))
         worst = 0.0
-        for p in st.patches[2:end]
+        for (li, p) in enumerate(st.patches)
+            p.level == 1 || continue
             it = inner(p)
             o = p.region.offset .- box.region.offset
-            A = getfield(p, name)
+            A = tiles[li]
             for j in eachindex(it[2]), i in eachindex(it[1])
                 b = B[ib[1][o[1] + i], ib[2][o[2] + j], ib[3][1]]
                 worst = max(worst, abs(A[it[1][i], it[2][j], it[3][1]] - b) / peak)
@@ -1105,6 +1110,8 @@ end
         return worst
     end
     level = Dict(name => deviation(name) for name in (:mu_art, :kappa_art))
+    primed = Dict(name => [copy(getfield(p, name)) for p in st.patches]
+                  for name in (:mu_art, :beta_art, :kappa_art))
     # The same tiles each computing their own, as a tile without a shared face
     # does.
     for (ps, Q) in CL.eachpatch(st, qt)
@@ -1120,6 +1127,23 @@ end
     @test level[:mu_art] < 1e-5
     @test level[:kappa_art] < 1e-13
     @test own[:mu_art] > 0.1 && own[:kappa_art] > 0.01
+    # Output recomputes the level-wide coefficients, those of the level's
+    # right-hand side, and restores the tiles' own that the arrays now hold.
+    tile_values = [copy(p.mu_art) for p in st.patches]
+    for name in (:mu_art, :beta_art, :kappa_art)
+        @test field_array(st, qt, name) == primed[name]
+    end
+    @test all(p.mu_art == a for (p, a) in zip(st.patches, tile_values))
+    snaps = field_snapshot(st, qt; fields=[:mu_art])
+    @test count(snaps) do snap
+        li = findfirst(p -> p.level == snap.level && p.region.offset == snap.offset,
+                       st.patches)
+        snap[:mu_art] == primed[:mu_art][li][inner(st.patches[li])...]
+    end == length(st.patches)
+    # The level's smoothed internal-energy sensor, held per tile through the
+    # pass, is the box's up to the order of a sum.
+    @test deviation(:sensor, field_array(st, qt, :sensor),
+                    field_array(sb, qb, :sensor)[2]) < 1e-13
 end
 
 @testset "tiled regrid seeds fresh tiles from surviving neighbors" begin

@@ -134,7 +134,7 @@ function _each_unit(f::F, solver::Solver, lev::Level, states) where {F}
 end
 
 """
-    _level_artificial!(solver, lev, states, prepared)
+    _level_artificial!(solver, lev, states, prepared, held = nothing)
 
 The artificial coefficients of every tile of `lev` that this rank holds,
 computed as one patch spanning the level would compute them, and written into
@@ -142,13 +142,16 @@ each tile's `mu_art`, `beta_art`, `kappa_art` and `D_art`. The primitives and
 the velocity gradients are computed here, the primitives skipped when
 `prepared` says the caller has refreshed them; on return the primitives are
 current for the tiles' right-hand sides, and the compression switch of a gated
-β* is left to them (`compute_rhs!`).
+β* is left to them (`compute_rhs!`). A `Dict` `held` receives, by patch index,
+a copy of each tile's smoothed internal-energy sensor, which the shared
+workspace holds for one unit only (`_output_level_artificial!`).
 
 Entered by every rank holding a tile of `lev`, at the same point: the
 exchanges are point-to-point over the level's records, and each tile's line
 solves and halo exchanges are collective over its own communicator.
 """
-function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool)
+function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
+                            held=nothing)
     art = solver.art
     n_species = solver.equations.n_species
     _each_unit(solver, lev, states) do ps, Q
@@ -169,6 +172,12 @@ function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool)
                 smooth_along!(ps.tmp_a, f, ps, d, 1, true)
                 copy_interior!(f, ps.tmp_a, ps.decomp)
             end
+        end
+    end
+    if held !== nothing
+        patches = getfield(solver, :patches)
+        for pi in lev.patches
+            held[pi] = _dense_copy(patches[pi].kappa_art)
         end
     end
     _each_unit(solver, lev, states) do ps, Q
@@ -276,6 +285,56 @@ function _level_coefficients!(ps)
         pointwise!(_species_diffusivity_point!, src, nx, ny, nz, D[sp], ps.c, src,
                    o1, o2, o3)
     end
+    return ps
+end
+
+# --- Output --------------------------------------------------------------------
+#
+# A diagnostic or a field writer that reports the coefficients from a state
+# vector recomputes them from that state, as the single-patch form does, and
+# restores the integrator's afterwards (`preserving_artificial`). On a level
+# that takes the pass the recomputation is the pass itself, so the output
+# carries the coefficients the level's next right-hand side computes from the
+# same state, not those of each tile alone.
+
+"""
+    _output_level_artificial!(solver, states) -> Dict{Int,Any}
+
+Run the level-wide pass on `states` for every level that takes it, before an
+output walks the patches, and return the held sensors by patch index (see
+`_level_artificial!`); a patch absent from the result recomputes its
+coefficients alone (`_output_artificial!`). The coefficient arrays are
+overwritten, so the caller holds this inside `preserving_artificial`. The
+exchange time is not charged to the step's `wall_wait`. Every rank must call
+it at the same point, before any patch's own derived-field pass.
+"""
+function _output_level_artificial!(solver::Solver, states)
+    held = Dict{Int,Any}()
+    solver.art.enabled || return held
+    wait = solver.wall_wait
+    for lev in getfield(solver, :levels)
+        _level_sensors(solver, lev) &&
+            _level_artificial!(solver, lev, states, false, held)
+    end
+    solver.wall_wait = wait
+    return held
+end
+
+"""
+    _output_artificial!(ps, Q, sensor)
+
+The coefficients and the sensor scratch of one patch for an output, after the
+caller's gradient pass on it: `compute_artificial!` where `sensor` is
+`nothing`, and otherwise what the patch's right-hand side adds to the level
+pass, the compression switch of a gated β*, with the strain magnitude and the
+held `sensor` copied into the shared workspace for `scalar_field`.
+"""
+function _output_artificial!(ps, Q, sensor)
+    sensor === nothing && return compute_artificial!(ps, Q)
+    _gated(ps.art) && gate_beta!(ps)
+    copy_interior!(ps.strain_mag, ps.sensed_fields[1], ps.decomp)
+    copy_interior!(ps.sensor, sensor, ps.decomp)
+    _mark_sensors!(ps)
     return ps
 end
 

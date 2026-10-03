@@ -829,15 +829,19 @@ gradients read each patch's ghost and shell nodes, so the state must be as
 `run!` leaves it after a step, shells imposed and shared planes exchanged
 ([`sync_patches!`](@ref), [`sync_levels!`](@ref)); a state that has only been
 initialized needs those first. Every patch's artificial coefficient arrays are
-restored to the values the integrator left.
+restored to the values the integrator left. On a refined level of several
+tiles μ\\* and β\\* are those the level's right-hand side computes over the
+whole level, which differ from a tile's own within a few nodes of a face
+shared with another tile.
 """
 function dissipation_rate(solver::Solver, states::Vector{<:ConservedState})
     _validate_transport_state!(solver, states)
     acc = zeros(2)
     preserving_artificial(solver) do
-        for (ps, Q) in eachpatch(solver, states)
+        held = _output_level_artificial!(solver, states)
+        for (li, (ps, Q)) in enumerate(eachpatch(solver, states))
             compute_primitives_and_gradients!(ps, Q)
-            compute_artificial!(ps, Q)
+            _output_artificial!(ps, Q, get(held, li, nothing))
             decomp = ps.decomp
             o1, o2, o3 = decomp.n_halo_d
             nx, ny, nz = decomp.n_local

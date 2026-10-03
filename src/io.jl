@@ -1119,7 +1119,9 @@ _wants_gradients(name::Symbol) =
 _wants_artificial(name::Symbol) =
     name in (:mu_art, :beta_art, :kappa_art, :D_art, :sensor, :strain_mag)
 
-function _prepare_fields!(solver::SolverLike, Q, fields)
+# `sensor` is the patch's held sensor where its level took the level-wide pass
+# (`_output_level_artificial!`), and `nothing` elsewhere.
+function _prepare_fields!(solver::SolverLike, Q, fields, sensor=nothing)
     if any(_wants_gradients, fields) || any(_wants_artificial, fields)
         # This exchanges halos, so ρ and the velocities are valid into the halo
         # and the derivative passes remain accurate at a rank boundary. It also
@@ -1128,7 +1130,7 @@ function _prepare_fields!(solver::SolverLike, Q, fields)
         # step, so a caller wanting them holds the request inside
         # `preserving_artificial`.
         compute_primitives_and_gradients!(solver, Q)
-        any(_wants_artificial, fields) && compute_artificial!(solver, Q)
+        any(_wants_artificial, fields) && _output_artificial!(solver, Q, sensor)
     else
         primitives!(solver, Q)   # halos may be stale but the interior is what we write
     end
@@ -1842,7 +1844,10 @@ the `vtkGhostType` point array, so the composite renders the finest data at
 every point and the coarse-fine faces once. `fields` and `stride` mean what
 they do above, the stride acting in each patch's own node space; `slice`
 names a plane of the **root** lattice, which each patch maps to its own
-coincident node, and a patch the plane misses writes no piece. Collective:
+coincident node, and a patch the plane misses writes no piece. On a refined
+level of several tiles the artificial coefficients and `:sensor` are those the
+level's right-hand side computes over the whole level, which differ from a
+tile's own within a few nodes of a face shared with another tile. Collective:
 every rank walks its patches in patch order, each patch's derived fields run
 on that patch's communicator, and the index gathers the piece list.
 """
@@ -1871,9 +1876,12 @@ function save_vtk(solver::Solver, states::Vector{<:ConservedState},
     end
     ensure_output_dir(prefix, comm)
     pieces = Int64[]
-    return preserving_artificial(solver, any(_wants_artificial, fields)) do
+    wants_artificial = any(_wants_artificial, fields)
+    return preserving_artificial(solver, wants_artificial) do
+        held = wants_artificial ? _output_level_artificial!(solver, states) :
+                                  Dict{Int,Any}()
         _save_patch_pieces!(pieces, solver, states, prefix, fields, st, slice,
-                            tile_of, levels, patches, rank)
+                            tile_of, levels, patches, rank, held)
         _write_multiblock(solver, pieces, prefix)
         return prefix
     end
@@ -1882,7 +1890,7 @@ end
 # One `.vtr` piece per held patch, in patch order, appending each written
 # piece's `(level, tile)` to `pieces` for the index below.
 function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
-                             slice, tile_of, levels, patches, rank)
+                             slice, tile_of, levels, patches, rank, held)
     for (li, p) in enumerate(patches)
         ps = PatchSolver(solver, p)
         ℓ, ti = tile_of[li]
@@ -1894,7 +1902,7 @@ function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
             1 <= pslice[2] <= ps.decomp.n_global[pslice[1]] || continue
         ranges = _output_ranges(ps, st, pslice)
         _check_output(ps, st, pslice, ranges)
-        _prepare_fields!(ps, states[li], fields)
+        _prepare_fields!(ps, states[li], fields, get(held, li, nothing))
         entries = Tuple{String,Int,Vector{Float32}}[]
         for name in fields
             append!(entries, vtk_field_entries(ps, states[li], name, false, ranges))
