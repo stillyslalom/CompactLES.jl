@@ -22,13 +22,15 @@
 #
 # --- Message tags ------------------------------------------------------------
 #
-# Three families of point-to-point message travel over `decomp.comm` and its
+# Four families of point-to-point message travel over `decomp.comm` and its
 # sub-communicators, so their tags are allocated from disjoint ranges:
 #
 #   10d, 10d + 1     `exchange_dim!` and `_exchange_dim_staged!`, phase 1 and 2
 #   100d, 100d + 1   `exchange_dim_batch!` and `_exchange_dim_batch_staged!`
 #   41, 42           the fold pair exchanges in folds.jl, which reach the
 #                    network through `sendrecv_block!`
+#   50 + d           the shared boundary plane of a VTK piece (`_close_seams`
+#                    in io.jl)
 #
 # Disjointness is not the property correctness rests on. Every message here is
 # a blocking `MPI.Sendrecv!` that all ranks of the sub-communicator reach in

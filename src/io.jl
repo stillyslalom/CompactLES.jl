@@ -1050,9 +1050,14 @@ end
 #     (u_r, u_θ, u_z), and a glyph or streamline drawn from those components on a
 #     wrapped grid would point in the wrong direction.
 #
-# Adjacent pieces abut without ghost overlap, which is adequate for point
-# rendering and slicing but may produce seams under cell-based filters. This
-# applies to both grid types and is unchanged from the original writer.
+# The parallel structured formats count extents in points, and a reader
+# assembles the whole extent from the cells of its pieces, so neighboring pieces
+# must share their boundary plane: pieces `0 40` and `40 80` cover the cell
+# between points 40 and 41, and pieces `0 40` and `41 80` leave it in neither.
+# ParaView's reader then refuses the whole file. Each rank therefore writes the
+# first output plane of its high neighbor along every split dimension
+# (`_close_seams`), and a point on a shared plane appears in two pieces with the
+# same value, which `GhostLevel="0"` permits.
 
 _extent_str(lo, hi) = join(("$(lo[d]) $(hi[d])" for d in 1:3), " ")
 
@@ -1193,7 +1198,8 @@ end
 #
 # Extents are then expressed in the coarse index space, where global index g
 # sits at (g − 1) ÷ s. The resulting per-rank ranges are contiguous, disjoint,
-# and cover the coarse grid, as the parallel container requires.
+# and cover the coarse grid's points; the shared planes below then cover the
+# cells between them.
 #
 # Subsampling reduces file size and write time by s³. It does not reduce the
 # cost of producing the fields: a gradient or schlieren pass still runs over the
@@ -1267,6 +1273,92 @@ _output_piece_extent(solver::SolverLike, stride, slice, ranges) = begin
                      (off[d] + first(ranges[d]) - 1) ÷ stride[d], 3)
     hi = ntuple(d -> lo[d] + length(ranges[d]) - 1, 3)
     lo, hi
+end
+
+# --- Shared planes ------------------------------------------------------------
+#
+# Along dimension d a rank sends its first output plane to its low neighbor and
+# appends the plane its high neighbor sends, so its piece ends on the
+# neighbor's first point. The plane is the neighbor's own payload, not a value
+# read from the halo: the next retained point lies up to `stride[d]` past the
+# last owned one, so beyond the halo once the stride exceeds `n_halo`, and a
+# derived field need not be valid in the halo at all. The dimensions are taken in order, each
+# exchanging the payloads the previous ones extended, so the corner point of a
+# 2-D or 3-D split arrives from the diagonal neighbor through the intermediate
+# one. The coordinates of the appended plane need no message, since `xcoord` is
+# defined at any local index.
+#
+# No piece extends across a periodic seam: the whole extent ends at the last
+# global point, so the last rank along a periodic dimension neither receives
+# nor sends there. Partners agree on whether to exchange under a slice as well,
+# because two neighbors along d ≠ sd share their block along the sliced
+# dimension and so either both hold the plane or neither does.
+
+"""
+Per dimension, whether this rank sends its first output plane to its low
+neighbor and whether it receives one from its high neighbor (`_close_seams`).
+Both are false along the sliced dimension and on a rank with no output.
+"""
+function _output_seams(solver::SolverLike, slice, ranges)
+    decomp = solver.decomp
+    sd = _slice_dim(slice)
+    held = _has_output(ranges)
+    return ntuple(3) do d
+        writes = held && d != sd
+        (writes && decomp.offset[d] > 0,
+         writes && decomp.offset[d] + decomp.n_local[d] < decomp.n_global[d])
+    end
+end
+
+"The output `ranges` extended by one retained point on each receiving side."
+_seam_ranges(ranges, stride, seams) =
+    ntuple(d -> seams[d][2] ? (first(ranges[d]):stride[d]:
+                               (last(ranges[d]) + stride[d])) : ranges[d], 3)
+
+"""
+    _close_seams(decomp, payloads, ncomp, shape, seams) -> Vector
+
+`payloads[m]` holds `ncomp[m]` components per point of a block of `shape`
+points, component fastest and then i, j, k, as the piece writers lay them out.
+Return them extended by the first plane of the high neighbor along each
+dimension `seams` marks, one `MPI.Sendrecv!` per such dimension over
+`decomp.comm`. Every rank of a seam must call this with the same payload
+layout.
+"""
+function _close_seams(decomp::Decomp, payloads::AbstractVector{Vector{T}}, ncomp,
+                      shape::NTuple{3,Int}, seams) where {T}
+    out = collect(payloads)
+    for d in 1:3
+        send, recv = seams[d]
+        (send || recv) || continue
+        blocks = [reshape(p, nc, shape...) for (p, nc) in zip(out, ncomp)]
+        planes = [vec(selectdim(b, d + 1, 1:1)) for b in blocks]
+        sbuf = reduce(vcat, planes; init=T[])
+        rbuf = similar(sbuf)
+        lo, hi = decomp.neighbors[d]
+        MPI.Sendrecv!(sbuf, rbuf, decomp.comm; dest=send ? lo : PNULL,
+                      source=recv ? hi : PNULL, sendtag=50 + d, recvtag=50 + d)
+        recv || continue
+        at = 0
+        for (m, (b, plane)) in enumerate(zip(blocks, planes))
+            got = reshape(view(rbuf, at+1:at+length(plane)),
+                          size(selectdim(b, d + 1, 1:1)))
+            out[m] = vec(cat(b, got; dims=d + 1))
+            at += length(plane)
+        end
+        shape = ntuple(k -> k == d ? shape[k] + 1 : shape[k], 3)
+    end
+    return out
+end
+
+# The field entries of `vtk_field_entries` with the high neighbors' planes
+# appended, for the piece over `_seam_ranges`.
+function _close_seams(solver::SolverLike, entries, ranges, seams)
+    any(s -> s[1] || s[2], seams) || return entries
+    data = _close_seams(solver.decomp, [e[3] for e in entries], [e[2] for e in entries],
+                        length.(ranges), seams)
+    return Tuple{String,Int,Vector{Float32}}[(e[1], e[2], v)
+                                             for (e, v) in zip(entries, data)]
 end
 
 _output_whole_extent(solver::SolverLike, stride, slice) = begin
@@ -1563,7 +1655,9 @@ Write one piece per rank plus a parallel container on rank 0, as Float32 point
 data on the physical grid, including stretch mappings, and return `prefix`. The
 pieces are `prefix.rNNNN.vtr` and the container `prefix.pvtr`, becoming `.vts`
 and `.pvts` when an angular dimension is resolved; an existing file of either
-name is truncated. Open the container in ParaView or VisIt. This writes a single
+name is truncated. Neighboring pieces share their boundary plane, as the
+parallel formats require, so a point on it is written by both ranks with the
+same value. Open the container in ParaView or VisIt. This writes a single
 dump; use [`FieldWriter`](@ref) for a sequence.
 
 `fields` selects what is written, as a tuple of names. The default is
@@ -1632,8 +1726,11 @@ function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
         for name in fields
             append!(entries, vtk_field_entries(solver, Q, name, curvilinear, ranges))
         end
-        return curvilinear ? _save_vts(solver, entries, prefix, st, slice, ranges) :
-                             _save_vtr(solver, entries, prefix, st, slice, ranges)
+        seams = _output_seams(solver, slice, ranges)
+        entries = _close_seams(solver, entries, ranges, seams)
+        written = _seam_ranges(ranges, st, seams)
+        return curvilinear ? _save_vts(solver, entries, prefix, st, slice, written) :
+                             _save_vtr(solver, entries, prefix, st, slice, written)
     end
 end
 
@@ -1908,10 +2005,15 @@ function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
             append!(entries, vtk_field_entries(ps, states[li], name, false, ranges))
         end
         _has_output(ranges) || continue
-        lo, hi = _output_piece_extent(ps, st, pslice, ranges)
+        seams = _output_seams(ps, pslice, ranges)
+        entries = _close_seams(ps, entries, ranges, seams)
         ghost = ℓ < length(levels) - 1 ? _vtk_ghost_points(ps, ranges) : nothing
+        ghost === nothing ||
+            (ghost = only(_close_seams(ps.decomp, [ghost], (1,), length.(ranges), seams)))
+        written = _seam_ranges(ranges, st, seams)
+        lo, hi = _output_piece_extent(ps, st, pslice, written)
         _write_vtr_piece(_patch_piece_name(prefix, ℓ, ti, rank), ps, entries, lo,
-                         hi, ranges, ghost)
+                         hi, written, ghost)
         push!(pieces, ℓ, ti)
     end
     return pieces

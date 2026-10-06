@@ -12,29 +12,18 @@ Defects found while building the Examples pages, filed here as found; each
 example they block is held until the item closes.
 
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
-  converging shock.** A spherical shock converging on an r-z quadrant (axis
-  and a symmetry plane at z = 0, 64² root, one level placed by the
-  artificial-diffusivity tag, run to R ≈ 0.17) left a checkerboard in the
-  shocked gas. The mean undivided fourth difference of ρ, over ρ, in the
-  shell behind the shock, against the uniform run on the level's nodes
-  (191²): one fixed box 1.00×, fixed tiles of edge 8 1.66×, tiles placed by
-  regridding 2.80×. A tiled level now forms its artificial coefficients over
-  the whole level, exchanging the strain magnitude and the sensors across
-  shared tile faces (commit `1fc1fdb`), and a sensor-tagged level whose
-  criteria see nothing at rest starts from the density tag on the initial
-  condition (commit `c78eee8`): fixed tiles 1.19×, regridded tiles 2.39×.
-  The fixed-tile remainder is the explicit face rows of the filter and the
-  derivatives, for which cheaper rows were measured and do not help. The
-  regridded remainder is mostly a cover too close to the shock, A18's
-  mechanism (`tag_buffer = 8` gave 1.78× before these commits). Also
-  remaining: the sharpening flux's filtered gradient is still smoothed per
-  tile; field output and diagnostics report the level-wide coefficients
-  (commit `063495c`). Reproducer:
-  `CompactLES_tutorial_protos/evidence/ex3_bug_noise.jl`. Holds the
-  Spherical implosion example
+  converging shock.** On `bench/levelpattern.jl`'s spherical shock
+  converging on an r-z quadrant, the mean undivided fourth difference of ρ
+  in the shell behind the shock is, against the uniform run on the level's
+  nodes, 1.00 times for one box and 1.19 times for fixed and for regridded
+  tiles ([measurements](CALIBRATION_APPENDIX.md#benchlevelpatternjl-the-grid-scale-pattern-of-a-refined-level)).
+  The regridded excess was A18's mechanism, removed by commit `04d3cff`;
+  the sharpening flux's filtered gradients are smoothed over the level
+  (commit `ef5a52d`). The tiled remainder is the explicit face rows of the
+  filter and the derivatives, for which cheaper rows were measured and do
+  not help. Holds the Spherical implosion example
   (`CompactLES_tutorial_protos/held/spherical_implosion/`).
-  **Gate:** the three layouts within a small factor of the uniform grid on
-  that measure, and the example's refined run consistent with uniform 384².
+  **Gate:** the example's refined run consistent with uniform 384².
 
 ## How to use this plan
 
@@ -182,17 +171,6 @@ surface; H8 for a magnetized target.
   with the filter off and loses positivity near t = 0.9.
   **Gate:** the origin blast at `cfl = 0.5` without retries.
 
-- [ ] **N25 — Diagnose the cylindrical slip wall's order in r.**
-  On an r-z annulus a standing wave touching the slip walls converges at
-  about second order where the Cartesian line converges at the interior
-  order; a pulse that never reaches the wall converges fully, so the loss is
-  at the curved wall
-  ([the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
-  Find whether the wall rows, the flux correction's area weighting, the
-  curvature source at the wall, or the filter's wall rows set it.
-  **Gate:** a slip-wall evolution row on the annulus in
-  `test/convergence.jl` at the order of the Cartesian wall row.
-
 - [ ] **N26 — Keep the internal energy positive ahead of a strong shock.**
   Measured (`bench/shockfoot.jl`, commit `105f787`;
   [negative internal energy ahead of a shock](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)):
@@ -246,16 +224,36 @@ surface; H8 for a magnetized target.
   `interface_flux = :closure` (commit `7a191c3`): the face at the shared
   node is limited by one θ on both patches and carries its own register,
   and Woodward–Colella and planar Noh on two and three patches leave no
-  inadmissible point. Under `:ghost`, the default, the inviscid flux closes
-  the interface with the gradient's rows (composite weight h at the shared
+  inadmissible point. Refined levels carry it (commits `d3bd6af`,
+  `af002dd`): boxes and tiles, static or regridded, nested, global step or
+  subcycled, on the Cartesian grid, and one box per level on the radial
+  grids. Coarse-fine end nodes and the parent's overwritten nodes are not
+  held, and their inadmissible states are kept out of held cells'
+  first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
+  rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
+  times the unlimited step. Under the limiter the interfaces close with the
+  closure rows, with a warning: under `:ghost` the inviscid flux closes the
+  interface with the gradient's rows (composite weight h at the shared
   node) and the rest with the divergence's one-sided rows (twice the end
-  weight), so no one face form covers both; the remaining route writes the
+  weight), so no one face form covers both. The remaining route writes the
   difference as a node term in each cell's limit, as the radial lines'
-  geometric part is, and is measured before it replaces `:closure`, which
-  lowers the interface's order. In order: refined levels, anchoring the face flux at a
-  coarse-fine face as at a node the parent's shell overwrites and
-  carrying the registers under subcycling;
-  then device storage and stacked tiles; then the remaining metrics and the
+  geometric part is, measured before it replaces `:closure`, which lowers
+  the interface's order. The parent's shell falls back to the
+  multilinear, linear-in-time interpolant of the parent wherever the
+  Lagrange chain or the Hermite blend leaves a node inadmissible and the
+  fallback is admissible, on host and device storage, limiter on or off
+  (commit `c85a315`); the correction pass gives both nodes of a face beside an
+  unheld inadmissible node one first-order flux (commit `6debed0`). Every
+  refined case of `bench/positivity.jl part=levels`, the blast with tiles
+  included, then leaves no inadmissible point. Device storage carries it
+  (commits `222894a`, `bacc29f`) on one patch, the radial lines, the r-z plane,
+  same-level patches and refined boxes, bitwise against the host under the
+  KernelAbstractions CPU backend and on an RX 6800 XT; a θ pass's tallies,
+  a decomposed line's offsets around the Allgather, the interface θ
+  exchange and the ε minima stage through the host. In order: stacked
+  device tiles, whose batched right-hand side holds no per-tile registers
+  (setup rejects a tiled device level), and tiles on the radial grids;
+  then the remaining metrics and the
   tabulated and NASA-9 equations of state, whose admissibility test is not
   linear. Each extension's face weights come from its own rows: the metric's
   face areas, the fold's mirrored rows, the interface rows.
@@ -289,23 +287,25 @@ surface; H8 for a magnetized target.
 - [ ] **V4 — Cut the gate's wall time.**
   CI built the package image twice per job; with one build (commit
   `8ea9ebf`) each Julia 1.13 serial job fell by about 6 min and the
-  numerics job from 49.1 to 44.5 min (run 37064699408 against 36870928283).
-  The inference barrier on `allocate_state` (commit `a8812af`) cut the serial
-  testsets by 3–6% and left the MPI suite's compile time unchanged.
-  `runtests.jl timing=true` (commit `725bf7d`) prints the compile and run
-  time of every testset. Both suites remain compile-bound: every MPI rank
-  compiles each `Solver` type the image lacks, and Julia 1.13 compiles the
-  serial suite at 2.1 times the cost of 1.10. CI's numerics job is split
-  into convergence with the two-rank suite and the eight-rank selection,
-  which drops the two wall-flux phases and the eight-rank neutral-transport
-  launch (commit `fa10874`). Remaining:
-  1. Record the split's CI wall against the 44.5 min numerics job.
-  2. The uniform half of "phase change" at eight ranks; the C10
-     configuration of the two-slab device layout and the Float32 NASA-9
-     device run (about 25 s together).
-  3. Hold the eight-rank phase list in one file instead of CI.yml and
-     CLAUDE.md, and decide the depot's image limit
-     (`JULIA_MAX_NUM_PRECOMPILE_FILES`).
+  numerics job from 49.1 to 44.5 min. The `allocate_state` barrier
+  (commit `a8812af`) cut the serial testsets by 3–6%, and
+  `runtests.jl timing=true` (commit `725bf7d`) prints each testset's
+  compile and run time. Splitting the numerics job (commit `fa10874`) cut a
+  CI run from 44.5 min to a median of 26.4 (20 runs, 22.3 to 32.2); the
+  eight-rank job is the longest in 13 of 20 (median 24.1 min), the serial
+  Julia 1 and pre jobs follow at 24.0. The eight-rank selection is
+  `RANK_SHAPE_PHASES` in `test/mpi_tests.jl` (`rank_shape=true`), and the
+  uniform half of the phase change at eight ranks, the C10 two-slab device
+  layout and the Float32 NASA-9 device run are cut (commit `14c4c15`).
+  Remaining:
+  1. The two-rank job rebuilt its image on 4 of 6 runs with unchanged
+     source, about 7 min each, while the eight-rank job reused its own.
+     Read the "Report the restored package image" step and fix the cause;
+     if it is the runner CPU, the fix is `JULIA_CPU_TARGET`. The image
+     limit stays at Julia's default of 10, least-recently-used, one image
+     per source tree.
+  2. Trim the step-bound eight-rank phases and the serial Julia 1 and pre
+     jobs.
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
 
@@ -1170,6 +1170,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **N21** — The composition clip of the repair acts only outside
   `StepControl.species_band`, which now bounds both sides through a test shared
   with the validation sweep (commit `0293798`).
+- [x] **N25** — The annulus slip wall's second order was the data's: the
+  standing wave breaks the curved wall's second compatibility condition, and
+  a compatible pulse converges at the Cartesian wall's order (commit
+  `6fa4131`).
 
 ### AMR numerics
 
