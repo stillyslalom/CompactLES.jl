@@ -957,7 +957,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     ws_pool = rhs_workspace_pool(backend, T)
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
                              ring_det,
-                             _shared_species_diffusivity(art, n_species))
+                             _shared_species_diffusivity(art, n_species), nlev > 1)
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
@@ -1246,9 +1246,10 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     empty3 = empty_field(backend, T)
     # `ring` adds the `:d8` ringing buffer; `bulk` selects the conserved
     # gradients of the shared-D_b species channels, which a refined patch
-    # differences as the root does.
+    # differences as the root does. A refined patch may be a parent itself,
+    # so it takes the derivative mask's scratch as a refined root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
-                        ring, bulk)
+                        ring, bulk, true)
     # A tile of a level whose artificial coefficients are computed level-wide
     # keeps the velocity gradients of that pass for its right-hand side. A
     # stacked tile has them in its own block of the stack's set already.

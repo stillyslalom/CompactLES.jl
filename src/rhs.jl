@@ -70,7 +70,7 @@ function deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
-    return out
+    return _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), false)
 end
 
 """
@@ -114,6 +114,7 @@ function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     plan = _plan_at(solver.deriv_plans, d)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_scaled!(out, plan, f, solver.decomp, solver.inv_h[d])
+        _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     else
         deriv_along!(out, f, solver, d, σf)
         _scale_grad!(out, solver, d)
@@ -151,7 +152,7 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                        dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
         end
     end
-    return dQ
+    return _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:div))
 end
 
 # The pressure term inv_h_d ∂p/∂ξ_d of component `c` where it enters as a
@@ -159,6 +160,253 @@ end
 # that the positivity limiter's stage array keeps it in a register of its own.
 pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
     div_subtract_along!(dQ, c, solver.p, solver, d, 1, solver.inv_h[d])
+
+# --- Derivatives on a parent level ---------------------------------------------
+#
+# A compact derivative is A⁻¹ B f: the explicit stencil B f is local, and A⁻¹
+# spreads it along the line, decaying by about 0.38 per node for the sixth-order
+# tridiagonal scheme. On a parent patch the nodes a child covers carry the
+# child's restricted solution, and a shock there is a jump narrower than the
+# parent spacing. The parent's gradients and flux divergences then carry an
+# alternating tail of that jump to the nodes it evolves itself: the uncovered
+# ones and the covered margin beside a coarse-fine face, which restriction does
+# not overwrite and from which the child's shell is interpolated. The child took
+# the tail in through its face data and, at a regrid, through the fill of the
+# nodes the moving level newly covers, so a level a few parent nodes ahead of a
+# converging shock carried tens of times the uniform fine grid's disturbance
+# ahead of it. Neither the filter (which `_child_mask!` already masks), the
+# artificial coefficients nor the regrid fill carries it; the tail of the
+# gradients and the divergences together does, and either alone leaves most of
+# it.
+#
+# Each derivative on such a patch therefore drops the explicit stencil's source
+# at the nodes the parent cannot resolve, D f − A⁻¹ M B f, with M one where a
+# node is deep inside a child (`child_deep`: one that restriction overwrites
+# after every step, so that the parent's own values there are discarded anyway,
+# and `CHILD_DERIVATIVE_DEPTH` nodes inside the child along the line), the
+# density along the line is unresolved at it or within `CHILD_MASK_REACH` nodes
+# (the test of `_child_mask!`), and the test reads no node beyond a
+# non-periodic end of the patch's line. Every route takes it: the gradients,
+# the flux divergence and the ghost-differenced divergence. A masked node's own
+# derivative is then nearly zero, and the covered feature stays close to its
+# restricted state through the parent's step. Applying the dropped source at
+# the masked nodes alone, which keeps the line's discrete conservation, left
+# five to ten times more ahead of the shock. Where no node is flagged the
+# derivative is the plain one, bit for bit, and the extra solve is skipped:
+# `_arm_child_mask!` decides per dimension once per right-hand side and
+# reduces the decision over the patch's communicator, so the ranks of a line
+# solve together or not at all. A paired fold's butterfly and a stacked level
+# stay plain, as in the filter's mask, and so does every patch of a solver
+# under the positivity limiter: its stage face fluxes are a running sum of the
+# divergence, and a divergence that drops part of a jump's flux carried the
+# difference to every face beyond the masked nodes, while one that restores it
+# at the masked nodes alone gave the limiter an update it does not bound
+# there; both left inadmissible states or a wrong solution on the limiter's
+# refined Noh and Woodward–Colella rows. The resolution threshold is the
+# default density tag's hold level, so under the default tagging a masked node
+# lies where the density tag holds the child (`_tag_delta4_point!`) whatever a
+# criterion reading the parent's derivatives or artificial coefficients finds
+# there. The measurements are under bench/movinglevel.jl in
+# reference/CALIBRATION_APPENDIX.md.
+#
+# The mask is off by default. The tail it removes also carries part of the
+# mass the parent's uncovered nodes exchange through a coarse-fine face, and
+# with no flux correction at the face the composite budget rests on it: a Sod
+# shock crossing a level drifted five to twenty times as far with the mask,
+# whatever the step and with the dropped source restored at the masked nodes.
+
+# `true` gives every parent patch the masked derivatives; off by default (see
+# above).
+const MASK_CHILD_DERIVATIVE = Ref(false)
+
+# A node may take the mask when it and this many nodes on either side of it
+# along the line are covered over their whole cells, so the first is the
+# fourth node inside a face. The restriction leaves the first node inside to
+# the parent, and its explicit stencil reads up to the third, so no node the
+# parent evolves reads one whose evolution the mask changes. Starting a node
+# deeper left far more ahead of a converging shock.
+const CHILD_DERIVATIVE_DEPTH = 3
+
+# Whether this patch's derivatives may take the mask: it carries the mask's
+# scratch (a solver of more than one level), the solver has no positivity
+# limiter, and a child level holds a patch. Read from the configuration and
+# the level hierarchy every rank of the patch holds; a stacked level's
+# workspace views carry no scratch.
+_child_mask_patch(solver::SolverLike) = false
+function _child_mask_patch(ps::PatchSolver)
+    MASK_CHILD_DERIVATIVE[] || return false
+    (isempty(ps.child_mask) || isempty(ps.child_deep)) && return false
+    getfield(ps.solver, :positivity) === nothing || return false
+    levels = getfield(ps.solver, :levels)
+    child = ps.patch.level + 2
+    return child <= length(levels) && !isempty(levels[child].transfers)
+end
+
+# Whether dimension `d` of the patch can take the mask: active, and not a
+# paired fold.
+function _child_mask_dim(solver::SolverLike, d::Int)
+    fold = solver.folds[d]
+    return solver.decomp.active[d] && (fold === nothing || fold.pair === nothing)
+end
+
+"""
+    _arm_child_mask!(solver)
+
+Record on the patch, per dimension, whether any node takes the parent-level
+derivative mask (`Patch.child_masked`), from the current primitives. Collective
+over the patch's communicator when the patch has a child level; a no-op
+otherwise. The right-hand side calls it after its primitives are refreshed and
+before its first derivative (`_gradient_step!`).
+"""
+_arm_child_mask!(solver::SolverLike) = solver
+function _arm_child_mask!(ps::PatchSolver)
+    _child_mask_patch(ps) || return ps
+    bits = 0
+    for d in 1:3
+        _child_mask_dim(ps, d) || continue
+        m = _child_mask!(ps, d)
+        any(!iszero, m) && (bits |= 1 << (d - 1))
+    end
+    bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm)
+    ps.patch.child_masked = ntuple(d -> isodd(bits >> (d - 1)), 3)
+    return ps
+end
+
+@inline _child_masked(solver::SolverLike, d::Int) = false
+@inline _child_masked(ps::PatchSolver, d::Int) =
+    ps.patch.child_masked[d] && _child_mask_patch(ps)
+
+# M along `d` into `child_mask`, from the density's undivided fourth difference.
+function _child_mask!(ps::PatchSolver, d::Int)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    m = ps.child_mask
+    reach = clamp(CHILD_MASK_REACH[], 0, decomp.n_halo_d[d] - 2)
+    # The rows whose test reads only nodes of the line; every row on a periodic
+    # line.
+    n = decomp.n_global[d]
+    lo, hi = decomp.periodic[d] ? (typemin(Int), typemax(Int)) :
+                                  (reach + 3, n - reach - 2)
+    pointwise!(_child_derivative_mask_point!, m, nx, ny, nz, m, ps.child_deep, ps.rho,
+               eltype(m)(CHILD_MASK_THRESHOLD[]), reach, lo, hi, decomp.offset[d], d,
+               o1, o2, o3)
+    return m
+end
+
+@inline function _child_derivative_mask_point!(m, deep, rho, thr, reach, lo, hi, off, d,
+                                               o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(Int(d == 1), Int(d == 2), Int(d == 3))
+        under = false
+        for t in -reach:reach
+            J = I + t * e
+            δ4 = rho[J - 2e] - 4 * rho[J - e] + 6 * rho[J] - 4 * rho[J + e] + rho[J + 2e]
+            under |= abs(δ4) > thr * abs(rho[J])
+        end
+        row = (d == 1 ? i : d == 2 ? j : k) + off
+        along = isodd(unsafe_trunc(Int, deep[I]) >> (d - 1))
+        drop = along & under & (lo <= row) & (row <= hi)
+        m[I] = ifelse(drop, one(eltype(m)), zero(eltype(m)))
+    end
+    return nothing
+end
+
+# The interior right-hand-side coefficients of a derivative plan, padded with
+# zeros to the halo width so that the launch takes a fixed-length tuple.
+_derivative_stencil(plan::DevicePlan) = _derivative_stencil(plan.host)
+function _derivative_stencil(plan)
+    ci = plan.ci
+    T = eltype(ci)
+    length(ci) <= 4 || error("the derivative mask takes a half-width of at most 4")
+    return ntuple(q -> q <= length(ci) ? ci[q] : zero(T), 4)
+end
+
+# The plan of the derivative being corrected: the divergence or the gradient
+# plans along `d`, or the fold's own with the field's sign.
+_child_mask_plan(solver, d, σf, ::Val{:div}) =
+    solver.folds[d] === nothing ? _plan_at(solver.div_plans, d) :
+                                  _fold_plan(solver.folds[d], σf, Val(:div), 1, false)
+_child_mask_plan(solver, d, σf, ::Val{:deriv}) =
+    solver.folds[d] === nothing ? _plan_at(solver.deriv_plans, d) :
+                                  _fold_plan(solver.folds[d], σf, Val(:deriv), 1, false)
+
+# sgn · A⁻¹ M B f into `child_solve`, which is returned. The mask is the one
+# `_child_mask!` makes from the current primitives; `f` carries current halos
+# along `d` (exchanged, or mirror-filled at a fold by the derivative just
+# taken). Collective along `d`, as the derivative is.
+function _child_masked_solve!(ps::PatchSolver, plan, f, d::Int, sgn::Int)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    m = _child_mask!(ps, d)
+    s = ps.child_solve
+    nlo, nhi = _rows_closed(plan)
+    pointwise!(_child_source_point!, s, nx, ny, nz, s, f, m, _derivative_stencil(plan),
+               d, nlo + 1, decomp.n_local[d] - nhi, sgn, o1, o2, o3)
+    solve_along!(s, plan, s, decomp)
+    return s
+end
+
+# sgn times the interior row's explicit stencil of `f` at the masked nodes of
+# the interior rows, zero elsewhere.
+@inline function _child_source_point!(s, f, m, ci, d, row_lo, row_hi, sgn, o1, o2, o3,
+                                      i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(Int(d == 1), Int(d == 2), Int(d == 3))
+        acc = zero(eltype(s))
+        for q in 1:4
+            acc += ci[q] * (f[I + q * e] - f[I - q * e])
+        end
+        row = d == 1 ? i : d == 2 ? j : k
+        keep = (row_lo <= row) & (row <= row_hi) & !iszero(m[I])
+        s[I] = ifelse(keep, sgn * acc, zero(acc))
+    end
+    return nothing
+end
+
+"""
+    _mask_child_derivative!(out, f, solver, d, σf, role, scaled)
+
+On a parent patch whose last right-hand side armed dimension `d`, subtract
+A⁻¹ M B f from the derivative `out` of `f` taken through the plans of `role`
+(`Val(:deriv)` or `Val(:div)`), times `inv_h` under `scaled`; `out` unchanged
+otherwise. Collective along `d`.
+"""
+@inline _mask_child_derivative!(out, f, solver::SolverLike, d::Int, σf::Int, role::Val,
+                                scaled::Bool) = out
+@noinline function _mask_child_derivative!(out, f, ps::PatchSolver, d::Int, σf::Int,
+                                           role::Val, scaled::Bool)
+    _child_masked(ps, d) || return out
+    s = _child_masked_solve!(ps, _child_mask_plan(ps, d, σf, role), f, d, 1)
+    scaled && _scale_grad!(s, ps, d)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    pointwise!(_subtract_interior_point!, out, nx, ny, nz, out, s, o1, o2, o3)
+    return out
+end
+
+# The same for a divergence already subtracted from component `c` of `dQ`,
+# times `inv_J` where it is not `nothing`: dQ += inv_J A⁻¹ M B f.
+@inline _mask_child_divergence!(dQ, c::Int, f, solver::SolverLike, d::Int, σf::Int,
+                                inv_J, role::Val) = dQ
+@noinline function _mask_child_divergence!(dQ, c::Int, f, ps::PatchSolver, d::Int,
+                                           σf::Int, inv_J, role::Val)
+    _child_masked(ps, d) || return dQ
+    s = _child_masked_solve!(ps, _child_mask_plan(ps, d, σf, role), f, d, -1)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    if inv_J === nothing
+        pointwise!(_subtract_div_point!, dQ, nx, ny, nz, dQ, s, c, o1, o2, o3)
+    else
+        pointwise!(_subtract_jac_div_point!, dQ, nx, ny, nz, dQ, s, inv_J, c, o1, o2, o3)
+    end
+    return dQ
+end
 
 """Compact filter of `f` along dimension `d` with antipodal sign `σf`.
 
@@ -952,7 +1200,7 @@ function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
     else
         apply_along_subtract!(dQ, c, plan, f, decomp, inv_J)
     end
-    return dQ
+    return _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:deriv))
 end
 
 # --- Phase two: the molecular flux through interface ends ---------------------
@@ -1481,11 +1729,18 @@ a distributed line solve.
 Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has
 run on this exact `Q` and only the gradients are wanted; the caller is then
 responsible for the claim that nothing has touched `Q` since.
+
+`arm = true`, which the right-hand side passes, first records from the
+refreshed primitives which dimensions take the parent-level derivative mask
+(`_arm_child_mask!`); a diagnostic leaves the record of the last right-hand
+side in place.
 """
 function compute_primitives_and_gradients!(solver::SolverLike, Q,
-                                           primitives_current::Bool=false)
+                                           primitives_current::Bool=false,
+                                           arm::Bool=false)
     decomp = solver.decomp
     primitives_current || refresh_primitives!(solver, Q)
+    arm && _arm_child_mask!(solver)
     vel = (solver.u, solver.v, solver.w)
     for jj in 1:3, d in 1:3
         if decomp.active[d]
@@ -1505,11 +1760,12 @@ end
 # coefficients were computed beforehand (`coefficients_current`): the
 # level-wide pass (`_level_artificial!`) computed both from this state, the
 # gradients into arrays of this patch's own (`_own_gradients`) or into its
-# block of a stack's, and nothing has written either since.
+# block of a stack's, and nothing has written either since. The derivative
+# mask is armed afresh either way, since the pass armed each tile in turn.
 function _gradient_step!(solver, Q, primitives_current::Bool,
                          coefficients_current::Bool)
-    coefficients_current && return solver
-    return compute_primitives_and_gradients!(solver, Q, primitives_current)
+    coefficients_current && return _arm_child_mask!(solver)
+    return compute_primitives_and_gradients!(solver, Q, primitives_current, true)
 end
 
 # The artificial-property step of `compute_rhs!`: `compute_artificial!`, or,

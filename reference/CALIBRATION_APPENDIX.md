@@ -7092,34 +7092,47 @@ bubble's mole fraction more than 4w beyond its radius) or from the gas at rest
 ahead of the shock (|ρ − 1| more than 0.02 and more than 0.05 inside the shock
 radius, over 0.02 < R < 0.3), over composite nodes at the end (bubble) or over
 every step (shock). `-plain` filters the parent's covered nodes as well
-(`MASK_CHILD_RESIDUAL[] = false`). The shock runs accept the state at the
-axis near t_c, which can carry a negative internal energy at a few nodes
-(`validity = :permissive`). Single runs, package at the commit that adds the
-script, under the overwritten-node CFL ceiling.
+(`MASK_CHILD_RESIDUAL[] = false`). The refined runs take the parent's
+derivative mask, which the package leaves off (`MASK_CHILD_DERIVATIVE[] =
+true`), and `-plainD` the plain derivatives (`derivative_mask=both`). The
+shock runs accept the state at the axis near t_c, which can carry a negative
+internal energy at a few nodes (`validity = :permissive`). Single runs,
+package at the commit that adds the derivative mask unless a table says
+otherwise, under the overwritten-node CFL ceiling.
 
 | bubble | away, root | away, level | He mass | layout changes |
 |---|---|---|---|---|
 | coarse | 5.86e-3 | | 4.9e-15 | |
 | fine | 3.97e-6 | | 4.4e-14 | |
-| moving | 1.97e-6 | 3.91e-5 | −3.8e-6 | 2 |
-| moving-plain | 2.56e-4 | 1.19e-3 | −2.9e-4 | 14 |
-| fixed | 3.95e-8 | 3.94e-6 | −3.1e-6 | 0 |
+| moving | 1.76e-6 | 3.17e-5 | −6.3e-7 | 2 |
+| moving-plainD | 1.97e-6 | 3.91e-5 | −3.8e-6 | 2 |
+| moving-plain | 2.39e-4 | 1.04e-3 | −2.3e-4 | 14 |
+| moving-plain-plainD | 2.56e-4 | 1.19e-3 | −2.9e-4 | 14 |
+| fixed | 1.34e-7 | 3.94e-6 | −3.1e-6 | 0 |
+| fixed-plainD | 3.95e-8 | 3.94e-6 | −3.1e-6 | 0 |
 | fixed-plain | 2.94e-6 | 3.94e-6 | −3.2e-6 | 0 |
 
-| shock | root steps | beyond 0.02 | beyond 0.05 | layout changes |
-|---|---|---|---|---|
-| fine | 2023 | 2.91e-4 | 2.69e-7 | 0 |
-| moving | 762 | 1.08e-2 | 6.28e-4 | 114 |
-| moving-plain | 763 | 5.29e-2 | 2.48e-2 | 173 |
-| fixed | 797 | 2.21e-4 | 1.71e-7 | 0 |
-| fixed-plain | 798 | 3.35e-4 | 2.44e-7 | 0 |
+| shock | root steps | beyond 0.02 | beyond 0.05 | layout changes | inadmissible |
+|---|---|---|---|---|---|
+| coarse | 673 | 7.50e-3 | 7.23e-4 | 0 | 0 |
+| fine | 2023 | 2.91e-4 | 2.69e-7 | 0 | 0 |
+| moving | 677 | 3.37e-4 | 8.79e-6 | 161 | 2 |
+| moving-plainD | 762 | 1.08e-2 | 6.28e-4 | 114 | 0 |
+| moving-plain | 675 | 2.08e-2 | 1.54e-2 | 154 | 2 |
+| moving-plain-plainD | 763 | 5.29e-2 | 2.48e-2 | 173 | 0 |
+| fixed | 673 | 2.96e-4 | 1.98e-7 | 0 | 0 |
+| fixed-plainD | 797 | 2.21e-4 | 1.71e-7 | 0 | 2 |
+| fixed-plain-plainD | 798 | 3.35e-4 | 2.44e-7 | 0 | 2 |
 
-The shock's columns take the larger of the root and the level. The fixed
-covers carry the uniform fine grid's disturbance to within a factor of two
-with either pass; the moving ones carry 300 (bubble) and 9.2e4 (shock,
-beyond 0.05) times it under the plain pass and 10 and 2.3e3 times it under
-the mask. The mass change of the plain bubble run accrues mostly between
-regrids, 7.6e-6 of its 2.9e-4 in the steps that changed the layout.
+The shock's columns take the larger of the root and the level; the last
+column counts the inadmissible nodes at t = 0.221, after the collapse. The
+fixed covers carry the uniform fine grid's disturbance to within a factor of
+two under every pass; the moving ones carry 300 (bubble) and 9.2e4 (shock,
+beyond 0.05) times it with neither mask, and 8 and 33 times it with both
+(1.16 times it beyond 0.02). The mass change of the plain bubble run accrues
+mostly between regrids, 7.6e-6 of its 2.9e-4 in the steps that changed the
+layout. With the derivative mask the shock's root takes 11 to 16% fewer
+steps.
 
 **Attribution.** A scratch script (not kept) replaced the state at regrids,
 reset parent nodes to the exact solution after each step, or switched the
@@ -7165,14 +7178,90 @@ density along the line exceeds a threshold within a reach of nodes:
 
 "Unchanged" is every printed digit of every row from the interface window to
 the temporal order section; under the overwritten-node ceiling the default
-leaves them unchanged as well. The shock's maximum beyond 0.02 varies between
-1.1e-2 and 4.5e-2 over these settings without a trend; it is the precursor
-that the regrid fill and the root's own derivatives place ahead of the shock. With
-every covered node masked, filling the newly covered nodes ahead of the shock
-with the state at rest lowers it to 4.8e-3, and `tag_buffer` 6 and 8 to
-9.0e-3 and 3.5e-3; both buffers end the run with a negative internal energy
-at the axis at t = 0.221. Interpolation order 2, the global step and a regrid
-check every step leave it between 1.1e-2 and 1.6e-2.
+leaves them unchanged as well. This table predates the derivative mask. The
+shock's maximum beyond 0.02 varies between 1.1e-2 and 4.5e-2 over these
+settings without a trend; it is the precursor the parent's derivatives
+place ahead of the shock, which the next paragraphs attribute.
+
+**The parent's derivatives.** With the positivity limiter on
+(`limiter=true`), the plain derivatives leave the shock's level, measured
+beyond 0.02 against the fine grid's 1.93e-4, at 9.33e-3, 6.58e-3, 5.25e-3,
+2.51e-3 and 1.22e-3 for `tag_buffer` 4, 6, 8, 12 and 16, every run ending
+admissible. At `tag_buffer` 8, setting the nodes a regrid newly covers to the
+state at rest lowers the level to 3.73e-4 and filling them from the uncovered
+root alone to 2.54e-3; the fill only carries the disturbance inward, since a
+fixed box with its inner face ahead of the shock (`fixed_inner=0.1`, the
+face at r = 0.0881) carries it as well. On that fixed box a scratch script
+(not kept) switched one candidate off at a time, the level's maximum falling
+at the face node when the shock is six root spacings inside it:
+
+| change, fixed box at r > 0.0881, limiter on | level, beyond 0.02 |
+|---|---|
+| none | 4.61e-3 |
+| no filter pass on the root | 6.46e-3 |
+| no filter pass on the level | 6.01e-3 |
+| root pass without the residual of every covered node | 4.68e-3 |
+| uncovered root nodes ahead of the shock reset to rest after each step | 4.48e-3 |
+| artificial properties off | 1.01e-2 |
+| root right-hand side without the covered state 5–20 nodes inside the face | 1.66e-4 |
+| the same, nodes 5–12 | 1.02e-3 |
+| the same, nodes 5–8 | 1.40e-2 |
+| the same, for the artificial coefficients only | 6.31e-3 |
+| the same, for everything but the artificial coefficients | 1.46e-4 |
+| root update zeroed at the restricted nodes | 1.10e-2 |
+
+The disturbance follows the distance from the face of the nearest strong
+jump in the root's right-hand side, the hidden ranges leaving one of their
+own at their far end. At one state with the shock seven spacings inside the
+face, the energy rate at the face node and the four covered nodes behind it
+is −12.8, 34, −86, 215 and −540 with the restricted shock in view and below
+1 without it: the alternating tail of the compact derivative, decaying by
+0.4 per node. Without the limiter, masking the divergences alone leaves the
+level at 2.20e-3 and the gradients alone at 4.10e-3 (reference 2.09e-3);
+both together, 1.21e-4. The mask's variants were chosen with the limiter on,
+its registers holding the masked divergence unless a row says otherwise, on
+the fixed box and the moving box at `tag_buffer` 4:
+
+| variant | fixed | moving |
+|---|---|---|
+| plain derivatives | 4.61e-3 | 9.33e-3 |
+| mask from the fourth node inside a face (as delivered) | 8.05e-5 | 3.25e-4 |
+| the same, the dropped source applied at the masked nodes | 8.78e-4 | 2.81e-3 |
+| mask from the overwritten nodes, the fifth inside | 5.73e-4 | 1.33e-2 |
+| registers holding the plain divergence | 2.59e-3 | 7.12e-3 |
+| registers restoring the dropped source at the masked nodes | 8.05e-5 | 3.29e-4 |
+
+The last arrangement gives 2.61e-4 at `tag_buffer` 8, every run ending
+admissible. Under the limiter the mask nevertheless stays off, even when it
+is enabled. On the limiter's
+refined rows of `bench/positivity.jl part=levels`, registers holding the
+masked divergence carried its dropped flux to every face beyond the masked
+nodes, and the cylindrical Noh box (`noh43`) ended at a plateau of 12.86
+and a shock radius of 0.2282 against 14.83 and 0.2086, with 19.8% of the
+stage faces limited, while Woodward–Colella lost positivity at step 1140;
+registers restoring the dropped source at the masked nodes left 31 shell and
+42 other inadmissible nodes on the Noh box and 934 unguaranteed faces on
+Woodward–Colella, where the plain derivatives leave none.
+
+**Composite conservation.** The mask is off by default because the Sod
+shocks of `test/level_tests.jl`, which cross a level in both directions, lose
+composite mass under it. Magnitude of the relative drift at t = 0.2:
+
+| case | plain | mask |
+|---|---|---|
+| global step, C6 | 9.19e-5 | 5.32e-4 |
+| global step, `:d8` and pentadiagonal filter | 6.1e-5 | 5.30e-4 |
+| subcycled, C6 | 1.17e-4 | 7.50e-4 |
+| subcycled, C10 | 1.02e-4 | 2.04e-3 |
+
+On the first case the masked drift falls from −8.2e-5 to −2.67e-4 between
+t = 0.06 and 0.08, as the shock enters the level, while the plain run's
+recovers to +5.3e-5, and it is −5.18e-4 at `cfl = 0.3` with the plain run's
+step count; restoring the dropped source at the masked nodes, which keeps the
+parent line's sum, leaves −4.74e-4. The removed tail therefore carries part
+of the mass the parent's uncovered nodes exchange through the coarse-fine
+face, on which the composite budget rests while the face takes no flux
+correction (A14).
 
 **The tutorial configuration.** The Advected bubbles tutorial itself (96²
 root, three bubbles, tiles of 12, against the uniform 288² grid): the largest

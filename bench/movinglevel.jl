@@ -9,7 +9,11 @@
 #
 # and, under `mask=both`, the two refined runs again with the parent's filter
 # pass taking the residual of the covered nodes as well
-# (`CompactLES.MASK_CHILD_RESIDUAL[] = false`, suffix `-plain`).
+# (`CompactLES.MASK_CHILD_RESIDUAL[] = false`, suffix `-plain`). The refined
+# runs take the parent's derivative mask, which the package leaves off
+# (`CompactLES.MASK_CHILD_DERIVATIVE[]`), and under `derivative_mask=both`
+# run again with the plain derivatives (suffix `-plainD`); `derivative_mask=off`
+# gives the package default alone.
 #
 #   bubble  the Advected bubbles tutorial reduced to one helium bubble in a
 #           periodic box of `bubble_n`² root nodes 10 mm apart, the edge width
@@ -25,7 +29,12 @@
 #           subcycled box placed by the density sensor. The gas ahead of the
 #           shock is at rest at density 1, so the disturbance is the largest
 #           |ρ − 1| over composite nodes more than `ahead` (and more than 0.05)
-#           inside the shock radius, over 0.02 < R < 0.3.
+#           inside the shock radius, over `shock_rmin` < R < 0.3. The box
+#           leads the shock by `shock_buffer` root nodes (`tag_buffer`);
+#           `limiter=true` turns the positivity limiter on, and `fixed_inner`
+#           starts the fixed level at that radius, so that its inner face
+#           stands ahead of the shock. Reported with the count of
+#           inadmissible nodes at the end.
 #
 #   julia --project=. -t 1 bench/movinglevel.jl
 #   julia --project=. -t 1 bench/movinglevel.jl problems=bubble bubble_w=0.03
@@ -42,8 +51,10 @@ const CL = CompactLES
 
 const opt = CL.script_args(ARGS, (
     problems = "bubble,shock", configs = "coarse,fine,moving,fixed", mask = "both",
+    derivative_mask = "on",
     bubble_n = 48, bubble_w = 0.01, bubble_tile = 12, bubble_dist = 0.06,
-    shock_n = 256, shock_t = 0.221, ahead = 0.02))
+    shock_n = 256, shock_t = 0.221, ahead = 0.02, shock_buffer = 4, limiter = false,
+    fixed_inner = 0.0, shock_rmin = 0.02))
 
 # ---------------------------------------------------------------------------
 # Bubble
@@ -144,18 +155,21 @@ function shock_case()
             drive = tanh_blend(r, 0.7, 0.012)
             Prim(rho=1.0 + 3.0 * drive, p=0.1 + 19.9 * drive)
         end)
-    box = AMR(initial=:sensor, subcycle=true)
+    box = AMR(initial=:sensor, subcycle=true, tag_buffer=opt.shock_buffer)
     # h = 1/(N − 1/2) with node 1 at h/2, so the grid at h/3 has 3N − 1 nodes.
     # The converging shock's state at the axis near t_c can leave the internal
     # energy negative at a few nodes, which the default validity rejects; the
     # disturbance ahead is measured before that.
     control = StepControl(validity=:permissive)
+    positivity_limiter = opt.limiter
     numerics(config) =
-        config == "coarse" ? Numerics(n_global=(n, 1, 1); control) :
-        config == "fine" ? Numerics(n_global=(3n - 1, 1, 1); control) :
-        config == "moving" ? Numerics(n_global=(n, 1, 1), amr=box; control) :
-        Numerics(n_global=(n, 1, 1), amr=AMR(box; initial=(r, θ, z) -> r < 0.76);
-                 control)
+        config == "coarse" ? Numerics(n_global=(n, 1, 1); control, positivity_limiter) :
+        config == "fine" ? Numerics(n_global=(3n - 1, 1, 1); control, positivity_limiter) :
+        config == "moving" ? Numerics(n_global=(n, 1, 1), amr=box; control,
+                                      positivity_limiter) :
+        Numerics(n_global=(n, 1, 1),
+                 amr=AMR(box; initial=(r, θ, z) -> opt.fixed_inner < r < 0.76);
+                 control, positivity_limiter)
     function radius(snaps)
         for snap in Iterators.reverse(snaps)
             r, p = snap.coords[1], vec(snap[:p])
@@ -178,7 +192,7 @@ function shock_case()
                 layout[] = level_regions(s, 1)
             end
             R = radius(snaps)
-            0.02 < R < 0.3 || return nothing
+            opt.shock_rmin < R < 0.3 || return nothing
             for snap in snaps
                 r, rho = snap.coords[1], vec(snap[:rho])
                 for i in eachindex(r)
@@ -192,15 +206,19 @@ function shock_case()
             nothing
         end)
         run!(solver, states; tfinal=opt.shock_t, nmax=20_000, callback=cb)
-        return (; steps=solver.step, e, changes=changes[])
+        bad = state_report(solver, states).inadmissible
+        return (; steps=solver.step, e, changes=changes[], bad)
     end
     header = @sprintf("shock: root %d, to t = %.3f; |ρ − 1| beyond %.2f and 0.05 \
-                       inside the shock", n, opt.shock_t, opt.ahead)
+                       inside the shock, %.2f < R < 0.3; tag_buffer %d, limiter %s",
+                      n, opt.shock_t, opt.ahead, opt.shock_rmin, opt.shock_buffer,
+                      opt.limiter)
     function report(label, r)
         @printf("  %-14s %5d steps  beyond %.2f: root %.2e  level %.2e   \
-                 beyond 0.05: root %.2e  level %.2e   layout changes %d\n",
+                 beyond 0.05: root %.2e  level %.2e   layout changes %d  \
+                 inadmissible %d\n",
                 label, r.steps, opt.ahead, r.e[:root], r.e[:level], r.e[:root_far],
-                r.e[:level_far], r.changes)
+                r.e[:level_far], r.changes, r.bad)
         @printf("row,shock,%s,ahead_level,%.3e\n", label, r.e[:level])
     end
     return (; header, run, report)
@@ -211,19 +229,21 @@ function main()
         case = name == "bubble" ? bubble_case() : name == "shock" ? shock_case() :
                error("unknown problem '$name', want bubble or shock")
         println(case.header)
+        choices(o) = o == "both" ? (true, false) : o == "on" ? (true,) : (false,)
         for config in split(opt.configs, ",")
             refined = config in ("moving", "fixed")
-            masks = !refined ? (true,) :
-                    opt.mask == "both" ? (true, false) :
-                    opt.mask == "on" ? (true,) : (false,)
-            for mask in masks
+            masks = refined ? choices(opt.mask) : (true,)
+            dmasks = refined ? choices(opt.derivative_mask) : (true,)
+            for mask in masks, dmask in dmasks
                 CL.MASK_CHILD_RESIDUAL[] = mask
-                label = mask ? String(config) : config * "-plain"
+                CL.MASK_CHILD_DERIVATIVE[] = dmask
+                label = String(config) * (mask ? "" : "-plain") * (dmask ? "" : "-plainD")
                 case.report(label, case.run(String(config)))
                 flush(stdout)
             end
         end
         CL.MASK_CHILD_RESIDUAL[] = true
+        CL.MASK_CHILD_DERIVATIVE[] = false
     end
 end
 

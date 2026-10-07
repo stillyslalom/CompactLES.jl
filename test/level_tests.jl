@@ -1043,6 +1043,52 @@ end
     @test parent(Q)[rows, :, :, :] == plain[rows, :, :, :]
 end
 
+@testset "a parent's derivatives drop the source of what a child resolves" begin
+    # An advected slab, a density twice the ambient between two jumps one node
+    # wide, at uniform velocity and pressure, deep inside a level. Away from
+    # the jumps every rate vanishes. The root's plain compact derivatives carry
+    # an alternating tail of the jumps to its uncovered nodes; the masked ones
+    # drop the jumps' sources, so the uncovered rates are zero.
+    per = (PeriodicBC(), PeriodicBC())
+    s = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+               refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+    states = allocate_state(s)
+    slab(x, y, z) = Prim(rho=0.36 < x < 0.64 ? 2.0 : 1.0, u=(1.0, 0.0, 0.0), p=1.0)
+    initialize!(s, states, slab)
+    ps = CL.PatchSolver(s, s.patches[1])
+    Q = states[1]
+    o = ps.decomp.n_halo_d
+    rows = o[1]+1:o[1]+ps.decomp.n_local[1]
+    line(A) = A[rows, 1 + o[2], 1 + o[3], :]
+    uncovered = ps.patch.covered[rows, 1 + o[2], 1 + o[3]] .== 0
+    @test count(uncovered) > 20
+    rates(masked) = begin
+        previous = CL.MASK_CHILD_DERIVATIVE[]
+        CL.MASK_CHILD_DERIVATIVE[] = masked
+        dQ = ConservedState(zero(parent(Q)))
+        try
+            CL.compute_rhs!(ps, Q, dQ)
+        finally
+            CL.MASK_CHILD_DERIVATIVE[] = previous
+        end
+        line(parent(dQ))
+    end
+    plain = rates(false)
+    masked = rates(true)
+    @test ps.patch.child_masked == (true, false, false)
+    scale = maximum(abs, plain)
+    @test maximum(abs, plain[uncovered, :]) > 1e-4 * scale
+    @test maximum(abs, masked[uncovered, :]) < 1e-13 * scale
+    # A resolved state arms nothing and takes the plain derivatives, bit for
+    # bit.
+    initialize!(s, states, (x, y, z) -> Prim(rho=1 + 0.1 * sinpi(2x), u=(1.0, 0.0, 0.0),
+                                             p=1.0))
+    plain = rates(false)
+    masked = rates(true)
+    @test ps.patch.child_masked == (false, false, false)
+    @test masked == plain
+end
+
 @testset "tiled level: multi-tile corner consensus and corner ghosts" begin
     # Four tiles meet at one fine node. Pairwise averaging in one flat pass
     # leaves the four copies unequal (a later pair reads a value an earlier

@@ -416,6 +416,16 @@ every stage of the global step removes a coupling term first order in the step b
 measurable error, so the write-back stays once per step
 ([measurements](CALIBRATION_APPENDIX.md#benchrestrictcostjl-restriction-before-every-stage)).
 
+**The parent's operators on restricted data.** A feature the child resolves
+is a jump on the parent's spacing, and the parent's compact solves spread its
+response along the line to the margin the shell is interpolated from. The
+filter pass therefore drops its residual at the covered nodes where the
+density is unresolved. The same treatment of the gradients and divergences
+removes a converging shock's precursor but, with no flux correction at the
+face, worsens composite conservation, so it is opt-in
+(`MASK_CHILD_DERIVATIVE`;
+[measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+
 **Distribution of the coupling.** Data moves point to point and work
 divides over a tile's own ranks (`LevelCoupling`, `src/levels.jl`). A
 tile's buffered box goes from the parent ranks holding its nodes to the

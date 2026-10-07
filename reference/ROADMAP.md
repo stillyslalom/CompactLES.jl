@@ -256,7 +256,12 @@ surface; H8 for a magnetized target.
   then the remaining metrics and the
   tabulated and NASA-9 equations of state, whose admissibility test is not
   linear. Each extension's face weights come from its own rows: the metric's
-  face areas, the fold's mirrored rows, the interface rows.
+  face areas, the fold's mirrored rows, the interface rows. The parent's
+  derivative mask (A18) stays off under the limiter, whose stage face fluxes
+  are a running sum of a divergence the mask does not conserve: registers
+  holding the masked divergence, or restoring its dropped source at the
+  masked nodes, broke the refined Noh and Woodward–Colella rows
+  ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
   **Depends on:** N26's stage in `src/`.
   **Gate:** per configuration, no inadmissible point on its strong-shock
   validation cases (Sedov and Noh ν = 2, 3 for the folds; the Noh level rows
@@ -469,22 +474,23 @@ promotion.
   `test/convergence.jl` unchanged or better.
 
 - [ ] **A18 — Remove the disturbances a moving refined level leaves behind.**
-  The parent's filter pass spread the residual of an under-resolved
-  restricted feature from the covered nodes along the parent's lines, into
-  uncovered nodes and the level's ghost data; it now leaves that residual
-  out where the density is unresolved (commit `04d3cff`;
-  [measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
-  The Advected bubbles tutorial's disturbance away from the bubbles is now 1
-  to 10 times the uniform fine grid's, and the largest mass change of a gas
-  falls from 6e-5 to 2e-6. The converging shock of the Imploding shock
-  tutorial still carries |ρ − 1| of 1e-2 within 0.02 of the front, 40 times
-  the fine grid's, from the regrid fill and the root's derivatives at the
-  edge of the cover. Candidates: fill newly covered nodes from a limited or
-  one-sided reconstruction, or let the cover lead the shock by more than
-  the buffer once the axis state stays valid (`tag_buffer` 6 and 8 shrink
-  the precursor but end with an invalid state at the axis).
+  The parent's filter pass leaves out the residual of a restricted feature
+  it cannot resolve (commit `04d3cff`), which brought the Advected bubbles
+  tutorial's disturbance to 1 to 10 times the uniform fine grid's. A
+  converging shock's level still carries 37 times the fine grid's ahead of
+  the front. The cause is the parent's compact gradients and divergences
+  carrying the restricted shock's tail to the nodes beside a coarse-fine
+  face; the regrid fill only moves it inward with the level. Dropping their
+  source at those nodes (`MASK_CHILD_DERIVATIVE`) brings the level to 1.16
+  times the fine grid's, but a Sod shock crossing a level then drifts five
+  to twenty times as far in composite mass, so the mask is off by default
+  ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+  Remaining: turn it on once A14's flux correction holds the composite
+  budget, or decide the trade without it.
+  **Depends on:** A14, or a decision.
   **Gate:** on the shock configuration, the level's |ρ − 1| more than 0.02
-  inside the front within a small factor of the uniform fine grid's.
+  inside the front within a small factor of the uniform fine grid's, with
+  the two-level Sod drifts of `test/level_tests.jl` inside their guards.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   `bench/amrwin.jl` times warm root-only, box, tiled and uniform-fine runs

@@ -69,7 +69,9 @@
 #   sensed_fields   within one level's artificial-property pass.
 #   inv_J area_d inv_h inv_r cot_over_r cot_over_r_gcl   geometry, written once
 #       by `init_geometry!`.
-#   covered overwritten   `_fill_covered!` at setup and at every regrid.
+#   covered overwritten child_deep   `_fill_covered!` at setup and at every
+#       regrid.
+#   child_masked   `_arm_child_mask!` at every right-hand side.
 #   ghost_flux   written and consumed within one level's right-hand side.
 #   level_scratch   within one parent step.
 #   pairbuf pairout   within one line operation.
@@ -79,6 +81,8 @@
 #       evaluation that wrote them; `max_rate` borrows grad_T_ion.
 #   tmp_a tmp_b   free scratch of any single call (the RHS, `max_rate`,
 #       `filter_state!`, the diagnostics, the tag sweep).
+#   child_mask child_solve   scratch of one masked derivative on a parent
+#       patch (`_mask_child_derivative!`); empty on a solver of one level.
 #   grad_u, strain_mag sensor   `compute_primitives_and_gradients!` and
 #       `compute_artificial!`. They keep the last pass, which may belong to
 #       another patch of the extent; `gradients_filled_by`/`sensors_filled_by`
@@ -145,6 +149,10 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     ring_buf::A                    # detector = :d8 only; empty otherwise
     flux::Matrix{A}                # flux[d, c]
     grad_Q::Matrix{A}              # shared-D_b species channels; 0 × 0 otherwise
+    # The parent-level derivative mask and its line solve (rhs.jl); a refined
+    # solver only, empty otherwise.
+    child_mask::A
+    child_solve::A
     # The patch whose gradient pass last wrote `grad_u` and whose artificial
     # pass last wrote `strain_mag` and `sensor`, recorded as that patch's
     # `covered` array: a host array every patch allocates for itself and
@@ -165,17 +173,17 @@ const SCRATCH_UNFILLED = zeros(UInt8, 0, 0, 0)
 _own_gradients(ws::RHSWorkspace, g::F) where {F} =
     RHSWorkspace([g() for _ in 1:3, _ in 1:3], ws.grad_T_ion, ws.grad_Y,
                  ws.strain_mag, ws.sensor, ws.sensor_sp, ws.tmp_a, ws.tmp_b,
-                 ws.ring_buf, ws.flux, ws.grad_Q, Ref(SCRATCH_UNFILLED),
-                 ws.sensors_filled_by)
+                 ws.ring_buf, ws.flux, ws.grad_Q, ws.child_mask, ws.child_solve,
+                 Ref(SCRATCH_UNFILLED), ws.sensors_filled_by)
 
 RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
-             tmp_b, ring_buf, flux, grad_Q) =
+             tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve) =
     RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
-                 tmp_b, ring_buf, flux, grad_Q, Ref(SCRATCH_UNFILLED),
-                 Ref(SCRATCH_UNFILLED))
+                 tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve,
+                 Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED))
 
 """
-    RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk)
+    RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk, child = false)
 
 Allocate one scratch set on `backend` for a patch decomposed as `decomp`.
 `ring` selects the `detector = :d8` ringing buffer, which is a zero-extent
@@ -183,21 +191,23 @@ placeholder under the default `:delta4`; `bulk` selects the `grad_Q`
 gradients of the conserved components, `grad_Q[d, c]`, which the species
 channels with one shared diffusivity (`species_flux = :partial_density` and
 `:bulk`) difference into their fluxes and which is a 0 × 0 matrix of the
-same array type otherwise, so the types do not depend on the option.
+same array type otherwise, so the types do not depend on the option. `child`
+selects the two arrays of the parent-level derivative mask, which a solver
+with more than one level allocates (`_mask_child_derivative!`).
 """
 function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
                       n_species::Int, n_cons::Int, ring::Bool,
-                      bulk::Bool) where {T}
+                      bulk::Bool, child::Bool=false) where {T}
     f() = field(backend, decomp)
     return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring,
-                          bulk)
+                          bulk, child)
 end
 
 # The set from an allocator `f()` and the zero-extent placeholder `empty` of
 # the same storage type: `field` on a backend above, or the stacked arrays
 # of a device level's spanning patch (construction.jl).
 function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
-                        ring::Bool, bulk::Bool) where {F}
+                        ring::Bool, bulk::Bool, child::Bool=false) where {F}
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
                         (f(), f(), f()),
                         [f() for _ in 1:3, _ in 1:n_species],
@@ -205,7 +215,8 @@ function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
                         ring ? f() : empty,
                         [f() for _ in 1:3, _ in 1:n_cons],
                         bulk ? [f() for _ in 1:3, _ in 1:n_cons] :
-                               Matrix{typeof(empty)}(undef, 0, 0))
+                               Matrix{typeof(empty)}(undef, 0, 0),
+                        child ? f() : empty, child ? f() : empty)
 end
 
 # A tile's workspace on a stacked level: views of the spanning patch's set
@@ -214,11 +225,13 @@ end
 # evaluation writes. The placeholder keeps the view type at zero extent.
 function _view_workspace(ws::RHSWorkspace, kr::UnitRange{Int})
     v(a) = view(a, :, :, kr)
-    ring = size(ws.ring_buf, 3) == 0 ? view(ws.ring_buf, :, :, 1:0) : v(ws.ring_buf)
+    # A placeholder array keeps its zero extent.
+    vp(a) = size(a, 3) == 0 ? view(a, :, :, 1:0) : v(a)
     return RHSWorkspace(map(v, ws.grad_u), map(v, ws.grad_T_ion), map(v, ws.grad_Y),
                         v(ws.strain_mag), v(ws.sensor), v(ws.sensor_sp),
-                        v(ws.tmp_a), v(ws.tmp_b), ring,
-                        map(v, ws.flux), map(v, ws.grad_Q))
+                        v(ws.tmp_a), v(ws.tmp_b), vp(ws.ring_buf),
+                        map(v, ws.flux), map(v, ws.grad_Q), vp(ws.child_mask),
+                        vp(ws.child_solve))
 end
 
 "An empty, concretely typed pool of [`RHSWorkspace`](@ref) sets for `backend`."
@@ -226,7 +239,7 @@ rhs_workspace_pool(backend::AbstractBackend, ::Type{T}) where {T} =
     RHSWorkspace{T,typeof(empty_field(backend, T))}[]
 
 """
-    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring, bulk)
+    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring, bulk, child = false)
 
 The [`RHSWorkspace`](@ref) serving a patch decomposed as `decomp`: an existing
 set of `pool` whose arrays already carry the padded extent this patch needs,
@@ -241,13 +254,14 @@ size.
 """
 function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
                         decomp::Decomp{T}, n_species::Int, n_cons::Int,
-                        ring::Bool, bulk::Bool) where {T}
+                        ring::Bool, bulk::Bool, child::Bool=false) where {T}
     n = ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
     for w in pool
         size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) &&
-            (!isempty(w.grad_Q) == bulk) && return w
+            (!isempty(w.grad_Q) == bulk) && (!isempty(w.child_mask) == child) &&
+            return w
     end
-    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk)
+    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk, child)
     push!(pool, w)
     return w
 end
@@ -372,6 +386,15 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
     # level's artificial-property pass (`_level_artificial!`), whose records
     # fill their ghost layers at a shared face. Empty on every other patch.
     sensed_fields::Vector{A}
+    # Per node, the dimensions along which the parent-level derivative mask
+    # may take it, as bits (`_fill_child_deep!`); written with `covered`.
+    # Zero-extent where the workspace carries no mask scratch.
+    child_deep::A
+    # Per dimension, whether this patch's last right-hand side found a node
+    # for the parent-level derivative mask (`_arm_child_mask!`): reduced over
+    # the patch's communicator, so every rank of a line takes the extra solve
+    # or none does. All false on a patch with no child level.
+    child_masked::NTuple{3,Bool}
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
@@ -390,7 +413,10 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                mu_art, beta_art, kappa_art, D_art,
                inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
                rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-               sensed_fields=empty(Y))
+               sensed_fields=empty(Y),
+               child_deep=isempty(rhs_workspace.child_mask) ?
+                          rhs_workspace.child_mask : zero(overwritten),
+               child_masked=(false, false, false))
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
@@ -401,7 +427,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
                  rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-                 sensed_fields, field_tuples)
+                 sensed_fields, child_deep, child_masked, field_tuples)
 end
 
 # --- Covered masks ----------------------------------------------------------
@@ -446,12 +472,12 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
     o = decomp.n_halo_d
     n = decomp.n_local
     base = ntuple(d -> patch.region.offset[d] + decomp.offset[d], 3)
-    # The mask bytes over the interior and, where `overwritten` is formed,
-    # `LEVEL_BUFFER` nodes beyond it on every active side, which its erosion
-    # reads: those nodes may lie on another rank or another tile, so they are
-    # evaluated from the regions, not exchanged.
-    pad = ntuple(d -> decomp.active[d] && !isempty(overwritten) ? LEVEL_BUFFER : 0,
-                 3)
+    # The mask bytes over the interior and, where `overwritten` or `child_deep`
+    # is formed, `LEVEL_BUFFER` nodes beyond it on every active side, which
+    # their erosions read: those nodes may lie on another rank or another
+    # tile, so they are evaluated from the regions, not exchanged.
+    eroded = !isempty(overwritten) || !isempty(patch.child_deep)
+    pad = ntuple(d -> decomp.active[d] && eroded ? LEVEL_BUFFER : 0, 3)
     bits_ext = zeros(UInt8, ntuple(d -> n[d] + 2 * pad[d], 3))
     # The patch's own edge nodes along each dimension, and whether the face
     # there closes the domain. A node on such a face has no cell beyond it,
@@ -497,7 +523,56 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
     isempty(overwritten) ||
         _fill_overwritten!(overwritten, bits_ext, pad, base, edge_lo, edge_hi,
                            closed, decomp)
+    isempty(patch.child_deep) ||
+        _fill_child_deep!(patch.child_deep, bits_ext, pad, base, edge_lo, edge_hi,
+                          closed, decomp)
     return patch
+end
+
+# Whether each node of `bits_ext` is covered over its whole cell or lies
+# beyond a face closing the domain.
+function _fully_covered_ext(bits_ext::Array{UInt8,3}, pad, base, edge_lo, edge_hi,
+                            closed, decomp::Decomp)
+    active = decomp.active
+    full = falses(size(bits_ext))
+    @inbounds for J in CartesianIndices(full)
+        g = ntuple(d -> base[d] + J[d] - pad[d], 3)
+        beyond = any(d -> active[d] && ((g[d] < edge_lo[d] && closed[d][1]) ||
+                                        (g[d] > edge_hi[d] && closed[d][2])), 1:3)
+        full[J] = beyond || bits_ext[J] == 0xff
+    end
+    return full
+end
+
+# The parent nodes the derivative mask may take along each dimension
+# (`_mask_child_derivative!`, rhs.jl), as bit d − 1 of a small integer stored
+# in the field's element type. A node qualifies along `d` when the restriction
+# writes it, which holds `RESTRICT_MARGIN` = 2 nodes off a face, so that it and
+# its neighbours along every active dimension are covered over their whole
+# cells, and when it and `CHILD_DERIVATIVE_DEPTH` nodes on either side along
+# `d` are.
+function _fill_child_deep!(deep, bits_ext::Array{UInt8,3}, pad::NTuple{3,Int}, base,
+                           edge_lo, edge_hi, closed, decomp::Decomp)
+    n = decomp.n_local
+    o = decomp.n_halo_d
+    active = decomp.active
+    full = _fully_covered_ext(bits_ext, pad, base, edge_lo, edge_hi, closed, decomp)
+    span(K, d, w) = all(t -> full[K + t * CartesianIndex(ntuple(e -> Int(e == d), 3))],
+                        -w:w)
+    T = eltype(deep)
+    host = zeros(T, size(deep))
+    @inbounds for J in CartesianIndices(n)
+        K = J + CartesianIndex(pad)
+        written = all(d -> !active[d] || span(K, d, 1), 1:3)
+        written || continue
+        bits = 0
+        for d in 1:3
+            active[d] && span(K, d, CHILD_DERIVATIVE_DEPTH) && (bits |= 1 << (d - 1))
+        end
+        host[J + CartesianIndex(o)] = T(bits)
+    end
+    _upload!(deep, host)
+    return deep
 end
 
 # The parent nodes `max_rate` holds to `OVERWRITTEN_CFL`: those a child
@@ -522,13 +597,7 @@ function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
     n = decomp.n_local
     o = decomp.n_halo_d
     active = decomp.active
-    full = falses(size(bits_ext))
-    @inbounds for J in CartesianIndices(full)
-        g = ntuple(d -> base[d] + J[d] - pad[d], 3)
-        beyond = any(d -> active[d] && ((g[d] < edge_lo[d] && closed[d][1]) ||
-                                        (g[d] > edge_hi[d] && closed[d][2])), 1:3)
-        full[J] = beyond || bits_ext[J] == 0xff
-    end
+    full = _fully_covered_ext(bits_ext, pad, base, edge_lo, edge_hi, closed, decomp)
     # Erosion by a box of half-width `LEVEL_BUFFER`, one active dimension at a
     # time. A node in the pad takes a truncated window, and no interior node's
     # result reads such a node along a dimension already eroded.
@@ -588,7 +657,7 @@ end
     n === :grad_u || n === :grad_T_ion || n === :grad_Y ||
     n === :strain_mag || n === :sensor || n === :sensor_sp ||
     n === :tmp_a || n === :tmp_b || n === :ring_buf || n === :flux ||
-    n === :grad_Q
+    n === :grad_Q || n === :child_mask || n === :child_solve
 
 # Property names owned by the patch or its workspace, not by the solver
 # configuration. `Base.getproperty(::Solver, name)` forwards these to the sole
@@ -605,7 +674,7 @@ end
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
     n === :cot_over_r || n === :cot_over_r_gcl || n === :covered ||
-    n === :overwritten ||
+    n === :overwritten || n === :child_deep || n === :child_masked ||
     n === :field_tuples || _is_workspace_prop(n)
 
 # The read behind both forwards: a workspace name takes one further hop.

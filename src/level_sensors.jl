@@ -175,7 +175,7 @@ function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
     art = solver.art
     n_species = solver.equations.n_species
     _each_unit(solver, lev, states) do ps, Q
-        compute_primitives_and_gradients!(ps, Q, prepared)
+        compute_primitives_and_gradients!(ps, Q, prepared, true)
         _sensed_fields!(ps)
     end
     _sync_sensor_fields!(solver, lev, p -> p.sensed_fields, art.detector !== :d8, 1:3)
