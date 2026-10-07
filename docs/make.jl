@@ -85,7 +85,11 @@ const EXAMPLES = [
     "jacobs_air_sf6.jl",
 ]
 
-"The provenance note of an example, from the record its full run committed."
+"""
+The provenance note of an example, from the record its full run committed: the
+commit and date of the runs, their wall time and the command that reproduces the
+figures. The record also holds the machine, the Julia version and the grids.
+"""
 function provenance_note(name)
     stamp = joinpath(@__DIR__, "src", "assets", "examples", name, "provenance.toml")
     isfile(stamp) || error("examples/$name.jl has no committed figures: $stamp is " *
@@ -95,28 +99,30 @@ function provenance_note(name)
     url = "https://github.com/stillyslalom/CompactLES.jl/commit/$commit"
     link = "[`$(first(commit, 7))`]($url)"
     dirty = r["dirty"] ? " with uncommitted changes to the package" : ""
-    threads = r["threads"] == 1 ? "1 thread" : "$(r["threads"]) threads"
-    ranks = r["ranks"] == 1 ? "1 rank" : "$(r["ranks"]) ranks"
-    minutes = r["wall_seconds"] / 60
-    wall = minutes < 2 ? @sprintf("%.0f s", r["wall_seconds"]) : @sprintf("%.0f min", minutes)
+    seconds = r["wall_seconds"]
+    wall = seconds < 120 ? @sprintf("%.0f s", seconds) :
+           seconds < 7200 ? @sprintf("%.0f min", seconds / 60) :
+           @sprintf("%.0f h", seconds / 3600)
     return """
-           !!! note "Provenance"
-               The figures on this page were computed on $(r["date"]) at commit
-               $link$dirty, with Julia $(r["julia"]) on $ranks × $threads of
-               a $(r["hardware"]), on $(r["grid"]), in $wall. They are
-               reproduced by `$(r["command"])`.
-           """
+           The figures on this page were computed at commit $link$dirty on
+           $(r["date"]), in $wall, by `$(r["command"])`."""
 end
 
-"Give a converted example its edit link and provenance note."
+"""
+Give a converted example its edit link and its provenance note, at the end of
+the page beside Literate's credit line, under the same rule.
+"""
 function example_page(name)
     return function (markdown)
-        lines = split(markdown, '\n')
-        title = findfirst(l -> startswith(l, "# "), lines)
-        title === nothing && error("examples/$name.jl has no `# # Title` line")
+        any(l -> startswith(l, "# "), split(markdown, '\n')) ||
+            error("examples/$name.jl has no `# # Title` line")
         edit = "```@meta\nEditURL = \"../../../examples/$name.jl\"\n```\n"
-        return edit * join(lines[1:title], '\n') * "\n\n" * provenance_note(name) *
-               join(lines[title+1:end], '\n')
+        credit = "\n*This page was generated using"
+        note = provenance_note(name)
+        body = occursin(credit, markdown) ?
+               replace(markdown, credit => "\n" * note * "\n" * credit; count = 1) :
+               rstrip(markdown) * "\n\n---\n\n" * note * "\n"
+        return edit * body
     end
 end
 
