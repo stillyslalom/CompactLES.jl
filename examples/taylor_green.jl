@@ -21,27 +21,35 @@
 # the reference, and divides the decay among the molecular viscosity, the
 # artificial properties and the compact filter.
 #
-# The script takes three settings: `N`, the nodes per side, which sets the
-# spacing ``\Delta x = 2\pi/N`` of the main run and of a second run at twice
-# that spacing; `tfinal`, the time at which the runs end; and `smoke`. With
-# `smoke=true` the runs have 24³ and 12³ nodes and end at ``t = 0.1``, which
-# checks that the page still runs; the figures come from the full run, launched
-# on eight MPI ranks of one thread each.
+# The script takes its settings from the command line: `N`, the nodes per side,
+# which sets the spacing ``\Delta x = 2\pi/N`` of the main run and of a second
+# run at twice that spacing; and `tfinal`, the time at which the runs end. The
+# figures were computed on eight MPI ranks of one thread each.
+#region
+# A third setting, `smoke=true`, gives the runs 24³ and 12³ nodes and ends them
+# at ``t = 0.1``, which checks that the page still runs; the figures come from
+# the full run.
+#endregion
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
+#region
 using CairoMakie
 using Printf
 CairoMakie.activate!(type = "png")
+#endregion
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
 opt = CompactLES.script_args(ARGS, (N = 64, tfinal = 12.0, smoke = false);
                              positional = (:N, :tfinal))
-N = opt.smoke ? 24 : opt.N
-tfinal = opt.smoke ? 0.1 : opt.tfinal
+N = opt.N
+tfinal = opt.tfinal
+#region
+opt.smoke && ((N, tfinal) = (24, 0.1))
+#endregion
 outdir = figure_dir("taylor_green"; smoke = opt.smoke) #src
 opt.smoke && println("figures in ", outdir) #src
 nothing #hide
@@ -83,12 +91,14 @@ problem = Problem(
         rho = 1.0),
 )
 
+#region
 path = joinpath(pkgdir(CompactLES), "data", "spectral_Re1600_512.gdiag")
 rows = [parse.(Float64, split(l)) for l in eachline(path) if !startswith(l, '#')]
 reference = (t = getindex.(rows, 1), K = getindex.(rows, 2), rate = getindex.(rows, 3))
 peak_rate, k = findmax(reference.rate)
 @printf("reference: K = %.4f at t = 0, peak -dK/dt = %.4e at t = %.2f\n",
         reference.K[1], peak_rate, reference.t[k])
+#endregion
 
 # ## Energy budget
 #
@@ -109,9 +119,9 @@ peak_rate, k = findmax(reference.rate)
 # molecular part is ``\mu (\langle \omega^2 \rangle + \tfrac43 \langle
 # (\nabla\cdot\mathbf u)^2 \rangle)``, with ``\omega`` the vorticity, by an
 # identity that holds for the discrete periodic derivative as well: the run
-# with the artificial properties disabled, below, gives the two equal to
-# round-off. For the incompressible reference the molecular dissipation is
-# ``\mu \langle\omega^2\rangle``, which is all of ``-dK/dt``.
+# with the artificial properties disabled, below, gives the two equal to within
+# 1e-13 of the molecular part. For the incompressible reference the molecular
+# dissipation is ``\mu \langle\omega^2\rangle``, which is all of ``-dK/dt``.
 #
 # Every 0.05 time units each run records ``K``, the stress dissipation, its
 # molecular part and the pressure work, and ``-dK/dt`` is the centered
@@ -146,17 +156,18 @@ function simulate(N; label, nmax = typemax(Int), kw...)
         nothing
     end)
     failure = nothing
-    wall = @elapsed try
+    try
         run!(solver, Q; tfinal, nmax, callback = (record, keep))
     catch err
         err isa SolverFailure || rethrow()
         failure = err
     end
+    #region
     if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        @printf("%-28s %d steps to t = %.2f in %.0f s\n", label, solver.step,
-                solver.t, wall)
+        @printf("%-28s %d steps to t = %.2f\n", label, solver.step, solver.t)
         failure === nothing || println("    ", sprint(showerror, failure))
     end
+    #endregion
     rate = [(K[i-1] - K[i+1]) / (t[i+1] - t[i-1]) for i in 2:length(t)-1]
     return (; N, label, t, K, total, molecular, pdil, rate, tc = t[2:end-1],
             frame = frame[], t_frame, failure)
@@ -182,6 +193,7 @@ runs = mpi_main() do
 end
 fine, coarse, no_art, no_filter = runs
 
+#region
 # The analysis and the figures below run on rank 0; the other ranks stop here.
 
 MPI.Comm_rank(MPI.COMM_WORLD) == 0 || exit()
@@ -193,13 +205,14 @@ for r in runs #src
                 r.total[i], r.molecular[i], r.pdil[i]) #src
     end #src
 end #src
-nothing #hide
+#endregion
 
 # ## Decay
 #
 # The kinetic energy and its rate of decay on both grids, with the defaults,
 # against the reference:
 
+#region
 reference_K(t) = reference.K[clamp(round(Int, 100t) + 1, 1, length(reference.K))]
 for r in (fine, coarse)
     isempty(r.rate) && continue
@@ -227,7 +240,7 @@ for ax in (ax1, ax2)
 end
 Legend(fig[3, 1], ax2, orientation = :horizontal, framevisible = false)
 save(joinpath(outdir, "decay.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Kinetic energy and its rate of decay](../assets/examples/taylor_green/decay.png)
 #
@@ -248,9 +261,18 @@ nothing #hide
 
 # ## Where the energy goes
 #
-# The terms of the budget at the peak of each run, as fractions of its
-# ``-dK/dt`` there:
+# The terms of the budget at the peak of each run, as percentages of its
+# ``-dK/dt`` there, are
+#
+# | run | ``t`` | molecular | artificial | pressure work | filter and error |
+# |:--|--:|--:|--:|--:|--:|
+# | ``2\pi/\Delta x = 64`` | 8.15 | 37.2 | 6.4 | 0.1 | 56.3 |
+# | ``2\pi/\Delta x = 32`` | 6.85 | 13.2 | 6.8 | 0.2 | 79.7 |
+# | ``2\pi/\Delta x = 32``, artificial off | 6.85 | 14.2 | 0.0 | 0.2 | 85.5 |
+#
+# and the terms against time are
 
+#region
 function shares(r, i)
     rate = r.rate[i]
     molecular, artificial = r.molecular[i+1], r.total[i+1] - r.molecular[i+1]
@@ -286,7 +308,7 @@ for (ax, r) in zip(axes, (coarse, fine))
 end
 Legend(fig[3, 1], axes[end], orientation = :horizontal, framevisible = false)
 save(joinpath(outdir, "budget.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![The terms of the energy budget](../assets/examples/taylor_green/budget.png)
 #
@@ -311,6 +333,7 @@ nothing #hide
 #
 # The coarse grid with each of the two changes against the defaults:
 
+#region
 for r in (no_art, no_filter)
     if r.failure === nothing
         peak, i = findmax(r.rate)
@@ -333,7 +356,7 @@ top = 1.1 * maximum(maximum(r.rate; init = peak_rate) for r in (coarse, no_art))
 ylims!(ax, -0.3top, top)
 Legend(fig[1, 2], ax, framevisible = false)
 save(joinpath(outdir, "defaults.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Changes to the defaults on the coarser grid](../assets/examples/taylor_green/defaults.png)
 #
@@ -357,6 +380,7 @@ nothing #hide
 # The vorticity magnitude on the plane ``x = \pi`` at ``t = 8``, on both
 # grids, on a common color scale:
 
+#region
 fig = Figure(size = (760, 400))
 frames = [r.frame for r in (coarse, fine)]
 top = maximum(maximum(f[3]) for f in frames)
@@ -367,7 +391,7 @@ for (n, (r, f)) in enumerate(zip((coarse, fine), frames))
 end
 Colorbar(fig[1, 3], limits = (0, top), colormap = :inferno, label = "|ω|")
 save(joinpath(outdir, "vorticity.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Vorticity magnitude at t = 8](../assets/examples/taylor_green/vorticity.png)
 #

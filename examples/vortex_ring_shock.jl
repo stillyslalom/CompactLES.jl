@@ -24,33 +24,40 @@
 # jet speed is therefore raised to 60 m/s, which shortens the transit by the
 # same factor of 40. The consequences are measured below.
 #
-# The script takes eight settings: `nr` and `nz`, the nodes across the radius
-# ``R`` of the tube and along its length ``H``, which set the spacings
-# ``\Delta r = R/(n_r - \tfrac12)`` and ``\Delta z = H/(n_z - 1)`` of the main
-# run and of a second run at twice those spacings; `Mach`, the Mach number of
-# the shock; `jet_speed`, the peak speed of the jet in m/s; `stroke`, the
-# length of the ejected slug in injector diameters; `t_shock`, the time at
-# which the shock is fired, 0 for the time the run computes; `t_after`, the
-# time the run continues after the shock reaches the interface; and `smoke`.
-# With `smoke=true` the runs have 16 × 56 and 10 × 36 nodes, which checks that
-# the page still runs; the figures come from the full run, launched on eight
-# MPI ranks of one thread each.
+# The script takes its settings from the command line: `nr` and `nz`, the nodes
+# across the radius ``R`` of the tube and along its length ``H``, which set the
+# spacings ``\Delta r = R/(n_r - \tfrac12)`` and ``\Delta z = H/(n_z - 1)`` of
+# the main run and of a second run at twice those spacings; `Mach`, the Mach
+# number of the shock; `jet_speed`, the peak speed of the jet in m/s; `stroke`,
+# the length of the ejected slug in injector diameters; `t_shock`, the time at
+# which the shock is fired, 0 for the time the run computes; and `t_after`, the
+# time the run continues after the shock reaches the interface. The figures
+# come from runs on eight MPI ranks of one thread each.
+#region
+# A further setting, `smoke=true`, gives the runs 16 × 56 and 10 × 36 nodes,
+# which checks that the page still runs.
+#endregion
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
 using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+#region
 
 using CairoMakie
 using Printf
 CairoMakie.activate!(type = "png")
+#endregion
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
 opt = CompactLES.script_args(ARGS,
     (nr = 112, nz = 384, Mach = 1.36, jet_speed = 60.0, stroke = 3.0, t_shock = 0.0,
      t_after = 1.6e-3, smoke = false); positional = (:nr, :nz))
-grids = opt.smoke ? ((16, 56), (10, 36)) : ((opt.nr, opt.nz), (opt.nr ÷ 2, opt.nz ÷ 2))
+grids = ((opt.nr, opt.nz), (opt.nr ÷ 2, opt.nz ÷ 2))
+#region
+opt.smoke && (grids = ((16, 56), (10, 36)))
+#endregion
 outdir = figure_dir("vortex_ring_shock"; smoke = opt.smoke) #src
 opt.smoke && MPI.Comm_rank(MPI.COMM_WORLD) == 0 && println("figures in ", outdir) #src
 nothing #hide
@@ -82,6 +89,7 @@ mirror = Prim(Y = shocked.Y, p = shocked.p, T_ion = shocked.T_ion,
 wall = riemann_interface(eos, mirror, shocked; dim = 3)
 reshock = riemann_interface(eos, wall.right, impact.right; dim = 3)
 W = abs(incident.shock_speed)
+#region
 @printf("incident shock %.1f m/s; behind it %.1f m/s, %.1f kPa, %.1f K\n", W,
         incident.velocity, incident.post.p / 1e3, incident.post.T_ion)
 @printf("at the interface: transmitted shock %.1f m/s, reflected %s %.1f m/s, \
@@ -91,6 +99,17 @@ W = abs(incident.shock_speed)
 @printf("at reshock: transmitted %s %.1f m/s, reflected %s %.1f m/s, interface %.1f m/s\n",
         reshock.right_wave, reshock.right_speed, reshock.left_wave, reshock.left_speed,
         reshock.u_star)
+#endregion
+
+# The incident shock moves at 468.3 m/s and leaves the air behind it at
+# 201.8 kPa, moving down at 179.2 m/s. The waves of the three Riemann problems,
+# with velocities in m/s, positive upward, are
+#
+# | problem | transmitted wave | reflected wave | interface |
+# |:--|:--|:--|--:|
+# | incident shock at the interface | shock, -210.8 | shock, 240.9 | -118.1 |
+# | transmitted shock at the end wall | | shock, 98.2 | |
+# | reflected shock at the interface | shock, 384.5 | rarefaction, -147.6 | 43.4 |
 
 # ## Jet
 #
@@ -115,8 +134,8 @@ W = abs(incident.shock_speed)
 # The Reynolds number ``U D/\nu`` and the Mach number ``U/c`` of the jet, at
 # the experiment's speed and at the speed used here, take the viscosity of air
 # at 295 K from the NASA transport fits of its constituents carried in the
-# package (a [`CeaTransport`](@ref) of nitrogen, oxygen, argon and carbon
-# dioxide in the mole fractions of air):
+# package, a [`CeaTransport`](@ref) of nitrogen, oxygen, argon and carbon
+# dioxide in the mole fractions of air.
 
 R = 0.127 / sqrt(π)      # radius of the round tube of the 5" square's area, m
 D = 0.0127               # injector diameter
@@ -136,12 +155,24 @@ mu_air = transport_coefficients(CeaTransport(constituents), constituents, T0, st
                                 state.cp, Y_air)[1]
 nu_air = mu_air / state.rho
 c_air = thermodynamic_state(eos, air).c
+#region
 for (label, speed) in (("experiment", 1.5), ("here", U))
     @printf("%-10s U = %5.1f m/s: Re = %6.0f, Mach %.4f, slug circulation %.2e m²/s\n",
             label, speed, speed * D / nu_air, speed / c_air, 9 / 8 * speed * D)
 end
 @printf("pulse %.2f ms, stroke L/D = %.1f\n", 1e3t_pulse, opt.stroke)
+#endregion
 
+# The two numbers, with the slug circulation ``\tfrac98 U D`` of the default
+# stroke, are
+#
+# | jet | ``U`` (m/s) | ``U D/\nu`` | ``U/c`` | ``\tfrac98 U D`` (m²/s) |
+# |:--|--:|--:|--:|--:|
+# | experiment | 1.5 | 1245 | 0.0044 | 0.0214 |
+# | here | 60 | 49798 | 0.174 | 0.857 |
+#
+# and the pulse lasts 1.27 ms.
+#
 # The faster jet raises the Reynolds number from 1200 to 5e4 and the Mach
 # number from 0.004 to 0.17. The calculation carries no molecular viscosity,
 # so neither value is represented: the grid and the artificial viscosity set
@@ -190,9 +221,16 @@ t_reshock = t_wall + z_meet / (wall.right_speed - impact.u_star)
 z_reshock = wall.right_speed * (t_reshock - t_wall)
 t_reflected_out = t_impact + gap / impact.right_speed
 t_retransmitted_out = t_reshock + (H - z_reshock) / reshock.right_speed
+#region
 @printf("shock fired at %.3f ms, reaches the interface at %.3f ms; end wall %.3f ms, \
         reshock %.3f ms at z = %.1f mm; run ends at %.3f ms\n", 1e3t_shock,
         1e3t_impact, 1e3t_wall, 1e3t_reshock, 1e3z_reshock, 1e3t_end)
+#endregion
+
+# The shock is fired at 6.767 ms and reaches the interface at 7.087 ms. In the
+# one-dimensional solution the transmitted shock reaches the end wall at
+# 7.561 ms and reshock occurs at 7.765 ms, 20.0 mm above the end wall. The run
+# ends at 8.687 ms.
 
 pulse(t) = t <= 0 || t >= t_pulse ? 0.0 : sin(π * t / t_pulse)^2
 jet(r, θ, z, t) = Prim(Y = (1.0, 0.0), p = p0, T_ion = T0,
@@ -224,6 +262,7 @@ nothing #hide
 
 frame_times = [t_pulse, (t_pulse + t_impact) / 2, t_impact, t_impact + 0.3e-3,
                t_reshock + 0.2e-3, t_end]
+#region
 
 function weights(x)
     w = fill(x[2] - x[1], length(x))
@@ -231,6 +270,7 @@ function weights(x)
     w[end] /= 2
     return w
 end
+#endregion
 
 run_key(nr, nz) = @sprintf("nr%d_nz%d_M%g_jet%g_stroke%g_ts%g_ta%g", nr, nz, opt.Mach, #src
                            opt.jet_speed, opt.stroke, opt.t_shock, opt.t_after) #src
@@ -272,17 +312,19 @@ function simulate(nr, nz)
         nothing
     end)
     t_open = t_shock + 10 * (H / (nz - 1)) / W
-    wall = @elapsed begin
-        run!(solver, Q; tfinal = t_end,
-             callback = (survey, record, keep, Callback(AtTime(t_open), Returns(true))))
-        steps = solver.step
-        solver, Q = setup(solver, Q; bcs = faces(NSCBCInflowBC(incident.post;
-                                                               target = inflow_state)))
-        run!(solver, Q; tfinal = t_end, callback = (survey, record, keep))
-    end
-    root && @printf("%d × %d nodes, h = %.2f mm: phase change at %.4f ms after %d steps, \
-                    %d steps in all, %.0f s\n", nr, nz, 1e3H / (nz - 1), 1e3t_open, steps,
-                    solver.step, wall)
+    run!(solver, Q; tfinal = t_end,
+         callback = (survey, record, keep, Callback(AtTime(t_open), Returns(true))))
+    #region
+    steps = solver.step
+    #endregion
+    solver, Q = setup(solver, Q; bcs = faces(NSCBCInflowBC(incident.post;
+                                                           target = inflow_state)))
+    run!(solver, Q; tfinal = t_end, callback = (survey, record, keep))
+    #region
+    root && @printf("%d × %d nodes, Δz = %.2f mm: phase change at %.4f ms after %d \
+                    steps, %d steps in all\n", nr, nz, 1e3H / (nz - 1), 1e3t_open, steps,
+                    solver.step)
+    #endregion
     return (; nr, nz, h = H / (nz - 1), t_open, ring, coords = coords[], frames, lines)
     end #src
 end
@@ -290,12 +332,14 @@ end
 runs = mpi_main() do
     [simulate(g...) for g in grids]
 end
-fine, coarse = runs
+nothing #hide
 
+#region
 # The analysis and the figures below run on rank 0; the other ranks stop here.
 
+fine, coarse = runs
 MPI.Comm_rank(MPI.COMM_WORLD) == 0 || exit()
-nothing #hide
+#endregion
 
 # ## Ring
 #
@@ -316,11 +360,12 @@ nothing #hide
 # U_K = \frac{\Gamma_r}{4\pi R_r}\left(\ln\frac{8R_r}{a} - \frac14\right),
 # ```
 #
-# as quoted in the Wikipedia article. The run compares it with the speed of
-# the center over the middle of the transit, from 1 ms after the end of the
-# pulse to 1.5 ms before the shock arrives, a straight line fitted to ``z_r``,
-# with ``\Gamma_r``, ``R_r`` and ``a`` averaged over the same window.
+# as quoted in the Wikipedia article. It is compared with the speed of the
+# center over the middle of the transit, from 1 ms after the end of the pulse
+# to 1.5 ms before the shock arrives, the slope of a straight line fitted to
+# ``z_r``, with ``\Gamma_r``, ``R_r`` and ``a`` averaged over the same window.
 
+#region
 function ring_track(run)
     r, z = run.coords
     wr, wz = weights(r), weights(z)
@@ -384,8 +429,6 @@ fits = map(zip(runs, tracks)) do (run, tr)
 end
 nothing #hide
 
-# The circulation of the slug model, accumulated over the pulse:
-
 slug(t) = U^2 / 2 * sum(pulse(s)^2 for s in range(0, t, length = 2001)) * t / 2001
 colors = Makie.wong_colors()
 fig = Figure(size = (760, 620))
@@ -415,8 +458,20 @@ end
 Legend(fig[1, 2], ax1, framevisible = false)
 Legend(fig[2, 2], ax2, framevisible = false)
 save(joinpath(outdir, "ring.png"), fig) #src
-nothing #hide
+#endregion
 
+# Over that window, with circulations in m²/s, lengths in mm and speeds in m/s,
+# the ring in the two runs has
+#
+# | ``\Delta z`` | ``\Gamma_r`` | ``R_r`` | ``a`` | speed of the center | ``U_K`` |
+# |:--|--:|--:|--:|--:|--:|
+# | 0.65 | 0.928 | 8.0 | 4.2 | 22.7 | 22.7 |
+# | 1.3 | 1.046 | 8.0 | 6.0 | 21.2 | 22.0 |
+#
+# The figure gives the height of the center and the circulations against time.
+# The dashed lines are the track assumed in firing the shock, above, and the
+# circulation of the slug model accumulated over the pulse, below.
+#
 # ![Ring height and circulation](../assets/examples/vortex_ring_shock/ring.png)
 #
 # At ``\Delta z = 0.65`` mm the center of the ring moves at 0.378 of the peak
@@ -460,6 +515,7 @@ nothing #hide
 # straight line fitted to the positions over a window in which no other wave
 # crosses the feature.
 
+#region
 function crossing(x, v, level; from = :low)
     i = from === :low ? findfirst(>(level), v) : findlast(>(level), v)
     i === nothing && return NaN
@@ -537,8 +593,20 @@ xlims!(ax, 1e3t_shock, 1e3t_end)
 ylims!(ax, 0, 1e3H)
 Legend(fig[2, 1], ax, orientation = :horizontal, nbanks = 2, framevisible = false)
 save(joinpath(outdir, "waves.png"), fig) #src
-nothing #hide
+#endregion
 
+# The velocities on the wall, in m/s and positive upward, are
+#
+# | feature | ``\Delta z = 0.65`` mm | ``\Delta z = 1.3`` mm | one-dimensional |
+# |:--|--:|--:|--:|
+# | incident shock | -468.3 | -468.2 | -468.3 |
+# | transmitted shock | -210.7 | -210.8 | -210.8 |
+# | reflected shock | 239.4 | 237.8 | 240.9 |
+# | interface | -118.0 | -118.0 | -118.1 |
+# | shock from the end wall | 99.9 | 99.0 | 98.2 |
+# | shock into the air at reshock | 385.5 | 385.6 | 384.5 |
+# | interface after reshock | 42.7 | 42.7 | 43.4 |
+#
 # ![Waves and interface against time](../assets/examples/vortex_ring_shock/waves.png)
 #
 # On the wall each wave and the interface move at the one-dimensional
@@ -562,6 +630,7 @@ nothing #hide
 # halfway through the transit, when the shock reaches the interface, 0.3 ms
 # later, 0.2 ms after reshock and at the end of the run.
 
+#region
 r, z = fine.coords
 rho_range = (1.0, 30.0)
 omega_scale = 0.25maximum(maximum(abs.(f.omega)) for f in fine.frames[1:2])
@@ -582,7 +651,7 @@ Colorbar(fig[3, 1:2], limits = rho_range, colormap = :grays, scale = log10,
 Colorbar(fig[3, 3], limits = (-omega_scale, omega_scale), colormap = :balance,
          vertical = false, label = "ω_θ (1/s)")
 save(joinpath(outdir, "flow.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Density and vorticity](../assets/examples/vortex_ring_shock/flow.png)
 #
@@ -616,10 +685,11 @@ nothing #hide
 # the state and replaces only the condition on the top face. Had the inflow
 # condition not held the state the Dirichlet face left, the change would have
 # sent a wave down the shocked air. Between the phase change and the shock's
-# arrival at the interface, the run compares the pressure on the wall with the
+# arrival at the interface, the pressure on the wall is compared with the
 # pressure behind the incident shock, on the face and everywhere more than 15
 # cells above the shock.
 
+#region
 for (run, w) in zip(runs, waves)
     m = run.ring.sf6
     @printf("%3d × %3d: SF6 mass departs from its initial value by at most %.1e, \
@@ -638,10 +708,11 @@ for (run, w) in zip(runs, waves)
             the shock by at most %.1e of the jump on the face and %.1e above the \
             shock\n", face / jump, clear / jump)
 end
+#endregion
 
 # The mass of SF6 departs from its initial value by at most 5.5e-4 on the
 # finer grid and 2.9e-3 on the coarser, while the transmitted shock reflects
-# from the end wall, and returns to within 2.8e-5 and 1.2e-4 by the end of the
+# from the end wall, and returns to within 3.8e-5 and 1.6e-4 by the end of the
 # run. After the phase change the pressure on the face and above the shock
 # departs from the post-shock pressure by at most 0.4% of the jump on both
 # grids, so the change of condition sends no larger wave down the tube.

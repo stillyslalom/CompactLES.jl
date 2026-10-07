@@ -31,27 +31,32 @@
 # reflected waves, and the page describes what it shows without a measurement
 # to compare.
 #
-# The script takes six settings: `ny`, the nodes across half a wavelength,
-# which sets the spacing ``\Delta x = \lambda/(2n_y)`` of the main runs; `grid`, the
-# sets also run at half that spacing, named without spaces and separated by
-# commas; `sweep`, the sets also run with
-# initial layers of 3 and 7 mm; `cmu`, whether CJ 1.21 is also run without the
-# artificial shear viscosity; `smoke`, which runs every calculation on a coarse
-# grid for a short time to check that the page runs; and `cache`, the
-# directory in which each finished run is kept, `examples/cache/jacobs_air_sf6`
-# when empty, so that an interrupted script resumes where it stopped and the
-# figures can be redrawn without the runs. The figures come from the full run,
-# on eight MPI ranks of one thread each.
+# The script takes its settings from the command line: `ny`, the nodes across
+# half a wavelength, which sets the spacing ``\Delta x = \lambda/(2n_y)`` of the
+# main runs; `grid`, the sets also run at half that spacing, named without
+# spaces and separated by commas; `sweep`, the sets also run with initial layers
+# of 3 and 7 mm; and `cmu`, whether CJ 1.21 is also run without the artificial
+# shear viscosity.
+#region
+# Two more settings concern the script itself. `smoke=true` runs every
+# calculation on a coarse grid for a short time to check that the page runs.
+# `cache` is the directory in which each finished run is kept,
+# `examples/cache/jacobs_air_sf6` when empty, so that an interrupted script
+# resumes where it stopped and the figures can be redrawn without the runs. The
+# figures come from the full run, on eight MPI ranks of one thread each.
+#endregion
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
 using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CairoMakie
 using Printf
+#region
+using CairoMakie
 using Serialization
 CairoMakie.activate!(type = "png")
+#endregion
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
@@ -59,7 +64,9 @@ opt = CompactLES.script_args(ARGS, (ny = 36, grid = "CJ1.21,JK59mm",
                                     sweep = "JK59mm,JK36mm", cmu = true, smoke = false,
                                     cache = ""))
 outdir = figure_dir("jacobs_air_sf6"; smoke = opt.smoke) #src
+#region
 cache_dir = isempty(opt.cache) ? joinpath(@__DIR__, "cache", "jacobs_air_sf6") : opt.cache
+#endregion
 root = MPI.Comm_rank(MPI.COMM_WORLD) == 0
 nothing #hide
 
@@ -146,6 +153,7 @@ gases = map(experiments) do e
        A_plus = atwood(impact.left, impact.right),
        compression = 1 - impact.u_star / incident.shock_speed)
 end
+#region
 if root
     println("set        acetone   A⁺ (paper)      ΔV m/s (paper)   a₀⁺/a₀⁻ (paper)")
     for (e, g) in zip(experiments, gases)
@@ -154,7 +162,19 @@ if root
                 e.a0_plus / e.a0)
     end
 end
+#endregion
 
+# The calculated values are listed below with the papers' values in
+# parentheses; for the compression, the value in parentheses is the ratio
+# ``a_0^+/a_0^-`` of the measured amplitudes.
+#
+# | set | acetone | ``A^+`` | ``\Delta V``, m/s | ``1 - \Delta V/W`` |
+# |:--- | ---: | ---: | ---: | ---: |
+# | CJ 1.11 | 24.4% | 0.615 (0.616) | 37.6 (33.0) | 0.885 (0.917) |
+# | CJ 1.21 | 24.4% | 0.625 (0.625) | 68.8 (60.6) | 0.806 (0.858) |
+# | JK 59 mm | 24.0% | 0.632 (0.635) | 93.0 (92.6) | 0.755 (0.741) |
+# | JK 36 mm | 4.7% | 0.691 (0.692) | 91.6 (90.1) | 0.784 (0.667) |
+#
 # The acetone fractions are 24% for Collins and Jacobs, as they state, and for
 # the longer wavelength of Jacobs and Krivets, and 4.7% for the shorter one.
 # The Atwood numbers after the shock agree with the papers' to 0.003. The
@@ -223,10 +243,13 @@ nothing #hide
 # The run records the pressure, the velocity and the SF6 mole fraction along
 # the tube every 20 µs.
 
-function tube_1d(e, g; h = opt.smoke ? 4e-3 : 1e-3)
+function tube_1d(e, g; h = 1e-3)
+    #region
+    opt.smoke && (h = 4e-3)
     file = opt.smoke ? "" :
            joinpath(cache_dir, "tube_" * replace(e.name, " " => "") * ".jls")
     !isempty(file) && isfile(file) && return deserialize(file)
+    #endregion
     problem, L, x_i = tube_problem(e, g; lambda = 1.0)
     nx = round(Int, L / h) + 1
     solver, Q = setup(problem, Numerics(n_global = (nx, 1, 1)))
@@ -250,11 +273,17 @@ function tube_1d(e, g; h = opt.smoke ? 4e-3 : 1e-3)
     t = rec.t .- rec.t[k0]
     result = (; x = x .- x_i, t, t_arrival = rec.t[k0], p = rec.p,
               position = position .- x_i, p_i, u_i)
+    #region
     if !isempty(file) && root
         mkpath(cache_dir)
         serialize(file, result)
     end
+    #endregion
     return result
+end
+
+tubes = mpi_main() do
+    [tube_1d(e, g) for (e, g) in zip(experiments, gases)]
 end
 
 # After the shock the interface moves at a constant velocity until the first
@@ -264,6 +293,7 @@ end
 # the largest rise of pressure at the interface within 40 µs, which is the
 # shock reflected from the end wall.
 
+#region
 function window_end(w)
     after = findall(>(0.5e-3), w.t)
     u_plateau = w.u_i[after[1]]
@@ -275,9 +305,6 @@ function window_end(w)
             stop = min(w.t[k_exp], w.t[k_re]), u_plateau)
 end
 
-tubes = mpi_main() do
-    [tube_1d(e, g) for (e, g) in zip(experiments, gases)]
-end
 windows = [window_end(w) for w in tubes]
 if root
     for (e, w, win) in zip(experiments, tubes, windows)
@@ -286,7 +313,19 @@ if root
                 1e3w.t_arrival, 1e3win.expansion, 1e3win.reshock)
     end
 end
+#endregion
 
+# The times at which the waves reach the interface are listed below. That of
+# the shock is counted from the opening of the diaphragm, and those of the two
+# reflected waves from the arrival of the shock.
+#
+# | set | shock, ms | head of the expansion, ms | reflected shock, ms |
+# |:--- | ---: | ---: | ---: |
+# | CJ 1.11 | 7.84 | 5.46 | 8.54 |
+# | CJ 1.21 | 7.20 | 5.42 | 6.80 |
+# | JK 59 mm | 6.72 | 5.84 | 5.82 |
+# | JK 36 mm | 6.04 | 5.88 | 5.86 |
+#
 # The figure compares the calculation with the wave diagrams of Collins and
 # Jacobs, Figures 3 and 4, digitized. The gray scale is the pressure difference
 # between neighboring nodes, so that shocks show as dark lines and the
@@ -294,6 +333,7 @@ end
 # blue lines are those of the diagrams: solid for shocks, dashed for
 # characteristics of the expansions, dotted for the interface.
 
+#region
 data_dir = joinpath(@__DIR__, "data", "jacobs")
 function read_digitized(name)
     lines = filter(l -> !startswith(l, "#") && !isempty(strip(l)),
@@ -333,7 +373,7 @@ if root
     fig = wave_figure((1, 2))
     save(joinpath(outdir, "waves.png"), fig) #src
 end
-nothing #hide
+#endregion
 
 # ![Wave diagrams](../assets/examples/jacobs_air_sf6/waves.png)
 #
@@ -415,13 +455,18 @@ t_after = Dict("CJ 1.11" => 10.6e-3, "CJ 1.21" => 11.1e-3, "JK 59 mm" => 6.6e-3,
 
 function simulate(j; ny = opt.ny, layer = delta, C_mu = nothing)
     e, g, w = experiments[j], gases[j], tubes[j]
+    #region
     ny = opt.smoke ? 12 : ny
+    #endregion
+    # the run's label, which also names the file the finished run is kept in
     key = @sprintf("%s_ny%d_d%.0f%s", replace(e.name, " " => ""), ny, 1e4layer,
                    C_mu === nothing ? "" : @sprintf("_cmu%g", C_mu))
+    #region
     file = opt.smoke ? "" : joinpath(cache_dir, key * ".jls")
     if !isempty(file) && isfile(file)
         return root ? deserialize(file) : nothing
     end
+    #endregion
     problem, L, x_i = tube_problem(e, g; a0 = e.a0, lambda = e.lambda, layer)
     h = e.lambda / 2 / ny
     nx, stretch = tube_stretch(L, x_i - 0.3, h)
@@ -452,15 +497,20 @@ function simulate(j; ny = opt.ny, layer = delta, C_mu = nothing)
                        X = snap[:X][near, :, 1, 3]))
         nothing
     end)
-    tfinal = w.t_arrival + (opt.smoke ? 0.5e-3 : t_after[e.name])
+    tfinal = w.t_arrival + t_after[e.name]
+    #region
+    opt.smoke && (tfinal = w.t_arrival + 0.5e-3)
+    #endregion
     wall = @elapsed run!(solver, Q; tfinal, callback = (sample, keep))
     result = (; key, name = e.name, ny, h, nx, layer, C_mu, wall, steps = solver.step,
               t = rec.t .- w.t_arrival, bubble = rec.bubble, spike = rec.spike, frames)
+    #region
     if root
-        @printf("%s: %d × %d nodes, h = %.3f mm, %d steps, %.0f s\n", key, nx, ny, 1e3h,
-                solver.step, wall)
+        @printf("%s: %d × %d nodes, Δx = %.3f mm, %d steps, %.0f s\n", key, nx, ny,
+                1e3h, solver.step, wall)
         isempty(file) || (mkpath(cache_dir); serialize(file, result))
     end
+    #endregion
     return result
 end
 
@@ -477,16 +527,18 @@ runs = mpi_main() do
     [simulate(j; kw...) for (j, kw) in plan]
 end
 
+#region
 # The analysis and the figures below run on rank 0; the other ranks stop here.
 
 root || exit()
-nothing #hide
+#endregion
 
 # ## Amplitude
 #
 # The main run of each set is the one at ``\lambda/\Delta x = 72`` with the 5 mm
 # layer and the default artificial properties.
 
+#region
 main_ny = opt.smoke ? 12 : opt.ny
 main = [first(filter(r -> r.name == e.name && r.ny == main_ny && r.layer == delta &&
                          r.C_mu === nothing, runs)) for e in experiments]
@@ -498,7 +550,7 @@ function line_fit(t, y)
     slope = sum((t .- tm) .* (y .- ym)) / sum((t .- tm) .^ 2)
     return slope, ym - slope * tm
 end
-nothing #hide
+#endregion
 
 # The papers normalize the amplitude by the wavenumber and time by the measured
 # initial growth rate, ``k(a - a_0^+)`` against ``k\dot a_0 t``. The
@@ -508,6 +560,7 @@ nothing #hide
 # the experiment's ``k\dot a_0 t`` stays below 0.5, the extent of the early
 # data from which Collins and Jacobs fitted their rate at Mach 1.11.
 
+#region
 function early_growth(r, e)
     k = 2pi / e.lambda
     t_fit = 0.5 / (k * e.rate)
@@ -524,6 +577,7 @@ for (e, g, gr) in zip(experiments, gases, growth)
     @printf("%-9s %5.2f (%4.2f)     %6.2f (%5.2f)     %6.2f\n", e.name, 1e3gr.a0_plus,
             1e3e.a0_plus, gr.rate, e.rate, richtmyer)
 end
+#endregion
 
 # The calculated amplitudes after the shock are 2.00, 1.45, 2.16 and 1.15 mm,
 # against 2.10, 1.57, 2.15 and 0.98 mm measured, and the early growth rates
@@ -547,6 +601,7 @@ end
 # calculation, since in two dimensions it reaches the tips of the bubbles or
 # the spikes first.
 
+#region
 dimensionless = (
     "CJ 1.11" => (file = "cj2002_fig14.csv", series = "Ms1.11"),
     "CJ 1.21" => (file = "cj2002_fig14.csv", series = "Ms1.21"),
@@ -566,7 +621,7 @@ end
 interpolate(x, y, xq) = (i = clamp(searchsortedlast(x, xq), 1, length(x) - 1);
                          y[i] + (xq - x[i]) * (y[i+1] - y[i]) / (x[i+1] - x[i]))
 comparison_end(j) = windows[j].stop - 0.1e-3
-nothing #hide
+#endregion
 
 # Jacobs and Krivets measure the distance between the points and a model by
 # the mean fractional deviation ``\Delta = N^{-1}\sum_i |y_i - y_r(x_i)| /
@@ -578,6 +633,7 @@ nothing #hide
 # line of unit slope that is linear theory, and against a fourth-degree
 # polynomial through the origin fitted to that set's points.
 
+#region
 function polynomial_fit(x, y; degree = 4)
     V = [xi^p for xi in x, p in 1:degree]
     c = V \ y
@@ -585,10 +641,13 @@ function polynomial_fit(x, y; degree = 4)
 end
 deviation(x, y, model) = sum(abs(y[i] - model(x[i])) / model(x[i]) for i in eachindex(x)) /
                          length(x)
+#endregion
+
 # A measured point is in the window if its time, ``x_i/k\dot a_0`` with the
 # measured rate, is; the points below ``k\dot a_0 t = 0.1``, where the
 # denominator vanishes, are left out.
 
+#region
 function score(r, j)
     e = experiments[j]
     gr = early_growth(r, e)
@@ -627,7 +686,7 @@ for (col, js, title) in ((1, (1, 2), "Collins and Jacobs"), (2, (3, 4), "Jacobs 
     axislegend(ax, position = :lt, framevisible = false, labelsize = 11)
 end
 save(joinpath(outdir, "dimensionless.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Dimensionless amplitude](../assets/examples/jacobs_air_sf6/dimensionless.png)
 #
@@ -665,6 +724,7 @@ nothing #hide
 # calculated amplitude is drawn over the whole run, and the vertical line marks
 # the end of the single-shock window.
 
+#region
 function measured_mm(e)
     xd, yd = measured(e.name)
     k = 2pi / e.lambda
@@ -698,7 +758,7 @@ for (j, e) in enumerate(experiments)
     axislegend(ax, position = :lt, framevisible = false, labelsize = 11)
 end
 save(joinpath(outdir, "amplitude.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Amplitude](../assets/examples/jacobs_air_sf6/amplitude.png)
 #
@@ -726,6 +786,7 @@ nothing #hide
 # displacement, the mean of the bubble and spike positions, is fitted over the
 # same interval, 0.3 to 4 ms.
 
+#region
 fig = Figure(size = (520, 400))
 ax = Axis(fig[1, 1], xlabel = "t (ms)", ylabel = "displacement (mm)")
 f11 = read_digitized("cj2002_fig11.csv")
@@ -745,7 +806,7 @@ for (j, series, marker, color) in ((1, "Ms1.11", :circle, Makie.wong_colors()[1]
 end
 axislegend(ax, position = :lt, framevisible = false)
 save(joinpath(outdir, "displacement.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Interface displacement](../assets/examples/jacobs_air_sf6/displacement.png)
 #
@@ -764,12 +825,16 @@ nothing #hide
 # layers of 3 and 7 mm around the 5 mm of Collins and Jacobs. CJ 1.21 is
 # repeated without the artificial shear viscosity, `C_mu = 0`.
 
+#region
 println("run                       ȧ₀ m/s   Δ calc")
 for r in runs
     s = score(r, findfirst(e -> e.name == r.name, experiments))
     @printf("%-25s %7.2f %7.1f%%\n", r.key, s.rate, 100s.calc)
 end
+#endregion
 
+# The early growth rate and the mean fractional deviation of each run are
+#
 # | run | ``\dot a_0``, m/s | ``\Delta`` |
 # |:--- | ---: | ---: |
 # | CJ 1.21, ``\Delta x`` = 0.82 mm | 5.83 | 11.2% |
@@ -805,6 +870,7 @@ end
 # half wavelength is mirrored across both symmetry planes to the width of the
 # tube, one and a half wavelengths.
 
+#region
 function frame_figure(r, e, picks)
     fig = Figure(size = (130 * length(picks) + 80, 280))
     for (col, t) in enumerate(picks)
@@ -828,7 +894,7 @@ fig = frame_figure(cj121, experiments[2], (3.011, 4.009, 5.015, 6.006, 7.005, 8.
                                            10.020))
 resize_to_layout!(fig)
 save(joinpath(outdir, "frames.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![SF6 mole fraction, CJ 1.21](../assets/examples/jacobs_air_sf6/frames.png)
 #

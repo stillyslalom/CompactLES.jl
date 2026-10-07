@@ -31,22 +31,29 @@ using CompactLES   # re-exports MPI
 using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
+#region
 using CairoMakie
 using Printf
 CairoMakie.activate!(type = "png")
+#endregion
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
-# The script takes three settings: `ny`, the nodes across the half test
-# section, which sets the spacing ``\Delta x = H/n_y`` of the main run, with
-# ``H`` the height of the half section, and of two further runs at twice and
-# four times that spacing; `tend`, the time the runs end after the shock
-# reaches the cylinder; and `smoke`. With `smoke=true` the runs have 16, 12 and
-# 10 rows, which checks that the page still runs; the figures come from the
-# full run.
+# The script takes its settings from the command line: `ny`, the nodes across
+# the half test section, which sets the spacing ``\Delta x = H/n_y`` of the main
+# run, with ``H`` the height of the half section, and of two further runs at
+# twice and four times that spacing; and `tend`, the time the runs end after the
+# shock reaches the cylinder.
+#region
+# A third setting, `smoke=true`, gives the runs 16, 12 and 10 rows, which checks
+# that the page still runs; the figures come from the full run.
+#endregion
 
 opt = CompactLES.script_args(ARGS, (ny = 100, tend = 1.0e-3, smoke = false))
-grids = opt.smoke ? (16, 12, 10) : (opt.ny, opt.ny ÷ 2, opt.ny ÷ 4)
+grids = (opt.ny, opt.ny ÷ 2, opt.ny ÷ 4)
+#region
+opt.smoke && (grids = (16, 12, 10))
+#endregion
 outdir = figure_dir("shock_bubble"; smoke = opt.smoke) #src
 nothing #hide
 
@@ -81,11 +88,13 @@ air = Prim(Y = mass_fractions(eos, "Air" => 1.0; basis = :mass), p = p0, T_ion =
 helium = Prim(Y = mass_fractions(eos, "He" => 0.72, "Air" => 0.28; basis = :mass),
               p = p0, T_ion = T0)
 incident = shock_jump(eos, air, 1.22)
+#region
 sound_speed(state) = thermodynamic_state(eos, state).c
 @printf("sound speed %.0f m/s in the air, %.0f m/s in the helium\n",
         sound_speed(air), sound_speed(helium))
 @printf("incident shock %.1f m/s; behind it %.1f m/s, %.1f K\n", incident.shock_speed,
         incident.velocity, incident.post.T_ion)
+#endregion
 
 function plane_waves(gas)
     refraction = riemann_interface(eos, incident.post, gas)
@@ -96,11 +105,22 @@ end
 oned = plane_waves(helium)
 pure = plane_waves(Prim(Y = mass_fractions(eos, "He" => 1.0; basis = :mass), p = p0,
                         T_ion = T0))
+#region
 for (label, w) in (("contaminated helium", oned), ("pure helium", pure))
     @printf("%-20s refracted %6.1f, transmitted %5.1f, upstream interface %5.1f, \
             downstream interface %5.1f m/s\n", label, w...)
 end
+#endregion
 
+# The incident shock moves at 420 m/s and sets the air behind it moving at
+# 115 m/s. The sound speed of the contaminated helium is 874 m/s. The plane-wave
+# velocities, in m/s, are
+#
+# | gas | refracted shock | transmitted shock | upstream interface | downstream interface |
+# |:--|--:|--:|--:|--:|
+# | helium with 28% air | 985 | 409 | 157 | 99 |
+# | pure helium | 1126 | 405 | 164 | 94 |
+#
 # On the axis these are the velocities the waves and interfaces take when they
 # form. For pure helium they are the one-dimensional values that Haas and
 # Sturtevant tabulated for this shock (their table 3), to within a meter per
@@ -182,10 +202,10 @@ function simulate(ny)
                        schlieren = field_slice(solver, Q, :schlieren)))
         nothing
     end)
-    wall = @elapsed run!(solver, Q; tfinal = t_impact + opt.tend,
-                         callback = (sample, shoot))
-    @printf("%d × %d nodes, h = %.3f mm: %d steps in %.0f s\n", nx, ny, 1e3 * H / ny,
-            solver.step, wall)
+    run!(solver, Q; tfinal = t_impact + opt.tend, callback = (sample, shoot))
+    #region
+    @printf("%d × %d nodes, Δx = %.3f mm: %d steps\n", nx, ny, 1e3 * H / ny, solver.step)
+    #endregion
     return (; nx, ny, h = H / ny, x = x[], t, axis_X, axis_p, wall_p, rear, front, frames)
     end #src
 end
@@ -202,6 +222,7 @@ nothing #hide
 # the rearmost helium. The shock travels from left to right, the opposite of
 # the photographs.
 
+#region
 function frame!(ax, frame, x_rear)
     x, y, s = frame.schlieren
     xs = 1e3 .* (x .- x_edge)
@@ -232,7 +253,7 @@ for (n, frame) in enumerate(fine.frames)
 end
 rowgap!(fig.layout, 8)
 save(joinpath(outdir, "density_gradient.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Density gradient](../assets/examples/shock_bubble/density_gradient.png)
 #
@@ -276,6 +297,7 @@ nothing #hide
 # two windows. They list a final velocity of the downstream interface as well,
 # which is taken up below.
 
+#region
 crossing(x, v, level; last = false) = begin
     i = last ? findlast(>(level), v) : findfirst(>(level), v)
     i === nothing ? NaN : x[i]
@@ -373,7 +395,7 @@ Legend(fig[2, 1:2],
        [[label for (_, label) in track_labels]; "fitted velocity"],
        orientation = :horizontal, nbanks = 4, framevisible = false)
 save(joinpath(outdir, "xt.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Feature positions against time](../assets/examples/shock_bubble/xt.png)
 #
@@ -385,8 +407,21 @@ nothing #hide
 # first and part after about 120 µs, when the air jet runs ahead along the axis
 # and the helium on either side falls behind.
 #
-# The ratio of each velocity to the measured one:
+# The velocities, in m/s, at the three spacings and in the references are
+#
+# | velocity | ``D/\Delta x = 112`` | 56 | 28 | measured | Quirk and Karni | plane waves |
+# |:--|--:|--:|--:|--:|--:|--:|
+# | incident shock ``V_s`` | 419 | 419 | 417 | 410 | 422 | 420 |
+# | refracted shock ``V_R`` | 947 | 903 | 831 | 900 | 943 | 985 |
+# | transmitted shock ``V_T`` | 379 | 378 | 378 | 393 | 377 | 409 |
+# | upstream interface ``V_{ui}`` | 188 | 186 | 175 | 170 | 178 | 157 |
+# | air jet head ``V_j`` | 217 | 210 | 199 | 230 | 227 | |
+# | downstream interface ``V_{di}`` | 135 | 136 | 138 | 145 | 146 | 99 |
+# | final upstream interface ``V_{uf}`` | 110 | 110 | 107 | 113 | | |
+#
+# and the ratio of each to the measured one is
 
+#region
 fig = Figure(size = (760, 440))
 ax = Axis(fig[1, 1], xlabel = "velocity / measured velocity",
           yticks = (1:7, feature_names), yreversed = true)
@@ -403,7 +438,7 @@ scatter!(ax, plane ./ measured, 1:7, marker = :vline, markersize = 16,
          color = Makie.wong_colors()[2], label = "plane waves")
 Legend(fig[1, 2], ax, framevisible = false)
 save(joinpath(outdir, "velocities.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Velocities against the measurements](../assets/examples/shock_bubble/velocities.png)
 #
@@ -424,14 +459,16 @@ nothing #hide
 # plane-wave value. On the three grids it moves at 135 to 138 m/s.
 #
 # The upstream interface does not move at one velocity before the jet forms.
-# The fits over shorter windows show it accelerate while the face flattens:
+# Fits over shorter windows show it accelerating while the face flattens.
 
+#region
 for (run, tr) in zip(runs, trs)
     @printf("%3d rows: upstream interface %.0f m/s over 0–25 µs, %.0f over 0–50 µs, \
             %.0f over 50–100 µs\n", run.ny, slope(tr.t, tr.upstream, (0.0, 25e-6)),
             slope(tr.t, tr.upstream, (0.0, 50e-6)),
             slope(tr.t, tr.upstream, (50e-6, 100e-6)))
 end
+#endregion
 
 # Over the first 25 µs the interface at ``D/\Delta x = 112`` moves at 164 m/s,
 # close to the plane-wave 157 m/s, and from 50 to 100 µs at 197 m/s; the window
@@ -451,11 +488,17 @@ end
 # Haas and Sturtevant also list a final velocity of the downstream interface,
 # 97 m/s, taken after the head of the jet has struck it. The calculation does
 # not give it a stable value. On the axis the jet closes on the downstream
-# interface and leaves a thin sheet of helium ahead of itself; the run prints,
-# at four times, the thickness of the helium between the jet head and the air
-# beyond, where its mole fraction exceeds one half, and the largest mole
-# fraction on the axis:
+# interface and leaves a thin sheet of helium ahead of itself. The thickness of
+# that sheet, where the helium mole fraction exceeds one half between the jet
+# head and the air beyond, and the largest mole fraction on the axis are
+#
+# | ``D/\Delta x`` | 600 µs | 700 µs | 800 µs | 900 µs |
+# |:--|:--|:--|:--|:--|
+# | 112 | 3.1 mm, 0.94 | 1.3 mm, 0.80 | 0.4 mm, 0.62 | none, 0.50 |
+# | 56 | 3.6 mm, 0.89 | 1.8 mm, 0.72 | 0.9 mm, 0.55 | none, 0.45 |
+# | 28 | 7.1 mm, 0.84 | 1.8 mm, 0.66 | 1.8 mm, 0.54 | none, 0.45 |
 
+#region
 for (run, tr) in zip(runs, trs)
     print(lpad(run.ny, 3), " rows:")
     for t in (600e-6, 700e-6, 800e-6, 900e-6)
@@ -465,6 +508,7 @@ for (run, tr) in zip(runs, trs)
     end
     println()
 end
+#endregion
 
 # At 600 µs the sheet is 3.1 mm thick at ``D/\Delta x = 112``, 3.6 mm at 56 and
 # 7.1 mm at 28, and by 800 µs it is about one cell thick on the two finer

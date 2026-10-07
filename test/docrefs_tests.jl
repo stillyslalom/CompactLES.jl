@@ -49,6 +49,10 @@ const EXAMPLE_PAGES = joinpath(DOCS_SRC, "examples")  # generated; not scanned
 const LITERATE = normpath(joinpath(@__DIR__, "..", "docs", "literate"))
 const EXAMPLES = normpath(joinpath(@__DIR__, "..", "examples"))
 
+# `has_regions` and `example_source`, which docs/make.jl uses to build an
+# example's pages.
+include(joinpath(@__DIR__, "..", "docs", "example_pages.jl"))
+
 # The identifier a `@docs` entry or a code reference names: the last
 # component of a possibly qualified name, with any call signature dropped.
 # `CompactLES.run!(solver, Q)` and `run!` both give `run!`; `@threaded` keeps
@@ -72,12 +76,12 @@ function pages()
     return sort(out)
 end
 
-# The markdown of a Literate tutorial script: the text of its comment lines,
-# which is what the generated page under `tutorials/` carries. Literate's
-# control comments (`#src`, `#md`, `#-` and the like) are not markdown.
-function literate_markdown(script)
+# The markdown of a Literate script, given its text: the text of its comment
+# lines, which is what the generated page carries. Literate's control comments
+# (`#src`, `#md`, `#-` and the like) are not markdown.
+function literate_markdown(source::AbstractString)
     lines = String[]
-    for line in eachline(script)
+    for line in eachline(IOBuffer(source))
         m = match(r"^#(?: (.*))?$", line)
         # A code line becomes a blank line, so that a line of this text is the
         # same line of the script in a report.
@@ -94,17 +98,30 @@ is_example_page(script) =
 
 # Every rendered page's markdown, keyed by a path to report: the pages under
 # docs/src as they are, and each tutorial and example as the markdown of its
-# script.
+# script. An example that marks regions gives two pages, the one that leaves
+# the regions out and the complete one, which repeats its headings; both are
+# read, so that a link to one of those headings is found ambiguous here as
+# Documenter finds it.
 function page_texts()
     texts = Pair{String,String}[]
     for page in pages()
         push!(texts, page => read(page, String))
     end
     for f in sort(readdir(LITERATE; join=true))
-        endswith(f, ".jl") && push!(texts, f => literate_markdown(f))
+        endswith(f, ".jl") && push!(texts, f => literate_markdown(read(f, String)))
     end
     for f in sort(readdir(EXAMPLES; join=true))
-        is_example_page(f) && push!(texts, f => literate_markdown(f))
+        is_example_page(f) || continue
+        source = read(f, String)
+        if has_regions(source)
+            for complete in (false, true)
+                page = example_source(source; complete, keep_lines = true)
+                push!(texts, (complete ? f * " (complete)" : f) =>
+                             literate_markdown(page))
+            end
+        else
+            push!(texts, f => literate_markdown(source))
+        end
     end
     return texts
 end

@@ -19,28 +19,35 @@
 # molecular mixing with a second calculation on a grid twice as coarse, to show
 # what the calculation settles and what it does not.
 #
-# The script takes five settings: `ny`, the nodes across the tube, which sets
-# the spacing ``\Delta x = L_y/n_y`` of the main run, with ``L_y`` the width of
-# the tube, and of a second run at twice that spacing; `Mach`, the Mach number
-# of the incident shock; `tfinal`, the time at which the runs end; `seed`,
-# which draws the phases of the interface's modes; and `smoke`. With
-# `smoke=true` the runs have 16 and 10 rows, which checks that the page still
-# runs; the figures come from the full run.
+# The script takes its settings from the command line: `ny`, the nodes across
+# the tube, which sets the spacing ``\Delta x = L_y/n_y`` of the main run, with
+# ``L_y`` the width of the tube, and of a second run at twice that spacing;
+# `Mach`, the Mach number of the incident shock; `tfinal`, the time at which the
+# runs end; and `seed`, which draws the phases of the interface's modes.
+#region
+# A fifth setting, `smoke=true`, gives the runs 16 and 10 rows, which checks
+# that the page still runs; the figures come from the full run.
+#endregion
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
 using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
+#region
 using CairoMakie
 using Printf
 CairoMakie.activate!(type = "png")
+#endregion
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
 opt = CompactLES.script_args(ARGS, (ny = 128, Mach = 1.5, tfinal = 3e-3, seed = 1,
                                     smoke = false))
-grids = opt.smoke ? (16, 10) : (opt.ny, opt.ny ÷ 2)
+grids = (opt.ny, opt.ny ÷ 2)
+#region
+opt.smoke && (grids = (16, 10))
+#endregion
 outdir = figure_dir("shock_tube"; smoke = opt.smoke) #src
 nothing #hide
 
@@ -67,16 +74,14 @@ nothing #hide
 # reflected into the SF6, and the interface takes a new velocity. The
 # difference between the two interface velocities is the velocity jump of
 # reshock. The Atwood number ``A = (\rho_2 - \rho_1)/(\rho_2 + \rho_1)``, with
-# ``\rho_2`` the density of the SF6 and ``\rho_1`` that of the air, is printed
-# for the gases at rest and for the gases either side of the interface after
+# ``\rho_2`` the density of the SF6 and ``\rho_1`` that of the air, is given
+# below for the gases at rest and for the gases either side of the interface after
 # each shock.
 
 eos = IdealMixture(["Air", "SF6"])
 p0, T0 = 101_325.0, 295.0
 air = Prim(Y = mass_fractions(eos, "Air" => 1.0; basis = :mole), p = p0, T_ion = T0)
 sf6 = Prim(Y = mass_fractions(eos, "SF6" => 1.0; basis = :mole), p = p0, T_ion = T0)
-density(state) = thermodynamic_state(eos, state).rho
-atwood(light, heavy) = (density(heavy) - density(light)) / (density(heavy) + density(light))
 
 Lx, Ly = 0.5, 0.1
 x_shock, x_interface = 0.20, 0.25
@@ -92,6 +97,9 @@ t_reshock = t_wall + (Lx - x_wall_meet) / (impact.u_star - wall.left_speed)
 x_reshock = x_wall_meet + impact.u_star * (t_reshock - t_wall)
 reshock = riemann_interface(eos, impact.left, wall.left)
 
+#region
+density(state) = thermodynamic_state(eos, state).rho
+atwood(light, heavy) = (density(heavy) - density(light)) / (density(heavy) + density(light))
 @printf("incident shock %.1f m/s; behind it %.1f m/s, %.1f kPa, %.1f K\n",
         incident.shock_speed, incident.velocity, incident.post.p / 1e3,
         incident.post.T_ion)
@@ -105,7 +113,18 @@ reshock = riemann_interface(eos, impact.left, wall.left)
         1e3t_reshock, 1e3(Lx - x_reshock), reshock.left_wave, reshock.left_speed,
         reshock.right_wave, reshock.right_speed, reshock.u_star,
         impact.u_star - reshock.u_star, atwood(reshock.left, reshock.right))
+#endregion
 
+# The incident shock moves at 516.5 m/s and sets the air behind it moving at
+# 239.1 m/s, at 249.1 kPa. The time of each of the three Riemann problems and
+# the velocities of its waves, in m/s, are
+#
+# | event | time (ms) | transmitted wave | reflected wave | interface | ``A`` after |
+# |:--|--:|--:|--:|--:|--:|
+# | first shock | 0.097 | shock, 241.1 | shock, −208.5 | 157.5 | 0.729 |
+# | end wall | 1.134 | | shock, −90.9 | | |
+# | reshock | 1.483 | shock, −404.2 | rarefaction, 152.5 | −58.7 | 0.758 |
+#
 # The interface and the reflected shock meet 32 mm from the end wall, and the
 # interface then moves back toward the inflow. The velocity jump of reshock,
 # 216 m/s, is larger than that of the first shock, 157.5 m/s. The Atwood number
@@ -200,9 +219,10 @@ function simulate(ny)
         end
         nothing
     end)
-    wall_time = @elapsed run!(solver, Q; tfinal = opt.tfinal, callback = sample)
-    @printf("%d × %d nodes, h = %.2f mm: %d steps in %.0f s\n", nx, ny, 1e3Ly / ny,
-            solver.step, wall_time)
+    run!(solver, Q; tfinal = opt.tfinal, callback = sample)
+    #region
+    @printf("%d × %d nodes, Δx = %.2f mm: %d steps\n", nx, ny, 1e3Ly / ny, solver.step)
+    #endregion
     return (; nx, ny, h = Ly / ny, x = x[], y = y[], t, p_mean, X_mean, XX_mean, frames)
     end #src
 end
@@ -219,6 +239,7 @@ nothing #hide
 # line fitted to the positions over a window of time, chosen so that no other
 # wave crosses the feature in it.
 
+#region
 function crossing(x, v, level; from = :left, above = true)
     test = above ? (>(level)) : (<(level))
     i = from === :left ? findfirst(test, v) : findlast(test, v)
@@ -302,7 +323,7 @@ Legend(fig[2, 1:2], [LineElement(color = :orange), LineElement(color = :orange,
        ["1-D waves, sharp interface", "1-D interface", "mean mole fraction 0.5"],
        orientation = :horizontal, framevisible = false)
 save(joinpath(outdir, "xt.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Plane-averaged pressure against position and time](../assets/examples/shock_tube/xt.png)
 #
@@ -359,6 +380,7 @@ nothing #hide
 # Every node of a plane has the same weight in the average, since the grid is
 # uniform and periodic across the tube.
 
+#region
 function mixing(run)
     h = [crossing(run.x, X, 0.95; from = :right, above = false) -
          crossing(run.x, X, 0.05) for X in run.X_mean]
@@ -383,7 +405,7 @@ linkxaxes!(panels...)
 hidexdecorations!(panels[1], grid = false)
 Legend(fig[0, 1], panels[1], orientation = :horizontal, framevisible = false)
 save(joinpath(outdir, "mixing.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![Width and molecular mixing fraction of the layer](../assets/examples/shock_tube/mixing.png)
 #
@@ -391,20 +413,36 @@ nothing #hide
 # of the one-dimensional solution. Each shock first compresses the layer, and
 # its perturbations then grow. The calculation carries no molecular viscosity
 # or diffusion: the gases mix through the artificial diffusivity and the
-# filter, which act at the scale of the grid. The run prints the width at the
-# start and just before the incident shock arrives,
+# filter, which act at the scale of the grid. The width at the start and just
+# before the incident shock arrives is 6.8 and 6.7 mm at ``\Delta x = 0.78`` mm
+# and 7.1 and 7.3 mm at 1.56 mm, so neither grid spreads the initial blend
+# before the shock arrives.
+#
+# The growth rate of the width and the velocity of ``x_{50}``, in m/s, fitted
+# over four windows, are
+#
+# | stage | t (ms) | ``dh/dt`` at 0.78 mm | at 1.56 mm | ``x_{50}`` at 0.78 mm | at 1.56 mm |
+# |:--|:--|--:|--:|--:|--:|
+# | before reshock | 0.98–1.38 | 9.6 | 8.8 | 157.4 | 157.0 |
+# | after reshock | 1.58–1.88 | 43.7 | 36.2 | −62.9 | −60.2 |
+# | deceleration | 1.98–2.28 | 51.2 | 56.1 | −22.0 | −18.2 |
+# | late | 2.38–3.00 | 17.4 | 20.1 | 10.3 | 18.6 |
+#
+# and the width ``h`` and ``\Theta`` 50 µs before reshock, 100 and 500 µs after
+# it, and at the end of the run are
+#
+# | ``\Delta x`` | 1.43 ms | 1.58 ms | 1.98 ms | 3.00 ms |
+# |:--|:--|:--|:--|:--|
+# | 0.78 mm | 22.3 mm, 0.78 | 12.6 mm, 0.88 | 29.3 mm, 0.68 | 60.3 mm, 0.57 |
+# | 1.56 mm | 22.3 mm, 0.85 | 13.0 mm, 0.95 | 27.4 mm, 0.77 | 61.6 mm, 0.70 |
 
+#region
 for (run, layer) in zip(runs, layers)
     @printf("%3d rows: h = %.1f mm at the start, %.1f mm just before the shock arrives\n",
             run.ny, 1e3at(run, layer.h, 0.0), 1e3at(run, layer.h, t_impact - 5e-6))
 end
 
-# 6.8 and 6.7 mm at ``\Delta x = 0.78`` mm and 7.1 and 7.3 mm at 1.56 mm, so
-# neither grid spreads the initial blend before the shock arrives. It also
-# prints the growth rate of the width and the velocity of ``x_{50}`` over four
-# windows, and the width and ``\Theta`` at four times:
-
-phases = [("before reshock", (t_reshock - 500e-6, t_reshock - 100e-6)),
+phases =[("before reshock", (t_reshock - 500e-6, t_reshock - 100e-6)),
           ("after reshock", (t_reshock + 100e-6, t_reshock + 400e-6)),
           ("deceleration", (t_reshock + 500e-6, t_reshock + 800e-6)),
           ("late", (t_reshock + 900e-6, opt.tfinal))]
@@ -421,6 +459,7 @@ for (run, layer) in zip(runs, layers)
                 1e3at(run, layer.h, t), at(run, layer.theta, t))
     end
 end
+#endregion
 
 # Before reshock the two grids give the same width: 22.3 mm on both at 1.43 ms,
 # growing at 9.6 and 8.8 m/s over the 0.4 ms before reshock. The sawtooth on
@@ -437,9 +476,14 @@ end
 # the fine grid's rate, and these grids do not settle it.
 #
 # Of the four windows, the layer grows fastest between 2.0 and 2.3 ms, at 51
-# and 56 m/s, while it decelerates. The run prints the plane-averaged pressure
-# on either side of the layer during the deceleration and after it:
+# and 56 m/s, while it decelerates. At 2.13 ms, during the deceleration, the
+# plane-averaged pressure is 590 kPa 5 mm on the air side of the layer and
+# 479 kPa 5 mm on the SF6 side. The pressure falls from the light gas to the
+# heavy one, so the deceleration is in the sense that is Rayleigh–Taylor
+# unstable. At 2.68 ms the difference has reversed, 505 against 559 kPa, and
+# from 2.4 ms the layer grows at 17 to 20 m/s.
 
+#region
 for t in (t_reshock + 650e-6, t_reshock + 1.2e-3)
     run, layer = runs[1], layers[1]
     k = argmin(abs.(run.t .- t))
@@ -451,13 +495,8 @@ for t in (t_reshock + 650e-6, t_reshock + 1.2e-3)
             %.0f kPa 5 mm on the SF6 side\n", 1e3t, p_at(lo - 5e-3) / 1e3,
             p_at(hi + 5e-3) / 1e3)
 end
+#endregion
 
-# At 2.13 ms the pressure is 590 kPa 5 mm on the air side of the layer and
-# 479 kPa 5 mm on the SF6 side. The pressure falls from the light gas to the
-# heavy one, so the deceleration is in the sense that is Rayleigh–Taylor
-# unstable. At 2.68 ms the difference has reversed, 505 against 559 kPa, and
-# from 2.4 ms the layer grows at 17 to 20 m/s.
-#
 # The molecular mixing fraction is not settled. The first shock lowers
 # ``\Theta`` as the perturbations grow, to 0.65 by 0.4 ms at
 # ``\Delta x = 0.78`` mm and more slowly to about 0.85 at 1.56 mm; at 0.78 mm
@@ -471,6 +510,7 @@ end
 # The SF6 mole fraction on both grids at seven times, in a window 100 mm long
 # centered on ``x_{50}``; gray is beyond the end wall.
 
+#region
 fig = Figure()
 for (row, run) in enumerate(runs), (col, frame) in enumerate(run.frames)
     center = at(run, trs[row].interface, frame.t)
@@ -491,7 +531,7 @@ Colorbar(fig[1:length(runs), end + 1], colormap = :viridis, limits = (0, 1),
 colgap!(fig.layout, 6)
 resize_to_layout!(fig)
 save(joinpath(outdir, "mole_fraction.png"), fig) #src
-nothing #hide
+#endregion
 
 # ![SF6 mole fraction](../assets/examples/shock_tube/mole_fraction.png)
 #

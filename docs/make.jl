@@ -72,8 +72,12 @@ const TUTORIALS = [
 # page: a full run writes its figures and a `provenance.toml` into
 # `src/assets/examples/<name>/`, and this build converts the script to
 # markdown without executing it (plain `julia` fences, no `@example`), with a
-# note built from the provenance file after the title. The weekly validation
-# workflow runs every listed example with `smoke=true`.
+# note built from the provenance file at the end. A script that marks regions
+# (see `example_pages.jl`) gives a second page, `<name>_script.md`, with the
+# whole script; it is kept out of the navigation and linked from the example's
+# page. The weekly validation workflow runs every listed example with
+# `smoke=true`.
+include("example_pages.jl")
 const EXAMPLE_SCRIPTS = joinpath(@__DIR__, "..", "examples")
 const EXAMPLE_DIR = joinpath(@__DIR__, "src", "examples")
 const EXAMPLES = [
@@ -110,21 +114,42 @@ end
 
 """
 Give a converted example its edit link and its provenance note, at the end of
-the page beside Literate's credit line, under the same rule.
+the page beside Literate's credit line, under the same rule. `page` is `:only`
+for an example without regions, `:reader` for the page that leaves them out,
+which links to the complete page beside the note, and `:complete` for the page
+of the whole script, which links back under its title.
 """
-function example_page(name)
+function example_page(name; page::Symbol = :only)
     return function (markdown)
-        any(l -> startswith(l, "# "), split(markdown, '\n')) ||
-            error("examples/$name.jl has no `# # Title` line")
+        lines = split(markdown, '\n')
+        title = findfirst(l -> startswith(l, "# "), lines)
+        title === nothing && error("examples/$name.jl has no `# # Title` line")
+        if page === :complete
+            heading = chopsuffix(lines[title][3:end], COMPLETE_TITLE)
+            insert!(lines, title + 1, "\nThis page shows the whole script of " *
+                    "[$heading]($name.md), including the code that reduces the " *
+                    "runs to the figures and the numbers quoted, which that page " *
+                    "leaves out.")
+            markdown = join(lines, '\n')
+        end
         edit = "```@meta\nEditURL = \"../../../examples/$name.jl\"\n```\n"
         credit = "\n*This page was generated using"
         note = provenance_note(name)
+        if page === :reader
+            note = "The code that reduces the runs to the figures and the numbers " *
+                   "quoted is left out of this page and shown on the page of the " *
+                   "[complete script]($(name)_script.md).\n\n" * note
+        end
         body = occursin(credit, markdown) ?
                replace(markdown, credit => "\n" * note * "\n" * credit; count = 1) :
                rstrip(markdown) * "\n\n---\n\n" * note * "\n"
         return edit * body
     end
 end
+
+"The examples that give a second page, with the whole script."
+const SPLIT_EXAMPLES = [first(splitext(name)) for name in EXAMPLES
+                        if has_regions(read(joinpath(EXAMPLE_SCRIPTS, name), String))]
 
 for dir in (TUTORIAL_DIR, EXAMPLE_DIR)
     mkpath(dir)
@@ -143,8 +168,19 @@ end
     end
     for name in EXAMPLES
         script = joinpath(EXAMPLE_SCRIPTS, name)
-        Literate.markdown(script, EXAMPLE_DIR; documenter=false,
-                          postprocess=example_page(first(splitext(name))))
+        stem = first(splitext(name))
+        if stem in SPLIT_EXAMPLES
+            Literate.markdown(script, EXAMPLE_DIR; documenter=false,
+                              preprocess=s -> example_source(s; complete=false),
+                              postprocess=example_page(stem; page=:reader))
+            Literate.markdown(script, EXAMPLE_DIR; documenter=false,
+                              name="$(stem)_script",
+                              preprocess=s -> example_source(s; complete=true),
+                              postprocess=example_page(stem; page=:complete))
+        else
+            Literate.markdown(script, EXAMPLE_DIR; documenter=false,
+                              postprocess=example_page(stem))
+        end
     end
 end
 
@@ -196,8 +232,6 @@ DocMeta.setdocmeta!(
             "Reshocked mixing layer" => "examples/shock_tube.md",
             "Taylor–Green vortex" => "examples/taylor_green.md",
             "Vortex ring and shock" => "examples/vortex_ring_shock.md",
-        ],
-        "Validation" => [
             "Jacobs air/SF6 experiments" => "examples/jacobs_air_sf6.md",
         ],
         "How-to guides" => [
@@ -241,6 +275,9 @@ DocMeta.setdocmeta!(
             ],
             "Public API index" => "reference/index.md",
         ],
+        # Last, so that the previous and next links between the listed pages
+        # do not pass through them.
+        [hide("examples/$(stem)_script.md") for stem in SPLIT_EXAMPLES]...,
     ],
 )
 
