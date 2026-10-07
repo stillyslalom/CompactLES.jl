@@ -74,8 +74,10 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            maxlevels=3, interpolation_order=0, mu=0.0,
                                            layouts="uniform,samelevel,depth2,depth3",
                                            stepping="both", idiv="default",
-                                           iflux="closure", ledger=false);
+                                           iflux="closure", ledger=false,
+                                           gradrem=false);
                                     positional=(:N, :tfinal))
+CL.GHOST_FLUX_REMAINDER[] = args.gradrem
 
 # Application comparison budgets, fixed independently of the results.
 const EVOLUTION_BUDGET = 1e-3

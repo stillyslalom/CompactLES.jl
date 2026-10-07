@@ -6075,31 +6075,69 @@ closure rows. The repaired cells lie 1–11 fine nodes into the low-density tile
 triggers four in five of them. Interpolation order 6 or 8 leaves the tallies unchanged on both
 paths. The `startup` part counts the same criterion without repairing (cells below 0.999 of the
 initial minimum density or total energy over density, summed over steps) and gives the level-1
-density error against the uniform run at the fine spacing:
+density error against the uniform run at the fine spacing. Package at the commit that adds the
+gradient-row remainder; the last two paths take its toggles (below):
 
 | diaphragm | path | 20 steps: flagged, min ρ/ρ0, L1(ρ) | t = 0.12: flagged, min ρ/ρ0, L1(ρ) |
 |---|---|---|---|
-| none (uniform, fine spacing) | — | 169, 0.640, — | 921, 0.640, — |
-| on the tile plane | ghost | 165, 0.782, 2.03e-3 | 2669, 0.770, 2.89e-3 |
-| | closure | 112, 0.904, 4.49e-4 | 2321, 0.772, 2.86e-3 |
-| | ghost, BL remainder rows | 148, 0.664, 2.91e-3 | 4037, 0.664, 7.39e-3 |
-| mid-tile | ghost | 183, 0.640, 1.85e-5 | 3034, 0.640, 1.11e-3 |
-| | closure | 184, 0.640, 2.53e-5 | 2958, 0.640, 1.58e-3 |
-| on a coarse-fine face | ghost | 129, 0.389, 8.85e-3 | 2521, 0.389, 1.28e-2 |
-| | closure | 85, 0.389, 7.80e-3 | 2474, 0.389, 1.28e-2 |
+| none (uniform, fine spacing) | — | 173, 0.671, — | 890, 0.671, — |
+| on the tile plane | ghost | 164, 0.697, 2.85e-3 | 1786, 0.697, 2.46e-3 |
+| | closure | 122, 0.934, 9.20e-4 | 1480, 0.897, 2.79e-3 |
+| | ghost, BL remainder rows | negative density, step 3 | — |
+| | ghost, gradient-row remainder | 152, 0.942, 2.61e-3 | 1664, 0.897, 2.73e-3 |
+| | the same, coarse-fine ends extrapolated | 152, 0.942, 2.61e-3 | 1661, 0.897, 2.70e-3 |
+| mid-tile | ghost | 144, 0.671, 4.96e-5 | 1956, 0.671, 8.56e-4 |
+| | closure | 151, 0.671, 8.04e-5 | 2028, 0.671, 1.65e-3 |
+| | ghost, gradient-row remainder | 144, 0.671, 4.96e-5 | 1931, 0.671, 8.82e-4 |
+| | the same, coarse-fine ends extrapolated | 144, 0.671, 4.96e-5 | 1911, 0.671, 8.62e-4 |
+| on a coarse-fine face | ghost | 168, 0.519, 9.55e-3 | 2249, 0.519, 1.01e-2 |
+| | closure | 100, 0.518, 7.95e-3 | 2059, 0.518, 9.98e-3 |
+| | ghost, remainder, coarse-fine ends extrapolated | 167, 0.518, 9.31e-3 | 2222, 0.518, 1.03e-2 |
 
 The count measures the start-up undershoot of an ideal jump, which the scheme produces without
-an interface (0.640 on the uniform grid, at step 7). A jump on a tile plane under the closure rows
+an interface (0.671 on the uniform grid, at step 8). A jump on a tile plane under the closure rows
 starts through the one-sided inviscid and remainder rows, whose dissipation damps that transient
-to 0.904; the ghost fluxes difference the inviscid flux there with interior accuracy and read
-0.782, and with the Brady–Livescu rows also on the remainder 0.664, the uniform grid's value.
-The difference is confined to the first steps: at t = 0.12 the two paths agree in minimum
-density and error, and a diaphragm placed inside a tile or on a coarse-fine face gives identical
-minima under both. At root N = 161 and t = 0.0045 the flagged counts rise 1.8-fold (ghost) and
-1.4-fold (closure) over N = 81 and the minima are unchanged. On
+to 0.934; the ghost fluxes difference the inviscid flux there with interior accuracy and read
+0.697, which they keep to t = 0.12. With the remainder through the gradient rows as well the
+transient reads 0.942, and at t = 0.12 the minimum is the closure rows' later one, 0.897 on the
+root. The Brady–Livescu rows on the remainder have failed at step 3 since `1fc1fdb`, which
+computes a tiled level's artificial coefficients over the whole level; at `c78eee8` they read
+0.664 and 7.39e-3, and the ghost path 0.770 and 2.89e-3. A diaphragm inside a tile or on a
+coarse-fine face gives the same minima under every path. Taken at `aa5757b`: at root N = 161
+and t = 0.0045 the flagged counts rise 1.8-fold (ghost) and 1.4-fold (closure) over N = 81 and
+the minima are unchanged. On
 the three regridded levels of `test/level_tests.jl` (shock and contact, subcycled, t = 0.25)
 the same count is 8706 under the ghost fluxes against 9908 under the closure rows, min ρ/ρ0
 0.637 against 0.633.
+
+**The remainder through the gradient rows.** With the artificial properties on, the remainder
+F − f of the ghost-differenced flux (their fluxes and the wall rewrite) takes the divergence
+plans' one-sided rows at an interface end, a second line solve. `GHOST_FLUX_REMAINDER` instead
+carries it in `ghost_flux` on dimensions whose interface ends are same-level, the level's
+records filling the ghost layers, and differences the whole flux through the gradient plans in
+one solve; `GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take
+a degree-5 Lagrange extrapolation of the interior remainder. Both are off by default and host
+only. On exact data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with
+`coefficients_current`), interface window, N = 48, 96, 192:
+
+| layout | plain | same-level ends | and coarse-fine ends |
+|---|---|---|---|
+| two patches, inviscid | 6.95e-5, 6.33e-6, 6.90e-7 (3.46, 3.20) | 1.75e-6, 2.91e-8, 4.62e-10 (5.91, 5.98) | the same |
+| two patches, μ = 2e-2 | (3.45, 3.20) | (5.91, 5.98) | the same |
+| two levels, inviscid | (2.76, 2.97) | the same as plain | (5.99, 5.93), 1.28e-10 at N = 192 |
+| two levels, μ = 2e-2 | (2.79, 2.97) | the same as plain | (5.96, 5.99) |
+
+On the `crossing` rows, np = 1, with both toggles: the gflux nest rows' shell, fine and root
+errors at t = 0.2 move by under 2% (base 5.57e-3 / 8.302e-2 / 2.730e-2 to 5.64e-3 / 8.300e-2 /
+2.755e-2; three levels 4.59e-3 to 4.52e-3; tile 8 fine 1.530e-2 to 1.564e-2), the two-patch
+row falls from 1.02e-2 to 8.25e-3 (shell) and 1.00e-1 to 8.60e-2 (root), the three-patch row
+from 7.95e-2 to 7.87e-2, and no row has an inadmissible step. On `test/validation.jl`'s Noh
+with a level at the axis the run holding the shock is unchanged in plateau (15.6523), mass
+drift and steps, its tile error against the uniform run 5.693e-3 to 5.658e-3; the run passing
+the shock out reads plateau 14.9422 to 14.9115, shock radius 0.2084 to 0.2086, mass drift
+−8.955e-4 to −8.551e-4 and e_min −0.0405 to −0.0376. `bench/couplingspectrum.jl` (art off) and
+`bench/interfaceconservation.jl iflux=ghost`'s mixing layer, whose remainder is zero, are
+unchanged to every printed digit.
 
 **Conservation.** The layer on (96, 24, 1) to t = 8, inviscid: the same-level layout's drift
 is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the closure rows),

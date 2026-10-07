@@ -235,10 +235,14 @@ surface; H8 for a magnetized target.
   closure rows, with a warning: under `:ghost` the inviscid flux closes the
   interface with the gradient's rows (composite weight h at the shared
   node) and the rest with the divergence's one-sided rows (twice the end
-  weight), so no one face form covers both. The remaining route writes the
+  weight), so no one face form covers both. Two routes remain: write the
   difference as a node term in each cell's limit, as the radial lines'
-  geometric part is, measured before it replaces `:closure`, which lowers
-  the interface's order. The parent's shell falls back to the
+  geometric part is, or difference the rest through the gradient rows too
+  (`GHOST_FLUX_REMAINDER`, A17 item 2), which leaves one face form with
+  weight h up to an interface end. The second keeps an interface's order
+  and moved no shock measure by more than 2%; under it the limiter needs a register
+  for the gradient-plan solves and open-end anchors. Either is measured
+  before it replaces `:closure`, which lowers the interface's order. The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the
   fallback is admissible, on host and device storage, limiter on or off
@@ -520,7 +524,12 @@ promotion.
      what a uniform patch's do per point. What remains is the ghost-flux
      divergence's second line solve per component on each interface
      dimension, whose one-sided rows carry their own left-hand side, so
-     removing it is a change of numerics.
+     removing it is a change of numerics. Differencing the remainder through
+     the gradient rows (`GHOST_FLUX_REMAINDER`, opt-in, host only) removes
+     it, raises an interface's order on exact data from 3 to 6 and moves
+     every shock measure by under 2%
+     ([measurements](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface));
+     making it the default needs its device kernels and the full gate.
   3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
      blob problems; revisit `tag_buffer`, the tag threshold and the tile
      edge against the error they buy.

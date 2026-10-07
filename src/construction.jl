@@ -1263,8 +1263,9 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # with such an end takes a ghost-flux array.
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
                                similar(empty3, T, 0, 0, 0, 0),
-                               ghost_viscous ? _interface_dims(active_g, boundary) :
-                                               (false, false, false))
+                               ghost_viscous || GHOST_FLUX_REMAINDER[] ?
+                                   _interface_dims(active_g, boundary) :
+                                   (false, false, false))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
                            fbcs, plans, empty3,
                            _patch_arrays(g, n_species, n_sensed), ws,
@@ -1591,7 +1592,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                     ntiles * stride, n_cons),
                            ntiles, stride),
         StackedArray(empty4, ntiles, stride),
-        ghost_viscous ? _interface_dims(active_g, boundary) : (false, false, false))
+        ghost_viscous || GHOST_FLUX_REMAINDER[] ? _interface_dims(active_g, boundary) :
+                                                  (false, false, false))
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (the batched phases read
     # only their kind: the members share the boundary faces, every other
@@ -1780,7 +1782,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               ws, _covered_mask(dcp), empty3, _empty_level_scratch(empty3),
               _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
                                  similar(empty3, T, 0, 0, 0, 0),
-                                 ntuple(d -> _ghost_viscous(interface_flux, transport) &&
+                                 ntuple(d -> (_ghost_viscous(interface_flux, transport) ||
+                                              _ghost_remainder(interface_flux, art)) &&
                                              dcp.active[d] &&
                                              (pbcs[d][1] isa InterfaceBC ||
                                               pbcs[d][2] isa InterfaceBC), 3)))

@@ -20,6 +20,23 @@ _ghost_viscous(interface_flux::Symbol, transport) =
     interface_flux === :ghost && !_zero_molecular_diffusion(transport)
 _ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
 
+# Test/bench toggle: under `interface_flux = :ghost` with the artificial
+# properties on, a dimension whose interface ends are all same-level carries
+# the remainder F − f in `ghost_flux` and differences the whole flux through
+# the gradient plans in one solve. Read at construction (allocation) and at
+# every right-hand side.
+const GHOST_FLUX_REMAINDER = Ref(false)
+
+# With `GHOST_FLUX_REMAINDER` on, also take dimensions with a coarse-fine end,
+# the remainder's ghost layers there extrapolated from the interior by a
+# polynomial of degree `GHOST_REMAINDER_DEGREE[]` along the line.
+const GHOST_REMAINDER_EXTRAPOLATE = Ref(false)
+const GHOST_REMAINDER_DEGREE = Ref(5)
+
+_ghost_remainder(interface_flux::Symbol, art) =
+    GHOST_FLUX_REMAINDER[] && interface_flux === :ghost && art.enabled
+_ghost_remainder(solver) = _ghost_remainder(solver.interface_flux, solver.art)
+
 # --- Operator routing through folds ----------------------------------------
 
 # The plans tuple is heterogeneous when a collapsed or folded dimension puts
@@ -1099,7 +1116,7 @@ _ghost_flux_dims(solver::SolverLike) =
 # every interface dimension `d` into the patch's `ghost_flux[d]`, with its
 # rank halos along `d` exchanged, from the gradients this evaluation
 # computed. Collective over the patch's communicator.
-function _molecular_ghost_flux!(solver::SolverLike)
+function _molecular_ghost_flux!(solver::SolverLike, Q)
     decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
@@ -1108,16 +1125,110 @@ function _molecular_ghost_flux!(solver::SolverLike)
     dims = _ghost_flux_dims(solver)
     G1, G2, G3 = solver.ghost_flux
     route = dims[1] ? G1 : dims[2] ? G2 : G3
-    pointwise!(_molecular_flux_point!, route, n1f, n2f, n3f,
-               G1, G2, G3, dims, solver.eos, solver.rho, solver.u, solver.v,
-               solver.w, solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u,
-               solver.grad_T_ion, ft.grad_Y, solver.transport, eq.n_species,
-               m1, m2, m3, eq.i_energy, eq.n_cons, decomp.n_local,
-               decomp.n_halo_d, n3f)
+    _ghost_viscous(solver) &&
+        pointwise!(_molecular_flux_point!, route, n1f, n2f, n3f,
+                   G1, G2, G3, dims, solver.eos, solver.rho, solver.u, solver.v,
+                   solver.w, solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u,
+                   solver.grad_T_ion, ft.grad_Y, solver.transport, eq.n_species,
+                   m1, m2, m3, eq.i_energy, eq.n_cons, decomp.n_local,
+                   decomp.n_halo_d, n3f)
     for d in 1:3
-        dims[d] && exchange_dim_batch!(ComponentViews(solver.ghost_flux[d]), decomp, d)
+        _remainder_ghosted(solver, d) || continue
+        G = solver.ghost_flux[d]
+        for c in 1:eq.n_cons
+            pointwise!(_remainder_flux_point!, G, n1f, n2f, n3f,
+                       G, solver.flux[d, c], Q, solver.rho, solver.u, solver.v,
+                       solver.w, solver.p, ft.Y, c, d, eq.n_species, m1, m2, m3,
+                       eq.i_energy, decomp.n_local, decomp.n_halo_d, n3f)
+        end
+        _extrapolate_coarse_fine!(solver, G, d)
+    end
+    for d in 1:3
+        dims[d] && size(solver.ghost_flux[d], 4) > 0 &&
+            exchange_dim_batch!(ComponentViews(solver.ghost_flux[d]), decomp, d)
     end
     return solver
+end
+
+# Whether dimension `d` takes its whole flux through the gradient plans, the
+# remainder F − f carried in `ghost_flux` (`GHOST_FLUX_REMAINDER`): an
+# interface dimension whose interface ends are all same-level.
+function _remainder_ghosted(solver::SolverLike, d::Int)
+    _ghost_remainder(solver) || return false
+    solver.decomp.active[d] && _interface_dim(solver, d) || return false
+    size(solver.ghost_flux[d], 4) > 0 || return false
+    GHOST_REMAINDER_EXTRAPOLATE[] && return true
+    bc_lo, bc_hi = solver.bcs[d]
+    return !parent_fed(bc_lo) && !parent_fed(bc_hi)
+end
+
+# The remainder's ghost layers at each coarse-fine face of `d` this rank holds,
+# by polynomial extrapolation of the interior values along the line.
+function _extrapolate_coarse_fine!(solver::SolverLike, G, d::Int)
+    decomp = solver.decomp
+    pad = decomp.n_halo_d
+    nl = decomp.n_local
+    deg = GHOST_REMAINDER_DEGREE[]
+    nl[d] > deg || error("extrapolation of degree $deg needs $(deg + 1) nodes")
+    o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+    for side in 1:2
+        parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) || continue
+        base = side == 1 ? 0 : pad[d] + nl[d]
+        edge = side == 1 ? pad[d] + 1 : pad[d] + nl[d]
+        dir = side == 1 ? 1 : -1
+        pointwise!(_extrapolate_ghost_point!, G, pad[d], nl[o1], nl[o2],
+                   G, size(G, 4), d, base, edge, dir, pad, deg)
+    end
+    return G
+end
+
+# Lagrange extrapolation of every component to a ghost node `m` spacings
+# beyond the edge node, from the edge node and the `degree` nodes inward.
+@inline function _extrapolate_ghost_point!(G, n_cons, d, base, edge, dir, pad,
+                                           degree, a, b, c3)
+    T = eltype(G)
+    @inbounds begin
+        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+        idx = ntuple(e -> e == d ? base + a : e == o1 ? pad[e] + b : pad[e] + c3, 3)
+        m = abs(idx[d] - edge)
+        for c in 1:n_cons
+            s = zero(T)
+            for j in 0:degree
+                w = one(T)
+                for k in 0:degree
+                    k == j && continue
+                    w *= T(-m - k) / T(j - k)
+                end
+                src = ntuple(e -> e == d ? edge + dir * j : idx[e], 3)
+                s += w * G[CartesianIndex(src), c]
+            end
+            G[CartesianIndex(idx), c] = s
+        end
+    end
+    return nothing
+end
+
+# The remainder F − f of component `c` along `d` into `G[I, c]` at points
+# interior along every active dimension, zero elsewhere, as
+# `_molecular_flux_point!` lays out the molecular flux.
+@inline function _remainder_flux_point!(G, F, Q, rho, u, v, w, p, Y, c, d,
+                                        n_species, m1, m2, m3, i_energy,
+                                        nl, pad, stride, i, j, k)
+    T = eltype(rho)
+    @inbounds begin
+        I = CartesianIndex(i, j, k)
+        kl = (k - 1) % stride + 1
+        inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
+                 pad[3] < kl <= pad[3] + nl[3]
+        if !inside
+            G[I, c] = zero(T)
+            return nothing
+        end
+        f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                    m1, m2, m3, i_energy, false, I)
+        G[I, c] = F[I] - f
+    end
+    return nothing
 end
 
 # dQ[:, c] -= D_div(F - P) + D_ext(P) along `d`, P the ghost-differenced
@@ -1136,8 +1247,8 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     m1, m2, m3 = eq.i_mom
     n1f, n2f, n3f = padded_extent(decomp)
     viscous = _ghost_viscous(solver)
-    viscous && c == 1 && d == findfirst(_ghost_flux_dims(solver)) &&
-        _molecular_ghost_flux!(solver)
+    (viscous || _ghost_remainder(solver)) && c == 1 &&
+        d == findfirst(_ghost_flux_dims(solver)) && _molecular_ghost_flux!(solver, Q)
     G = solver.ghost_flux[d]
     Y = solver.field_tuples.Y
     Ad, iJ = _ghost_geometry(solver, d)
@@ -1150,6 +1261,8 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     # a line solve every rank of the patch takes.
     less_p = _pressure_gradient(solver, d, c)
     less_p && _ext_subtract_along!(dQ, c, solver.p, solver, d, solver.inv_h[d], 1)
+    # The whole flux waits for phase two (`GHOST_FLUX_REMAINDER`).
+    _remainder_ghosted(solver, d) && return dQ
     if viscous
         _flux_remainder(solver, d) || return dQ
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
@@ -1371,6 +1484,8 @@ function _coarse_fine_ghost_fluxes!(solver::SolverLike, lt, scratch, Q)
     for d in 1:3
         G = solver.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
+        # The remainder's extrapolated ghosts carry the molecular part too.
+        _remainder_ghosted(solver, d) && continue
         gring = _device_path(G) ? scratch.gring : lt.gradients.gring
         for side in 1:2
             parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) ||
@@ -1398,9 +1513,11 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
     n1f, n2f, n3f = padded_extent(decomp)
     ft = solver.field_tuples
     dims = _ghost_flux_dims(solver)
+    viscous = _ghost_viscous(solver)
     for d in 1:3
         G = solver.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
+        viscous || _remainder_ghosted(solver, d) || continue
         Ad, iJ = _ghost_geometry(solver, d)
         for c in 1:n_cons
             # The pressure gradient was subtracted in phase one.

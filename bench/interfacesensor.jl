@@ -652,7 +652,7 @@ function crossing_rows()
             tile=0, scheme=:C6, closures=:neutral3, filter_cfl=0.35, art=true,
             ghosts=true, patch_grid=(1, 1, 1), species=1, idiv=nothing,
             direction=1, interface_rhs=:extended, iflux=:closure,
-            detector=:delta4, filt=:compact)
+            detector=:delta4, filt=:compact, gradrem=false, extrap=false)
     rows = Any[base]
     HAS_GHOST_TOGGLE &&
         push!(rows, merge(base, (; label="sensor taps clamped", ghosts=false)))
@@ -701,6 +701,13 @@ function crossing_rows()
                             (" three patches", (; mode=:patches,
                                                 patch_grid=(3, 1, 1))))
         push!(rows, merge(base, change, (; label="gflux$label", iflux=:ghost)))
+        get(change, :mode, :levels) === :patches && get(change, :art, true) &&
+            push!(rows, merge(base, change, (; label="gflux$label grad-rem",
+                                             iflux=:ghost, gradrem=true)))
+        get(change, :mode, :levels) !== :patches && get(change, :art, true) &&
+            push!(rows, merge(base, change, (; label="gflux$label rem-extrap",
+                                             iflux=:ghost, gradrem=true,
+                                             extrap=true)))
     end
     push!(rows, merge(base, (; label="reversed", direction=-1)))
     # The pentadiagonal filter and the d8 detector at the coarse-fine faces.
@@ -777,8 +784,15 @@ function run_rows(rows, N, ts, nmax, refs)
             RANK == 0 && printfmt("  %-22s SKIPPED: %s\n", row.label, why)
             continue
         end
-        r = with_ghosts(() -> crossing_row(row, N, ts, nmax, refs[refkey(row)]),
+        CL.GHOST_FLUX_REMAINDER[] = row.gradrem
+        CL.GHOST_REMAINDER_EXTRAPOLATE[] = row.extrap
+        r = try
+            with_ghosts(() -> crossing_row(row, N, ts, nmax, refs[refkey(row)]),
                         row.ghosts)
+        finally
+            CL.GHOST_FLUX_REMAINDER[] = false
+            CL.GHOST_REMAINDER_EXTRAPOLATE[] = false
+        end
         print_crossing(row, r, ts)
     end
 end
@@ -1270,8 +1284,18 @@ function startup_part(N, steps, tfinal)
         say("--- $lname, ", nm == steps ? "$steps steps" : "t = $tf", " ---")
         paths = Any[("ghost", (;)), ("closure", (interface_flux=:closure,))]
         with_bl && push!(paths, ("ghost, BL remainder rows", (interface_divergence=BL,)))
+        lkw.tile > 0 && push!(paths, ("ghost, gradient-row remainder", (;)))
+        push!(paths, ("ghost, remainder, cf extrapolated", (;)))
         for (pname, pkw) in paths
-            r = attempt(() -> startup_run(N, x0, tf, nm; lkw..., pkw...))
+            CL.GHOST_FLUX_REMAINDER[] = startswith(pname, "ghost, gr") ||
+                                        startswith(pname, "ghost, remainder")
+            CL.GHOST_REMAINDER_EXTRAPOLATE[] = endswith(pname, "extrapolated")
+            r = try
+                attempt(() -> startup_run(N, x0, tf, nm; lkw..., pkw...))
+            finally
+                CL.GHOST_FLUX_REMAINDER[] = false
+                CL.GHOST_REMAINDER_EXTRAPOLATE[] = false
+            end
             failed(r) && (say(@sprintf("  %-26s %s", pname, r)); continue)
             s, states, m = r
             u, ustates, um = startup_run(Nf, x0, s.t, 100000)
