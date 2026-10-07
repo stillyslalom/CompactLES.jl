@@ -1,13 +1,13 @@
 command = "julia --project=docs -t 8 examples/shock_tube.jl"
-commit = "d8c451ac97b1599f14fbcf8441e861366758d4dd"
-date = "2026-10-01"
+commit = "671fb0f6b5b7379673c9b534454d6ff684d4ea2b"
+date = "2026-10-06"
 dirty = false
-grid = "640 × 128 and 320 × 64 nodes"
+grid = "Δx = 0.78 mm and 1.56 mm"
 hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
 julia = "1.11.4"
 ranks = 1
 threads = 8
-wall_seconds = 802.0
+wall_seconds = 387.6
 
 [settings]
 Mach = 1.5

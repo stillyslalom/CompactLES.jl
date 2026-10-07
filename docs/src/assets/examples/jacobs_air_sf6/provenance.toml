@@ -1,0 +1,18 @@
+command = "mpiexec -n 8 julia --project=docs -t 1 examples/jacobs_air_sf6.jl"
+commit = "671fb0f6b5b7379673c9b534454d6ff684d4ea2b"
+date = "2026-10-06"
+dirty = false
+grid = "spacings Δx = λ/72 and λ/144"
+hardware = "12th Gen Intel(R) Core(TM) i9-12900K"
+julia = "1.11.4"
+ranks = 8
+threads = 1
+wall_seconds = 53548.2
+
+[settings]
+cache = ""
+cmu = true
+grid = "CJ1.21,JK59mm"
+ny = 36
+smoke = false
+sweep = "JK59mm,JK36mm"

@@ -120,6 +120,15 @@ Nonlinear shock cases are not bit-reproducible under every harmless arithmetic
 reassociation. Compare their reported errors to roughly four significant
 figures; movement in an earlier digit warrants investigation.
 
+## Experimental validation
+
+The example [Jacobs air/SF6 experiments](@ref) compares single-mode
+Richtmyer–Meshkov growth with the shock-tube measurements of Collins and
+Jacobs (2002) and Jacobs and Krivets (2005), digitized from their figures. The
+measured points are external data; the comparison is limited to the time
+before the first reflected wave reaches the interface, which a calculation of
+the whole tube determines.
+
 ## Artificial-property calibration
 
 The defaults were set by sweeps over Cook coefficients, CFL, and

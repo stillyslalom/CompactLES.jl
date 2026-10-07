@@ -139,9 +139,9 @@ c0 = sqrt(gamma * R_gas * T0)
 # negative pressure, and `run!` rejects such a state by default.
 # [`StepControl`](@ref) with `validity = :permissive` accepts it and warns
 # instead; [`state_report`](@ref), printed after the run, counts the points
-# outside the model's domain. The numerics are otherwise the defaults, on 256
-# radial nodes. A callback records the density and pressure profiles every
-# thousand years.
+# outside the model's domain. The numerics are otherwise the defaults, at a
+# radial spacing ``\Delta r = 0.078`` pc. A callback records the density and
+# pressure profiles every thousand years.
 
 using Logging                                  #hide
 Logging.disable_logging(Logging.Warn)          #hide
@@ -189,12 +189,13 @@ fig
 # falls steeply. The captured shock spreads over a few nodes, across which the
 # density has already begun to fall, so the peak lies below 4, and lower at
 # early times, when those nodes are a larger fraction of the radius. At 20 kyr
-# the peak is 3.7 on 256 nodes, 3.8 on 512 and 3.9 on 1024.
+# the peak is 3.7 at ``\Delta r = 0.078`` pc, 3.8 at 0.039 pc and 3.9 at
+# 0.020 pc.
 #
 # At 2 kyr the pressure near ``r/R = 0.9`` departs from the later profiles by
 # up to 5% of ``p_s``. The departure halves when the width of the deposit is
-# halved and does not shrink on 512 nodes: it is left by the finite width of
-# the deposit, and it has fallen below 2% by 5 kyr.
+# halved and does not shrink at ``\Delta r = 0.039`` pc: it is left by the
+# finite width of the deposit, and it has fallen below 2% by 5 kyr.
 
 # ## Radius
 #
@@ -239,16 +240,16 @@ for t in (5, 10, 20)
             (sedov_radius(t) - R) / dr, rho0 * (R / xi0)^5 / t^2 * energy_unit / 1e51)
 end
 
-# The radius grows as ``t^{2/5}``, and at 20 kyr the energy inferred from it
-# is 1.8% below the energy deposited. The measured radius falls short of the
+# The radius grows as ``t^{2/5}``, and at 20 kyr the energy inferred from it is
+# 1.8% below the energy deposited. The measured radius falls short of the
 # Sedov–Taylor radius by a nearly constant distance, under one node spacing:
 # the density peak of the captured shock lies that far behind the front. The
 # shortfall is a smaller fraction of a larger radius, so the inferred energy
 # approaches the deposited energy as the remnant grows, and the fitted exponent
 # lies slightly above 2/5. The shortfall falls as the grid is refined: at
-# 20 kyr the inferred energy is 4% low on 128 nodes, 0.7% low on 512 and 0.3%
-# low on 1024, where the exponent is 0.4006. The total energy on the grid
-# changes by less than 0.1% over the run.
+# 20 kyr the inferred energy is 4% low at ``\Delta r = 0.16`` pc, 0.7% low at
+# 0.039 pc and 0.3% low at 0.020 pc, where the exponent is 0.4006. The total
+# energy on the grid changes by less than 0.1% over the run.
 
 # ## What this checks
 #

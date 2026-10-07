@@ -98,7 +98,7 @@ nothing #hide
 
 # ## Tiles
 #
-# The root grid has 96 nodes in each direction, 10 mm apart, so the edge of a
+# The root spacing is ``\Delta x = 10`` mm in each direction, so the edge of a
 # bubble, about ``2w`` wide, spans two root spacings. On the refined level the
 # spacing is 3.3 mm and ``w`` is three spacings.
 #

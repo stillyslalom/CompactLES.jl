@@ -25,14 +25,16 @@
 # same factor of 40. The consequences are measured below.
 #
 # The script takes eight settings: `nr` and `nz`, the nodes across the radius
-# of the tube and along it in the main run, which a second run halves;
-# `Mach`, the Mach number of the shock; `jet_speed`, the peak speed of the
-# jet in m/s; `stroke`, the length of the ejected slug in injector diameters;
-# `t_shock`, the time at which the shock is fired, 0 for the time the run
-# computes; `t_after`, the time the run continues after the shock reaches the
-# interface; and `smoke`. With `smoke=true` the runs have 16 × 56 and
-# 10 × 36 nodes, which checks that the page still runs; the figures come from
-# the full run, launched on eight MPI ranks of one thread each.
+# ``R`` of the tube and along its length ``H``, which set the spacings
+# ``\Delta r = R/(n_r - \tfrac12)`` and ``\Delta z = H/(n_z - 1)`` of the main
+# run and of a second run at twice those spacings; `Mach`, the Mach number of
+# the shock; `jet_speed`, the peak speed of the jet in m/s; `stroke`, the
+# length of the ejected slug in injector diameters; `t_shock`, the time at
+# which the shock is fired, 0 for the time the run computes; `t_after`, the
+# time the run continues after the shock reaches the interface; and `smoke`.
+# With `smoke=true` the runs have 16 × 56 and 10 × 36 nodes, which checks that
+# the page still runs; the figures come from the full run, launched on eight
+# MPI ranks of one thread each.
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
@@ -212,9 +214,9 @@ nothing #hide
 
 # ## Run
 #
-# The main run has 112 nodes across the radius and 384 along the tube, a
-# spacing of 0.65 mm and 20 cells across the injector; the second run has 56
-# and 192. The numerics are the defaults. Every 50 µs each run records the
+# The main run has ``\Delta r = 0.64`` mm and ``\Delta z = 0.65`` mm, 20 cells
+# across the injector; the second run has twice those spacings, 10 cells across
+# the injector. The numerics are the defaults. Every 50 µs each run records the
 # azimuthal vorticity ``\omega_\theta`` over the whole plane and the mass of
 # SF6. From the moment the shock is fired, every fourth step, it records the
 # pressure and the SF6 mole fraction on the tube wall and on the axis. At six
@@ -230,7 +232,10 @@ function weights(x)
     return w
 end
 
+run_key(nr, nz) = @sprintf("nr%d_nz%d_M%g_jet%g_stroke%g_ts%g_ta%g", nr, nz, opt.Mach, #src
+                           opt.jet_speed, opt.stroke, opt.t_shock, opt.t_after) #src
 function simulate(nr, nz)
+    cached("vortex_ring_shock", run_key(nr, nz); smoke = opt.smoke) do #src
     solver, Q = setup(problem, Numerics(n_global = (nr, 1, nz)))
     root = MPI.Comm_rank(solver.comm) == 0
     ring = (t = Float64[], omega = Matrix{Float64}[], sf6 = Float64[])
@@ -279,6 +284,7 @@ function simulate(nr, nz)
                     %d steps in all, %.0f s\n", nr, nz, 1e3H / (nz - 1), 1e3t_open, steps,
                     solver.step, wall)
     return (; nr, nz, h = H / (nz - 1), t_open, ring, coords = coords[], frames, lines)
+    end #src
 end
 
 runs = mpi_main() do
@@ -392,7 +398,8 @@ model = @. H - ring_speed_ratio * U * (times - ring_delay * t_pulse)
 lines!(ax1, 1e3times, 1e3model, color = :black, linestyle = :dash,
        label = "assumed in firing the shock")
 for (n, (run, tr)) in enumerate(zip(runs, tracks))
-    lines!(ax1, 1e3tr.t, 1e3tr.zr, color = colors[n], label = "$(run.nr) × $(run.nz)")
+    lines!(ax1, 1e3tr.t, 1e3tr.zr, color = colors[n],
+           label = @sprintf("Δz = %.2f mm", 1e3run.h))
 end
 hlines!(ax1, [1e3z_interface], color = :gray, label = "interface")
 vlines!(ax1, [1e3t_impact], color = :gray, linestyle = :dot, label = "shock arrives")
@@ -401,9 +408,9 @@ lines!(ax2, 1e3times, slug.(times), color = :black, linestyle = :dash,
        label = "slug model Γ0")
 for (n, (run, tr)) in enumerate(zip(runs, tracks))
     lines!(ax2, 1e3tr.t, tr.Gamma, color = colors[n], linestyle = :dot,
-           label = "Γ, $(run.nr) × $(run.nz)")
+           label = @sprintf("Γ, Δz = %.2f mm", 1e3run.h))
     lines!(ax2, 1e3tr.t, tr.Gamma_ring, color = colors[n],
-           label = "Γ_r, $(run.nr) × $(run.nz)")
+           label = @sprintf("Γ_r, Δz = %.2f mm", 1e3run.h))
 end
 Legend(fig[1, 2], ax1, framevisible = false)
 Legend(fig[2, 2], ax2, framevisible = false)
@@ -412,15 +419,15 @@ nothing #hide
 
 # ![Ring height and circulation](../assets/examples/vortex_ring_shock/ring.png)
 #
-# On 112 × 384 nodes the center of the ring moves at 0.378 of the peak jet
-# speed and its extrapolated track leaves the injector plane at
+# At ``\Delta z = 0.65`` mm the center of the ring moves at 0.378 of the peak
+# jet speed and its extrapolated track leaves the injector plane at
 # ``0.39\,t_p``, the values the firing time assumed, and the center is 3.7 mm
-# above the interface when the shock arrives. On 56 × 192 nodes the ring
+# above the interface when the shock arrives. At ``\Delta z = 1.3`` mm the ring
 # moves at 0.354 of the jet speed and is 12 mm above the interface when the
-# shock arrives: its speed depends on the resolution. Kelvin's formula with
-# the measured circulation, radius and core gives the measured speed on both
-# grids, to 0.1 m/s on the finer and 0.8 m/s on the coarser, although the core
-# is not thin: ``a/R_r`` is 0.5 on the finer grid and 0.75 on the coarser.
+# shock arrives: its speed depends on the resolution. Kelvin's formula with the
+# measured circulation, radius and core gives the measured speed on both grids,
+# to 0.1 m/s on the finer and 0.8 m/s on the coarser, although the core is not
+# thin: ``a/R_r`` is 0.5 on the finer grid and 0.75 on the coarser.
 #
 # At the end of the pulse the circulation in the plane is 1.00 ``\Gamma_0``
 # on the finer grid and 1.04 ``\Gamma_0`` on the coarser. The ring's own
@@ -538,8 +545,8 @@ nothing #hide
 # velocity within 1% on the finer grid, except the shock reflected from the
 # end wall and the interface after reshock, which differ by 1.7% and 1.6%;
 # the two grids agree with each other within 1%. Over the 200 µs window the
-# interface after reshock moves at 42.7 m/s against 43.4 m/s. It then slows and, near 8.2 ms, turns
-# back toward the end wall.
+# interface after reshock moves at 42.7 m/s against 43.4 m/s. It then slows
+# and, near 8.2 ms, turns back toward the end wall.
 #
 # On the axis the ring has pressed the interface 4.6 mm into the SF6 by the
 # time the shock arrives, and the interface there then runs ahead of the
@@ -644,10 +651,10 @@ end
 # - Near the tube wall the incident, transmitted and reflected shocks and
 #   the interface move at the velocities of the one-dimensional Riemann
 #   solutions to within 1.7% on both grids, through reshock.
-# - On 112 × 384 nodes the ring moves at 0.378 of the peak jet speed and its
-#   track starts at ``0.39\,t_p``, the values used to time the shock, so the
-#   ring is 3.7 mm above the interface when the shock arrives. On 56 × 192
-#   nodes the ring is 6% slower and 12 mm higher.
+# - At ``\Delta z = 0.65`` mm the ring moves at 0.378 of the peak jet speed and
+#   its track starts at ``0.39\,t_p``, the values used to time the shock, so
+#   the ring is 3.7 mm above the interface when the shock arrives. At
+#   ``\Delta z = 1.3`` mm the ring is 6% slower and 12 mm higher.
 # - Kelvin's formula, with the circulation, radius and core size measured in
 #   the calculation, gives the ring's speed within 4% on both grids.
 # - The circulation of the plane at the end of the pulse is that of the slug
@@ -657,6 +664,6 @@ end
 #   face to the characteristic inflow disturbs the post-shock pressure by at
 #   most 0.4% of the jump.
 
-grid = join(("$(r.nr) × $(r.nz)" for r in runs), " and ") * " nodes" #src
+grid = join((@sprintf("Δz = %.2f mm", 1e3r.h) for r in runs), " and ") #src
 command = "mpiexec -n 8 julia --project=docs -t 1 examples/vortex_ring_shock.jl" #src
 write_provenance(outdir; command, settings = opt, wall = time() - T_START, grid) #src

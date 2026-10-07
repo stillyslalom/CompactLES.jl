@@ -15,12 +15,12 @@
 # reached the cylinder. Haas and Sturtevant plotted the positions of the shocks
 # and interfaces against time and took velocities from straight lines fitted
 # to them, with an estimated error of 10%. Quirk and Karni (1994) calculated
-# the same case with an adaptive Euler code on a grid equivalent to 900 cells
-# across the cylinder and compared six of these velocities with the
-# measurements. This page calculates the helium cylinder in two dimensions and
-# compares seven velocities with the measured ones, with those of Quirk and
-# Karni, and with the plane-wave values of one-dimensional gas dynamics where
-# those apply.
+# the same case with an adaptive Euler code at a finest spacing of
+# ``D/\Delta x = 900``, with ``D`` the diameter of the cylinder, and compared
+# six of these velocities with the measurements. This page calculates the
+# helium cylinder in two dimensions and compares seven velocities with the
+# measured ones, with those of Quirk and Karni, and with the plane-wave values
+# of one-dimensional gas dynamics where those apply.
 #
 # The measured and calculated velocities quoted here are from table 2 of Haas
 # and Sturtevant (J. Fluid Mech. 181, 41–76) and table 3 of Quirk and Karni
@@ -37,11 +37,13 @@ CairoMakie.activate!(type = "png")
 
 include(joinpath(@__DIR__, "common.jl")) #src
 
-# The script takes three settings: `ny`, the rows of nodes across the half
-# test section in the main run, which two further runs halve and quarter;
-# `tend`, the time the runs end after the shock reaches the cylinder; and
-# `smoke`. With `smoke=true` the runs have 16, 12 and 10 rows, which checks
-# that the page still runs; the figures come from the full run.
+# The script takes three settings: `ny`, the nodes across the half test
+# section, which sets the spacing ``\Delta x = H/n_y`` of the main run, with
+# ``H`` the height of the half section, and of two further runs at twice and
+# four times that spacing; `tend`, the time the runs end after the shock
+# reaches the cylinder; and `smoke`. With `smoke=true` the runs have 16, 12 and
+# 10 rows, which checks that the page still runs; the figures come from the
+# full run.
 
 opt = CompactLES.script_args(ARGS, (ny = 100, tend = 1.0e-3, smoke = false))
 grids = opt.smoke ? (16, 12, 10) : (opt.ny, opt.ny ÷ 2, opt.ny ÷ 4)
@@ -143,20 +145,21 @@ nothing #hide
 
 # ## Run
 #
-# The main run has 100 rows of nodes across the half test section, a spacing
-# of 0.445 mm and 112 cells across the cylinder, and the numerics are the
-# defaults. Two more runs have 50 and 25 rows. Every fourth step, each run
-# records the helium mole fraction and the pressure on the row of nodes next to
-# the axis, the pressure on the row next to the wall, and the extent of the
-# helium along the tube: the first and last columns in which its mole
-# fraction exceeds one half in any row. At the times of Haas and Sturtevant's
-# photographs it also keeps the magnitude of the density gradient, the
-# quantity a schlieren image shows.
+# The main run has a spacing of 0.445 mm, or ``D/\Delta x = 112`` across the
+# cylinder, and the numerics are the defaults. Two more runs have
+# ``D/\Delta x = 56`` and 28. Every fourth step, each run records the helium
+# mole fraction and the pressure on the row of nodes next to the axis, the
+# pressure on the row next to the wall, and the extent of the helium along the
+# tube: the first and last columns in which its mole fraction exceeds one half
+# in any row. At the times of Haas and Sturtevant's photographs it also keeps
+# the magnitude of the density gradient, the quantity a schlieren image shows.
 
 photographs = [32, 52, 62, 72, 82, 102, 245, 427, 674, 983] .* 1e-6
 photographs = filter(<=(opt.tend), photographs)
 
+run_key(ny) = @sprintf("ny%d_tend%g", ny, opt.tend) #src
 function simulate(ny)
+    cached("shock_bubble", run_key(ny); smoke = opt.smoke) do #src
     nx = round(Int, Lx / (H / ny)) + 1
     solver, Q = setup(problem, Numerics(n_global = (nx, ny, 1)))
     t = Float64[]
@@ -184,18 +187,20 @@ function simulate(ny)
     @printf("%d × %d nodes, h = %.3f mm: %d steps in %.0f s\n", nx, ny, 1e3 * H / ny,
             solver.step, wall)
     return (; nx, ny, h = H / ny, x = x[], t, axis_X, axis_p, wall_p, rear, front, frames)
+    end #src
 end
 runs = [simulate(ny) for ny in grids]
 nothing #hide
 
 # ## Images
 #
-# The figure shows the magnitude of the density gradient on the 100-row grid
-# at the times of the ten photographs in Haas and Sturtevant's figure 7, on a
-# logarithmic gray scale that spans a factor of 300 below the largest value in
-# each frame. Each frame is mirrored about the axis to show the whole test
-# section, is 100 mm long, and starts 10 mm upstream of the rearmost helium.
-# The shock travels from left to right, the opposite of the photographs.
+# The figure shows the magnitude of the density gradient at
+# ``D/\Delta x = 112`` at the times of the ten photographs in Haas and
+# Sturtevant's figure 7, on a logarithmic gray scale that spans a factor of 300
+# below the largest value in each frame. Each frame is mirrored about the axis
+# to show the whole test section, is 100 mm long, and starts 10 mm upstream of
+# the rearmost helium. The shock travels from left to right, the opposite of
+# the photographs.
 
 function frame!(ax, frame, x_rear)
     x, y, s = frame.schlieren
@@ -372,13 +377,13 @@ nothing #hide
 
 # ![Feature positions against time](../assets/examples/shock_bubble/xt.png)
 #
-# The x–t diagram of the 100-row run has the shape of Quirk and Karni's figure
-# 13 over the first 250 µs: the refracted shock crosses the helium in 54 µs,
-# the transmitted shock then runs ahead of the incident one, and the
-# downstream interface stays at rest until the refracted shock reaches it.
-# The upstream interface on the axis and the rearmost helium coincide at
-# first and part after about 120 µs, when the air jet runs ahead along the
-# axis and the helium on either side falls behind.
+# The x–t diagram of the run at ``D/\Delta x = 112`` has the shape of Quirk and
+# Karni's figure 13 over the first 250 µs: the refracted shock crosses the
+# helium in 54 µs, the transmitted shock then runs ahead of the incident one,
+# and the downstream interface stays at rest until the refracted shock reaches
+# it. The upstream interface on the axis and the rearmost helium coincide at
+# first and part after about 120 µs, when the air jet runs ahead along the axis
+# and the helium on either side falls behind.
 #
 # The ratio of each velocity to the measured one:
 
@@ -390,7 +395,7 @@ vlines!(ax, [1.0], color = :gray)
 for (n, (c, ny)) in enumerate(zip(computed, grids))
     scatter!(ax, c ./ measured, 1:7, color = n == 1 ? Makie.wong_colors()[1] : :white,
              strokewidth = 1.5, strokecolor = Makie.wong_colors()[1],
-             markersize = (12, 12, 8)[n], label = "$ny rows")
+             markersize = (12, 12, 8)[n], label = "D/Δx = $(round(Int, 2R * ny / H))")
 end
 scatter!(ax, quirk_karni ./ measured, 1:7, marker = :xcross, color = :black,
          label = "Quirk and Karni")
@@ -402,16 +407,16 @@ nothing #hide
 
 # ![Velocities against the measurements](../assets/examples/shock_bubble/velocities.png)
 #
-# On 100 rows, six of the seven velocities lie within the 10% that Haas and
-# Sturtevant estimated for their measurements, and the upstream interface lies
-# 11% above. The shock velocities agree with Quirk and Karni's to 1%, and the
-# interface and jet velocities differ from theirs by 4% to 8%.
+# At ``D/\Delta x = 112``, six of the seven velocities lie within the 10% that
+# Haas and Sturtevant estimated for their measurements, and the upstream
+# interface lies 11% above. The shock velocities agree with Quirk and Karni's
+# to 1%, and the interface and jet velocities differ from theirs by 4% to 8%.
 #
-# The incident shock moves at the speed its Mach number gives, and the
-# measured 410 m/s lies within the error. The transmitted shock is the same on
-# all three grids, 4% below the measurement and 7% below the plane-wave value.
-# The refracted shock is not: 831, 903 and 947 m/s on 25, 50 and 100 rows,
-# below the plane-wave 985 m/s on each. The increase from one grid to the
+# The incident shock moves at the speed its Mach number gives, and the measured
+# 410 m/s lies within the error. The transmitted shock is the same on all three
+# grids, 4% below the measurement and 7% below the plane-wave value. The
+# refracted shock is not: 831, 903 and 947 m/s at ``D/\Delta x = 28``, 56 and
+# 112, below the plane-wave 985 m/s on each. The increase from one grid to the
 # next shrinks only from 72 to 44 m/s, so these grids do not settle it.
 #
 # The downstream interface moves at 135 m/s, against 145 m/s measured and
@@ -428,18 +433,20 @@ for (run, tr) in zip(runs, trs)
             slope(tr.t, tr.upstream, (50e-6, 100e-6)))
 end
 
-# Over the first 25 µs the interface on 100 rows moves at 164 m/s, close to
-# the plane-wave 157 m/s, and from 50 to 100 µs at 197 m/s; the window of
-# 0–100 µs averages the two. Over 0–50 µs the velocity is 177 m/s, within 4%
+# Over the first 25 µs the interface at ``D/\Delta x = 112`` moves at 164 m/s,
+# close to the plane-wave 157 m/s, and from 50 to 100 µs at 197 m/s; the window
+# of 0–100 µs averages the two. Over 0–50 µs the velocity is 177 m/s, within 4%
 # of the measurement. Haas and Sturtevant describe their value as the initial
 # velocity of the interface without giving its window, so the comparison
 # depends on that choice by more than the measurement's error. On the coarser
-# grids the first 25 µs are slower, 150 and 110 m/s on 50 and 25 rows.
+# grids the first 25 µs are slower, 150 and 110 m/s at ``D/\Delta x = 56`` and
+# 28.
 #
 # The jet head moves at 217 m/s from 100 to 250 µs, 6% below the measured
-# 230 m/s and 4% below Quirk and Karni's 227 m/s. On 50 and 25 rows it moves at
-# 210 and 199 m/s: the velocity rises with resolution by 11 and then 7 m/s per
-# halving of the spacing, and these three grids do not show where it settles.
+# 230 m/s and 4% below Quirk and Karni's 227 m/s. At ``D/\Delta x = 56`` and 28
+# it moves at 210 and 199 m/s: the velocity rises with resolution by 11 and
+# then 7 m/s per halving of the spacing, and these three grids do not show
+# where it settles.
 #
 # Haas and Sturtevant also list a final velocity of the downstream interface,
 # 97 m/s, taken after the head of the jet has struck it. The calculation does
@@ -459,34 +466,34 @@ for (run, tr) in zip(runs, trs)
     println()
 end
 
-# At 600 µs the sheet is 3.1 mm thick on 100 rows, 3.6 mm on 50 and 7.1 mm on
-# 25, and by 800 µs it is about one cell thick on the two finer grids. As it
-# thins its largest mole fraction falls, more slowly on the finer grids: at
-# 700 µs it is 0.80 on 100 rows against 0.72 and 0.66 on 50 and 25. By
-# 900 µs it has fallen to one half or below on all three, and only then does
-# the foremost helium jump back to the lobes. That leaves 100 to 200 µs before
-# the end of the run, and a fit over them depends on where it starts, so the
-# page does not report a final downstream velocity. The rearmost helium, at
-# the upstream side of the lobes, moves at 110 m/s from 600 µs on, against
-# the measured final upstream velocity of 113 m/s.
+# At 600 µs the sheet is 3.1 mm thick at ``D/\Delta x = 112``, 3.6 mm at 56 and
+# 7.1 mm at 28, and by 800 µs it is about one cell thick on the two finer
+# grids. As it thins its largest mole fraction falls, more slowly on the finer
+# grids: at 700 µs it is 0.80 at ``D/\Delta x = 112`` against 0.72 and 0.66 at
+# 56 and 28. By 900 µs it has fallen to one half or below on all three, and
+# only then does the foremost helium jump back to the lobes. That leaves 100 to
+# 200 µs before the end of the run, and a fit over them depends on where it
+# starts, so the page does not report a final downstream velocity. The rearmost
+# helium, at the upstream side of the lobes, moves at 110 m/s from 600 µs on,
+# against the measured final upstream velocity of 113 m/s.
 
 # ## What this checks
 #
 # - The plane-wave velocities from [`riemann_interface`](@ref) reproduce the
 #   one-dimensional values of Haas and Sturtevant for pure helium.
-# - In two dimensions, on 112 cells across the cylinder, the shocks, the
-#   interfaces and the jet move within the 10% error of the measured
-#   velocities, apart from the upstream interface, whose value depends on the
-#   time over which it is fitted. The shock velocities agree with Quirk and
-#   Karni's calculation to 1%.
+# - In two dimensions, at ``D/\Delta x = 112``, the shocks, the interfaces and
+#   the jet move within the 10% error of the measured velocities, apart from
+#   the upstream interface, whose value depends on the time over which it is
+#   fitted. The shock velocities agree with Quirk and Karni's calculation to
+#   1%.
 # - The incident and transmitted shocks and the downstream interface give the
-#   same velocity on 25, 50 and 100 rows. The refracted shock and the jet speed
-#   up with resolution and are not settled on these grids.
+#   same velocity at ``D/\Delta x = 28``, 56 and 112. The refracted shock and
+#   the jet speed up with resolution and are not settled on these grids.
 # - The jet breaks through the downstream interface on the axis between 800
 #   and 900 µs, when the sheet of helium ahead of it, about one cell thick by
 #   then, has mixed down to a mole fraction of one half; the finer grids keep
 #   the sheet's helium longer.
 
-grid = join(("$(r.nx) × $(r.ny)" for r in runs), ", ", " and ") * " nodes" #src
+grid = "Δx = " * join(("D/$(round(Int, 2R / r.h))" for r in runs), ", ", " and ") #src
 command = "julia --project=docs -t 8 examples/shock_bubble.jl" #src
 write_provenance(outdir; command, settings = opt, wall = time() - T_START, grid) #src

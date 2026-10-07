@@ -135,8 +135,8 @@ problem = Problem(
 )
 nothing #hide
 
-# Slip walls close both ends; no gas crosses them. The grid has 64 points and
-# the numerics are the defaults.
+# Slip walls close both ends; no gas crosses them. The spacing is
+# ``\Delta x = L/63``, 0.32 µm, and the numerics are the defaults.
 
 solver, Q = setup(problem, Numerics(n_global = (64, 1, 1)))
 nothing #hide

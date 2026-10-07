@@ -151,7 +151,9 @@ for (label, run) in runs
 end
 
 # The runs stop at ``t = 0.221``, just before the shock reaches the axis. The
-# step counts are root steps; the refined level takes three for each. The
+# coarse grid and the root of the refined run have ``\Delta r = 0.0039``; the
+# refined level and the fine grid have a third of it, ``\Delta r = 0.0013``.
+# The step counts are root steps; the refined level takes three for each. The
 # refined run changes the mass by more than the uniform grids do, since
 # neither the transfers between its levels nor the interpolation into a moved
 # box is conservative.
@@ -258,11 +260,12 @@ end
 # but it falls by 0.4% as the window moves toward the axis. The refined run
 # gives the fine run's exponent to within 0.0005 in each window.
 #
-# The remaining 0.2% does not change with the resolution or the time step; on
-# 1536 nodes, or with half the step, the exponent moves by 0.0003 or less. It
-# depends on the strength of the shock and on how it is launched: with the cold
-# gas at ten times the pressure, where the shock is weaker, the exponent is
-# 0.845, and with the annulus at density 1 it is 0.839. Over these radii the
+# The remaining 0.2% does not change with the resolution or the time step; at
+# half the fine spacing, ``\Delta r = 0.00065``, or with half the step, the
+# exponent moves by 0.0003 or less. It depends on the strength of the shock
+# and on how it is launched: with the cold gas at ten times the pressure, where
+# the shock is weaker, the exponent is 0.845, and with the annulus at density
+# 1 it is 0.839. Over these radii the
 # shock has not fully settled onto Guderley's flow.
 #
 # ## Pressure near the axis

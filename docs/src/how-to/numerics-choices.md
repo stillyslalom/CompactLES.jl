@@ -230,9 +230,9 @@ species; its benefit appears at three or more.
 Float32 uses half the memory of Float64 on either backend.
 With default closures, the Float32 wall-evolution error reaches a floor
 near 3e-5, and a freestream at a wall holds to roundoff of about 2e-6.
-At 96 points, a single derivative's wall error is about 9e-5 in either
-precision. Keep the default closures in Float32: the Brady–Livescu rows
-have a higher wall-derivative error floor, near 1e-3.
+At ``\Delta x = 1/95`` on a unit line, a single derivative's wall error is
+about 9e-5 in either precision. Keep the default closures in Float32: the
+Brady–Livescu rows have a higher wall-derivative error floor, near 1e-3.
 
 The default `cfl = 0.5` completes every case in the regression battery. It
 is the limit of a converging strong shock at the spherical origin at every

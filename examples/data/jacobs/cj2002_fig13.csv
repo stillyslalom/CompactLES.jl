@@ -1,0 +1,17 @@
+# Collins, B. D. & Jacobs, J. W. 2002 PLIF flow visualization and measurements of the Richtmyer-Meshkov instability of an air/SF6 interface. J. Fluid Mech. 464, 113-136. doi:10.1017/S0022112002008844
+# Figure 13, journal page 131 (PDF page 19): early-time amplitude, Ms = 1.11; each point the average of five experiments, error bars are 95% confidence intervals; fitted line 3.92 m/s
+# x = time t (ms); y = amplitude a (mm)
+# series: Ms1.11_5run_mean (no symbol is drawn: the point is the crossing of the vertical amplitude bar and the horizontal time bar)
+# columns: y = midpoint of the two amplitude-bar caps (the time-bar row agrees within 0.004 mm); y_lo/y_hi = amplitude cap centres; x_lo/x_hi = time cap centres
+# calibration: x from 54 ticks, rms 0.000644 ms (max 0.00163); y from 30 ticks, rms 0.00279 mm (max 0.00703)
+# pixel size: 0.0006998 ms/px, 0.005001 mm/px; bar centres located to about 0.5 px
+# digitizing uncertainty (1 sigma): x 0.000733 ms, y 0.00375 mm (calibration rms and 0.5 px in quadrature)
+# method: as the marker figures for the axes; bar centres and cap rows/columns measured from pixel runs around each crossing; the 0.8 ms crossing is merged with the fitted line, its caps are clean
+series,x,y,y_lo,y_hi,x_lo,x_hi,flag
+Ms1.11_5run_mean,0.0210,2.1057,1.9594,2.2520,0.0141,0.0281,ok
+Ms1.11_5run_mean,0.2357,2.9805,2.6817,3.2794,0.2255,0.2451,ok
+Ms1.11_5run_mean,0.4097,3.4595,2.9619,3.9572,0.4013,0.4188,ok
+Ms1.11_5run_mean,0.6007,4.2196,3.9195,4.5197,0.5932,0.6054,ok
+Ms1.11_5run_mean,0.8079,5.0382,4.6394,5.4371,0.8039,0.8116,ok
+Ms1.11_5run_mean,1.0029,5.9833,5.7320,6.2346,0.9970,1.0075,ok
+Ms1.11_5run_mean,1.2025,6.7245,6.5645,6.8846,1.1952,1.2092,ok

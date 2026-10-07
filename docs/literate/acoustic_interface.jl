@@ -93,7 +93,7 @@ nothing #hide
 
 # ## Grid and run
 #
-# The grid has 800 points on the 1 m tube, 32 points per pulse width in air.
+# The spacing is ``\Delta x = 1.25`` mm, 32 points per pulse width in air.
 # The transmitted pulse is shorter by the ratio of the sound speeds, which
 # leaves about 13 points per width in SF6. The numerics are the defaults,
 # including the artificial properties and the filter.

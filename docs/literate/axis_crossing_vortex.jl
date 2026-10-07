@@ -84,8 +84,9 @@ nothing #hide
 # ## Disk
 #
 # The disk has radius 1. The azimuth ``\theta`` is resolved over the full turn
-# with 64 nodes and is periodic; ``z`` is collapsed, as in
-# [Imploding shock](@ref). The radius has 32 nodes at
+# at a spacing ``\Delta\theta = 2\pi/64`` and is periodic; ``z`` is collapsed,
+# as in [Imploding shock](@ref). The radial spacing is ``\Delta r = 0.032``,
+# 4.7 spacings across the core radius, with nodes at
 # ``r_i = (i - \tfrac12)\Delta r``, none on the axis.
 #
 # [`AxisBC`](@ref) continues the flow through ``r = 0``. With ``\theta``
@@ -248,15 +249,15 @@ end
 # ``x = \pm 0.3``, and it lies in and around the core, where the profiles vary
 # most rapidly.
 #
-# Its size is set by the azimuthal spacing. With 96 azimuthal nodes instead of
-# 64 the density difference is nine times smaller at ``t = 0.2`` and five
-# times smaller at ``t = 1.6``; with 48 radial nodes instead of 32 it does not
-# fall. The azimuthal spacing ``r\Delta\theta`` grows with the radius and
-# passes ``\Delta r`` at ``r = 0.32``, so away from the axis the core is
-# resolved more coarsely in angle than in radius. The early swings appear as
-# stripes along the azimuth beside the vortex, as at ``t = 0.2``, and the
-# largest difference, ``3 \times 10^{-4}`` at ``t = 1.6``, comes as the
-# vortex reaches ``r = 0.4``.
+# Its size is set by the azimuthal spacing. At ``\Delta\theta = 2\pi/96``
+# instead of ``2\pi/64`` the density difference is nine times smaller at
+# ``t = 0.2`` and five times smaller at ``t = 1.6``; at ``\Delta r = 0.021``
+# instead of 0.032 it does not fall. The azimuthal spacing ``r\Delta\theta``
+# grows with the radius and passes ``\Delta r`` at ``r = 0.32``, so away from
+# the axis the core is resolved more coarsely in angle than in radius. The
+# early swings appear as stripes along the azimuth beside the vortex, as at
+# ``t = 0.2``, and the largest difference, ``3 \times 10^{-4}`` at ``t = 1.6``,
+# comes as the vortex reaches ``r = 0.4``.
 #
 # Weaker waves, a fifth of the largest difference, spread outward from the
 # vortex and reach the boundary by ``t = 0.8``. On a disk of radius 1.5 at the
@@ -302,7 +303,8 @@ run!(solver, Q; tfinal = 1.6, nmax = 10_000, callback = check)
 # - An exact vortex carried straight across the axis of a resolved
 #   ``(r, \theta)`` grid keeps its shape. Its difference from the translated
 #   vortex is the same on the axis as on either side of it, ``2 \times
-#   10^{-4}`` in density and ``10^{-3}`` in velocity at 32 by 64 nodes.
+#   10^{-4}`` in density and ``10^{-3}`` in velocity at ``\Delta r = 0.032``
+#   and ``\Delta\theta = 2\pi/64``.
 # - The axis condition carries the flow, with its velocity components
 #   reversed, into the radial line half a turn away.
 # - A [`DirichletBC`](@ref) given a function of position and time holds a

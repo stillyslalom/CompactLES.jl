@@ -72,14 +72,14 @@ nothing #hide
 # ## Lax
 #
 # The Lax problem is a Riemann problem in a gas with ``\gamma = 1.4``: at
-# ``t = 0`` the gas at ``x < 0.5`` has ``(\rho, u, p) = (0.445, 0.698,
-# 3.528)`` and the gas at ``x > 0.5`` has ``(0.5, 0, 0.571)``. It resolves
-# into a rarefaction running left, a contact and a shock running right. Unlike
-# Sod's problem, the left state carries momentum, so the star states lie far
-# from both initial states. The line has 400 nodes on ``[0, 1]``, the
-# diaphragm is spread over two cells, and the run ends at ``t = 0.14`` at a
-# CFL number of 0.4. Both ends hold their initial state, which is exact until
-# a wave reaches them.
+# ``t = 0`` the gas at ``x < 0.5`` has ``(\rho, u, p) = (0.445, 0.698, 3.528)``
+# and the gas at ``x > 0.5`` has ``(0.5, 0, 0.571)``. It resolves into a
+# rarefaction running left, a contact and a shock running right. Unlike Sod's
+# problem, the left state carries momentum, so the star states lie far from
+# both initial states. The spacing on ``[0, 1]`` is
+# ``\Delta x = 2.5 \times 10^{-3}``, the diaphragm is spread over two cells,
+# and the run ends at ``t = 0.14`` at a CFL number of 0.4. Both ends hold their
+# initial state, which is exact until a wave reaches them.
 
 lax_run = named(lax(; nmax))
 lax_exact(x) = riemann_profile(x, LAX_T, 0.5, LAX_L, LAX_R, 1.4)
@@ -102,7 +102,7 @@ nothing #hide
 
 # ![Lax problem against the exact solution](../assets/examples/shock_capturing/lax.png)
 #
-# The L1 errors, the mean absolute differences over the 400 nodes, are
+# The L1 errors, the mean absolute differences over the nodes, are
 # ``4.9 \times 10^{-3}`` in density and ``7.5 \times 10^{-3}`` in velocity and
 # pressure. Of the density error, 60%
 # lies within 20 cells of the contact and 32% within 20 cells of the shock.
@@ -119,15 +119,17 @@ nothing #hide
 # train of short waves behind it, and a scheme that is too dissipative, or an
 # artificial viscosity that acts away from the shock, reduces their amplitude.
 # The shock starts at ``x = -4`` on ``[-5, 5]`` and the run ends at
-# ``t = 1.8`` on 800 nodes at a CFL number of 0.4.
+# ``t = 1.8`` at a spacing ``\Delta x = 0.0125``, 100 points per wavelength of
+# the density wave ahead of the shock, and a CFL number of 0.4.
 #
-# The problem has no exact solution. The reference is this code on 3200
-# nodes, with the initial shock spread over the same width as on the 800-node
-# grid, so that both runs solve the same initial-value problem. The
+# The problem has no exact solution. The reference is this code at a quarter of
+# the spacing, with the initial shock spread over the same width as on the
+# coarser grid, so that both runs solve the same initial-value problem. The
 # validation battery stores it in `test/refs/shu_osher.csv`, sampled at the
-# 800 nodes, and a rerun at the commit of these figures reproduces the stored
-# profile to ``10^{-8}``. It is a regression reference: the finer grid makes it more
-# accurate, but it is not independent of the scheme.
+# nodes of the coarser grid, and a rerun at the commit of these figures
+# reproduces the stored profile to ``10^{-8}``. It is a regression reference:
+# the finer grid makes it more accurate, but it is not independent of the
+# scheme.
 
 function stored_reference(name)
     rows = [parse.(Float64, split(line, ','))
@@ -147,12 +149,12 @@ band = so_band(so_run.x)        # the wave train, 0.5 ≤ x ≤ 2.2
 
 fig = Figure(size = (760, 560))
 ax1 = Axis(fig[1, 1], ylabel = "ρ", xlabel = "x")
-overlay!(ax1, so_run.x, so_run.rho, so_ref.x, so_ref.rho; reference = "3200 nodes")
+overlay!(ax1, so_run.x, so_run.rho, so_ref.x, so_ref.rho; reference = "reference, Δx/4")
 axislegend(ax1, position = :lb)
 ax2 = Axis(fig[2, 1], ylabel = "ρ", xlabel = "x", title = "Wave train")
-overlay!(ax2, so_run.x, so_run.rho, so_ref.x, so_ref.rho; reference = "3200 nodes")
+overlay!(ax2, so_run.x, so_run.rho, so_ref.x, so_ref.rho; reference = "reference, Δx/4")
 xlims!(ax2, 0.4, 2.5)
-Label(fig[0, 1], "Shu–Osher, t = 1.8, 800 nodes", font = :bold, tellwidth = false)
+Label(fig[0, 1], "Shu–Osher, t = 1.8, Δx = 0.0125", font = :bold, tellwidth = false)
 save(joinpath(outdir, "shu_osher.png"), fig) #src
 nothing #hide
 
@@ -162,8 +164,8 @@ nothing #hide
 # reference to 0.1%. The L1 error is ``6.7 \times 10^{-3}`` over the line and
 # ``2.1 \times 10^{-2}`` over the wave train, which holds half of it. A fifth
 # of the error lies within four cells of the shock, and a tenth near
-# ``x = 0.73``, where the 3200-node run carries a narrow spike that the
-# 800-node run smooths out.
+# ``x = 0.73``, where the reference carries a narrow spike that the
+# calculation smooths out.
 
 # ## Woodward–Colella
 #
@@ -174,9 +176,10 @@ nothing #hide
 # walls, and by ``t = 0.038`` they have piled the gas into a thin dense shell
 # near ``x = 0.78``. The pressure ratio of ``10^5`` tests whether the scheme
 # survives at all; the density and position of the shell test how it resolves
-# the contacts that bound it. The line has 800 nodes, a [`SlipWallBC`](@ref)
-# closes each end, and the CFL number is 0.3. As for Shu–Osher, the reference
-# is this code on 3200 nodes, stored in `test/refs/woodward_colella.csv` and
+# the contacts that bound it. The spacing is
+# ``\Delta x = 1.25 \times 10^{-3}``, a [`SlipWallBC`](@ref) closes each end,
+# and the CFL number is 0.3. As for Shu–Osher, the reference is this code at a
+# quarter of the spacing, stored in `test/refs/woodward_colella.csv` and
 # reproduced to ``10^{-8}`` at the commit of these figures.
 
 wc_run = named(woodward(; nmax))
@@ -190,26 +193,27 @@ i_peak = argmax(wc_run.rho)
 
 fig = Figure(size = (760, 560))
 ax1 = Axis(fig[1, 1], ylabel = "ρ", xlabel = "x")
-overlay!(ax1, wc_run.x, wc_run.rho, wc_ref.x, wc_ref.rho; reference = "3200 nodes")
+overlay!(ax1, wc_run.x, wc_run.rho, wc_ref.x, wc_ref.rho; reference = "reference, Δx/4")
 axislegend(ax1, position = :lt)
 ax2 = Axis(fig[2, 1], ylabel = "ρ", xlabel = "x", title = "Collided shell")
-overlay!(ax2, wc_run.x, wc_run.rho, wc_ref.x, wc_ref.rho; reference = "3200 nodes")
+overlay!(ax2, wc_run.x, wc_run.rho, wc_ref.x, wc_ref.rho; reference = "reference, Δx/4")
 xlims!(ax2, 0.62, 0.86)
-Label(fig[0, 1], "Woodward–Colella, t = 0.038, 800 nodes", font = :bold,
+Label(fig[0, 1], "Woodward–Colella, t = 0.038, Δx = 1.25e-3", font = :bold,
       tellwidth = false)
 save(joinpath(outdir, "woodward_colella.png"), fig) #src
 nothing #hide
 
 # ![Woodward–Colella density](../assets/examples/shock_capturing/woodward_colella.png)
 #
-# The L1 error is ``3.2 \times 10^{-2}``. The calculation places the left edge of the shell,
-# where the density crosses 5, 0.0017 (1.4 cells) to the right of the
-# reference's; the offset falls from 0.0035 to 0.0017 and 0.0006 on 400, 800
-# and 1600 nodes, and the peak of the shell, 6.64, lies 1% above the
+# The L1 error is ``3.2 \times 10^{-2}``. The calculation places the left edge
+# of the shell, where the density crosses 5, 0.0017 (1.4 cells) to the right of
+# the reference's; the offset falls from 0.0035 to 0.0017 and 0.0006 as the
+# spacing falls from ``2.5 \times 10^{-3}`` to ``1.25 \times 10^{-3}`` and
+# ``6.3 \times 10^{-4}``, and the peak of the shell, 6.64, lies 1% above the
 # reference's 6.57. Between ``x = 0.735`` and 0.76, where both runs carry a
 # wiggle, the difference does not fall with refinement (0.35, 0.28 and 0.32
-# on the same three grids), so the 3200-node run does not settle that part of
-# the profile.
+# on the same three grids), so the reference does not settle that part of the
+# profile.
 #
 # Until the two blast waves meet, near ``t = 0.028``, nine to fourteen cells
 # in the cold gas at the two fronts carry a negative internal energy, as low
@@ -227,16 +231,17 @@ nothing #hide
 # ```
 #
 # with ``\xi_0 = 1.0328`` for ``\gamma = 1.4`` (Sedov 1959; Kamm and Timmes
-# 2007). The density just behind the shock is ``(\gamma + 1)/(\gamma - 1)
-# = 6`` times the ambient. The grid is a [`SphericalMetric`](@ref) resolved
-# in radius alone, as in the [Supernova remnant](@ref) tutorial, continued
-# through the origin by [`OriginBC`](@ref) and closed at ``r = 1.2`` by a
-# slip wall. The energy is deposited as a Gaussian pressure pulse of width
-# 0.06 in gas at ``\rho_0 = 1`` and ``p = 10^{-5}``, and its amount puts the
-# shock at ``R_s = 0.8`` at ``t = 1``. The battery runs the case on 256 nodes
-# at a CFL number of 0.3, and this section repeats it on 128, 512 and 1024.
-# The shock radius is taken as the outermost point at which the density
-# crosses twice the ambient value.
+# 2007). The density just behind the shock is ``(\gamma + 1)/(\gamma - 1) = 6``
+# times the ambient. The grid is a [`SphericalMetric`](@ref) resolved in radius
+# alone, as in the [Supernova remnant](@ref) tutorial, continued through the
+# origin by [`OriginBC`](@ref) and closed at ``r = 1.2`` by a slip wall. The
+# energy is deposited as a Gaussian pressure pulse of width 0.06 in gas at
+# ``\rho_0 = 1`` and ``p = 10^{-5}``, and its amount puts the shock at
+# ``R_s = 0.8`` at ``t = 1``. The battery runs the case at a spacing
+# ``\Delta r = 4.7 \times 10^{-3}``, 13 spacings across the width of the pulse,
+# and a CFL number of 0.3, and this section repeats it at twice, half and a
+# quarter of that spacing. The shock radius is taken as the outermost point at
+# which the density crosses twice the ambient value.
 
 sedov_grids = (128, 256, 512, 1024)
 sedov_runs = [named(sedov(; N, nmax)) for N in sedov_grids]
@@ -252,7 +257,7 @@ fig = Figure(size = (760, 420))
 ax_sedov = Axis(fig[1, 1], xlabel = "r", ylabel = "ρ",
                 title = "Sedov–Taylor, t = 1")
 for (N, r) in zip(sedov_grids, sedov_runs)
-    lines!(ax_sedov, r.x, r.rho, label = "$N nodes")
+    lines!(ax_sedov, r.x, r.rho, label = @sprintf("Δr = %.2g", r.x[2] - r.x[1]))
 end
 vlines!(ax_sedov, [R_exact], color = :black, linestyle = :dash, label = "exact radius")
 hlines!(ax_sedov, [6.0], color = :gray, linestyle = :dot, label = "strong-shock jump")
@@ -263,14 +268,15 @@ nothing #hide
 
 # ![Sedov–Taylor density on four grids](../assets/examples/shock_capturing/sedov.png)
 #
-# On 256 nodes the shock radius exceeds the self-similar value by 1.0%. The
-# excess falls by about half with each doubling of the node count, to 0.24%
-# on 1024 nodes. The peak density rises toward the jump of 6 over the same
-# grids, from 4.6 on 128 nodes to 5.9 on 1024: the density falls steeply
-# behind the shock, and a shock spread over a few cells cuts off the top of
-# the profile. Four to six cells just ahead of the shock carry a negative
-# internal energy at ``t = 1``, down to ``-0.006`` against ``2.5 \times
-# 10^{-5}`` in the ambient gas. The case therefore runs with
+# At ``\Delta r = 4.7 \times 10^{-3}`` the shock radius exceeds the
+# self-similar value by 1.0%. The excess falls by about half with each halving
+# of the spacing, to 0.24% at ``\Delta r = 1.2 \times 10^{-3}``. The peak
+# density rises toward the jump of 6 over the same grids, from 4.6 at
+# ``\Delta r = 9.4 \times 10^{-3}`` to 5.9 at ``1.2 \times 10^{-3}``: the
+# density falls steeply behind the shock, and a shock spread over a few cells
+# cuts off the top of the profile. Four to six cells just ahead of the shock
+# carry a negative internal energy at ``t = 1``, down to ``-0.006`` against
+# ``2.5 \times 10^{-5}`` in the ambient gas. The case therefore runs with
 # `validity = :permissive` (see [`StepControl`](@ref)), which reports such a
 # state instead of rejecting it, and the battery bounds the count.
 
@@ -290,10 +296,11 @@ nothing #hide
 # is ``10^{-4}``. The center is a [`SlipWallBC`](@ref) in the plane, an
 # [`AxisBC`](@ref) in the cylinder and an [`OriginBC`](@ref) in the sphere,
 # and the outer boundary at ``r = 1`` holds the exact inflow, which in the
-# cylinder and the sphere compresses in time. The grids have 400, 256 and 256
-# nodes, and all three run at a CFL number of 0.15, the value at which the
-# artificial properties were calibrated on this problem, with
-# `validity = :permissive`.
+# cylinder and the sphere compresses in time. The spacing is
+# ``\Delta r = 2.5 \times 10^{-3}`` in the plane and ``3.9 \times 10^{-3}`` in
+# the cylinder and the sphere, and all three run at a CFL number of 0.15, the
+# value at which the artificial properties were calibrated on this problem,
+# with `validity = :permissive`.
 #
 # The spherical case starts from the exact solution at ``t = 0.3``, with the
 # shock at ``r = 0.1`` spread over four cells. From the singular start at
@@ -334,10 +341,10 @@ nothing #hide
 # ``2 \times 10^{-3}``. Behind it both plateaus are low, 15.0 of 16 and 62.6
 # of 64 over the same range, and both shocks lead their exact position by
 # 0.009, about two cells. Where the post-shock gas is too light, the shocked
-# region holds the inflowing mass only by extending further, and on 1024 nodes
-# the plateaus rise to 15.7 and 63.8 while the leads fall to 0.0025 and
-# 0.0017. In the cylinder the low density near the axis spreads over most of
-# the plateau. In the sphere the bump near
+# region holds the inflowing mass only by extending further, and at
+# ``\Delta r = 9.8 \times 10^{-4}`` the plateaus rise to 15.7 and 63.8 while
+# the leads fall to 0.0025 and 0.0017. In the cylinder the low density near
+# the axis spreads over most of the plateau. In the sphere the bump near
 # ``r = 0.1`` lies where the shock stood at the warm start: started at
 # ``t = 0.24`` instead, with the shock at ``r = 0.08``, the bump moves to
 # ``r = 0.07``.
@@ -371,7 +378,8 @@ for ν in 1:3
     ax = Axis(fig[ν, 1], ylabel = "ρ / exact plateau", xlabel = ν == 3 ? "r" : "",
               title = geometry[ν])
     for (N, r) in zip(wall_grids[ν], wall_runs[ν])
-        scatterlines!(ax, r.x, r.rho ./ 4^ν, markersize = 5, label = "$N nodes")
+        scatterlines!(ax, r.x, r.rho ./ 4^ν, markersize = 5,
+                      label = @sprintf("Δr = %.2g", r.x[2] - r.x[1]))
     end
     hlines!(ax, [1.0], color = :black, label = "exact")
     xlims!(ax, 0, 0.07)
@@ -388,10 +396,11 @@ nothing #hide
 # Refinement narrows the heated region without removing the error. At the
 # plane the density reaches 95% of the plateau within four nodes of the wall
 # on every grid, so the layer thins in proportion to the spacing, while the
-# deficit at the wall falls only from 28% on 200 nodes to 20% on 1600. At the
-# axis the region narrows and the deficit falls from 58% to 50% over the four
-# grids. At the origin the region narrows while the deficit grows, from 26% on
-# 128 nodes to 32% on 1024.
+# deficit at the wall falls only from 28% at ``\Delta r = 5.0 \times 10^{-3}``
+# to 20% at ``6.3 \times 10^{-4}``. At the axis the region narrows and the
+# deficit falls from 58% to 50% over the four grids. At the origin the region
+# narrows while the deficit grows, from 26% at
+# ``\Delta r = 7.8 \times 10^{-3}`` to 32% at ``9.8 \times 10^{-4}``.
 
 # ## What this checks
 #
@@ -415,5 +424,5 @@ nothing #hide
 
 write_provenance(outdir; command = "julia --project=docs examples/shock_capturing.jl", #src
                  settings = opt, wall = time() - T_START,                             #src
-                 grid = "one-dimensional lines of 128 to 1600 nodes",                  #src
+                 grid = "one-dimensional lines, Δx = 6.3e-4 to 1.25e-2",               #src
                  inputs = ("test/cases.jl", "test/references.jl", "test/refs"))        #src

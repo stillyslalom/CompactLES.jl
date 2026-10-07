@@ -237,7 +237,7 @@ See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraint
 
 | File | Demonstrates |
 |------|--------------|
-| `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600 on 64³ and 32³ nodes against a 512³ spectral reference, with the kinetic-energy budget by mechanism; the "Taylor–Green vortex" example page |
+| `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600 at 64 and 32 points per period (2π/Δx) against a spectral reference at 512, with the kinetic-energy budget by mechanism; the "Taylor–Green vortex" example page |
 | `examples/shock_tube.jl`       | Multimode air/SF6 Richtmyer–Meshkov layer at Mach 1.5 with reshock from the end wall, in 2-D; the "Reshocked mixing layer" example page |
 | `examples/piston_driver.jl`    | Oscillating full-state Dirichlet driver with non-reflecting NSCBC outflow |
 | `examples/converging_shock.jl` | Cylindrically converging shock; 1-D radial run on the regularized axis |

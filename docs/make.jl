@@ -82,6 +82,7 @@ const EXAMPLES = [
     "shock_tube.jl",
     "taylor_green.jl",
     "vortex_ring_shock.jl",
+    "jacobs_air_sf6.jl",
 ]
 
 "The provenance note of an example, from the record its full run committed."
@@ -189,6 +190,9 @@ DocMeta.setdocmeta!(
             "Reshocked mixing layer" => "examples/shock_tube.md",
             "Taylor–Green vortex" => "examples/taylor_green.md",
             "Vortex ring and shock" => "examples/vortex_ring_shock.md",
+        ],
+        "Validation" => [
+            "Jacobs air/SF6 experiments" => "examples/jacobs_air_sf6.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",

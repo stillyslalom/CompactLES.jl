@@ -1,0 +1,99 @@
+# Jacobs, J. W. & Krivets, V. V. 2005 Experiments on the late-time development of single-mode Richtmyer-Meshkov instability. Phys. Fluids 17, 034105. doi:10.1063/1.1852574
+# FIG. 7, journal page 034105-7 (PDF page 8): ka - ka0 vs k adot0 t compared with nonlinear models
+# x = k adot0 t (-); y = k a - k a0 (-)
+# series: lambda59mm = open circles (k = 0.106 /mm, a0+ = 2.15 mm, adot0 = 10.55 m/s); lambda36mm = open squares (k = 0.177 /mm, a0+ = 0.98 mm, adot0 = 8.98 m/s), JK Table I
+# model curves, arrows, labels and the legend are masked (thick strokes removed by a 3x3 erosion test)
+# INCOMPLETE below x ~ 4: many markers sit on the bundle of thick model curves and are only partly visible; those found there carry larger tolerances, others are missing
+# calibration: x from 37 ticks, rms residual 0.00294 (max 0.00592)
+# calibration: y from 46 ticks, rms residual 0.00166 (max 0.00323)
+# tick values used per side: bottom: 0.5..9.5 (18 ticks, hidden/unused [5.0]); top: 0.5..9.5 (19 ticks); left: 0.2..4.8 (24 ticks); right: 0.2..4.8 (22 ticks, hidden/unused [4.2, 4.4])
+# pixel size: 0.01193 x-units/px, 0.007455 y-units/px
+# centre scatter (model-fit vs template centre, 74 markers): rms 0.27 px in x, 0.26 px in y
+# digitizing uncertainty (1 sigma, calibration rms and centre scatter in quadrature): x 0.0044, y 0.00253 (data units)
+# x_tol, y_tol: per-point half-range of centre positions that keep the pixel mismatch within a few pixels of its minimum, floored at the 1-sigma value above; large values mark poorly constrained (mostly hidden) markers
+# flags: ok = isolated, template-detected; overlap = touches another marker (position from the model fit); fit_added = not found by the template but required by the model fit of an overlapping group (strong evidence); fit_added_weak = same, weak evidence; poorly_constrained = centre tolerance >= 3 px in x or y; weak_support = the marker explains fewer than 8 pixels that no other marker explains (15% of the median for clean markers): possibly a duplicate or a different symbol
+# marker counts: lambda36mm 49, lambda59mm 33; flag counts: fit_added 1, fit_added_weak 2, kind_from_fit 3, ok 34, overlap 42, poorly_constrained 2, weak_support 1
+# method: Embedded raster image extracted at native resolution (PyMuPDF). Axes calibrated from the frame tick marks on all four sides: each frame line fitted as a straight line, tick centres located on it, values assigned from the printed labels, and an affine map data = c0 + c1*col + c2*row fitted per axis by least squares (absorbs the scan skew). Markers found by outline template correlation with occlusion accounting, then every group of touching markers refined by fitting rendered marker outlines to the pixels (coordinate descent on the mismatch count); hidden markers added only when they reduce the mismatch by a stated threshold. Curves, error bars and text are not data. Verified by overlay inspection.
+series,x,y,x_tol,y_tol,flag
+lambda36mm,0.4949,0.5103,0.0179,0.0037,overlap
+lambda36mm,0.6618,0.6967,0.0060,0.0037,ok
+lambda36mm,0.8248,0.7539,0.0060,0.0037,ok
+lambda36mm,1.1389,1.0694,0.0060,0.0037,overlap
+lambda36mm,1.2879,1.1077,0.0060,0.0037,kind_from_fit
+lambda36mm,1.4551,1.2146,0.0060,0.0037,kind_from_fit
+lambda36mm,2.0929,1.6061,0.0060,0.0025,overlap
+lambda36mm,2.2408,1.6397,0.0060,0.0037,overlap
+lambda36mm,2.4149,1.7030,0.0060,0.0037,fit_added_weak
+lambda36mm,2.5699,1.8670,0.0060,0.0037,overlap
+lambda36mm,2.7250,1.9416,0.0044,0.0037,overlap
+lambda36mm,2.8800,1.9043,0.0044,0.0112,fit_added_weak
+lambda36mm,3.2020,2.0087,0.0044,0.0025,ok
+lambda36mm,3.3630,2.2360,0.0044,0.0037,overlap
+lambda36mm,3.5180,2.3199,0.0060,0.0025,overlap
+lambda36mm,3.6790,2.3143,0.0060,0.0037,overlap
+lambda36mm,3.8340,2.5864,0.0044,0.0025,overlap
+lambda36mm,3.9950,2.6125,0.0044,0.0037,overlap
+lambda36mm,4.1560,2.4709,0.0044,0.0037,ok
+lambda36mm,4.3111,2.6274,0.0044,0.0025,overlap
+lambda36mm,4.4661,2.7094,0.0044,0.0025,overlap
+lambda36mm,4.7881,2.9330,0.0044,0.0025,overlap
+lambda36mm,4.9491,2.8155,0.0044,0.0025,overlap
+lambda36mm,5.1101,2.8698,0.0044,0.0025,overlap
+lambda36mm,5.2651,2.9818,0.0044,0.0025,overlap
+lambda36mm,5.4201,3.0157,0.0044,0.0025,overlap
+lambda36mm,5.5811,2.9107,0.0044,0.0025,ok
+lambda36mm,5.7421,3.0970,0.0044,0.0025,ok
+lambda36mm,6.0582,3.0896,0.0044,0.0025,overlap
+lambda36mm,6.2192,3.1045,0.0044,0.0025,overlap
+lambda36mm,6.3742,3.2014,0.0044,0.0025,ok
+lambda36mm,6.6962,3.2163,0.0044,0.0025,ok
+lambda36mm,6.8512,3.3877,0.0044,0.0025,ok
+lambda36mm,7.0062,3.5219,0.0044,0.0025,ok
+lambda36mm,7.3282,3.5555,0.0044,0.0025,ok
+lambda36mm,7.4833,3.4439,0.0044,0.0025,ok
+lambda36mm,7.6437,3.5402,0.0044,0.0025,ok
+lambda36mm,7.9603,3.7232,0.0044,0.0025,ok
+lambda36mm,8.1208,3.9543,0.0044,0.0025,ok
+lambda36mm,8.4373,3.9804,0.0044,0.0025,ok
+lambda36mm,8.5983,3.8126,0.0060,0.0025,ok
+lambda36mm,9.0694,4.1593,0.0044,0.0025,ok
+lambda36mm,9.2304,4.2562,0.0044,0.0037,ok
+lambda36mm,9.3913,3.9990,0.0044,0.0025,ok
+lambda36mm,9.5464,4.1594,0.0044,0.0025,ok
+lambda36mm,9.7014,4.2562,0.0044,0.0025,overlap
+lambda36mm,9.7014,4.3382,0.0044,0.0224,kind_from_fit;poorly_constrained
+lambda36mm,9.8624,3.9431,0.0044,0.0037,ok
+lambda36mm,9.8624,4.1481,0.0044,0.0025,ok
+lambda59mm,0.1119,0.1299,0.0044,0.0025,overlap
+lambda59mm,0.2257,0.1868,0.0060,0.0037,overlap
+lambda59mm,0.3263,0.2930,0.0239,0.0112,ok
+lambda59mm,0.4442,0.4776,0.0060,0.0037,overlap
+lambda59mm,0.8944,0.9855,0.0044,0.0037,overlap
+lambda59mm,0.9802,0.9173,0.0358,0.0261,weak_support;overlap;poorly_constrained
+lambda59mm,2.4626,1.7925,0.0060,0.0037,overlap
+lambda59mm,2.9098,2.0785,0.0044,0.0025,ok
+lambda59mm,3.0231,1.9490,0.0044,0.0025,overlap
+lambda59mm,3.3570,2.3069,0.0060,0.0025,overlap
+lambda59mm,3.5806,2.4150,0.0044,0.0037,fit_added
+lambda59mm,3.5809,2.4448,0.0044,0.0025,overlap
+lambda59mm,3.8102,2.5156,0.0044,0.0037,overlap
+lambda59mm,4.0249,2.6871,0.0060,0.0025,overlap
+lambda59mm,4.1421,2.6542,0.0044,0.0025,overlap
+lambda59mm,4.1441,2.8287,0.0060,0.0025,ok
+lambda59mm,4.3647,2.7187,0.0044,0.0025,overlap
+lambda59mm,4.5883,2.8827,0.0044,0.0025,ok
+lambda59mm,4.6986,2.7571,0.0044,0.0025,ok
+lambda59mm,4.9252,2.7179,0.0044,0.0037,overlap
+lambda59mm,4.9281,2.8995,0.0060,0.0025,overlap
+lambda59mm,5.0326,2.9424,0.0060,0.0037,overlap
+lambda59mm,5.1459,3.0523,0.0044,0.0025,overlap
+lambda59mm,5.4828,3.0616,0.0044,0.0025,overlap
+lambda59mm,5.8197,3.3028,0.0044,0.0025,ok
+lambda59mm,6.0403,3.0113,0.0044,0.0025,overlap
+lambda59mm,6.1548,3.3393,0.0060,0.0025,overlap
+lambda59mm,6.2639,3.5984,0.0060,0.0025,ok
+lambda59mm,6.2669,3.3654,0.0044,0.0025,overlap
+lambda59mm,6.3742,3.7232,0.0044,0.0025,ok
+lambda59mm,6.4861,3.6142,0.0044,0.0025,ok
+lambda59mm,6.6008,3.3281,0.0044,0.0025,ok
+lambda59mm,6.7131,3.5320,0.0044,0.0025,ok

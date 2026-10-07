@@ -122,13 +122,14 @@ problem = Problem(
 # ## Grid and schemes
 #
 # [`Numerics`](@ref) holds everything about how the problem is solved.
-# `n_global = (N, 1, 1)` resolves only ``x``, with ``N = 128`` points. The
-# spatial derivative is the sixth-order compact scheme of Lele, the default:
-# the derivative values along a grid line are coupled through a tridiagonal
-# solve, and the scheme resolves short waves far better than an explicit
-# stencil of the same width. Time advances with a five-stage, fourth-order
-# low-storage Runge--Kutta method, at a step set by the CFL number from the
-# fastest local wave speed.
+# `n_global = (N, 1, 1)` resolves only ``x``. Its ``N = 128`` nodes on the
+# periodic domain, one wavelength ``\lambda`` long, set the spacing
+# ``\Delta x = \lambda/128``. The spatial derivative is the sixth-order compact
+# scheme of Lele, the default: the derivative values along a grid line are
+# coupled through a tridiagonal solve, and the scheme resolves short waves far
+# better than an explicit stencil of the same width. Time advances with a
+# five-stage, fourth-order low-storage Runge--Kutta method, at a step set by
+# the CFL number from the fastest local wave speed.
 #
 # By default CompactLES also adds localized artificial viscosity near shocks
 # and applies a compact low-pass filter after every step. Both are turned off
@@ -219,16 +220,16 @@ pointwise = abs.(snapshots[4] .- earnshaw.(x, 0.9t_shock)) ./ u0
 @printf("largest pointwise error %.1e u0 at ξ = %.3f\n", maximum(pointwise),
         moving(x, 0.9t_shock)[argmax(pointwise)])
 
-# The highest harmonics are concentrated at the front, and at
-# ``\sigma = 0.9`` their amplitudes decay slowly enough that modes near the
-# grid's resolution limit still carry part of the profile. Those modes travel
-# at the wrong speed on any finite grid, so the error concentrates there while
-# the resolved harmonics stay accurate. At ``\sigma = 0.9`` the 40th harmonic,
-# close to the shortest wave the sixth-order scheme resolves on 128 points,
+# The highest harmonics are concentrated at the front, and at ``\sigma = 0.9``
+# their amplitudes decay slowly enough that modes near the grid's resolution
+# limit still carry part of the profile. Those modes travel at the wrong speed
+# on any finite grid, so the error concentrates there while the resolved
+# harmonics stay accurate. At ``\sigma = 0.9`` the 40th harmonic, close to the
+# shortest wave the sixth-order scheme resolves at ``\lambda/\Delta x = 128``,
 # still has an amplitude of ``1.5\times10^{-3}\,u_0``, and the 64th, the
 # shortest the grid can hold, ``3\times10^{-4}\,u_0``. Refining the grid
-# reduces the error by resolving more of these harmonics. As
-# ``\sigma \to 1`` the spectrum reaches the grid scale at any resolution.
+# reduces the error by resolving more of these harmonics. As ``\sigma \to 1``
+# the spectrum reaches the grid scale at any resolution.
 
 # ## After the shock
 #
@@ -312,10 +313,10 @@ weight = u_sorted[i] / (u_sorted[i] - u_sorted[i+1])
 ξ_shock = ξ_late[i] + weight * (ξ_late[i+1] - ξ_late[i])
 @printf("shock at ξ = %.4f\n", ξ_shock)
 
-# The same calculation on 256 and 512 points puts the shock at 0.5088 and
-# 0.5085, so the offset is not a grid effect. Weak shock theory neglects terms
-# of second order in the amplitude, of size ``(u_0/c_0)^2 = 0.01`` here, and
-# the offset is of that size.
+# The same calculation at ``\lambda/\Delta x = 256`` and 512 puts the shock at
+# 0.5088 and 0.5085, so the offset is not a grid effect. Weak shock theory
+# neglects terms of second order in the amplitude, of size
+# ``(u_0/c_0)^2 = 0.01`` here, and the offset is of that size.
 
 # ## What this checks
 #
@@ -328,6 +329,6 @@ weight = u_sorted[i] / (u_sorted[i] - u_sorted[i+1])
 #   shock solution away from the shock itself, to the accuracy of that theory,
 #   while the unregularized one does not.
 #
-# These comparisons are at a single resolution, ``N = 128``. On finer grids
-# the harmonic and front errors shrink, while the shock offset from weak shock
-# theory stays as it is.
+# These comparisons are at a single resolution, ``\lambda/\Delta x = 128``. On
+# finer grids the harmonic and front errors shrink, while the shock offset from
+# weak shock theory stays as it is.

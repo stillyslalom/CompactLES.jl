@@ -1,0 +1,419 @@
+# Collins, B. D. & Jacobs, J. W. 2002 PLIF flow visualization and measurements of the Richtmyer-Meshkov instability of an air/SF6 interface. J. Fluid Mech. 464, 113-136. doi:10.1017/S0022112002008844
+# Figure 3, journal page 120 (PDF page 8): x,t wave diagram for the Ms = 1.11 experiments
+# x = position along the tube (m), positive downward toward the SF6 and the end wall; t = time (ms) after shock arrival at the interface
+# the diagram is a raster image (bilevel, 727 dpi), not vector graphics; get_drawings() returns nothing on this page
+# calibration: x from 42 ticks, rms 0.00048 m (max 0.0011); t from 50 ticks, rms 0.0076 ms (max 0.017); pixel 0.575 mm x 6.84 us
+# frame edges in data units: left x = -0.3992, right x = 0.7504, bottom t = -0.998, top t = 12.018 (labels: -0.4, 0.75, -1, 12)
+# straight lines: total-least-squares fits to the pixels of each line found by an iterative Hough transform (pixel rms about the fit 1.1-1.4 px, i.e. the drawn line half-width); vertices are intersections of the fitted lines with each other, with the interface centreline, or with the frame (a frame vertex is where the drawing is clipped, not a physical end)
+# interface: centre of the thick curve in each pixel row (every 5th row listed), uncertainty about +-1 px = +-0.6 mm in x
+# uncertainty of vertices from line intersections: about +-1 mm in x and +-0.01 ms in t, more where two lines meet at a shallow angle; the three t~0 pairwise intersections agree within the values given in README.md
+# families of characteristics are ordered by speed |dx/dt|; head = fastest, tail = slowest; slopes are as drawn
+# columns: curve, point index, x_m, t_ms, note
+curve,point,x_m,t_ms,note
+incident_shock,0,-0.32712,-0.9982,bottom frame
+incident_shock,1,-0.00270,-0.0008,intersection with transmitted shock
+transmitted_shock,0,-0.00270,-0.0008,intersection with incident shock
+transmitted_shock,1,0.75016,4.7517,intersection with end-wall reflected shock
+reflected_shock,0,-0.00085,0.0049,intersection with incident shock
+reflected_shock,1,-0.39918,1.5664,left frame
+endwall_reflected_shock,0,0.75016,4.7517,intersection with transmitted shock
+endwall_reflected_shock,1,0.25573,8.4807,intersection with interface centreline
+reshock_transmitted_shock,0,0.25759,8.4667,intersection with end-wall reflected shock
+reshock_transmitted_shock,1,-0.39918,11.3813,left frame
+expansion_long_dash_1_head,0,-0.39918,3.6251,left frame; drawn dashes span (-0.3951 m; 3.636 ms) to (0.1873 m; 5.271 ms); 12 dashes
+expansion_long_dash_1_head,1,0.19714,5.2982,intersection with interface centreline; drawn dashes span (-0.3951 m; 3.636 ms) to (0.1873 m; 5.271 ms); 12 dashes
+expansion_long_dash_2_interior,0,-0.39918,4.0844,left frame; drawn dashes span (-0.3955 m; 4.095 ms) to (0.2104 m; 5.909 ms); 13 dashes
+expansion_long_dash_2_interior,1,0.21874,5.9344,intersection with interface centreline; drawn dashes span (-0.3955 m; 4.095 ms) to (0.2104 m; 5.909 ms); 13 dashes
+expansion_long_dash_3_interior,0,-0.39918,4.5616,left frame; drawn dashes span (-0.3952 m; 4.574 ms) to (0.2274 m; 6.546 ms); 13 dashes
+expansion_long_dash_3_interior,1,0.23509,6.5702,intersection with interface centreline; drawn dashes span (-0.3952 m; 4.574 ms) to (0.2274 m; 6.546 ms); 13 dashes
+expansion_long_dash_4_interior,0,-0.39918,5.1133,left frame; drawn dashes span (-0.3952 m; 5.126 ms) to (0.2373 m; 7.187 ms); 13 dashes
+expansion_long_dash_4_interior,1,0.24742,7.2201,intersection with interface centreline; drawn dashes span (-0.3952 m; 5.126 ms) to (0.2373 m; 7.187 ms); 13 dashes
+expansion_long_dash_5_interior,0,-0.39918,5.6614,left frame; drawn dashes span (-0.3953 m; 5.674 ms) to (0.2378 m; 7.806 ms); 13 dashes
+expansion_long_dash_5_interior,1,0.25418,7.8616,intersection with interface centreline; drawn dashes span (-0.3953 m; 5.674 ms) to (0.2378 m; 7.806 ms); 13 dashes
+expansion_long_dash_6_tail,0,-0.39918,6.1343,left frame; drawn dashes span (-0.3956 m; 6.147 ms) to (0.2375 m; 8.427 ms); 13 dashes
+expansion_long_dash_6_tail,1,0.25529,8.4910,intersection with interface centreline; drawn dashes span (-0.3956 m; 6.147 ms) to (0.2375 m; 8.427 ms); 13 dashes
+fan_into_SF6_short_dash_1_head,0,0.25607,8.4728,backward extension to the interface centreline; drawn dashes span (0.3328 m; 9.184 ms) to (0.6234 m; 11.874 ms); 13 dashes
+fan_into_SF6_short_dash_1_head,1,0.63897,12.0183,top frame; drawn dashes span (0.3328 m; 9.184 ms) to (0.6234 m; 11.874 ms); 13 dashes
+fan_into_SF6_short_dash_2_interior,0,0.25657,8.4610,backward extension to the interface centreline; drawn dashes span (0.3182 m; 9.083 ms) to (0.5973 m; 11.898 ms); 12 dashes
+fan_into_SF6_short_dash_2_interior,1,0.60917,12.0183,top frame; drawn dashes span (0.3182 m; 9.083 ms) to (0.5973 m; 11.898 ms); 12 dashes
+fan_into_SF6_short_dash_3_interior,0,0.25616,8.4705,backward extension to the interface centreline; drawn dashes span (0.3332 m; 9.344 ms) to (0.5658 m; 11.979 ms); 10 dashes
+fan_into_SF6_short_dash_3_interior,1,0.56919,12.0183,top frame; drawn dashes span (0.3332 m; 9.344 ms) to (0.5658 m; 11.979 ms); 10 dashes
+fan_into_SF6_short_dash_4_tail,0,0.25629,8.4674,backward extension to the interface centreline; drawn dashes span (0.3297 m; 9.387 ms) to (0.5366 m; 11.979 ms); 9 dashes
+fan_into_SF6_short_dash_4_tail,1,0.53973,12.0183,top frame; drawn dashes span (0.3297 m; 9.387 ms) to (0.5366 m; 11.979 ms); 9 dashes
+interface,0,0.09346,11.9521,row centre of the thick curve
+interface,1,0.09434,11.9179,row centre of the thick curve
+interface,2,0.09550,11.8838,row centre of the thick curve
+interface,3,0.09696,11.8496,row centre of the thick curve
+interface,4,0.09812,11.8154,row centre of the thick curve
+interface,5,0.10044,11.7812,row centre of the thick curve
+interface,6,0.10189,11.7471,row centre of the thick curve
+interface,7,0.10363,11.7129,row centre of the thick curve
+interface,8,0.10537,11.6787,row centre of the thick curve
+interface,9,0.10740,11.6446,row centre of the thick curve
+interface,10,0.10828,11.6104,row centre of the thick curve
+interface,11,0.11059,11.5762,row centre of the thick curve
+interface,12,0.11205,11.5420,row centre of the thick curve
+interface,13,0.11292,11.5079,row centre of the thick curve
+interface,14,0.11495,11.4737,row centre of the thick curve
+interface,15,0.11669,11.4395,row centre of the thick curve
+interface,16,0.11843,11.4053,row centre of the thick curve
+interface,17,0.11989,11.3712,row centre of the thick curve
+interface,18,0.12191,11.3370,row centre of the thick curve
+interface,19,0.12308,11.3028,row centre of the thick curve
+interface,20,0.12453,11.2687,row centre of the thick curve
+interface,21,0.12656,11.2345,row centre of the thick curve
+interface,22,0.12830,11.2003,row centre of the thick curve
+interface,23,0.13004,11.1661,row centre of the thick curve
+interface,24,0.13150,11.1320,row centre of the thick curve
+interface,25,0.13295,11.0978,row centre of the thick curve
+interface,26,0.13440,11.0636,row centre of the thick curve
+interface,27,0.13643,11.0295,row centre of the thick curve
+interface,28,0.13788,10.9953,row centre of the thick curve
+interface,29,0.13991,10.9611,row centre of the thick curve
+interface,30,0.14108,10.9269,row centre of the thick curve
+interface,31,0.14310,10.8928,row centre of the thick curve
+interface,32,0.14427,10.8586,row centre of the thick curve
+interface,33,0.14658,10.8244,row centre of the thick curve
+interface,34,0.14746,10.7902,row centre of the thick curve
+interface,35,0.14949,10.7561,row centre of the thick curve
+interface,36,0.15094,10.7219,row centre of the thick curve
+interface,37,0.15268,10.6877,row centre of the thick curve
+interface,38,0.15443,10.6536,row centre of the thick curve
+interface,39,0.15588,10.6194,row centre of the thick curve
+interface,40,0.15762,10.5852,row centre of the thick curve
+interface,41,0.15936,10.5510,row centre of the thick curve
+interface,42,0.16110,10.5169,row centre of the thick curve
+interface,43,0.16255,10.4827,row centre of the thick curve
+interface,44,0.16429,10.4485,row centre of the thick curve
+interface,45,0.16575,10.4143,row centre of the thick curve
+interface,46,0.16749,10.3802,row centre of the thick curve
+interface,47,0.16894,10.3460,row centre of the thick curve
+interface,48,0.17068,10.3118,row centre of the thick curve
+interface,49,0.17213,10.2777,row centre of the thick curve
+interface,50,0.17359,10.2435,row centre of the thick curve
+interface,51,0.17561,10.2093,row centre of the thick curve
+interface,52,0.17707,10.1751,row centre of the thick curve
+interface,53,0.17881,10.1410,row centre of the thick curve
+interface,54,0.18026,10.1068,row centre of the thick curve
+interface,55,0.18229,10.0726,row centre of the thick curve
+interface,56,0.18345,10.0384,row centre of the thick curve
+interface,57,0.18577,10.0043,row centre of the thick curve
+interface,58,0.18694,9.9701,row centre of the thick curve
+interface,59,0.18896,9.9359,row centre of the thick curve
+interface,60,0.19042,9.9018,row centre of the thick curve
+interface,61,0.19216,9.8676,row centre of the thick curve
+interface,62,0.19361,9.8334,row centre of the thick curve
+interface,63,0.19535,9.7992,row centre of the thick curve
+interface,64,0.19709,9.7651,row centre of the thick curve
+interface,65,0.19826,9.7309,row centre of the thick curve
+interface,66,0.20057,9.6967,row centre of the thick curve
+interface,67,0.20174,9.6625,row centre of the thick curve
+interface,68,0.20377,9.6284,row centre of the thick curve
+interface,69,0.20522,9.5942,row centre of the thick curve
+interface,70,0.20667,9.5600,row centre of the thick curve
+interface,71,0.20870,9.5259,row centre of the thick curve
+interface,72,0.20987,9.4917,row centre of the thick curve
+interface,73,0.21218,9.4575,row centre of the thick curve
+interface,74,0.21363,9.4233,row centre of the thick curve
+interface,75,0.21537,9.3892,row centre of the thick curve
+interface,76,0.21654,9.3550,row centre of the thick curve
+interface,77,0.21857,9.3208,row centre of the thick curve
+interface,78,0.22002,9.2867,row centre of the thick curve
+interface,79,0.22176,9.2525,row centre of the thick curve
+interface,80,0.22322,9.2183,row centre of the thick curve
+interface,81,0.22524,9.1841,row centre of the thick curve
+interface,82,0.22698,9.1500,row centre of the thick curve
+interface,83,0.22844,9.1158,row centre of the thick curve
+interface,84,0.22989,9.0816,row centre of the thick curve
+interface,85,0.23192,9.0474,row centre of the thick curve
+interface,86,0.23308,9.0133,row centre of the thick curve
+interface,87,0.23511,8.9791,row centre of the thick curve
+interface,88,0.23685,8.9449,row centre of the thick curve
+interface,89,0.23859,8.9108,row centre of the thick curve
+interface,90,0.24033,8.8766,row centre of the thick curve
+interface,91,0.24179,8.8424,row centre of the thick curve
+interface,92,0.24353,8.8082,row centre of the thick curve
+interface,93,0.24585,8.7536,row centre of the thick curve
+interface,94,0.24817,8.7194,row centre of the thick curve
+interface,95,0.24933,8.6852,row centre of the thick curve
+interface,96,0.25165,8.6511,row centre of the thick curve
+interface,97,0.25281,8.6169,row centre of the thick curve
+interface,98,0.25427,8.5827,row centre of the thick curve
+interface,99,0.25774,8.5349,row centre of the thick curve
+interface,100,0.25517,8.5007,row centre of the thick curve
+interface,101,0.25633,8.4665,row centre of the thick curve
+interface,102,0.25692,8.4323,row centre of the thick curve
+interface,103,0.25608,8.3981,row centre of the thick curve
+interface,104,0.25609,8.3639,row centre of the thick curve
+interface,105,0.25582,8.3297,row centre of the thick curve
+interface,106,0.25584,8.2955,row centre of the thick curve
+interface,107,0.25556,8.2614,row centre of the thick curve
+interface,108,0.25558,8.2272,row centre of the thick curve
+interface,109,0.25560,8.1930,row centre of the thick curve
+interface,110,0.25561,8.1588,row centre of the thick curve
+interface,111,0.25563,8.1246,row centre of the thick curve
+interface,112,0.25536,8.0904,row centre of the thick curve
+interface,113,0.25537,8.0562,row centre of the thick curve
+interface,114,0.25510,8.0221,row centre of the thick curve
+interface,115,0.25512,7.9879,row centre of the thick curve
+interface,116,0.25484,7.9537,row centre of the thick curve
+interface,117,0.25486,7.9195,row centre of the thick curve
+interface,118,0.25459,7.8853,row centre of the thick curve
+interface,119,0.25374,7.8511,row centre of the thick curve
+interface,120,0.25376,7.8169,row centre of the thick curve
+interface,121,0.25377,7.7827,row centre of the thick curve
+interface,122,0.25350,7.7485,row centre of the thick curve
+interface,123,0.25294,7.7144,row centre of the thick curve
+interface,124,0.25296,7.6802,row centre of the thick curve
+interface,125,0.25269,7.6460,row centre of the thick curve
+interface,126,0.25213,7.6118,row centre of the thick curve
+interface,127,0.25186,7.5776,row centre of the thick curve
+interface,128,0.25158,7.5434,row centre of the thick curve
+interface,129,0.25131,7.5092,row centre of the thick curve
+interface,130,0.25047,7.4750,row centre of the thick curve
+interface,131,0.25019,7.4408,row centre of the thick curve
+interface,132,0.24992,7.4067,row centre of the thick curve
+interface,133,0.24936,7.3725,row centre of the thick curve
+interface,134,0.24938,7.3383,row centre of the thick curve
+interface,135,0.24853,7.3041,row centre of the thick curve
+interface,136,0.24826,7.2699,row centre of the thick curve
+interface,137,0.24799,7.2357,row centre of the thick curve
+interface,138,0.24714,7.2015,row centre of the thick curve
+interface,139,0.24687,7.1673,row centre of the thick curve
+interface,140,0.24602,7.1331,row centre of the thick curve
+interface,141,0.24575,7.0989,row centre of the thick curve
+interface,142,0.24519,7.0648,row centre of the thick curve
+interface,143,0.24492,7.0306,row centre of the thick curve
+interface,144,0.24408,6.9964,row centre of the thick curve
+interface,145,0.24352,6.9622,row centre of the thick curve
+interface,146,0.24324,6.9280,row centre of the thick curve
+interface,147,0.24240,6.8938,row centre of the thick curve
+interface,148,0.24184,6.8596,row centre of the thick curve
+interface,149,0.24128,6.8254,row centre of the thick curve
+interface,150,0.24015,6.7912,row centre of the thick curve
+interface,151,0.23987,6.7570,row centre of the thick curve
+interface,152,0.23903,6.7228,row centre of the thick curve
+interface,153,0.23847,6.6886,row centre of the thick curve
+interface,154,0.23762,6.6545,row centre of the thick curve
+interface,155,0.23677,6.6203,row centre of the thick curve
+interface,156,0.23593,6.5861,row centre of the thick curve
+interface,157,0.23422,6.5519,row centre of the thick curve
+interface,158,0.23424,6.5177,row centre of the thick curve
+interface,159,0.23368,6.4835,row centre of the thick curve
+interface,160,0.23312,6.4493,row centre of the thick curve
+interface,161,0.23198,6.4151,row centre of the thick curve
+interface,162,0.23114,6.3809,row centre of the thick curve
+interface,163,0.23029,6.3467,row centre of the thick curve
+interface,164,0.22916,6.3125,row centre of the thick curve
+interface,165,0.22860,6.2783,row centre of the thick curve
+interface,166,0.22775,6.2441,row centre of the thick curve
+interface,167,0.22690,6.2099,row centre of the thick curve
+interface,168,0.22606,6.1757,row centre of the thick curve
+interface,169,0.22521,6.1415,row centre of the thick curve
+interface,170,0.22379,6.1074,row centre of the thick curve
+interface,171,0.22323,6.0732,row centre of the thick curve
+interface,172,0.22181,6.0390,row centre of the thick curve
+interface,173,0.22096,6.0048,row centre of the thick curve
+interface,174,0.22040,5.9706,row centre of the thick curve
+interface,175,0.21898,5.9364,row centre of the thick curve
+interface,176,0.21727,5.9022,row centre of the thick curve
+interface,177,0.21729,5.8680,row centre of the thick curve
+interface,178,0.21587,5.8338,row centre of the thick curve
+interface,179,0.21531,5.7996,row centre of the thick curve
+interface,180,0.21360,5.7654,row centre of the thick curve
+interface,181,0.21246,5.7312,row centre of the thick curve
+interface,182,0.21133,5.6970,row centre of the thick curve
+interface,183,0.21048,5.6628,row centre of the thick curve
+interface,184,0.20906,5.6286,row centre of the thick curve
+interface,185,0.20793,5.5944,row centre of the thick curve
+interface,186,0.20708,5.5602,row centre of the thick curve
+interface,187,0.20595,5.5260,row centre of the thick curve
+interface,188,0.20424,5.4918,row centre of the thick curve
+interface,189,0.20310,5.4576,row centre of the thick curve
+interface,190,0.20197,5.4234,row centre of the thick curve
+interface,191,0.20055,5.3892,row centre of the thick curve
+interface,192,0.19913,5.3550,row centre of the thick curve
+interface,193,0.19828,5.3208,row centre of the thick curve
+interface,194,0.19657,5.2866,row centre of the thick curve
+interface,195,0.19572,5.2525,row centre of the thick curve
+interface,196,0.19430,5.2183,row centre of the thick curve
+interface,197,0.19317,5.1841,row centre of the thick curve
+interface,198,0.19175,5.1499,row centre of the thick curve
+interface,199,0.19061,5.1157,row centre of the thick curve
+interface,200,0.18948,5.0815,row centre of the thick curve
+interface,201,0.18835,5.0473,row centre of the thick curve
+interface,202,0.18664,5.0131,row centre of the thick curve
+interface,203,0.18522,4.9789,row centre of the thick curve
+interface,204,0.18379,4.9447,row centre of the thick curve
+interface,205,0.18266,4.9105,row centre of the thick curve
+interface,206,0.18153,4.8763,row centre of the thick curve
+interface,207,0.18039,4.8421,row centre of the thick curve
+interface,208,0.17897,4.8079,row centre of the thick curve
+interface,209,0.17726,4.7737,row centre of the thick curve
+interface,210,0.17641,4.7395,row centre of the thick curve
+interface,211,0.17499,4.7053,row centre of the thick curve
+interface,212,0.17357,4.6711,row centre of the thick curve
+interface,213,0.17244,4.6369,row centre of the thick curve
+interface,214,0.17102,4.6027,row centre of the thick curve
+interface,215,0.16988,4.5685,row centre of the thick curve
+interface,216,0.16875,4.5343,row centre of the thick curve
+interface,217,0.16761,4.5001,row centre of the thick curve
+interface,218,0.16619,4.4659,row centre of the thick curve
+interface,219,0.16535,4.4317,row centre of the thick curve
+interface,220,0.16335,4.3975,row centre of the thick curve
+interface,221,0.16250,4.3633,row centre of the thick curve
+interface,222,0.16108,4.3291,row centre of the thick curve
+interface,223,0.15995,4.2949,row centre of the thick curve
+interface,224,0.15853,4.2607,row centre of the thick curve
+interface,225,0.15768,4.2265,row centre of the thick curve
+interface,226,0.15626,4.1923,row centre of the thick curve
+interface,227,0.15512,4.1581,row centre of the thick curve
+interface,228,0.15341,4.1239,row centre of the thick curve
+interface,229,0.15228,4.0898,row centre of the thick curve
+interface,230,0.15086,4.0556,row centre of the thick curve
+interface,231,0.14972,4.0214,row centre of the thick curve
+interface,232,0.14859,3.9872,row centre of the thick curve
+interface,233,0.14688,3.9530,row centre of the thick curve
+interface,234,0.14575,3.9188,row centre of the thick curve
+interface,235,0.14461,3.8846,row centre of the thick curve
+interface,236,0.14290,3.8504,row centre of the thick curve
+interface,237,0.14177,3.8162,row centre of the thick curve
+interface,238,0.14064,3.7820,row centre of the thick curve
+interface,239,0.13950,3.7478,row centre of the thick curve
+interface,240,0.13837,3.7136,row centre of the thick curve
+interface,241,0.13695,3.6794,row centre of the thick curve
+interface,242,0.13524,3.6452,row centre of the thick curve
+interface,243,0.13439,3.6110,row centre of the thick curve
+interface,244,0.13297,3.5768,row centre of the thick curve
+interface,245,0.13155,3.5426,row centre of the thick curve
+interface,246,0.13070,3.5084,row centre of the thick curve
+interface,247,0.12928,3.4742,row centre of the thick curve
+interface,248,0.12786,3.4400,row centre of the thick curve
+interface,249,0.12701,3.4058,row centre of the thick curve
+interface,250,0.12588,3.3716,row centre of the thick curve
+interface,251,0.12417,3.3374,row centre of the thick curve
+interface,252,0.12275,3.3032,row centre of the thick curve
+interface,253,0.12190,3.2690,row centre of the thick curve
+interface,254,0.12048,3.2348,row centre of the thick curve
+interface,255,0.11906,3.2006,row centre of the thick curve
+interface,256,0.11792,3.1664,row centre of the thick curve
+interface,257,0.11679,3.1322,row centre of the thick curve
+interface,258,0.11508,3.0980,row centre of the thick curve
+interface,259,0.11395,3.0638,row centre of the thick curve
+interface,260,0.11253,3.0296,row centre of the thick curve
+interface,261,0.11110,2.9954,row centre of the thick curve
+interface,262,0.10997,2.9612,row centre of the thick curve
+interface,263,0.10884,2.9270,row centre of the thick curve
+interface,264,0.10741,2.8929,row centre of the thick curve
+interface,265,0.10628,2.8587,row centre of the thick curve
+interface,266,0.10457,2.8245,row centre of the thick curve
+interface,267,0.10315,2.7903,row centre of the thick curve
+interface,268,0.10202,2.7561,row centre of the thick curve
+interface,269,0.10088,2.7219,row centre of the thick curve
+interface,270,0.09975,2.6877,row centre of the thick curve
+interface,271,0.09861,2.6535,row centre of the thick curve
+interface,272,0.09719,2.6193,row centre of the thick curve
+interface,273,0.09577,2.5851,row centre of the thick curve
+interface,274,0.09464,2.5509,row centre of the thick curve
+interface,275,0.09350,2.5167,row centre of the thick curve
+interface,276,0.09179,2.4825,row centre of the thick curve
+interface,277,0.09095,2.4483,row centre of the thick curve
+interface,278,0.08953,2.4141,row centre of the thick curve
+interface,279,0.08839,2.3799,row centre of the thick curve
+interface,280,0.08726,2.3457,row centre of the thick curve
+interface,281,0.08612,2.3115,row centre of the thick curve
+interface,282,0.08441,2.2773,row centre of the thick curve
+interface,283,0.08328,2.2431,row centre of the thick curve
+interface,284,0.08157,2.2089,row centre of the thick curve
+interface,285,0.08044,2.1747,row centre of the thick curve
+interface,286,0.07930,2.1405,row centre of the thick curve
+interface,287,0.07817,2.1063,row centre of the thick curve
+interface,288,0.07646,2.0721,row centre of the thick curve
+interface,289,0.07561,2.0379,row centre of the thick curve
+interface,290,0.07419,2.0037,row centre of the thick curve
+interface,291,0.07248,1.9695,row centre of the thick curve
+interface,292,0.07135,1.9353,row centre of the thick curve
+interface,293,0.07022,1.9011,row centre of the thick curve
+interface,294,0.06879,1.8669,row centre of the thick curve
+interface,295,0.06795,1.8327,row centre of the thick curve
+interface,296,0.06624,1.7985,row centre of the thick curve
+interface,297,0.06482,1.7643,row centre of the thick curve
+interface,298,0.06340,1.7301,row centre of the thick curve
+interface,299,0.06284,1.6960,row centre of the thick curve
+interface,300,0.06141,1.6618,row centre of the thick curve
+interface,301,0.05999,1.6276,row centre of the thick curve
+interface,302,0.05886,1.5934,row centre of the thick curve
+interface,303,0.05772,1.5592,row centre of the thick curve
+interface,304,0.05630,1.5250,row centre of the thick curve
+interface,305,0.05517,1.4908,row centre of the thick curve
+interface,306,0.05404,1.4566,row centre of the thick curve
+interface,307,0.05261,1.4224,row centre of the thick curve
+interface,308,0.05148,1.3882,row centre of the thick curve
+interface,309,0.05006,1.3540,row centre of the thick curve
+interface,310,0.04864,1.3198,row centre of the thick curve
+interface,311,0.04750,1.2856,row centre of the thick curve
+interface,312,0.04608,1.2514,row centre of the thick curve
+interface,313,0.04466,1.2172,row centre of the thick curve
+interface,314,0.04353,1.1830,row centre of the thick curve
+interface,315,0.04210,1.1488,row centre of the thick curve
+interface,316,0.04068,1.1146,row centre of the thick curve
+interface,317,0.03955,1.0804,row centre of the thick curve
+interface,318,0.03841,1.0462,row centre of the thick curve
+interface,319,0.03728,1.0120,row centre of the thick curve
+interface,320,0.03586,0.9778,row centre of the thick curve
+interface,321,0.03444,0.9436,row centre of the thick curve
+interface,322,0.03273,0.9094,row centre of the thick curve
+interface,323,0.03159,0.8752,row centre of the thick curve
+interface,324,0.03046,0.8410,row centre of the thick curve
+interface,325,0.02933,0.8068,row centre of the thick curve
+interface,326,0.02819,0.7726,row centre of the thick curve
+interface,327,0.02677,0.7384,row centre of the thick curve
+interface,328,0.02564,0.7042,row centre of the thick curve
+interface,329,0.02450,0.6700,row centre of the thick curve
+interface,330,0.02308,0.6358,row centre of the thick curve
+interface,331,0.02195,0.6016,row centre of the thick curve
+interface,332,0.02053,0.5674,row centre of the thick curve
+interface,333,0.01939,0.5332,row centre of the thick curve
+interface,334,0.01797,0.4990,row centre of the thick curve
+interface,335,0.01712,0.4649,row centre of the thick curve
+interface,336,0.01570,0.4307,row centre of the thick curve
+interface,337,0.01457,0.3965,row centre of the thick curve
+interface,338,0.01315,0.3623,row centre of the thick curve
+interface,339,0.01172,0.3281,row centre of the thick curve
+interface,340,0.01002,0.2939,row centre of the thick curve
+interface,341,0.00888,0.2597,row centre of the thick curve
+interface,342,0.00775,0.2255,row centre of the thick curve
+interface,343,0.00661,0.1913,row centre of the thick curve
+interface,344,0.00519,0.1571,row centre of the thick curve
+interface,345,0.00406,0.1229,row centre of the thick curve
+interface,346,0.00206,0.0887,row centre of the thick curve
+interface,347,0.00265,0.0545,row centre of the thick curve
+interface,348,-0.00078,0.0203,row centre of the thick curve
+interface,349,-0.00077,-0.0139,row centre of the thick curve
+interface,350,0.00040,-0.0481,row centre of the thick curve
+interface,351,0.00042,-0.0823,row centre of the thick curve
+interface,352,0.00043,-0.1165,row centre of the thick curve
+interface,353,0.00045,-0.1506,row centre of the thick curve
+interface,354,0.00046,-0.1848,row centre of the thick curve
+interface,355,0.00048,-0.2190,row centre of the thick curve
+interface,356,0.00049,-0.2532,row centre of the thick curve
+interface,357,0.00051,-0.2874,row centre of the thick curve
+interface,358,0.00053,-0.3216,row centre of the thick curve
+interface,359,0.00025,-0.3558,row centre of the thick curve
+interface,360,-0.00002,-0.3899,row centre of the thick curve
+interface,361,0.00057,-0.4241,row centre of the thick curve
+interface,362,0.00030,-0.4583,row centre of the thick curve
+interface,363,0.00032,-0.4925,row centre of the thick curve
+interface,364,0.00033,-0.5267,row centre of the thick curve
+interface,365,0.00006,-0.5609,row centre of the thick curve
+interface,366,0.00037,-0.5951,row centre of the thick curve
+interface,367,0.00009,-0.6293,row centre of the thick curve
+interface,368,0.00011,-0.6634,row centre of the thick curve
+interface,369,0.00012,-0.6976,row centre of the thick curve
+interface,370,0.00014,-0.7318,row centre of the thick curve
+interface,371,0.00016,-0.7660,row centre of the thick curve
+interface,372,0.00017,-0.8002,row centre of the thick curve
+interface,373,0.00019,-0.8344,row centre of the thick curve
+interface,374,0.00020,-0.8686,row centre of the thick curve
+interface,375,0.00022,-0.9027,row centre of the thick curve
+interface,376,0.00024,-0.9369,row centre of the thick curve

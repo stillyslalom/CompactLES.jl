@@ -257,10 +257,11 @@ nothing #hide
 
 # ## Grid and run
 #
-# The grid has 36 rows of nodes across the half wavelength and square cells,
-# 0.82 mm on a side, which makes 303 columns along the channel. The numerics
-# are the defaults. A snapshot of the mole fractions and the density every
-# 10 µs, the first at the start, records the interface.
+# The cells are square, 0.82 mm on a side, so that ``\lambda/\Delta x = 72``;
+# `ny`, the nodes across the half wavelength, sets the spacing
+# ``\Delta x = \lambda/(2n_y)``. The numerics are the defaults. A snapshot of
+# the mole fractions and the density every 10 µs, the first at the start,
+# records the interface.
 
 ny = 36
 nx = round(Int, Lx / (lambda / 2 / ny))
@@ -344,9 +345,9 @@ delta_calc = sum(thickness) / length(thickness)
 nothing #hide
 
 # The layer leaves the shock about 3.5 mm thick, a tenth thicker than the
-# estimate above, and keeps that thickness. On a grid of 48 rows it is 3.1 mm,
-# the estimate. On a grid of 24 rows the compressed layer would span 2.5
-# cells; the artificial diffusivity, which acts where the grid does not
+# estimate above, and keeps that thickness. At ``\lambda/\Delta x = 96`` it is
+# 3.1 mm, the estimate. At ``\lambda/\Delta x = 48`` the compressed layer would
+# span 2.5 cells; the artificial diffusivity, which acts where the grid does not
 # resolve a variation, spreads it to 4.5 mm by 0.4 ms and 4.9 mm by 1 ms, and
 # the thicker layer grows 2% more slowly than the one here.
 

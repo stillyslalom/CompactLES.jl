@@ -132,11 +132,11 @@ nothing #hide
 # ## Grid and run
 #
 # The three widths are ``w = 0.05``, 0.1 and 0.2, for which ``kw`` is 0.31,
-# 0.63 and 1.26. The layer needs resolution along ``x``: 97 nodes make a
-# spacing of ``\lambda/64``, which puts 3.2 nodes across the thinnest layer.
-# Across the channel the ripple is a single cosine, and 10 columns of nodes
-# over the half wavelength resolve it; with 16 columns the growth rate changes
-# by 0.03%. The numerics are the defaults.
+# 0.63 and 1.26. The layer needs resolution along ``x``: a spacing of
+# ``\Delta x = \lambda/64`` puts 3.2 spacings across the thinnest layer.
+# Across the channel the ripple is a single cosine, which a spacing
+# ``\Delta y = \lambda/20`` resolves; at ``\Delta y = \lambda/32`` the growth
+# rate changes by 0.03%. The numerics are the defaults.
 #
 # Each run lasts ``4.5/\sigma_w``, and a snapshot of the mole fractions every
 # 0.1 time units records it:

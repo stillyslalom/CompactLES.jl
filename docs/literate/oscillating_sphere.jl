@@ -81,19 +81,20 @@ end
 # the velocity components as ``(u_r, u_\theta, u_\phi)``. The field is
 # symmetric about the polar axis, so ``\phi`` is collapsed, as in
 # [Supernova remnant](@ref), and ``u_\phi = 0``. The polar angle is resolved
-# over ``(0, \pi)`` with 32 nodes at ``\theta_j = (j - \tfrac12)\Delta\theta``,
-# none on the axis. [`PoleBC`](@ref), applied at both ends, continues the flow
-# through the axis: with ``\phi`` collapsed, the node at ``-\theta`` is the one
-# at ``\theta``, and ``u_\theta`` changes sign across the axis while the
-# density, the pressure and ``u_r`` do not.
+# over ``(0, \pi)`` at a spacing ``\Delta\theta = \pi/32``, with nodes at
+# ``\theta_j = (j - \tfrac12)\Delta\theta``, none on the axis. [`PoleBC`](@ref),
+# applied at both ends, continues the flow through the axis: with ``\phi``
+# collapsed, the node at ``-\theta`` is the one at ``\theta``, and ``u_\theta``
+# changes sign across the axis while the density, the pressure and ``u_r`` do
+# not.
 #
-# The radius runs from the sphere to ``r = 2.1``, four wavelengths, with 128
-# nodes, about 32 per wavelength. At the sphere a [`DirichletBC`](@ref) holds
-# the exact solution, as at the outer boundary of
+# The radius runs from the sphere to ``r = 2.1``, four wavelengths, at a
+# spacing ``\Delta r = 0.016``, about 32 points per wavelength. At the sphere a
+# [`DirichletBC`](@ref) holds the exact solution, as at the outer boundary of
 # [Axis-crossing vortex](@ref). At ``r = 2.1`` an [`NSCBCOutflowBC`](@ref), as
 # in [Richtmyer–Meshkov instability](@ref), lets the outgoing wave leave and
-# relaxes the pressure toward that of the gas at rest. The initial state is
-# the exact solution at ``t = 0``. The numerics are the defaults.
+# relaxes the pressure toward that of the gas at rest. The initial state is the
+# exact solution at ``t = 0``. The numerics are the defaults.
 
 nr, ntheta = 128, 32
 problem = Problem(
@@ -235,8 +236,8 @@ fig
 #
 # The remaining 0.4% is the resolution at the sphere, whose radius spans six
 # radial spacings: holding the exact solution at the outer boundary leaves the
-# ratio the same, and with 64 radial nodes instead of 128 the radiated
-# amplitude is 2% high.
+# ratio the same, and at twice the radial spacing, about 16 points per
+# wavelength, the radiated amplitude is 2% high.
 #
 # ## Pattern
 #
@@ -262,8 +263,8 @@ fig
 
 # The pattern is ``|\cos\theta|`` to a few parts in a million, at the axis and
 # at the equator alike: the errors in amplitude and phase above are the same
-# at every angle. With 16 or 64 polar nodes instead of 32, the ratio to the
-# exact amplitude along the axis does not change.
+# at every angle. At ``\Delta\theta = \pi/16`` or ``\pi/64`` instead of
+# ``\pi/32``, the ratio to the exact amplitude along the axis does not change.
 #
 # ## Start
 #

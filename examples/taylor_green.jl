@@ -1,30 +1,32 @@
 # # Taylor–Green vortex
 #
 # The Taylor–Green vortex is a periodic array of vortices that starts as a
-# single Fourier mode and breaks down into turbulence. At a Reynolds number
-# of 1600 the rate at which its kinetic energy decays rises to a maximum near
+# single Fourier mode and breaks down into turbulence. At a Reynolds number of
+# 1600 the rate at which its kinetic energy decays rises to a maximum near
 # ``t = 9`` and then falls as the turbulence decays. The case is a standard
 # test of large-eddy simulation: the velocity gradients that carry the peak
-# dissipation are too fine for a grid of 32 or 64 points per side. The
-# questions are how close the energy history comes to a resolved calculation
-# on such a grid, and what removes the energy that the grid cannot dissipate
-# through the molecular viscosity.
+# dissipation are too fine for a spacing ``\Delta x`` of a 32nd or a 64th of
+# the period, ``2\pi/\Delta x = 32`` or 64. The questions are how close the
+# energy history comes to a resolved calculation on such a grid, and what
+# removes the energy that the grid cannot dissipate through the molecular
+# viscosity.
 #
-# The reference is a pseudo-spectral calculation of the incompressible flow on
-# 512³ points, distributed with the International Workshops on High-Order CFD
-# Methods as `spectral_Re1600_512.gdiag` and carried in the package's `data`
-# directory. Its columns are the time, the kinetic energy per unit volume, its
-# rate of decay ``-dK/dt`` and the enstrophy, every 0.01 from ``t = 0`` to
-# 19.99. This page calculates the vortex at Mach 0.1 on 32³ and 64³ nodes,
-# compares the energy and its rate of decay with the reference, and divides
-# the decay among the molecular viscosity, the artificial properties and the
-# compact filter.
+# The reference is a pseudo-spectral calculation of the incompressible flow at
+# ``2\pi/\Delta x = 512``, distributed with the International Workshops on
+# High-Order CFD Methods as `spectral_Re1600_512.gdiag` and carried in the
+# package's `data` directory. Its columns are the time, the kinetic energy per
+# unit volume, its rate of decay ``-dK/dt`` and the enstrophy, every 0.01 from
+# ``t = 0`` to 19.99. This page calculates the vortex at Mach 0.1 at
+# ``2\pi/\Delta x = 32`` and 64, compares the energy and its rate of decay with
+# the reference, and divides the decay among the molecular viscosity, the
+# artificial properties and the compact filter.
 #
-# The script takes three settings: `N`, the nodes per side of the main run,
-# which a second run halves; `tfinal`, the time at which the runs end; and
-# `smoke`. With `smoke=true` the runs have 24³ and 12³ nodes and end at
-# ``t = 0.1``, which checks that the page still runs; the figures come from the
-# full run, launched on eight MPI ranks of one thread each.
+# The script takes three settings: `N`, the nodes per side, which sets the
+# spacing ``\Delta x = 2\pi/N`` of the main run and of a second run at twice
+# that spacing; `tfinal`, the time at which the runs end; and `smoke`. With
+# `smoke=true` the runs have 24³ and 12³ nodes and end at ``t = 0.1``, which
+# checks that the page still runs; the figures come from the full run, launched
+# on eight MPI ranks of one thread each.
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
@@ -119,7 +121,9 @@ peak_rate, k = findmax(reference.rate)
 # A configuration that loses positivity ends with a [`SolverFailure`](@ref),
 # which the run records.
 
+run_key(N, label) = @sprintf("N%d_t%g_%s", N, tfinal, replace(label, r"\W+" => "_")) #src
 function simulate(N; label, nmax = typemax(Int), kw...)
+    cached("taylor_green", run_key(N, label); smoke = opt.smoke) do #src
     solver, Q = setup(problem, Numerics(n_global = (N, N, N); kw...))
     volume = (2pi)^3
     mean(f) = volume_integral(solver, f) / volume
@@ -156,6 +160,7 @@ function simulate(N; label, nmax = typemax(Int), kw...)
     rate = [(K[i-1] - K[i+1]) / (t[i+1] - t[i-1]) for i in 2:length(t)-1]
     return (; N, label, t, K, total, molecular, pdil, rate, tc = t[2:end-1],
             frame = frame[], t_frame, failure)
+    end #src
 end
 
 # ## Runs
@@ -168,11 +173,12 @@ end
 # disables the filter.
 
 runs = mpi_main() do
-    [simulate(N; label = "$(N)³, defaults"),
-     simulate(N ÷ 2; label = "$(N ÷ 2)³, defaults"),
-     simulate(N ÷ 2; label = "$(N ÷ 2)³, artificial off",
+    [simulate(N; label = "2π/Δx = $N, defaults"),
+     simulate(N ÷ 2; label = "2π/Δx = $(N ÷ 2), defaults"),
+     simulate(N ÷ 2; label = "2π/Δx = $(N ÷ 2), artificial off",
               art = ArtificialProperties(enabled = false)),
-     simulate(N ÷ 2; label = "$(N ÷ 2)³, filter off", filter = nothing, nmax = 3000)]
+     simulate(N ÷ 2; label = "2π/Δx = $(N ÷ 2), filter off", filter = nothing,
+              nmax = 3000)]
 end
 fine, coarse, no_art, no_filter = runs
 
@@ -213,10 +219,10 @@ for ax in (ax1, ax2)
     window = reference.t .<= tfinal
     y = ax === ax1 ? reference.K : reference.rate
     lines!(ax, reference.t[window], y[window], color = :black, linewidth = 2.5,
-           label = "512³ spectral reference")
+           label = "spectral reference, 2π/Δx = 512")
     for (n, r) in enumerate((fine, coarse))
         lines!(ax, ax === ax1 ? r.t : r.tc, ax === ax1 ? r.K : r.rate,
-               color = colors[n], label = "$(r.N)³, defaults")
+               color = colors[n], label = "2π/Δx = $(r.N), defaults")
     end
 end
 Legend(fig[3, 1], ax2, orientation = :horizontal, framevisible = false)
@@ -225,20 +231,20 @@ nothing #hide
 
 # ![Kinetic energy and its rate of decay](../assets/examples/taylor_green/decay.png)
 #
-# The reference decays at its largest rate, 1.29e-2, at ``t = 8.97``. On 64³
-# the rate departs from the reference near ``t = 3``, exceeds it by up to 44%
-# between ``t = 4`` and 6, and reaches its maximum of 1.27e-2 at ``t = 8.15``,
-# 1.5% below the reference maximum and 0.8 earlier. After ``t = 9.5`` it lies
-# 6% to 23% below the reference. The maximum therefore agrees because an early
-# rise and an early fall bracket it, not because the history follows the
-# reference. The energy falls 8% below the reference near ``t = 9.5`` and
-# ends 4% below at ``t = 12``.
+# The reference decays at its largest rate, 1.29e-2, at ``t = 8.97``. At
+# ``2\pi/\Delta x = 64`` the rate departs from the reference near ``t = 3``,
+# exceeds it by up to 44% between ``t = 4`` and 6, and reaches its maximum of
+# 1.27e-2 at ``t = 8.15``, 1.5% below the reference maximum and 0.8 earlier.
+# After ``t = 9.5`` it lies 6% to 23% below the reference. The maximum
+# therefore agrees because an early rise and an early fall bracket it, not
+# because the history follows the reference. The energy falls 8% below the
+# reference near ``t = 9.5`` and ends 4% below at ``t = 12``.
 #
-# On 32³ the rate is already 2.3 times the reference at ``t = 3``. It peaks at
-# 1.47e-2 at ``t = 6.85``, 15% above the reference maximum and 2.1 earlier,
-# and then falls to 0.6 of the reference. The energy is 27% below the
-# reference near ``t = 8.5``. Halving the spacing moves the peak toward the
-# reference in both time and value.
+# At ``2\pi/\Delta x = 32`` the rate is already 2.3 times the reference at
+# ``t = 3``. It peaks at 1.47e-2 at ``t = 6.85``, 15% above the reference
+# maximum and 2.1 earlier, and then falls to 0.6 of the reference. The energy
+# is 27% below the reference near ``t = 8.5``. Halving the spacing moves the
+# peak toward the reference in both time and value.
 
 # ## Where the energy goes
 #
@@ -264,7 +270,7 @@ gap = maximum(abs.(no_art.total .- no_art.molecular) ./ no_art.molecular)
         %.1e of the latter\n", gap)
 
 fig = Figure(size = (760, 640))
-axes = [Axis(fig[n, 1], ylabel = "dissipation", title = "$(r.N)³, defaults")
+axes = [Axis(fig[n, 1], ylabel = "dissipation", title = "2π/Δx = $(r.N), defaults")
         for (n, r) in enumerate((coarse, fine))]
 linkaxes!(axes...)
 hidexdecorations!(axes[1], grid = false)
@@ -285,19 +291,21 @@ nothing #hide
 # ![The terms of the energy budget](../assets/examples/taylor_green/budget.png)
 #
 # The molecular dissipation of both runs follows the reference until about
-# ``t = 3``, when it is 0.98 of the reference rate on 64³ and 0.90 on 32³, and
-# falls behind it from then on. At the peak of the 64³ run the molecular
-# viscosity carries 37% of the decay, the artificial properties 6% and the
-# pressure work 0.1%, which leaves 56% to the filter. On 32³ the shares are
-# 13%, 7% and 0.2%, and the filter's 80%. The molecular dissipation of the
-# 64³ run never exceeds 4.7e-3, 37% of the reference maximum, so this grid
-# holds at most 37% of the peak enstrophy of the resolved flow.
+# ``t = 3``, when it is 0.98 of the reference rate at ``2\pi/\Delta x = 64``
+# and 0.90 at 32, and falls behind it from then on. At the peak of the run at
+# ``2\pi/\Delta x = 64`` the molecular viscosity carries 37% of the decay, the
+# artificial properties 6% and the pressure work 0.1%, which leaves 56% to the
+# filter. At ``2\pi/\Delta x = 32`` the shares are 13%, 7% and 0.2%, and the
+# filter's 80%. The molecular dissipation of the run at ``2\pi/\Delta x = 64``
+# never exceeds 4.7e-3, 37% of the reference maximum, so this grid holds at
+# most 37% of the peak enstrophy of the resolved flow.
 #
-# The 32³ peak was measured a second time with the filter's own loss taken
-# directly, by advancing a copy of the state one step and filtering it: the
-# filter removes 79% of the decay there, and the terms then account for the
-# measured ``-dK/dt`` to 0.3%. The remainder ``F`` is therefore the filter's
-# work, with the error of the discretization under one percent of the decay.
+# The peak at ``2\pi/\Delta x = 32`` was measured a second time with the
+# filter's own loss taken directly, by advancing a copy of the state one step
+# and filtering it: the filter removes 79% of the decay there, and the terms
+# then account for the measured ``-dK/dt`` to 0.3%. The remainder ``F`` is
+# therefore the filter's work, with the error of the discretization under one
+# percent of the decay.
 
 # ## Defaults
 #
@@ -317,7 +325,7 @@ fig = Figure(size = (760, 380))
 ax = Axis(fig[1, 1], xlabel = "t", ylabel = "−dK/dt")
 window = reference.t .<= tfinal
 lines!(ax, reference.t[window], reference.rate[window], color = :black,
-       linewidth = 2.5, label = "512³ spectral reference")
+       linewidth = 2.5, label = "spectral reference, 2π/Δx = 512")
 for (n, r) in enumerate((coarse, no_art, no_filter))
     lines!(ax, r.tc, r.rate, color = colors[n], label = r.label)
 end
@@ -327,15 +335,15 @@ Legend(fig[1, 2], ax, framevisible = false)
 save(joinpath(outdir, "defaults.png"), fig) #src
 nothing #hide
 
-# ![Changes to the defaults on 32³](../assets/examples/taylor_green/defaults.png)
+# ![Changes to the defaults on the coarser grid](../assets/examples/taylor_green/defaults.png)
 #
-# Without the artificial properties the 32³ run peaks at the same time and
-# 0.9% higher, and its energy stays closer to the reference, 25% below it at
-# most rather than 27%. At its peak the filter's share rises from 80% to 86%,
-# taking over the share of the artificial shear viscosity. The artificial
-# bulk viscosity has almost no dilatation to act on at Mach 0.1: its
-# dissipation at the 32³ peak is 2e-4 of the decay. The artificial properties
-# are not what produce this result.
+# Without the artificial properties the run at ``2\pi/\Delta x = 32`` peaks at
+# the same time and 0.9% higher, and its energy stays closer to the reference,
+# 25% below it at most rather than 27%. At its peak the filter's share rises
+# from 80% to 86%, taking over the share of the artificial shear viscosity. The
+# artificial bulk viscosity has almost no dilatation to act on at Mach 0.1: its
+# dissipation at the peak of that run is 2e-4 of the decay. The artificial
+# properties are not what produce this result.
 #
 # Without the filter the run follows the reference rate more closely than the
 # filtered run up to ``t = 3``, 0.98 of it against 2.3 times it. The energy
@@ -353,7 +361,7 @@ fig = Figure(size = (760, 400))
 frames = [r.frame for r in (coarse, fine)]
 top = maximum(maximum(f[3]) for f in frames)
 for (n, (r, f)) in enumerate(zip((coarse, fine), frames))
-    panel = Axis(fig[1, n], aspect = DataAspect(), title = "$(r.N)³", xlabel = "y",
+    panel = Axis(fig[1, n], aspect = DataAspect(), title = "2π/Δx = $(r.N)", xlabel = "y",
                  ylabel = n == 1 ? "z" : "")
     heatmap!(panel, f[1], f[2], f[3], colormap = :inferno, colorrange = (0, top))
 end
@@ -363,27 +371,30 @@ nothing #hide
 
 # ![Vorticity magnitude at t = 8](../assets/examples/taylor_green/vorticity.png)
 #
-# The two grids place the strongest vorticity in the same pairs of sheets. On
-# 64³ each sheet spans several nodes and weaker streaks a node or two wide lie
-# between the sheets. On 32³ each sheet is one or two nodes across, and the
-# field between the sheets varies from node to node.
+# The two grids place the strongest vorticity in the same pairs of sheets. At
+# ``2\pi/\Delta x = 64`` each sheet spans several nodes and weaker streaks a
+# node or two wide lie between the sheets. At ``2\pi/\Delta x = 32`` each sheet
+# is one or two nodes across, and the field between the sheets varies from node
+# to node.
 
 # ## What this checks
 #
-# - On 64³ nodes with the default numerics the peak rate of decay of the
-#   kinetic energy is within 1.5% of the 512³ spectral reference, but it occurs
-#   0.8 time units early, the rate is up to 44% high before it and up to 23%
-#   low after it, and the energy is up to 8% low.
-# - On 32³ nodes the peak is 15% high and 2.1 time units early, and the energy
-#   is up to 27% low.
+# - At ``2\pi/\Delta x = 64`` with the default numerics the peak rate of decay
+#   of the kinetic energy is within 1.5% of the spectral reference at
+#   ``2\pi/\Delta x = 512``, but it occurs 0.8 time units early, the rate is up
+#   to 44% high before it and up to 23% low after it, and the energy is up to
+#   8% low.
+# - At ``2\pi/\Delta x = 32`` the peak is 15% high and 2.1 time units early,
+#   and the energy is up to 27% low.
 # - The molecular dissipation follows the reference until ``t = 3`` on both
-#   grids and reaches 37% of the reference maximum on 64³. At the peak the
-#   compact filter removes 56% of the decay on 64³ and 80% on 32³, and the
-#   artificial properties 6% to 7%.
-# - Disabling the artificial properties changes the 32³ peak by 0.9%.
-#   Disabling the filter makes the energy grow from before ``t = 4`` until the
-#   density turns negative at ``t = 5.26``.
+#   grids and reaches 37% of the reference maximum at ``2\pi/\Delta x = 64``.
+#   At the peak the compact filter removes 56% of the decay at
+#   ``2\pi/\Delta x = 64`` and 80% at 32, and the artificial properties 6% to
+#   7%.
+# - Disabling the artificial properties changes the peak at
+#   ``2\pi/\Delta x = 32`` by 0.9%. Disabling the filter makes the energy grow
+#   from before ``t = 4`` until the density turns negative at ``t = 5.26``.
 
-grid = "$(N)³ and $(N ÷ 2)³ nodes" #src
+grid = "Δx = 2π/$(N) and 2π/$(N ÷ 2)" #src
 command = "mpiexec -n 8 julia --project=docs -t 1 examples/taylor_green.jl" #src
 write_provenance(outdir; command, settings = opt, wall = time() - T_START, grid) #src

@@ -61,8 +61,9 @@ nothing #hide
 # A traveling wave of pressure amplitude 10 Pa, ``10^{-4}`` of the ambient
 # pressure, fills a periodic domain one wavelength long. As in
 # [Acoustic interface](@ref), the density and velocity disturbances of a wave
-# traveling toward ``+x`` are ``p'/c^2`` and ``p'/(\rho c)``. The grid has 64
-# points per wavelength and the numerics are the defaults.
+# traveling toward ``+x`` are ``p'/c^2`` and ``p'/(\rho c)``. The spacing is
+# ``\Delta x = \lambda/64``, with ``\lambda`` the wavelength, and the numerics
+# are the defaults.
 
 function simulate(frequency; periods = 60)
     wavelength = c0 / frequency
@@ -139,8 +140,8 @@ end
 
 # The rates agree to within 0.001% at all three frequencies. Neither the
 # artificial properties nor the filter, both on by default, contributes:
-# turning them off leaves every printed digit unchanged, as does doubling the
-# number of grid points.
+# turning them off leaves every printed digit unchanged, as does halving the
+# spacing.
 #
 # A wave traveling at ``c`` loses amplitude over a distance ``c/\alpha``. At
 # 5 MHz in argon at atmospheric pressure that distance is

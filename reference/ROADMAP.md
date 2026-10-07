@@ -314,8 +314,10 @@ surface; H8 for a magnetized target.
   Richtmyer–Meshkov shock tube, comparing dissipation histories, spectra and
   mix widths; `pyranda_filter()` and the He/CO2 comparison deck (commit
   `9e640ab`) and the record of Pyranda's numerics (commit `29364ad`) are in
-  place. Select one published RM experiment with documented initial and
-  boundary conditions and obtain the missing specifications from its authors.
+  place. The experiment comparison is the Validation page
+  `examples/jacobs_air_sf6.jl`: Collins and Jacobs (2002) and Jacobs and
+  Krivets (2005), digitized, against a whole-tube calculation in the
+  single-shock window, where the growth does not depend on `C_mu`.
   **Depends on:** N4 for the defaults compared.
   **Deliver:** reproducible inputs, reference provenance, uncertainty/error measures,
   and a docs validation section. Keep analytic validation, external data, and

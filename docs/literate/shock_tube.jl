@@ -118,7 +118,7 @@ nothing #hide
 # The startup, when the diaphragm opens over three cells, is the most violent
 # part of the run. It runs at a CFL number of 0.3, and a
 # [`StepControl`](@ref) allows a failed step to be retried at a smaller one.
-# The grid has 128 points per meter.
+# The spacing is ``\Delta x = 7.8`` mm.
 
 numerics(L_driver) = Numerics(
     n_global = (round(Int, 128 * (L_driver + L_driven)), 1, 1),

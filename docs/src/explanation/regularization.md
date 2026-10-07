@@ -82,9 +82,9 @@ velocity oscillation, and the sensors built from them return zero there. Only
 `mu_sensor = :velocity` responds to that mode. Grid-scale content of the
 conserved state is removed by the compact filter, not by the artificial
 properties, consistent with the measured Taylor--Green dissipation budget: at
-128³ the filter supplies 37% of the energy sink and the artificial shear
-viscosity 2%, and removing the filter ends the run while removing the
-artificial properties does not.
+``2\pi/\Delta x = 128`` the filter supplies 37% of the energy sink and the
+artificial shear viscosity 2%, and removing the filter ends the run while
+removing the artificial properties does not.
 
 The defaults are unchanged because the alternatives were measured and did not
 improve the validation battery. The velocity field for artificial shear
@@ -237,5 +237,5 @@ The defaults are a starting point, not a material model. For a new regime:
 5. record the filter strength and cadence with every coefficient result.
 
 The parameter sweeps behind the defaults ran on the cases of `test/cases.jl`
-and on Taylor--Green at 32³ to 128³. Those measurements should not be
-generalized beyond those configurations without new evidence.
+and on Taylor--Green at ``2\pi/\Delta x = 32`` to 128. Those measurements
+should not be generalized beyond those configurations without new evidence.

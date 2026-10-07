@@ -1,0 +1,71 @@
+# Collins, B. D. & Jacobs, J. W. 2002 PLIF flow visualization and measurements of the Richtmyer-Meshkov instability of an air/SF6 interface. J. Fluid Mech. 464, 113-136. doi:10.1017/S0022112002008844
+# Figure 12, journal page 130 (PDF page 18): measured amplitude vs time for all Ms = 1.11 experiments
+# x = time t (ms); y = amplitude a (mm), half the crest-to-trough distance of the centremost wave
+# series: Ms1.11 = open circles
+# 12 measurement times; Fig. 13 states 5 runs per early time and the clusters at 2.2, 3.2, 4.2 and 6.2 ms show 5 distinct markers each, so about 60 markers are expected; 53 are distinguishable; the others lie under other markers (opaque symbols) and cannot be recovered
+# Fig. 13 gives the 5-run means for t <= 1.2 ms; see README.md for the per-time comparison
+# cross-check flag: confirmed_KH2022fig6 / unconfirmed_KH2022fig6 = a marker of the same series exists / does not exist in KH2022fig6 within +-0.03 in x and +-0.08 in y
+# calibration: x from 68 ticks, rms residual 0.00262 (max 0.00579)
+# calibration: y from 37 ticks, rms residual 0.0082 (max 0.0192)
+# tick values used per side: bottom: 0.2..6.8 (34 ticks); top: 0.2..6.8 (34 ticks); left: 1..19 (18 ticks, hidden/unused [2.0]); right: 1..19 (19 ticks)
+# pixel size: 0.003497 x-units/px, 0.01251 y-units/px
+# centre scatter (model-fit vs template centre, 46 markers): rms 0.30 px in x, 0.44 px in y
+# digitizing uncertainty (1 sigma, calibration rms and centre scatter in quadrature): x 0.00282, y 0.00988 (data units)
+# x_tol, y_tol: per-point half-range of centre positions that keep the pixel mismatch within a few pixels of its minimum, floored at the 1-sigma value above; large values mark poorly constrained (mostly hidden) markers
+# flags: ok = isolated, template-detected; overlap = touches another marker (position from the model fit); fit_added = not found by the template but required by the model fit of an overlapping group (strong evidence); fit_added_weak = same, weak evidence; poorly_constrained = centre tolerance >= 3 px in x or y; weak_support = the marker explains fewer than 39 pixels that no other marker explains (15% of the median for clean markers): possibly a duplicate or a different symbol
+# marker counts: Ms1.11 53; flag counts: confirmed_KH2022fig6 52, fit_added 6, fit_added_weak 1, ok 7, overlap 39, unconfirmed_KH2022fig6 1, weak_support 1
+# method: Embedded raster image extracted at native resolution (PyMuPDF). Axes calibrated from the frame tick marks on all four sides: each frame line fitted as a straight line, tick centres located on it, values assigned from the printed labels, and an affine map data = c0 + c1*col + c2*row fitted per axis by least squares (absorbs the scan skew). Markers found by outline template correlation with occlusion accounting, then every group of touching markers refined by fitting rendered marker outlines to the pixels (coordinate descent on the mismatch count); hidden markers added only when they reduce the mismatch by a stated threshold. Curves, error bars and text are not data. Verified by overlay inspection.
+series,x,y,x_tol,y_tol,flag
+Ms1.11,0.0196,2.301,0.0035,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,0.0207,2.018,0.0035,0.019,fit_added;confirmed_KH2022fig6
+Ms1.11,0.0268,2.115,0.0035,0.019,fit_added;confirmed_KH2022fig6
+Ms1.11,0.0352,2.012,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.2303,3.107,0.0028,0.025,fit_added;confirmed_KH2022fig6
+Ms1.11,0.2398,2.909,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,0.2443,3.197,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.2453,2.607,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.4033,3.903,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.4138,3.604,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.4163,3.500,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.4227,2.807,0.0028,0.013,ok;confirmed_KH2022fig6
+Ms1.11,0.5938,4.106,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.5975,4.600,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.6014,4.306,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,0.6026,4.112,0.0035,0.019,weak_support;fit_added_weak;confirmed_KH2022fig6
+Ms1.11,0.6044,4.012,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.8053,5.298,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.8054,4.910,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.8097,4.982,0.0028,0.031,fit_added;confirmed_KH2022fig6
+Ms1.11,0.8099,5.393,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,0.8101,4.605,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,1.0010,5.995,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,1.0033,5.796,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,1.0063,6.295,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,1.1976,6.891,0.0028,0.010,overlap;unconfirmed_KH2022fig6
+Ms1.11,1.1980,6.586,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,1.1985,6.800,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,1.2081,6.600,0.0028,0.019,fit_added;confirmed_KH2022fig6
+Ms1.11,2.1984,8.094,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,2.1995,9.490,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,2.2038,11.191,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,2.2045,10.387,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,2.2086,10.090,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,3.1979,13.192,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,3.2022,13.990,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,3.2024,13.282,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,3.2120,12.988,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,3.2160,14.890,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,4.1938,15.284,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,4.1994,16.188,0.0028,0.013,overlap;confirmed_KH2022fig6
+Ms1.11,4.2023,14.890,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,4.2066,16.100,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,4.2160,16.393,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,5.2007,18.198,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,5.2011,18.126,0.0028,0.025,fit_added;confirmed_KH2022fig6
+Ms1.11,5.2015,17.813,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,5.2016,18.308,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,6.2118,18.712,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,6.2171,18.313,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,6.2172,17.713,0.0028,0.010,overlap;confirmed_KH2022fig6
+Ms1.11,6.2174,16.399,0.0028,0.010,ok;confirmed_KH2022fig6
+Ms1.11,6.2259,17.919,0.0028,0.013,overlap;confirmed_KH2022fig6

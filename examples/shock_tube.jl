@@ -19,12 +19,13 @@
 # molecular mixing with a second calculation on a grid twice as coarse, to show
 # what the calculation settles and what it does not.
 #
-# The script takes five settings: `ny`, the rows of nodes across the tube in
-# the main run, which a second run halves; `Mach`, the Mach number of the
-# incident shock; `tfinal`, the time at which the runs end; `seed`, which draws
-# the phases of the interface's modes; and `smoke`. With `smoke=true` the runs
-# have 16 and 10 rows, which checks that the page still runs; the figures come
-# from the full run.
+# The script takes five settings: `ny`, the nodes across the tube, which sets
+# the spacing ``\Delta x = L_y/n_y`` of the main run, with ``L_y`` the width of
+# the tube, and of a second run at twice that spacing; `Mach`, the Mach number
+# of the incident shock; `tfinal`, the time at which the runs end; `seed`,
+# which draws the phases of the interface's modes; and `smoke`. With
+# `smoke=true` the runs have 16 and 10 rows, which checks that the page still
+# runs; the figures come from the full run.
 
 const T_START = time() #src
 using CompactLES   # re-exports MPI
@@ -165,17 +166,19 @@ nothing #hide
 
 # ## Run
 #
-# The main run has 128 rows of nodes across the tube and square cells, 640
-# columns at a spacing of 0.78 mm: 10.7 cells per shortest wavelength and 6.4
-# across the initial blend. The second run has 64 rows. The numerics are the
-# defaults. Every 5 µs each run records three averages over the planes of
-# constant ``x``: the pressure, the mole fraction ``X`` of the SF6, and
-# ``X(1 - X)``. At seven times it also keeps the mole fraction field.
+# The main run has square cells at a spacing ``\Delta x = 0.78`` mm: 10.7 cells
+# per shortest wavelength and 6.4 across the initial blend. The second run has
+# ``\Delta x = 1.56`` mm. The numerics are the defaults. Every 5 µs each run
+# records three averages over the planes of constant ``x``: the pressure, the
+# mole fraction ``X`` of the SF6, and ``X(1 - X)``. At seven times it also
+# keeps the mole fraction field.
 
 frame_times = [0.0, 0.7, 1.45, 1.6, 2.0, 2.5, 3.0] .* 1e-3
 frame_times = filter(<=(opt.tfinal), frame_times)
 
+run_key(ny) = @sprintf("ny%d_Mach%g_t%g_seed%d", ny, opt.Mach, opt.tfinal, opt.seed) #src
 function simulate(ny)
+    cached("shock_tube", run_key(ny); smoke = opt.smoke) do #src
     nx = round(Int, Lx / Ly * ny)
     solver, Q = setup(problem, Numerics(n_global = (nx, ny, 1)))
     t = Float64[]
@@ -201,6 +204,7 @@ function simulate(ny)
     @printf("%d × %d nodes, h = %.2f mm: %d steps in %.0f s\n", nx, ny, 1e3Ly / ny,
             solver.step, wall_time)
     return (; nx, ny, h = Ly / ny, x = x[], y = y[], t, p_mean, X_mean, XX_mean, frames)
+    end #src
 end
 runs = [simulate(ny) for ny in grids]
 nothing #hide
@@ -302,10 +306,10 @@ nothing #hide
 
 # ![Plane-averaged pressure against position and time](../assets/examples/shock_tube/xt.png)
 #
-# The figure shows the 128-row run, with the waves of the one-dimensional
-# solution drawn over it. The fitted velocities are
+# The figure shows the run at ``\Delta x = 0.78`` mm, with the waves of the
+# one-dimensional solution drawn over it. The fitted velocities are
 #
-# | velocity (m/s) | 128 rows | 64 rows | 1-D |
+# | velocity (m/s) | ``\Delta x = 0.78`` mm | ``\Delta x = 1.56`` mm | 1-D |
 # |:--|--:|--:|--:|
 # | incident shock | 515.4 | 511.3 | 516.5 |
 # | shock transmitted into the SF6 | 241.0 | 240.9 | 241.1 |
@@ -314,19 +318,19 @@ nothing #hide
 # | shock transmitted into the air at reshock | −403.8 | −405.3 | −404.2 |
 # | interface after reshock | −64.2 | −60.9 | −58.7 |
 #
-# The shocks travel at their one-dimensional speeds to within 1% on both
-# grids, and the reflected shock meets the layer where and when it meets the
-# sharp interface. After the first shock, ``x_{50}`` moves at the contact
-# velocity to within 0.8%. After reshock it moves faster than the
-# one-dimensional interface, by 4% on 64 rows and 9% on 128.
+# The shocks travel at their one-dimensional speeds to within 1% on both grids,
+# and the reflected shock meets the layer where and when it meets the sharp
+# interface. After the first shock, ``x_{50}`` moves at the contact velocity to
+# within 0.8%. After reshock it moves faster than the one-dimensional
+# interface, by 4% at ``\Delta x = 1.56`` mm and 9% at 0.78 mm.
 #
 # The plane ``x_{50}`` is not a material surface. After reshock the layer grows
-# faster toward the air than toward the SF6: on 64 rows, the plane where
-# ``\langle X \rangle = 0.05`` moves at −78 m/s and the plane where it is 0.95
-# at −45 m/s. A position that follows the SF6 as a whole is that of a sharp
-# interface holding the same volume of it, the end wall less
-# ``\int \langle X \rangle\, dx``; on 64 rows it moves at −58.4 m/s after
-# reshock, within 0.5% of the one-dimensional interface.
+# faster toward the air than toward the SF6: at ``\Delta x = 1.56`` mm, the
+# plane where ``\langle X \rangle = 0.05`` moves at −78 m/s and the plane where
+# it is 0.95 at −45 m/s. A position that follows the SF6 as a whole is that of
+# a sharp interface holding the same volume of it, the end wall less
+# ``\int \langle X \rangle\, dx``; at ``\Delta x = 1.56`` mm it moves at
+# −58.4 m/s after reshock, within 0.5% of the one-dimensional interface.
 #
 # From 1.9 ms the layer leaves the dashed line, which continues the interface
 # velocity of reshock and leaves out the waves that follow it. The rarefaction
@@ -367,7 +371,8 @@ at(run, series, t) = series[argmin(abs.(run.t .- t))]
 fig = Figure(size = (760, 520))
 panels = [Axis(fig[i, 1], ylabel = l) for (i, l) in enumerate(("h (mm)", "Θ"))]
 for (run, layer, color) in zip(runs, layers, Makie.wong_colors())
-    lines!(panels[1], 1e3 .* run.t, 1e3 .* layer.h; color, label = "$(run.ny) rows")
+    lines!(panels[1], 1e3 .* run.t, 1e3 .* layer.h; color,
+           label = @sprintf("Δx = %.2f mm", 1e3run.h))
     lines!(panels[2], 1e3 .* run.t, layer.theta; color)
 end
 for panel in panels
@@ -394,10 +399,10 @@ for (run, layer) in zip(runs, layers)
             run.ny, 1e3at(run, layer.h, 0.0), 1e3at(run, layer.h, t_impact - 5e-6))
 end
 
-# 6.8 and 6.7 mm on 128 rows and 7.1 and 7.3 mm on 64, so neither grid
-# spreads the initial blend before the shock arrives. It also prints the growth
-# rate of the width and the velocity of ``x_{50}`` over four windows, and the
-# width and ``\Theta`` at four times:
+# 6.8 and 6.7 mm at ``\Delta x = 0.78`` mm and 7.1 and 7.3 mm at 1.56 mm, so
+# neither grid spreads the initial blend before the shock arrives. It also
+# prints the growth rate of the width and the velocity of ``x_{50}`` over four
+# windows, and the width and ``\Theta`` at four times:
 
 phases = [("before reshock", (t_reshock - 500e-6, t_reshock - 100e-6)),
           ("after reshock", (t_reshock + 100e-6, t_reshock + 400e-6)),
@@ -417,19 +422,19 @@ for (run, layer) in zip(runs, layers)
     end
 end
 
-# Before reshock the two grids give the same width: 22.3 mm on both at
-# 1.43 ms, growing at 9.6 and 8.8 m/s over the 0.4 ms before reshock. The
-# sawtooth on the 64-row curve, about 0.1 mm root mean square, has the period,
-# about 10 µs, in which the layer moves one cell along the grid.
+# Before reshock the two grids give the same width: 22.3 mm on both at 1.43 ms,
+# growing at 9.6 and 8.8 m/s over the 0.4 ms before reshock. The sawtooth on
+# the curve at ``\Delta x = 1.56`` mm, about 0.1 mm root mean square, has the
+# period, about 10 µs, in which the layer moves one cell along the grid.
 #
-# Over the 0.3 ms after reshock the layer grows at 43.7 m/s on 128 rows and
-# 36.2 m/s on 64, four to five times its rate before reshock. With the velocity
-# jump and the Atwood number of reshock, ``(dh/dt)/(A \Delta u)`` is 0.27 and
-# 0.22. The grids then differ more in when the layer grows than in how far:
-# the finer grid leads by 2 mm (7%) at 2.0 ms, and at 3 ms the widths are 60.3
-# and 61.6 mm, within 2%. A growth rate fitted over a fixed window after
-# reshock differs between the grids by up to 17% of the fine grid's rate, and
-# these grids do not settle it.
+# Over the 0.3 ms after reshock the layer grows at 43.7 m/s at
+# ``\Delta x = 0.78`` mm and 36.2 m/s at 1.56 mm, four to five times its rate
+# before reshock. With the velocity jump and the Atwood number of reshock,
+# ``(dh/dt)/(A \Delta u)`` is 0.27 and 0.22. The grids then differ more in when
+# the layer grows than in how far: the finer grid leads by 2 mm (7%) at 2.0 ms,
+# and at 3 ms the widths are 60.3 and 61.6 mm, within 2%. A growth rate fitted
+# over a fixed window after reshock differs between the grids by up to 17% of
+# the fine grid's rate, and these grids do not settle it.
 #
 # Of the four windows, the layer grows fastest between 2.0 and 2.3 ms, at 51
 # and 56 m/s, while it decelerates. The run prints the plane-averaged pressure
@@ -454,11 +459,12 @@ end
 # from 2.4 ms the layer grows at 17 to 20 m/s.
 #
 # The molecular mixing fraction is not settled. The first shock lowers
-# ``\Theta`` as the perturbations grow, to 0.65 by 0.4 ms on 128 rows and more
-# slowly to about 0.85 on 64; on 128 rows it then recovers to 0.78 by reshock.
-# Reshock raises it on both grids for a short time before it falls again. It
-# is lower on 128 rows than on 64 at every time after the first shock, by as
-# much as 0.2 at 0.4 ms, and at 3 ms it is 0.57 against 0.70.
+# ``\Theta`` as the perturbations grow, to 0.65 by 0.4 ms at
+# ``\Delta x = 0.78`` mm and more slowly to about 0.85 at 1.56 mm; at 0.78 mm
+# it then recovers to 0.78 by reshock. Reshock raises it on both grids for a
+# short time before it falls again. It is lower at ``\Delta x = 0.78`` mm than
+# at 1.56 mm at every time after the first shock, by as much as 0.2 at 0.4 ms,
+# and at 3 ms it is 0.57 against 0.70.
 
 # ## Images
 #
@@ -473,7 +479,7 @@ for (row, run) in enumerate(runs), (col, frame) in enumerate(run.frames)
                  backgroundcolor = :gray60,
                  title = row == 1 ? @sprintf("%.2f ms", 1e3frame.t) : "",
                  xlabel = row == length(runs) && col == 1 ? "x − x₅₀ (mm)" : "",
-                 ylabel = col == 1 ? "$(run.ny) rows\ny (mm)" : "")
+                 ylabel = col == 1 ? @sprintf("Δx = %.2f mm\ny (mm)", 1e3run.h) : "")
     heatmap!(panel, 1e3 .* (run.x .- center), 1e3 .* run.y, frame.X, colormap = :viridis,
              colorrange = (0, 1))
     limits!(panel, -50, 50, 0, 1e3Ly)
@@ -491,21 +497,22 @@ nothing #hide
 #
 # By 0.70 ms the modes have grown into spikes of SF6 in the air, rolled up at
 # their tips. At 1.60 ms, just after reshock, the layer is compressed. From
-# 2.0 ms it grows toward both gases, with rolled-up structures on the SF6
-# side as well as on the air side, and the structures merge into fewer and
-# larger ones. The two grids show the same arrangement of structures through
-# 1.60 ms and different ones from 2.0 ms. At 3 ms the 128-row run holds
-# filaments of each gas a few cells thick that the 64-row run does not have.
+# 2.0 ms it grows toward both gases, with rolled-up structures on the SF6 side
+# as well as on the air side, and the structures merge into fewer and larger
+# ones. The two grids show the same arrangement of structures through 1.60 ms
+# and different ones from 2.0 ms. At 3 ms the run at ``\Delta x = 0.78`` mm
+# holds filaments of each gas a few cells thick that the run at 1.56 mm does
+# not have.
 #
 # ## What this checks
 #
 # - The shocks of the first impact, of the reflection from the end wall and of
 #   reshock travel at the speeds of the one-dimensional Riemann solutions to
-#   within 1% on 64 and 128 rows.
+#   within 1% at ``\Delta x = 1.56`` and 0.78 mm.
 # - The layer moves at the contact velocity after the first shock. After
 #   reshock the plane where the mean mole fraction is one half drifts as the
-#   layer grows unevenly, and on 64 rows the volume of SF6 moves at the
-#   contact velocity to within 0.5%.
+#   layer grows unevenly, and at ``\Delta x = 1.56`` mm the volume of SF6 moves
+#   at the contact velocity to within 0.5%.
 # - Before reshock the width of the layer is the same on both grids. After
 #   reshock the width differs by up to 7% between them, and the growth rate
 #   over a fixed window by up to 17%; the widths at the end of the run agree to
@@ -516,6 +523,6 @@ nothing #hide
 # - The layer grows fastest while the waves reflected from the end wall
 #   decelerate it with the pressure higher on the air side.
 
-grid = join(("$(r.nx) × $(r.ny)" for r in runs), " and ") * " nodes" #src
+grid = "Δx = " * join((@sprintf("%.2f mm", 1e3r.h) for r in runs), " and ") #src
 command = "julia --project=docs -t 8 examples/shock_tube.jl" #src
 write_provenance(outdir; command, settings = opt, wall = time() - T_START, grid) #src

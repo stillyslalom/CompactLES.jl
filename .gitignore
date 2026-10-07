@@ -22,3 +22,6 @@ bench/logs/*.out
 
 # questions for outside authors, kept locally
 reference/AUTHOR_QUESTIONS.md
+
+# cached runs of the documented examples (examples/common.jl, `cached`)
+examples/cache/
