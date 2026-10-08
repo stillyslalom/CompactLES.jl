@@ -5580,9 +5580,11 @@ independent measurements, and the instrument reports the excursion beside
 the drift instead of stopping on it.
 
 **Decision.** Every layout is inside its conservation budget, the fixed
-layouts by an order of magnitude, so no surface-flux correction is enabled and the coupling stays as
-it is; the requirements a correction would have to meet are in
-[AMR_GPU.md](AMR_GPU.md#composite-conservation-budgets). The root-edge
+layouts by an order of magnitude, so smooth flow takes no surface-flux
+correction; the correction of
+[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling) is
+gated to lines beside an unresolved density feature, and the density of these
+cases is uniform. The root-edge
 mass-fraction undershoot under global stepping is an imposed-shell accuracy
 question for N11, not a conservation one. No turbulent, variable-density,
 shock or hardware-GPU claim follows from these passive-species cases.
@@ -5631,17 +5633,73 @@ error of the coupling that converges at second order or better, concentrated
 in the right-hand side at the coarse–fine boundary, and the transfers
 (shell, restriction, filter) are two orders below it.
 
-**Decision.** No conservative correction is added. The attributed
+**Decision.** Smooth flow takes no conservative correction. The attributed
 non-conservation is a converging operator defect at the coarse–fine
-boundary, 7e-5 at its largest against the 1e-3 budget at this
-resolution. A refluxing
-register would remove only the mismatch row, a sixth of the drift at t = 5π,
-and leave the root's straddling-row defect, which no face-local flux fix
-reaches; its cost is the register the section on composite budgets in
-AMR_GPU.md describes, one flux plane per interface face and component
-retained per stage and summed over the child's substeps, and a correction of
-the parent's rows next to the covered region, which changes the imposed
-state the smooth-order gates are measured on.
+boundary, 7e-5 at its largest against the 1e-3 budget at this resolution,
+and a correction applied on every line of a 2-D face costs the interface its
+order ([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+
+### bench/reflux.jl: the conservative coarse-fine coupling
+
+`julia --project=. -t 4 bench/reflux.jl`, serial, Float64, C6 and the default
+filter; the cases are described in the script's header. The uncorrected rows
+set `REFLUX[] = false`.
+
+**Sod.** Relative change of the composite mass and energy at t = 0.2, in the
+conserved quadrature (`_conserved_budget`), the shock having crossed both faces
+of the box over [0.6, 0.8]:
+
+| stepping | parent mask | uncorrected mass | corrected mass | uncorrected energy | corrected energy |
+|---|---|---|---|---|---|
+| global | off | +8.51e-5 | +6.65e-8 | +6.46e-5 | +3.90e-8 |
+| global | on | −5.23e-4 | −8.93e-7 | −7.71e-4 | −6.38e-7 |
+| subcycled | off | +9.12e-5 | +3.10e-8 | +4.72e-5 | +5.90e-8 |
+| subcycled | on | −7.48e-4 | +3.72e-8 | −1.05e-3 | +6.58e-8 |
+
+**Entropy wave.** Largest density error over the level's nodes at t = 0.3:
+
+| coupling | N = 24 | N = 48 | N = 96 | orders |
+|---|---|---|---|---|
+| uncorrected | 1.929e-8 | 3.006e-10 | 4.915e-12 | 6.00, 5.93 |
+| gated (default) | 1.929e-8 | 3.006e-10 | 4.915e-12 | 6.00, 5.93 |
+| every line corrected | 7.642e-4 | 2.129e-4 | 1.245e-4 | 1.84, 0.77 |
+
+The gate never fires on the wave, and the gated rows are the uncorrected ones
+bit for bit. Corrected on every line, each line takes the difference of the
+two grids' tangential quadratures of its face flux, of order H³ per line, and
+the level's error falls to second order and below. On a 1-D line, where there
+is no tangential quadrature, the ungated correction keeps the interface's
+order; without Ω, the correction of the box rule beside the face, it lowers
+it to 2.
+
+**Noh crossing.** The tile over 43 root nodes passes its shock out near
+t = 0.5; mass pieces of the budget ledger over the run to t = 0.6, and the
+composite mass less the inflow through the outer boundary, of the final
+mass:
+
+| coupling | right-hand sides | filter | correction | inflow | composite less inflow |
+|---|---|---|---|---|---|
+| uncorrected | 0.778337 | +1.51e-4 | 0 | 0.780000 | −1.18e-3 |
+| corrected | 0.776899 | +1.13e-3 | +1.97e-3 | 0.780000 | −3.65e-7 |
+
+The uniform run at the level's spacing drifts by −4.45e-7 against the exact
+mass. The crossing leaves a static density crater beside the face, ρ ≈ 8.9
+against a plateau near 15 on the child, three child nodes wide, which is
+present uncorrected as well. On data that rough Ω is not small: at t = 0.6
+it carries −3.96e-4 of the mass, so `volume_integral`, which omits it, reads
++3.96e-4 on the corrected run where the conserved quadrature reads −3.65e-7.
+Ω is −4e-7 at t = 0.2 and grows from t ≈ 0.45 as the shock reaches the face.
+
+**Rejected placements.** A correction added to the parent's face node, which
+the shell copies to the child, fed back through the child's next step and
+grew without bound in the cold radial inflow; the node one out from the face
+does not. A gate window over the whole box flagged the pre-shock flow, whose
+density ρ = 1 + t/r varies steeply near the axis, and the correction it
+applied there polluted the inflow; the window of `GATE_REACH` = 8 parent
+nodes either side of the face does not reach it. Without the positivity
+guard the Noh crossing reached a negative density at t = 0.459, and without
+the filter passes' junction fluxes in the register the corrected composite
+gained 4.9e-3 of its mass.
 
 ### bench/interfacesensor.jl: the sensors and the filter at an interface
 
@@ -6116,8 +6174,8 @@ plans' one-sided rows at an interface end, a second line solve. `GHOST_FLUX_REMA
 carries it in `ghost_flux` on dimensions whose interface ends are same-level, the level's
 records filling the ghost layers, and differences the whole flux through the gradient plans in
 one solve; `GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take
-a degree-5 Lagrange extrapolation of the interior remainder. Both are off by default and host
-only. On exact data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with
+a degree-5 Lagrange extrapolation of the interior remainder. Both are the default, the
+extrapolation applied per tile, so a stacked device level takes it too. On exact data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with
 `coefficients_current`), interface window, N = 48, 96, 192:
 
 | layout | plain | same-level ends | and coarse-fine ends |
@@ -6876,14 +6934,17 @@ the area form:
 
 A tile holding the shock reproduces the uniform fine run on the axis as at
 the plane; the subcycled tile's axis node reads a deficit 1.7 points above
-the global step's. Once the shock leaves the tile, near t = 0.5, the
-composite loses mass at the crossing and the post-shock plateau inside the
-tile falls: on the axis to within 1.5% of the battery's uniform ν = 2 row on
-256 nodes, at the plane by 1.2%. The loss is the coupling's at a shock, not
-the axis's; the smooth composite budgets
-([bench/interfaceconservation.jl](#benchinterfaceconservationjl-composite-conservation-budgets))
-do not cover it. No axis runaway appears under αf = 0.47 at the level's
-spacing, 767 radial nodes.
+the global step's. The table's rows are uncorrected (`REFLUX[] = false`).
+Once the shock leaves the tile, near t = 0.5, the uncorrected composite loses
+mass at the crossing and the post-shock plateau inside the tile falls: on the
+axis to within 1.5% of the battery's uniform ν = 2 row on 256 nodes, at the
+plane by 1.2%. The loss is the coupling's at a shock, not the axis's. The
+conservative coupling holds the axis crossing's mass to −3.6e-7 in the
+conserved quadrature
+([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)),
+but not its plateau, 14.906 against 14.912 uncorrected under the global
+step. No axis runaway appears under αf = 0.47 at the level's spacing, 767
+radial nodes.
 
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave

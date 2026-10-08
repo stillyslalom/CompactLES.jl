@@ -237,12 +237,11 @@ surface; H8 for a magnetized target.
   node) and the rest with the divergence's one-sided rows (twice the end
   weight), so no one face form covers both. Two routes remain: write the
   difference as a node term in each cell's limit, as the radial lines'
-  geometric part is, or difference the rest through the gradient rows too
-  (`GHOST_FLUX_REMAINDER`, A17 item 2), which leaves one face form with
-  weight h up to an interface end. The second keeps an interface's order
-  and moved no shock measure by more than 2%; under it the limiter needs a register
-  for the gradient-plan solves and open-end anchors. Either is measured
-  before it replaces `:closure`, which lowers the interface's order. The parent's shell falls back to the
+  geometric part is, or take the rest through the gradient rows as `:ghost`
+  now does by default, which leaves one face form with weight h up to an
+  interface end; under it the limiter needs a register for the gradient-plan
+  solves and open-end anchors. Either is measured before it replaces
+  `:closure`, which lowers the interface's order. The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the
   fallback is admissible, on host and device storage, limiter on or off
@@ -361,8 +360,9 @@ surface; H8 for a magnetized target.
 ## Refinement for the production geometry
 
 Node-centered patch and level coupling is interpolation and injection with
-compact interface closures, not a conservative flux reconciliation; under the
-N10 budgets no surface-flux correction is needed. The measured interface orders
+compact interface closures, and where the parent does not resolve the flow at
+a coarse-fine face the step's junction fluxes are reconciled (A14); smooth
+flow keeps the N10 budgets uncorrected. The measured interface orders
 are in the appendix's smooth-evolution
 [accuracy matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix);
 the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md). The
@@ -444,21 +444,23 @@ promotion.
   design; N23's axis tile (commit `c2e7a39`) is that design for the
   θ-collapsed axis only.
 
-- [ ] **A14 — Add a conservative flux correction at coarse-fine faces.**
-  The level coupling interpolates and injects and reconciles no fluxes. A
-  strong shock leaving a static tile on Noh loses mass at the crossing, at
-  the r-z axis and at a symmetry plane alike, and the plateau inside the tile
-  falls to about the coarse level's
-  ([the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
-  Regridding that follows the shock avoids most crossings, but the dendritic
-  layouts of [AMR_GPU.md](AMR_GPU.md#long-term-target-dendritic-meshes) put
-  shocks across coarse-fine faces in every converging run without AMR. Design
-  a flux register for the node-centred coupling: the coarse face flux
-  replaced by the time- and area-integrated fine flux, under global stepping
-  and subcycling, over tiles and ranks, and on the metric's face areas.
-  **Gate:** mass, momentum and energy to round-off on the Noh crossing rows
-  of `test/validation.jl`; the smooth interface orders of
-  `test/convergence.jl` unchanged or better.
+- [ ] **A20 — Carry the conservative coarse-fine coupling to every
+  configuration.** The A14 correction runs on host storage without the
+  positivity limiter, and across a 2-D or 3-D face only on lines where the
+  parent's density beside the face holds an unresolved feature, since the
+  two grids' tangential quadratures differ at order H³ per line and
+  corrected everywhere they took a 2-D entropy wave from sixth order to
+  second
+  ([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+  Remaining: device kernels for the captures, the fold and the application,
+  and a stacked level's per-stack captures; the limiter's stage and filter
+  registers at a junction; and, for exact conservation of smooth flow, a
+  tangential transfer and corner and axis terms of the quadrature high-order
+  enough that the ungated correction keeps the interface orders.
+  **Gate:** the device path bitwise against the host on the A14 cases;
+  under the limiter, the Noh and Woodward–Colella level rows admissible with
+  the composite budget held; ungated, the interface rows of
+  `test/convergence.jl` unchanged.
 
 - [ ] **A16 — Make the level coupling stable without the filter.**
   Under the default ghost fluxes and no filter, the one-step map of a
@@ -489,9 +491,9 @@ promotion.
   times the fine grid's, but a Sod shock crossing a level then drifts five
   to twenty times as far in composite mass, so the mask is off by default
   ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
-  Remaining: turn it on once A14's flux correction holds the composite
-  budget, or decide the trade without it.
-  **Depends on:** A14, or a decision.
+  With the conservative coupling (A14) the Sod crossings conserve to 1e-6
+  with the mask on, so what remains is measuring the mask's default against
+  the gate below and the level rows it moves.
   **Gate:** on the shock configuration, the level's |ρ − 1| more than 0.02
   inside the front within a small factor of the uniform fine grid's, with
   the two-level Sod drifts of `test/level_tests.jl` inside their guards.
@@ -525,11 +527,10 @@ promotion.
      divergence's second line solve per component on each interface
      dimension, whose one-sided rows carry their own left-hand side, so
      removing it is a change of numerics. Differencing the remainder through
-     the gradient rows (`GHOST_FLUX_REMAINDER`, opt-in, host only) removes
-     it, raises an interface's order on exact data from 3 to 6 and moves
-     every shock measure by under 2%
-     ([measurements](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface));
-     making it the default needs its device kernels and the full gate.
+     the gradient rows, now the default, removes it, raises an interface's
+     order on exact data from 3 to 6 and moves every shock measure by under
+     2%
+     ([measurements](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
   3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
      blob problems; revisit `tag_buffer`, the tag threshold and the tile
      edge against the error they buy.
@@ -1281,6 +1282,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **A14** — `Hydrostatic` sets the pressure of an initial condition in
   discrete balance with the run's derivative operator, and an unfiltered
   two-fluid column stays at rest to round-off (commit `acfe5cb`).
+- [x] **A14** — Coarse-fine junction lines holding an unresolved feature
+  take the step's difference of the two grids' face fluxes, less a high-order
+  quadrature correction's change, on the parent; a Noh tile passing its shock
+  out conserves mass to 4e-7 against 1.2e-3 (commit pending).
 - [x] **A15** — `CompositeBC` divides a face among member conditions by a
   coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
   on it (commit `9574aea`).

@@ -209,6 +209,7 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
         return subcycled_step!(solver, states, dQs, dus, dt, prepared)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
+    _reflux_begin_step!(solver, states)
     for stage in 1:5
         solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
@@ -308,6 +309,7 @@ function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
         for pi in lev.patches
             _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi], dus[pi],
                         A, B, dt)
+            _reflux_fold!(solver, patches[pi], dQs[pi], A, B, dt)
         end
         return states
     end
@@ -497,6 +499,7 @@ function _subcycled_step_status!(solver::Solver, states, dQs, dus, dt,
                                  prepared::Bool, control, limiter=nothing)
     t0 = solver.t
     guard = SubstepCFLGuard(dt)
+    _reflux_begin_step!(solver, states)
     # `solver.step` counts completed steps; the level counts below are
     # one-based indices of the step in progress.
     status = _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
@@ -677,6 +680,8 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         _ledger_open!(solver, states, lev)
         _restrict_tiles!(solver, states, child)
         _ledger!(solver, states, :restrict, lev)
+        _reflux_apply!(solver, states, ℓ)
+        _ledger!(solver, states, :reflux, lev)
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.
         _sync_level!(solver, states, lev)
@@ -1599,6 +1604,13 @@ function _post_step!(solver, states::Vector{<:ConservedState})
     _ledger_open!(solver, states)
     restrict_level!(solver, states)
     _ledger!(solver, states, :restrict)
+    # Under subcycling each deeper parent took its correction after its own
+    # step (`_advance_level!`); here the root's, or every level's.
+    nlev = length(getfield(solver, :levels))
+    for ℓp in (getfield(solver, :subcycle) ? (1:min(1, nlev - 1)) : (1:nlev-1))
+        _reflux_apply!(solver, states, ℓp)
+    end
+    _ledger!(solver, states, :reflux)
     prolong_level_ghosts!(solver, states)
     _ledger!(solver, states, :shell)
     return states
@@ -2192,6 +2204,7 @@ function filter_state!(solver::SolverLike, Q)
                 continue
             end
             _filter_line!(solver.tmp_a, comps[c], solver, d, σ, mask)
+            _reflux_filter!(solver, comps[c], solver.tmp_a, c, d, w)
             # w == 1 takes the original path exactly, so a pass at or above the reference
             # CFL stays bit-identical to the unrelaxed solver.
             if w == 1

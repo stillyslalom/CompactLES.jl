@@ -253,26 +253,38 @@ each transfer separately from the evolution between transfers. Mixing width
 and molecular mixing are physical diagnostics, not conserved variables.
 
 Every measured configuration is inside its budget, the fixed layouts by an
-order of magnitude, so no surface-flux correction is enabled. A strong shock
-crossing a static coarse-fine face is outside these smooth budgets: Noh's
-shock leaving a tile loses mass at the crossing, planar or on the axis, far
-above the drift of the uniform runs at either spacing
-([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
-A surface-flux correction, if one is added, would retain the outward
-metric-weighted flux on each interface while the patch's
-RHS workspace is live, accumulate it with the low-storage RK weights, and
-reconcile coincident faces after every participating patch has evaluated its
-stages; a subcycled parent needs the sum over its children's substeps,
-endpoint evaluations taken only for the Hermite interpolation must stay out
-of the register, and a rejected step discards the register with the state.
-That register alone would not close the budget, because the compact
-one-sided divergence does not telescope under the diagnostic quadrature and
-the shared-plane average, the imposed shells, the filter, restriction and
-regrid transfer each move the integral. A face-local correction must
-preserve constants and pass the smooth-order, reflection and state-validity
-gates; rescaling the whole state to fix a global integral is not one.
-Compatible SBP–SAT operators and quadrature remain the fallback if a
-localized correction cannot pass those gates.
+order of magnitude. A strong shock crossing a static coarse-fine face was
+outside these smooth budgets: Noh's shock leaving a tile lost mass at the
+crossing, planar or on the axis, far above the drift of the uniform runs at
+either spacing.
+
+**The conservative coupling** (`src/reflux.jl`). The composite quadrature is
+the one the coupling conserves: a parent node takes its whole cell unless a
+child covers all of it, a child's nodes count from the third in from a
+parent-fed face, so the cells meet at the half node beyond the parent's face
+node, and the child's nodes beside each face carry a correction Ω of the box
+rule. The shell and the restriction write only nodes it does not count. A
+compact divergence is a difference of face fluxes satisfying the interior
+face relation, whose constant is zero on every closure set, so each grid's
+flux at the junction is local: the derivative at two nodes beside it and the
+explicit stencil. Each right-hand side's junction fluxes, and each filter
+pass's, go through the low-storage recurrence into a register, and after the
+child's steps and the restriction the difference of the two grids', less the
+change of Ω, is added to the parent's next node out from the face. Ω makes
+that correction vanish to high order for smooth data on a 1-D line, but
+across a 2-D or 3-D face the two grids' tangential quadratures differ at
+order H³ per line, so a line is corrected only in a step where the parent's
+density within a few nodes of the face, on either side, holds a feature its
+spacing does not resolve, the masks' fourth-difference test, and a connected
+run of such
+lines takes its correction as one change. Smooth flow is then bit for bit
+the uncorrected coupling's. The correction's node is one out from the face
+node because a correction on the node the shell copies to the child fed back
+on itself, and a positivity guard holds back the part of a correction that
+would take a node below half its density or internal energy, for a later
+step
+([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+It runs on host storage and not under the positivity limiter.
 
 ## Patches and same-level interfaces
 
@@ -421,8 +433,8 @@ is a jump on the parent's spacing, and the parent's compact solves spread its
 response along the line to the margin the shell is interpolated from. The
 filter pass therefore drops its residual at the covered nodes where the
 density is unresolved. The same treatment of the gradients and divergences
-removes a converging shock's precursor but, with no flux correction at the
-face, worsens composite conservation, so it is opt-in
+removes a converging shock's precursor; without the conservative coupling
+it worsened composite conservation, and it stays opt-in
 (`MASK_CHILD_DERIVATIVE`;
 [measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
 
@@ -1051,25 +1063,27 @@ The diagnostics route through it in their `Vector` forms, one full padded
 array (or one state) per held patch aligned with `solver.patches`:
 `volume_integral`, `domain_volume`, `volume_average`, `plane_profile`,
 `species_pdf`, `mix_width`, `molecular_mixing`, `tke_profile`,
-`turbulent_kinetic_energy` and `dissipation_rate`. A coarse node's weight
-is its quadrature weight times the fraction of its cell no child covers
+`turbulent_kinetic_energy` and `dissipation_rate`. An integral takes the
+conserved quadrature of the coupling, without the correction Ω (whole cells
+at a parent's face nodes, the child's nodes from the third in); the PDF
+weights a coarse node by the fraction of its cell no child covers
 (`uncovered_fraction`); a plane average uses the in-plane fraction
 (`uncovered_plane_fraction`, the orthant pairs across the profile
 direction), samples the root's stations only, and takes each finer patch's
 coincident planes with that patch's own transverse cell measure, a plane
-two abutting tiles share counting half from each. The fine patch's own
-quadrature gives its boundary planes half weights, so the two sides of a
-coarse-fine face sum to one, the same rule the same-level interface plane
-follows. Every composite form accumulates the rank's patches and reduces
+two abutting tiles share counting half from each; there the fine patch's
+boundary planes take half weights, so the two sides of a coarse-fine face sum
+to one, the rule the same-level interface plane follows. Every composite form accumulates the rank's patches and reduces
 once over the root communicator, so a rank holding no piece of a refined
 level enters the reduction with its root block and returns the same
 number. The single-array forms are the one-patch quadrature as it always
 was and apply no mask.
 
 The composite quadrature is exact for a linear field on a wall-bounded
-box, which pins it to round-off on one refined patch, a 3×3×3 tile nest
-and a three-level nest, where the same sums without the masks carry the
-covered volume twice (serial and MPI suites). On a refined Taylor–Green the
+box that a level does not reach, which pins it to round-off on one refined
+patch, a 3×3×3 tile nest and a three-level nest, where the same sums without
+the masks carry the covered volume twice (serial and MPI suites); a level on
+a wall leaves the two walls' half cells at different spacings, f'(H² − h²)/8. On a refined Taylor–Green the
 masked composite energy history tracks the single-level history to the fine
 sampling's own quadrature difference, where the unmasked sum sits nearly two
 orders above it ([measurements](CALIBRATION_APPENDIX.md#amr)); the same check

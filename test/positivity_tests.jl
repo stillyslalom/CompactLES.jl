@@ -509,6 +509,9 @@ end
                        ic=(x, y, z) -> Prim(rho=1.0, u=(0.1, 0.1, 0.0),
                                             p=1 + 1e-2 * exp(-((x - 0.45)^2 +
                                                                 (y - 0.5)^2) / 0.01)))
+        # The conservative coarse-fine coupling is not taken under the
+        # limiter, so the unlimited run goes without it too.
+        CL.REFLUX[] = false
         for sub in (false, true)
             runs = map((false, true)) do on
                 s, Q = setup(prob, pos_level((48, 48, 1),
@@ -525,6 +528,7 @@ end
             @test s0.step == s1.step && s0.t == s1.t
             @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
         end
+        CL.REFLUX[] = true
     end
 
     @testset "a strong shock through a refined box stays admissible" begin

@@ -441,6 +441,10 @@ end
                (interface_divergence=lele_d1_6(closures=:brady_livescu),),
                (interface_flux=:ghost,),
                (interface_flux=:ghost, transport=ConstantTransport(mu0=1e-3)))
+        # The conservative coarse-fine coupling is host-only and leaves a
+        # stacked device level uncorrected (src/reflux.jl), so both runs go
+        # without it here.
+        CL.REFLUX[] = false
         s1, q1, initial = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -449,6 +453,7 @@ end
         finally
             CL.FORCE_KA[] = false
             CL.FORCE_DEVICE_EXCHANGE[] = false
+            CL.REFLUX[] = true
         end
         @test s1.step == s2.step
         @test level_regions(s1, 1) == level_regions(s2, 1)
@@ -565,6 +570,8 @@ end
         run!(s, states; tfinal=1.0, nmax=2)
         return s, states
     end
+    # Without the host-only conservative coupling, as above.
+    CL.REFLUX[] = false
     s1, q1 = slab2d(CPUBackend())
     CL.FORCE_KA[] = true
     CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -573,6 +580,7 @@ end
     finally
         CL.FORCE_KA[] = false
         CL.FORCE_DEVICE_EXCHANGE[] = false
+        CL.REFLUX[] = true
     end
     lev = getfield(s2, :levels)[2]
     @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4

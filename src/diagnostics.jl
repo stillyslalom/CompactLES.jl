@@ -49,12 +49,14 @@
 # `solver.patches`, one full padded array per held patch, or a state
 # vector; these accumulate every patch's contribution on this rank and
 # reduce once over `solver.comm`, so a rank holding no piece of a refined
-# level enters the same reduction and returns the same number. Each
-# coarse node's weight is multiplied by the fraction of its quadrature
-# cell no child level covers (`Patch.covered`, `uncovered_fraction`), and
-# a plane average by the in-plane fraction, so a covered coarse node is
-# excluded exactly once and a child's face plane is counted once between
-# its two sides. A profile on a composite grid is sampled at the root's
+# level enters the same reduction and returns the same number. The
+# integrals take the quadrature the coarse-fine coupling conserves
+# (src/reflux.jl): a coarse node with its whole cell unless a child covers
+# all of it (`Patch.covered`), a refined patch's nodes from the third in
+# from a face its parent feeds, and the correction Ω on the child's nodes
+# beside each such face. A plane average weights a coarse node by the
+# in-plane fraction of its cell no child covers, so a child's face plane
+# is counted once between its two sides. A profile on a composite grid is sampled at the root's
 # stations, each plane average combining the uncovered root nodes and the
 # nodes of every finer patch whose planes coincide with it, with each
 # patch's own transverse cell measure. The single-array forms are the
@@ -156,10 +158,12 @@ Multi-patch form: `fs` holds one full padded array per local patch, aligned
 with `solver.patches`. Patch contributions accumulate locally and reduce over
 `solver.comm` once. A shared interface-plane node carries a half weight on each
 side (each patch's interface end is a node-centered closed edge to its own
-quadrature), so the plane is counted exactly once in the total, and a coarse
-node a child level covers is weighted by the uncovered fraction of its cell
-(`Patch.covered`), so the composite grid is integrated once. Every rank of
-`solver.comm` must call it, a rank holding no piece of a refined level
+quadrature), so the plane is counted exactly once in the total. Across a
+coarse-fine face a coarse node takes its whole cell unless a child covers all
+of it, and a refined patch's nodes count from the third in from a face its
+parent feeds, so the two grids' cells meet half a coarse cell inside the
+child without overlapping and a linear field integrates exactly. Every rank
+of `solver.comm` must call it, a rank holding no piece of a refined level
 included.
 """
 function volume_integral(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}})
@@ -187,10 +191,7 @@ function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3},
             for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
                 w = wj * quad_weight(solver, 1, i) * _edge_factors(solver, i, j, k, I)
-                if masked
-                    m = covered[I]
-                    m == 0 || (w *= uncovered_fraction(m))
-                end
+                masked && (w *= _conserved_fraction(solver, covered[I], i, j, k))
                 # J = 1/inv_J is the metric Jacobian; inv_J carries any
                 # stretching, so this is the physical cell volume.
                 acc += w * f[I] / solver.inv_J[I]
@@ -213,20 +214,27 @@ function _conserved_budget(solver::SolverLike, Q::ConservedState)
                          solver.equations)
 end
 
-function _conserved_budget(solver::Solver, states::Vector{<:ConservedState})
+# On a composite solver the budget is the quantity the coarse-fine coupling
+# conserves: the cells of `volume_integral` and, under `junctions`, the
+# correction Ω beside each coarse-fine face (src/reflux.jl), which makes the
+# rule's rate high-order there and is not exact for a linear field on its own.
+function _conserved_budget(solver::Solver, states::Vector{<:ConservedState};
+                           junctions::Bool=true)
     length(states) == npatches(solver) || throw(ArgumentError(
         "state vector has $(length(states)) entries for $(npatches(solver)) local patches"))
+    # The junctions' corrections of the quadrature are the captures'.
+    _reflux_current!(solver)
     n = solver.equations.n_species + 4
     local_budget = zeros(Float64, n)
     for (ps, Q) in eachpatch(solver, states)
-        local_budget .+= _local_conserved_budget(ps, Q, true)
+        local_budget .+= _local_conserved_budget(ps, Q, true, junctions)
     end
     return _budget_tuple(MPI.Allreduce(local_budget, +, solver.comm),
                          solver.equations)
 end
 
 function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
-                                 masked::Bool)
+                                 masked::Bool, junctions::Bool=masked)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -239,10 +247,7 @@ function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
         I = CartesianIndex(i + o1, j + o2, k + o3)
         w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
             quad_weight(solver, 3, k) * _edge_factors(solver, i, j, k, I)
-        if masked
-            m = covered[I]
-            m == 0 || (w *= uncovered_fraction(m))
-        end
+        masked && (w *= _conserved_fraction(solver, covered[I], i, j, k))
         vol = Float64(w / solver.inv_J[I]) * dV
         for sp in 1:nsp
             out[sp] += vol * Float64(Q[I, sp])
@@ -252,7 +257,28 @@ function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
         end
         out[nsp + 4] += vol * Float64(Q[I, eq.i_energy])
     end
+    junctions && _junction_budget!(out, solver, Q)
     return out
+end
+
+# The composite budget's weight factor at an interior node, the conserved
+# quadrature of src/reflux.jl: none where a child covers the node's whole
+# cell, the whole cell at a parent's face node however much of it a child
+# covers, and none at a refined patch's two nodes nearest a parent-fed face.
+@inline function _conserved_fraction(solver::SolverLike, m::UInt8, i::Int, j::Int,
+                                     k::Int)
+    m == 0xff && return 0.0
+    decomp = solver.decomp
+    bcs = solver.bcs
+    il = (i, j, k)
+    for d in 1:3
+        decomp.active[d] || continue
+        g = decomp.offset[d] + il[d]
+        n = decomp.n_global[d]
+        (parent_fed(bcs[d][1]) && g <= 2 || parent_fed(bcs[d][2]) && g >= n - 1) &&
+            return 0.0
+    end
+    return 1.0
 end
 
 function _budget_tuple(values::Vector{Float64}, equations)
@@ -293,10 +319,7 @@ function _local_domain_volume(solver::SolverLike, masked::Bool)
         I = CartesianIndex(i + o1, j + o2, k + o3)
         w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
             quad_weight(solver, 3, k) * _edge_factors(solver, i, j, k, I)
-        if masked
-            m = covered[I]
-            m == 0 || (w *= uncovered_fraction(m))
-        end
+        masked && (w *= _conserved_fraction(solver, covered[I], i, j, k))
         acc += w / solver.inv_J[I]
     end
     return acc * cell_measure(solver)

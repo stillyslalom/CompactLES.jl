@@ -88,17 +88,26 @@ const CL = CompactLES
                     refine=BlockRegion((48, 0, 0), (32, 1, 1)))
     states = allocate_state(moving)
     initialize!(moving, states, ic)
-    before = CL._conserved_budget(moving, states)
+    # The cells alone: the junctions' correction of the quadrature is not
+    # exact for a linear field where a level ends on the domain's face.
+    before = CL._conserved_budget(moving, states; junctions=false)
     old_region = only(level_regions(moving, 1))
     moving.step += 1
     CL._maybe_regrid!(moving, states, Workspace(states), nothing)
     @test only(level_regions(moving, 1)) != old_region
-    after = CL._conserved_budget(moving, states)
+    after = CL._conserved_budget(moving, states; junctions=false)
     @test before.species_masses ≈ expected.species_masses atol=2e-13
-    @test after.species_masses ≈ before.species_masses atol=2e-12
-    @test after.total_mass ≈ before.total_mass atol=2e-12
-    @test all(isapprox.(after.momentum, before.momentum; atol=2e-12))
-    @test after.total_energy ≈ before.total_energy atol=2e-12
+    # The new region reaches the wall at x = 1. The cells meet without
+    # overlap at its coarse-fine face, and the two walls' half cells, at the
+    # tile's spacing there and the root's at x = 0, leave −(H² − h²)/8 times
+    # each density's slope, which for 1 + x is the mass's own.
+    H = moving.patches[1].h[1]
+    wall = -(H^2 - (H / 3)^2) / 8
+    @test after.species_masses ≈ expected.species_masses .+ wall .* [0.3, 0.7] atol=2e-12
+    @test after.total_mass ≈ mass + wall atol=2e-12
+    @test all(isapprox.(after.momentum, expected.momentum .+ wall .* velocity; atol=2e-12))
+    @test after.total_energy ≈
+          expected.total_energy + wall * (1 / (1.4 - 1) + 0.5 * sum(abs2, velocity)) atol=2e-12
 
     single = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false))
@@ -166,7 +175,9 @@ end
         r = CL._ledger_end!(s, Q)
         @test !any(k -> k[1] === :unattributed, keys(r.pieces))
         @test maximum(abs, r.residual) < 1e-12
-        @test haskey(r.pieces, (:regrid, 1)) && haskey(r.pieces, (:shell, 1))
+        # The imposed shell writes only nodes the conserved quadrature does
+        # not count.
+        @test haskey(r.pieces, (:regrid, 1)) && !haskey(r.pieces, (:shell, 1))
         for level in 0:1
             @test maximum(abs, r.pieces[(:rhs, level)] .-
                                r.pieces[(:rhs_integral, level)]) < 1e-12

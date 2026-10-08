@@ -2423,8 +2423,11 @@ const WALL_LEVEL_TOL = 1e-7
     @test lt.boundary[1] == (true, false) && lt.imposed[1] == (false, true)
     @test CL._box_buffer(lt)[1] == (0, CL.LEVEL_BUFFER)
     @test first(CL._restrict_window(lt)[1]) == 1
-    # The composite quadrature counts the covered wall node once: exact for
-    # a linear field, the wall node's outer half-cell covered with its inner.
+    # The composite quadrature counts the covered wall node once, the wall
+    # node's outer half-cell covered with its inner. The cells meet without
+    # overlap at the coarse-fine face, so a linear field leaves only the two
+    # walls' half cells, which no longer cancel: one at the tile's spacing
+    # and one at the root's, f'(H² − h²)/8 together for f = 1 + 2x.
     @test domain_volume(solver) ≈ 1.0 atol = 1e-14
     lin = map(getfield(solver, :patches)) do p
         ps = PatchSolver(solver, p)
@@ -2434,7 +2437,8 @@ const WALL_LEVEL_TOL = 1e-7
         end
         a
     end
-    @test volume_integral(solver, lin) ≈ 2.0 atol = 1e-13
+    H = solver.patches[1].h[1]
+    @test volume_integral(solver, lin) ≈ 2.0 + 2 * (H^2 - (H / 3)^2) / 8 atol = 1e-13
     root = PatchSolver(solver, solver.patches[1])
     @test root.covered[padded_index(root, 1, 1, 1)] == 0xff
     # Against the uniform run at the level's spacing in the same equal steps,
@@ -2523,14 +2527,11 @@ const PLANE_LEVEL_TOL = 1e-10
             end
             a
         end
-        # A half cell takes its node's value, so for f = 1 + 2x each half cell
-        # contributes ∓(its width)² by the side of its node it lies on. At a
-        # plane every cell is whole; at the coarse-fine face the root's half
-        # cell and the tile's do not cancel, and the difference is the face's
-        # alone: ∓(h² − (h/3)²)/4 with the face on the tile's high or low side.
-        h = root.h[1]
-        face = (k == 1 ? -1 : 1) * (h^2 - (h / 3)^2) / 4
-        @test volume_integral(s, lin) ≈ 2.0 + face atol = 1e-13
+        # At a plane every cell is whole, and at the coarse-fine face the
+        # root's face node takes its whole cell and the tile's cells start
+        # beyond it, so every cell is centred on its node and a linear field
+        # integrates exactly.
+        @test volume_integral(s, lin) ≈ 2.0 atol = 1e-13
         # Against the uniform run at the level's spacing in the same equal
         # steps, the tile differs by the refinement's error alone.
         f, fq = plane_level(N; refined=false)
@@ -2960,15 +2961,17 @@ const AXIS_FILTER_TOL = 2e-5
     @test first(CL._restrict_window(lt)[1]) == 1
     # The composite quadrature: the root's node at h/2 is covered on both
     # halves of [0, h], and the tile's node at h/6 carries the axis edge
-    # factor of its own spacing, as the root alone carries its own. Only the
-    # coarse-fine face departs from the root alone, by the trapezoid edge
-    # terms of its two sides on the linear r, ((h/3)² − h²)/12 = −2h²/27.
+    # factor of its own spacing, as the root alone carries its own. The
+    # cells meet without overlap at the coarse-fine face, so the composite
+    # departs from the root alone by the axis's edge term on the linear r,
+    # −h²/24 at the root's spacing, taken at the tile's instead:
+    # (h² − (h/3)²)/24 = h²/27.
     @test CL.uncovered_fraction(root.covered[padded_index(root, 1, 1, 1)]) == 0
     @test CL.quad_weight(fine, 1, 1) == 1.0
     @test CL._edge_factor(fine, 1, 1, padded_index(fine, 1, 1, 1)) ≈ 11 / 12
     alone = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) - 2h^2 / 27 atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) + h^2 / 27 atol = 1e-15
     # Against the uniform run at the level's spacing in the same equal steps,
     # the tile differs by the refinement's error alone.
     n = 3N
@@ -3035,13 +3038,14 @@ const AXIS_FILTER_TOL = 2e-5
     @test fine.folds[3].sigvel == root.folds[3].sigvel == (1, 1, -1)
     @test fine.folds[1].sigvel == root.folds[1].sigvel
     @test xcoord(fine, 1, 1) ≈ root.h[1] / 6 && xcoord(fine, 3, 1) ≈ root.h[3] / 6
-    # The face term of the r-weighted quadrature along the tile's r face,
-    # which spans (m − ½)h of z.
+    # The axis's edge term at the tile's spacing, h²/27 per unit of z (the
+    # axis tile above), over the tile's cells in z, which end half a root
+    # cell inside its face, (m − 1)h from the plane.
     h = root.h[1]
     m = lt.region.extent[3]
     alone = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, zplane),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) - 2h^2 / 27 * (m - 0.5) * h atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) + h^2 / 27 * (m - 1) * h atol = 1e-15
     # A uniform state at rest stays at rest to round-off through both folds,
     # the viscous ghost fluxes, the artificial properties, the d8 detector and
     # the filter.

@@ -267,6 +267,60 @@ function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
 end
 
 """
+    RefluxCapture
+
+One side of a coarse-fine junction as one patch holds it: the parent's lines
+through the face node beside a child tile, or the child's lines through its
+first counted nodes (src/reflux.jl). `nodes` are the padded indices along `d`
+whose increments enter the junction's face flux, with the coefficients of the
+derivative (`dcoef`) and of the filter (`fcoef`); `dr` and `fr` are the
+padded index `j` of the anchor face `j + ½` whose explicit stencil this rank
+evaluates, 0 where another rank holds it. Every per-line array is indexed by
+the line's position in `lines`, the padded ranges of the two transverse
+dimensions in ascending order. `stage` collects one right-hand side, `du` and
+`reg` follow it through the low-storage recurrence, and `reg` takes each
+filter pass directly; `om0` is scratch for the child's correction of the
+quadrature. `window` is the parent's padded range along `d` of the gate's
+nodes this rank holds, `wslot` the first one's place among the junction's
+`GATE_WIDTH`, and `rho0` the density there at the step's start.
+"""
+struct RefluxCapture{T,M<:AbstractMatrix{T},V<:AbstractVector{T}}
+    level::Int                  # index in `solver.levels` of the parent level
+    junction::Int               # the junction's index under that level
+    child::Bool
+    d::Int
+    sgn::T
+    nodes::NTuple{6,Int}
+    dcoef::NTuple{6,T}
+    dr::Int
+    drs::NTuple{8,T}            # derivative face stencil, l = 1 - dM .. dM
+    dM::Int
+    drscale::T
+    fcoef::NTuple{6,T}
+    fr::Int
+    frs::NTuple{8,T}            # filter face stencil, l = 1 - fM .. fM
+    fM::Int
+    frscale::T
+    hd::T
+    lines::NTuple{2,UnitRange{Int}}
+    kap::V                      # per line: the measure of a derivative's flux
+    kapf::V                     # per line: that of a filter pass, 0 if not taken
+    bnode::Int                  # parent: padded index of the correction's node, or 0
+    wb::V                       # parent: that node's composite weight
+    band::NTuple{6,Int}         # child: the quadrature correction's nodes
+    omega::NTuple{6,T}
+    entry::Vector{Int}          # per line, its line of the junction
+    window::UnitRange{Int}      # parent: the gate's nodes along d held here
+    wslot::Int                  # parent: the place of window[1] among them
+    rho0::Matrix{Float64}       # parent: the density there at the step's start
+    snap::M
+    stage::M
+    du::M
+    reg::M
+    om0::M
+end
+
+"""
     Patch
 
 Per-patch state of a [`Solver`](@ref): the patch's place in the global grid
@@ -309,7 +363,7 @@ copied whole into each box, and into every `PatchSolver` built from an entry
 of the solver's abstractly typed patch list. A mutable one is boxed as a
 reference.
 """
-mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
+mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -402,6 +456,10 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
     # `grad_Y` and `flux` off the workspace); the convenience constructor
     # below derives them.
     field_tuples::TF
+    # The coarse-fine junctions this patch takes part in, as a parent or as
+    # a child (`RefluxCapture`, src/reflux.jl); rebuilt whenever the layout
+    # changes, empty on a solver without refinement.
+    reflux_captures::RC
 end
 
 # The positional argument list every construction site uses; `field_tuples`
@@ -427,7 +485,9 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
                  rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-                 sensed_fields, child_deep, child_masked, field_tuples)
+                 sensed_fields, child_deep, child_masked, field_tuples,
+                 RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
+                               typeof(similar(rho, 0))}[])
 end
 
 # --- Covered masks ----------------------------------------------------------

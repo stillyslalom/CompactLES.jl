@@ -295,6 +295,10 @@ function main(opt)
         run!(s, states; tfinal=1e6, nmax=6)
         return s, states
     end
+    # The coarse-fine flux correction (src/reflux.jl) runs on host storage
+    # only, and a shock crossing the tiled Sod's faces takes it, so these
+    # comparisons run without it on both sides.
+    CL.REFLUX[] = false
     for (label, build) in (("two viscous slabs", two_slabs),
                            ("tiled subcycled regridding Sod", tiled_sod),
                            ("tiled 3-D box, 12 tiles", tiled_box),
@@ -313,6 +317,7 @@ function main(opt)
                 sc.wall_total / sc.step, sd.wall_total / sd.step,
                 (sc.wall_total / sc.step) / (sd.wall_total / sd.step))
     end
+    CL.REFLUX[] = true
 
     # --- Float32 TGV short history + step timing at n^3 -------------------
     for Tp in (Float64, Float32)

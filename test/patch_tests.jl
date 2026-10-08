@@ -492,14 +492,18 @@ end
         @test closure96 > 100 * e96
     end
     # The ghost flux arrays exist only where they are read: under the ghost
-    # path with molecular transport, along each interface dimension.
+    # path with molecular transport or the artificial properties, whose
+    # remainder they carry, along each interface dimension.
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
                          patch_grid=(2, 1, 1); kw...)
     extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
-    @test all(==(0), extents(mk(interface_flux=:ghost)))
+    off = ArtificialProperties(enabled=false)
+    @test all(==(0), extents(mk(interface_flux=:ghost, art=off)))
     @test all(==(0), extents(mk(interface_flux=:closure,
                                 transport=ConstantTransport(mu0=1e-2))))
-    viscous = extents(mk(interface_flux=:ghost, transport=ConstantTransport(mu0=1e-2)))
-    @test all(==(5), viscous[:, 1]) && all(==(0), viscous[:, 2:3])
+    for kw in ((transport=ConstantTransport(mu0=1e-2), art=off), (;))
+        e = extents(mk(; interface_flux=:ghost, kw...))
+        @test all(==(5), e[:, 1]) && all(==(0), e[:, 2:3])
+    end
 end

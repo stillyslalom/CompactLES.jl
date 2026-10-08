@@ -20,17 +20,22 @@ _ghost_viscous(interface_flux::Symbol, transport) =
     interface_flux === :ghost && !_zero_molecular_diffusion(transport)
 _ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
 
-# Test/bench toggle: under `interface_flux = :ghost` with the artificial
-# properties on, a dimension whose interface ends are all same-level carries
-# the remainder F − f in `ghost_flux` and differences the whole flux through
-# the gradient plans in one solve. Read at construction (allocation) and at
-# every right-hand side.
-const GHOST_FLUX_REMAINDER = Ref(false)
+# Under `interface_flux = :ghost` with the artificial properties on, an
+# interface dimension carries the remainder F − f in `ghost_flux` and
+# differences the whole flux through the gradient plans in one solve; the
+# level's records fill its ghost layers at a same-level end. The divergence
+# plans' one-sided rows, a second solve, took the remainder before, at an
+# interface order near 3 against 6 here. Test/bench toggle, read at
+# construction (allocation) and at every right-hand side; `false` restores
+# the second solve.
+const GHOST_FLUX_REMAINDER = Ref(true)
 
-# With `GHOST_FLUX_REMAINDER` on, also take dimensions with a coarse-fine end,
+# With `GHOST_FLUX_REMAINDER` on, the dimensions with a coarse-fine end too,
 # the remainder's ghost layers there extrapolated from the interior by a
-# polynomial of degree `GHOST_REMAINDER_DEGREE[]` along the line.
-const GHOST_REMAINDER_EXTRAPOLATE = Ref(false)
+# polynomial of degree `GHOST_REMAINDER_DEGREE[]` along the line (lower on a
+# rank holding fewer nodes). Test/bench toggle; `false` leaves those
+# dimensions to the second solve.
+const GHOST_REMAINDER_EXTRAPOLATE = Ref(true)
 const GHOST_REMAINDER_DEGREE = Ref(5)
 
 _ghost_remainder(interface_flux::Symbol, art) =
@@ -155,6 +160,7 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                              σf::Int, inv_J)
     fold = solver.folds[d]
     plan = _plan_at(solver.div_plans, d)
+    _reflux_open!(solver, dQ, c, d)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_subtract!(dQ, c, plan, f, solver.decomp, inv_J)
     else
@@ -169,7 +175,9 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                        dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
         end
     end
-    return _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:div))
+    _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:div))
+    _reflux_close!(solver, dQ, c, f, d, inv_J)
+    return dQ
 end
 
 # The pressure term inv_h_d ∂p/∂ξ_d of component `c` where it enters as a
@@ -1141,7 +1149,6 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
                        solver.w, solver.p, ft.Y, c, d, eq.n_species, m1, m2, m3,
                        eq.i_energy, decomp.n_local, decomp.n_halo_d, n3f)
         end
-        _extrapolate_coarse_fine!(solver, G, d)
     end
     for d in 1:3
         dims[d] && size(solver.ghost_flux[d], 4) > 0 &&
@@ -1163,13 +1170,15 @@ function _remainder_ghosted(solver::SolverLike, d::Int)
 end
 
 # The remainder's ghost layers at each coarse-fine face of `d` this rank holds,
-# by polynomial extrapolation of the interior values along the line.
-function _extrapolate_coarse_fine!(solver::SolverLike, G, d::Int)
+# by polynomial extrapolation of the interior values along the line. Phase
+# two, per tile: a stacked level's spanning patch carries the first tile's
+# face kinds only.
+function _extrapolate_coarse_fine!(solver::SolverLike, d::Int)
     decomp = solver.decomp
     pad = decomp.n_halo_d
     nl = decomp.n_local
-    deg = GHOST_REMAINDER_DEGREE[]
-    nl[d] > deg || error("extrapolation of degree $deg needs $(deg + 1) nodes")
+    G = solver.ghost_flux[d]
+    deg = min(GHOST_REMAINDER_DEGREE[], nl[d] - 1)
     o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     for side in 1:2
         parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) || continue
@@ -1298,6 +1307,7 @@ function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
     decomp = solver.decomp
     plan = _plan_at(solver.deriv_plans, d)
     fold = solver.folds[d]
+    _reflux_open!(solver, dQ, c, d)
     if fold !== nothing || plan isa DevicePlan
         fold === nothing ? apply_along!(solver.tmp_a, plan, f, decomp) :
             fold_apply!(solver.tmp_a, f, solver, fold, σf, Val(:deriv))
@@ -1313,7 +1323,9 @@ function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
     else
         apply_along_subtract!(dQ, c, plan, f, decomp, inv_J)
     end
-    return _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:deriv))
+    _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:deriv))
+    _reflux_close!(solver, dQ, c, f, d, inv_J)
+    return dQ
 end
 
 # --- Phase two: the molecular flux through interface ends ---------------------
@@ -1449,9 +1461,13 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
     end
     for (k, pi) in enumerate(lev.patches)
         lt = lev.index == 0 ? nothing : lev.transfers[lev.tiles[k]]
-        lt === nothing || lt.gradients === nothing ||
-            _coarse_fine_ghost_fluxes!(PatchSolver(solver, patches[pi]), lt,
-                                       patches[pi].level_scratch, states[pi])
+        lt === nothing && continue
+        ps = PatchSolver(solver, patches[pi])
+        for d in 1:3
+            _remainder_ghosted(ps, d) && _extrapolate_coarse_fine!(ps, d)
+        end
+        lt.gradients === nothing ||
+            _coarse_fine_ghost_fluxes!(ps, lt, patches[pi].level_scratch, states[pi])
     end
     # The solves run as the right-hand sides did: per patch, or per stack.
     if isempty(lev.stacks)
@@ -1942,6 +1958,7 @@ returns only the forwarding method of a function with keywords.
 function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
                       coefficients_current::Bool=false)
     decomp = solver.decomp
+    _reflux_zero!(solver)
     _gradient_step!(solver, Q, primitives_current, coefficients_current)
     _validate_transport_state!(solver, Q; current=true)
     _artificial_step!(solver, Q, coefficients_current)

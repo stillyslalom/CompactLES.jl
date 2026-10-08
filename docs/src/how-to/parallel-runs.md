@@ -158,9 +158,13 @@ explains tags, tiling, restrictions, and restarts.
 AMR currently requires unstretched Cartesian coordinates, or axisymmetric
 cylindrical ones with θ collapsed. A level may reach a symmetry plane or the
 axis of an r-z run on the host backend, placed there by a `BlockRegion` or
-by shapes and regridding tags. It does
-not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
-budgets as diagnostics to check. A refined device configuration supports
+by shapes and regridding tags. Where the root does not resolve a feature at
+a coarse--fine face, such as a shock or a contact crossing it, the face
+fluxes are reconciled so that the composite mass, momentum, and energy are
+conserved; in smooth flow they are not, and the budgets drift by amounts that
+fall with the spacing. Device runs and runs under the positivity limiter take
+no such correction, so treat their composite budgets as diagnostics to check.
+A refined device configuration supports
 subcycling, tiling, and regridding, but not `level_restriction=:filter`.
 Load the GPU package first and wrap its backend:
 

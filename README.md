@@ -312,11 +312,12 @@ checkpoint are listed with the setup error each rejected one raises.
   Stanton–Murillo ion interdiffusivity evaluator is not a plasma EOS or a
   coupled ion-transport model. See the
   [transport model](docs/src/explanation/thermodynamics.md).
-- Refinement is Cartesian or axisymmetric r-z only and does not provide
-  conservative refluxing
-  (a coarse–fine flux correction that enforces a shared conservation budget).
-  Patch and level interfaces, restriction, and filtering can affect composite
-  conservation; assess those errors for the chosen calculation.
+- Refinement is Cartesian or axisymmetric r-z only. The coarse–fine face
+  fluxes are reconciled, conserving the composite budget, only where a feature
+  the coarse grid does not resolve is crossing a face and only on the host
+  backend. Elsewhere patch and level interfaces, restriction, and filtering can
+  affect composite conservation; assess those errors for the chosen
+  calculation.
 - Wall boundary conditions assume coordinate-surface walls; Soret/Dufour and
   reacting chemistry are not built in (reactions can use the source interface).
 

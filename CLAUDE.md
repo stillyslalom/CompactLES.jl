@@ -276,7 +276,9 @@ them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the intended ones, so *any* report elsewhere is a regression. The
 baseline is one site in `apply_bcs!` (`enforce!`) and five in
-`compute_rhs!`, hence six in `step!`. Three are the boundary hooks
+`compute_rhs!`, and seven in `step!`: those six and the `_cold` barrier in
+front of `_build_reflux!`, which rebuilds the coarse-fine captures after a
+layout change. Of the five in `compute_rhs!`, three are the boundary hooks
 (`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through the detector's
 `_face_mirror`): face conditions are stored abstractly on the `Patch` so that a
 combination of them does not recompile the right-hand-side tree, and the
@@ -519,6 +521,19 @@ Names are spelled out in full. Current vocabulary:
   `_plane_accumulate!` (the composite plane average at the root's
   stations). A diagnostic's `Vector` form is the composite, masked one; the
   single-array form is the one-patch quadrature and applies no mask
+- `junction` (one coarse-fine face of one tile as the conservative coupling
+  treats it, its `box` the parent lines crossing it, `_reflux_junctions`),
+  `RefluxCapture` / `reflux_captures` (a `Patch` field: the patch's side of
+  each junction it takes part in, parent or child, with the per-line
+  `stage`, `du` and `reg` registers), `REFLUX` (test/bench toggle),
+  `_reflux_open!` / `_reflux_close!` (the hooks in the two divergence
+  funnels), `_reflux_fold!`, `_reflux_filter!`, `_reflux_begin_step!`,
+  `_reflux_apply!`, `_junction_omega` (the weights of Ω, the conserved
+  quadrature's correction beside a junction), `_conserved_fraction` (that
+  quadrature's node factor), `GATE_REACH` / `GATE_WIDTH` / `_reflux_density!`
+  / `_reflux_gated` (the gate, tested on the window's densities summed over
+  the level's ranks, so it reads no halo),
+  `RefluxCarry` (what the positivity guard holds back)
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix

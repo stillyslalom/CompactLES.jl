@@ -158,10 +158,15 @@ imbalance in a two-level hierarchy. A multi-level nested vector regrids only
 with a positive `tile`.
 
 Refinement uses interpolation to fill new fine nodes and restriction to
-update covered parent nodes. Injection does not make arbitrary composite
-integrals exactly conservative: monitor the hierarchy-aware mass and energy
-integrals for the quantity of interest, especially as a front crosses a
-coarse-fine interface or the layout changes. Checkpoint files record the
+update covered parent nodes. Where a feature the parent spacing does not
+resolve, a shock or a contact, lies within a few parent nodes of a
+coarse-fine face, the fluxes the two grids computed through the face over a
+step are reconciled on the parent node beside it, so the composite mass,
+momentum and energy are conserved while it crosses. Smooth flow is left
+uncorrected, with a drift that falls with the spacing, and device storage and
+the positivity limiter take no correction. Monitor the hierarchy-aware mass
+and energy integrals for the quantity of interest, especially as the layout
+changes. Checkpoint files record the
 hierarchy and its refinement controls; resume with a compatible solver
 configuration so the recorded layout can be restored. Subcycling can reduce
 work on coarse levels relative to advancing every level at the fine-limited

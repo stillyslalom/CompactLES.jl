@@ -99,9 +99,12 @@ create or destroy the summed conserved quantity.
 This is the scope verified by the serial and distributed periodic conservation
 tests. Patch and level interfaces lie outside it: their coupling is
 interpolation and injection through ghost fluxes or compact interface
-closures, and its conservation is measured as a drift of the composite
-integrals rather than proved, inside the budgets set for it on long periodic
-mixing and moving-refinement runs. It is not a blanket statement that every one-sided
+closures. Where the coarse grid does not resolve the flow at a coarse--fine
+face, the difference between the two grids' fluxes through it over a step is
+added to the coarse node beside the face, which conserves the composite
+integrals there; in smooth flow the coupling is left uncorrected, and its
+conservation is measured as a drift of the composite integrals, inside the
+budgets set for it on long periodic mixing and moving-refinement runs. It is not a blanket statement that every one-sided
 closure or every operation in a timestep preserves an arbitrary discrete
 integral. Physical boundary fluxes, characteristic corrections, and explicit
 sources change the balance as specified by the problem. The compact state

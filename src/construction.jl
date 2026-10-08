@@ -1665,7 +1665,9 @@ _fine_bc(face::Int, on_boundary::Bool, bc) =
 # A patch with new id, faces and boundary conditions sharing every array and
 # plan of `p`: what a regrid hands a surviving tile whose neighbors changed.
 function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs)
-    names = fieldnames(typeof(p))[1:end-1]     # field_tuples is derived
+    # `field_tuples` is derived, and the junction captures are rebuilt for
+    # the new layout.
+    names = filter(f -> f ∉ (:field_tuples, :reflux_captures), fieldnames(typeof(p)))
     args = map(names) do f
         f === :id ? id : f === :faces ? faces : f === :bcs ? bcs : getfield(p, f)
     end

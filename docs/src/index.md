@@ -96,9 +96,11 @@ Berger–Oliger subcycling. [`AMR`](@ref) groups region selection, tagging, and
 time stepping. CPU and device backends support MPI decomposition and refined
 layouts. [Adaptive mesh refinement](@ref) describes their setup and restrictions.
 
-These paths do not all have equal maturity. Refinement has no conservative
-refluxing (a correction that balances fluxes across coarse–fine interfaces),
-and filtering and interface coupling can change composite conserved quantities.
+These paths do not all have equal maturity. Refinement balances the fluxes
+across a coarse–fine interface only where a feature the coarse grid does not
+resolve is crossing it, and only on the host backend; elsewhere filtering and
+interface coupling can change composite conserved quantities by amounts that
+fall with the spacing.
 Each explanation page states the relevant evidence and limitations.
 
 !!! warning "Research software"

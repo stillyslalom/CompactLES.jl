@@ -26,7 +26,7 @@
 
 """The mechanisms a ledger piece is attributed to, in report order."""
 const LEDGER_PHASES = (:rhs, :wall_enforce, :filter, :same_level, :shell, :restrict,
-                       :regrid, :repair, :truncation, :callback, :rollback,
+                       :reflux, :regrid, :repair, :truncation, :callback, :rollback,
                        :unattributed)
 
 # The right-hand side integrated through the stage recurrence: its own
@@ -127,6 +127,7 @@ function _ledger_begin!(solver::Solver, Q)
 end
 
 function _ledger_reset!(L::BudgetLedger, solver, states)
+    _reflux_current!(solver)
     np = _ledger_held(solver)
     patches = getfield(solver, :patches)
     L.version = _ledger_version(solver)
