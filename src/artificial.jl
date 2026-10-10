@@ -573,8 +573,11 @@ end
         il = (d == 1 ? i : d == 2 ? j : rem(k - 1, n3p) + 1)
         # The edge tests sit outside the stencil loop, not on each tap: every
         # flag is invariant over the whole sweep, and the clamped branch is the
-        # one a line with neither a wall nor a folded end takes.
-        if !(mirror_lo | mirror_hi | wall_lo | wall_hi)
+        # one a line with neither a wall nor a folded end takes. A node whose
+        # five taps all lie on the block, 3 ≤ il ≤ n_d − 2, takes it too: no
+        # tap there reaches a mirror, and the clamp leaves each in place, so
+        # the per-tap tests of `_delta4_line` would sum the same terms.
+        if !(mirror_lo | mirror_hi | wall_lo | wall_hi) | ((il > 2) & (il < n_d - 1))
             acc = zero(eltype(out))
             for m in -2:2
                 ilm = clamp(il + m, lomin, himax)
