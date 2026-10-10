@@ -888,9 +888,8 @@ assemble_fluxes!(solver::SolverLike, Q) =
 # type comes off an array argument instead.
 @inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
                                 cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
-                                grad_u, gT, gY, flux, transport, n_species,
-                                m1, m2, m3, i_energy, act, bulk, o1, o2, o3,
-                                i, j, k)
+                                grad_u, gT, gY, flux, transport, i_energy, act,
+                                bulk, o1, o2, o3, i, j, k)
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -904,73 +903,127 @@ assemble_fluxes!(solver::SolverLike, Q) =
         μ = molecular.mu + mu_art[I]
         β = beta_art[I]
         κ = molecular.kappa + kappa_art[I]
-        divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+        divu = grad_u[1][1][I] + grad_u[2][2][I] + grad_u[3][3][I]
         # T(2)/T(3), not the literal 2/3: the Float64 literal promotes the
         # normal stresses under a narrower T, making τ a heterogeneous tuple
         # whose runtime indexing is a dynamic field access, an InvalidIRError
         # on device. The Float64 value is identical.
         two_thirds = T(2) / T(3)
-        τ11 = μ * (2*grad_u[1,1][I] - two_thirds * divu) + β * divu
-        τ22 = μ * (2*grad_u[2,2][I] - two_thirds * divu) + β * divu
-        τ33 = μ * (2*grad_u[3,3][I] - two_thirds * divu) + β * divu
-        τ12 = μ * (grad_u[1,2][I] + grad_u[2,1][I])
-        τ13 = μ * (grad_u[1,3][I] + grad_u[3,1][I])
-        τ23 = μ * (grad_u[2,3][I] + grad_u[3,2][I])
+        τ11 = μ * (2*grad_u[1][1][I] - two_thirds * divu) + β * divu
+        τ22 = μ * (2*grad_u[2][2][I] - two_thirds * divu) + β * divu
+        τ33 = μ * (2*grad_u[3][3][I] - two_thirds * divu) + β * divu
+        τ12 = μ * (grad_u[1][2][I] + grad_u[2][1][I])
+        τ13 = μ * (grad_u[1][3][I] + grad_u[3][1][I])
+        τ23 = μ * (grad_u[2][3][I] + grad_u[3][2][I])
         τ = ((τ11, τ12, τ13), (τ12, τ22, τ23), (τ13, τ23, τ33))
         # A collapsed dimension's flux is neither exchanged nor differenced,
         # so assembling it was a third of this phase wasted on a planar run.
-        for d in 1:3
-            act[d] || continue
-            ud = uv[d]
-            τd = τ[d]
-            # Per-species diffusion with a correction velocity:
-            # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
-            # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1. Under the
-            # shared-D_b species channels (`:partial_density`, `:bulk`) the
-            # artificial part of this flux is added afterwards by
-            # `_partial_density_flux_point!` or `_bulk_flux_point!`, so only
-            # the molecular diffusivity D0 enters here; `D_art` then holds
-            # D_b, which must not be read as a Fickian coefficient.
-            Vc = zero(T)
-            for sp in 1:n_species
-                Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
-                Vc += Dk * gY[d, sp][I]
-            end
-            hdiff = zero(T)              # Σ_k h_k J_{k,d}
-            for sp in 1:n_species
-                Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
-                Jkd = ρ * (-Dk * gY[d, sp][I] + Y[sp][I] * Vc)
-                flux[d, sp][I] = ρ * Y[sp][I] * ud + Jkd
-                hdiff += species_enthalpy(eos, sp, point) * Jkd
-            end
-            flux[d, m1][I] = ρ * ud * uv[1] + (d == 1 ? pI : zero(T)) - τd[1]
-            flux[d, m2][I] = ρ * ud * uv[2] + (d == 2 ? pI : zero(T)) - τd[2]
-            flux[d, m3][I] = ρ * ud * uv[3] + (d == 3 ? pI : zero(T)) - τd[3]
-            flux[d, i_energy][I] = (E + pI) * ud -
-                           (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
-                           κ * gT[d][I] + hdiff
-        end
+        act[1] && _fluxes_along!(Val(1), flux[1], gY[1], gT[1], Y, D_art, eos, point,
+                                 molecular, bulk, ρ, uv, pI, E, κ, τ[1], I)
+        act[2] && _fluxes_along!(Val(2), flux[2], gY[2], gT[2], Y, D_art, eos, point,
+                                 molecular, bulk, ρ, uv, pI, E, κ, τ[2], I)
+        act[3] && _fluxes_along!(Val(3), flux[3], gY[3], gT[3], Y, D_art, eos, point,
+                                 molecular, bulk, ρ, uv, pI, E, κ, τ[3], I)
     end
     return nothing
 end
 
+# Left-to-right sum of `acc` and the elements of a tuple: the order of the
+# loop `for x in t; acc += x; end`, unrolled.
+@inline _sum_in_order(acc, t::Tuple) = _sum_in_order(acc + first(t), Base.tail(t))
+@inline _sum_in_order(acc, ::Tuple{}) = acc
+
+# The fluxes along dimension `d` at one point. `fd` holds the species
+# fluxes and then the momentum and energy fluxes along `d`, `gYd` the
+# mass-fraction gradients along `d`; `Y`, `D_art` and both of these are
+# tuples whose length is the species count, so the species sums unroll at
+# constant indices.
+@inline function _fluxes_along!(::Val{d}, fd, gYd, gTd, Y, D_art, eos, point,
+                                molecular, bulk, ρ, uv, pI, E, κ, τd, I) where {d}
+    T = typeof(ρ)
+    N = length(Y)
+    @inbounds begin
+        ud = uv[d]
+        # Per-species diffusion with a correction velocity:
+        # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
+        # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1. Under the
+        # shared-D_b species channels (`:partial_density`, `:bulk`) the
+        # artificial part of this flux is added afterwards by
+        # `_partial_density_flux_point!` or `_bulk_flux_point!`, so only
+        # the molecular diffusivity D0 enters here; `D_art` then holds
+        # D_b, which must not be read as a Fickian coefficient.
+        # Each closure below is a method of its own: the enclosing `@inbounds`
+        # does not reach it, and without `@inline` it stays a call per
+        # species, a GC safepoint at which every array of the body is rooted
+        # again (measured at 25% of this phase).
+        Dk = ntuple(Val(N)) do sp
+            @inline
+            @inbounds bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
+        end
+        Vc = _sum_in_order(zero(T), ntuple(Val(N)) do sp
+            @inline
+            @inbounds Dk[sp] * gYd[sp][I]
+        end)
+        hJ = ntuple(Val(N)) do sp
+            @inline
+            @inbounds begin
+                Jkd = ρ * (-Dk[sp] * gYd[sp][I] + Y[sp][I] * Vc)
+                fd[sp][I] = ρ * Y[sp][I] * ud + Jkd
+                species_enthalpy(eos, sp, point) * Jkd
+            end
+        end
+        hdiff = _sum_in_order(zero(T), hJ)          # Σ_k h_k J_{k,d}
+        fd[N + 1][I] = ρ * ud * uv[1] + (d == 1 ? pI : zero(T)) - τd[1]
+        fd[N + 2][I] = ρ * ud * uv[2] + (d == 2 ? pI : zero(T)) - τd[2]
+        fd[N + 3][I] = ρ * ud * uv[3] + (d == 3 ? pI : zero(T)) - τd[3]
+        fd[N + 4][I] = (E + pI) * ud -
+                       (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
+                       κ * gTd[I] + hdiff
+    end
+    return nothing
+end
+
+# The field collections of one patch as tuples of their arrays, with the
+# species count `N` in the type: `flux` and `gY` per dimension, `grad_u` as
+# its rows. A body indexing these at the constant indices an unrolled
+# species sum produces reads each array through one load of a tuple field.
+# The `Vector`/`Matrix` forms instead cost a load of the element, a null
+# check and a reload of the array's size per access, and a tuple indexed at
+# a runtime species index cost 3× (see `FieldVector`).
+@inline _species_tuple(v, ::Val{N}) where {N} = ntuple(sp -> v[sp], Val(N))
+@inline _dims_tuple(m, ::Val{N}) where {N} =
+    ntuple(d -> ntuple(c -> m[d, c], Val(N)), Val(3))
+
 # Keyed on the field storage, EOS, transport and `Q` only (see `PatchFields`),
 # so every scheme, detector, dimensionality and patch wrapper shares one
-# compiled body per (T, array type, EOS, transport).
+# compiled body per (T, array type, EOS, transport, species count).
 function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol,
                            sharpen::Bool, Q)
+    # A dynamic dispatch on the species count, once per whole-array assembly.
+    # The species count is not in the solver type, so solvers differing only
+    # in it share every other compiled method; only the launches below compile
+    # once per species count.
+    _launch_fluxes!(Val(eqi[1]), f, eos, tr, eqi, shared, species_flux, sharpen, Q)
+    return nothing
+end
+
+function _launch_fluxes!(::Val{N}, f, eos, tr, eqi, shared::Bool, species_flux::Symbol,
+                         sharpen::Bool, Q) where {N}
     n_species, n_cons, i_energy, (m1, m2, m3) = eqi
     decomp = f.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     ft = f.ft
+    flux = ft.flux
+    columns = (ntuple(identity, Val(N))..., m1, m2, m3, i_energy)
+    fd = ntuple(d -> map(c -> flux[d, c], columns), Val(3))
     pointwise!(_fluxes_point!, f.rho, nx, ny, nz,
                Q, eos, f.rho, f.u, f.v, f.w, f.p,
-               f.T_ion, f.cp_mix, f.mu_art, f.beta_art,
-               f.kappa_art, ft.D_art, ft.Y, ft.grad_u,
-               f.grad_T_ion, ft.grad_Y, ft.flux,
-               tr, n_species, m1, m2, m3, i_energy,
-               decomp.active, shared, o1, o2, o3)
+               f.T_ion, f.cp_mix, f.mu_art, f.beta_art, f.kappa_art,
+               _species_tuple(ft.D_art, Val(N)), _species_tuple(ft.Y, Val(N)),
+               _dims_tuple(ft.grad_u, Val(3)), f.grad_T_ion,
+               _dims_tuple(ft.grad_Y, Val(N)), fd,
+               tr, i_energy, decomp.active, shared, o1, o2, o3)
     # The shared-D_b species channels, D_b read from `D_art[1]` (every
     # `D_art[k]` holds it) and ∂_d Q_c from the gradients `compute_rhs!` filled
     # into `grad_Q`: `:bulk` adds −D_b ∂_d Q_c to every component,
@@ -980,13 +1033,18 @@ function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol,
     # every rank, so the branch is safe with no collective below it.
     if shared && species_flux === :bulk
         pointwise!(_bulk_flux_point!, f.rho, nx, ny, nz,
-                   ft.flux, f.D_art[1], FieldMatrix(f.grad_Q),
+                   flux, f.D_art[1], FieldMatrix(f.grad_Q),
                    n_cons, decomp.active, o1, o2, o3)
     elseif shared && species_flux === :partial_density
+        # The sharpening fluxes sit in the `grad_Q` columns past the partial
+        # densities, which exist only under `sharpen`; without it the
+        # species columns stand in for them, unread.
+        gQ = FieldMatrix(f.grad_Q)
+        gS = sharpen ? ntuple(d -> ntuple(sp -> gQ[d, N + sp], Val(N)), Val(3)) :
+                       _dims_tuple(gQ, Val(N))
         pointwise!(_partial_density_flux_point!, f.rho, nx, ny, nz,
-                   ft.flux, eos, f.D_art[1], FieldMatrix(f.grad_Q),
-                   f.u, f.v, f.w, f.T_ion, n_species,
-                   m1, m2, m3, i_energy, decomp.active, sharpen, o1, o2, o3)
+                   fd, eos, f.D_art[1], _dims_tuple(gQ, Val(N)), gS,
+                   f.u, f.v, f.w, f.T_ion, decomp.active, sharpen, o1, o2, o3)
     end
     return nothing
 end
@@ -1000,8 +1058,7 @@ end
 # what the mass flux carries. Under `sharpen` each J_k first takes the
 # sharpening flux S_k that `_sharpening_fluxes!` left in `gQ[d, n_species + k]`,
 # so the consistency terms are those of the total species flux.
-@inline function _partial_density_flux_point!(flux, eos, D_b, gQ, u, v, w, T_ion,
-                                              n_species, m1, m2, m3, i_energy,
+@inline function _partial_density_flux_point!(flux, eos, D_b, gQ, gS, u, v, w, T_ion,
                                               act, sharpen, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -1009,29 +1066,48 @@ end
         uv = (u[I], v[I], w[I])
         point = _species_point(eos, T_ion[I])
         ke = (uv[1]^2 + uv[2]^2 + uv[3]^2) / 2
-        for d in 1:3
-            act[d] || continue
-            Jsum = zero(Db)
-            eJ = zero(Db)
-            for sp in 1:n_species
-                Jkd = -Db * gQ[d, sp][I]
-                sharpen && (Jkd += gQ[d, n_species + sp][I])
-                flux[d, sp][I] += Jkd
-                Jsum += Jkd
-                eJ += _species_internal_energy(eos, sp, point) * Jkd
+        act[1] && _partial_density_along!(flux[1], gQ[1], gS[1], eos, point, Db, uv,
+                                          ke, sharpen, I)
+        act[2] && _partial_density_along!(flux[2], gQ[2], gS[2], eos, point, Db, uv,
+                                          ke, sharpen, I)
+        act[3] && _partial_density_along!(flux[3], gQ[3], gS[3], eos, point, Db, uv,
+                                          ke, sharpen, I)
+    end
+    return nothing
+end
+
+# The partial-density fluxes along one dimension: `fd` the species, momentum
+# and energy fluxes along it, `gQd` the partial-density gradients and `gSd`
+# the sharpening fluxes, tuples of the species count as in `_fluxes_along!`.
+@inline function _partial_density_along!(fd, gQd, gSd, eos, point, Db, uv, ke, sharpen,
+                                         I)
+    N = length(gQd)
+    @inbounds begin
+        J = ntuple(Val(N)) do sp
+            @inline
+            @inbounds begin
+                Jkd = -Db * gQd[sp][I]
+                sharpen && (Jkd += gSd[sp][I])
+                fd[sp][I] += Jkd
+                Jkd
             end
-            flux[d, m1][I] += Jsum * uv[1]
-            flux[d, m2][I] += Jsum * uv[2]
-            flux[d, m3][I] += Jsum * uv[3]
-            flux[d, i_energy][I] += Jsum * ke + eJ
         end
+        Jsum = _sum_in_order(zero(Db), J)
+        eJ = _sum_in_order(zero(Db), ntuple(Val(N)) do sp
+            @inline
+            @inbounds _species_internal_energy(eos, sp, point) * J[sp]
+        end)
+        fd[N + 1][I] += Jsum * uv[1]
+        fd[N + 2][I] += Jsum * uv[2]
+        fd[N + 3][I] += Jsum * uv[3]
+        fd[N + 4][I] += Jsum * ke + eJ
     end
     return nothing
 end
 
 # e_k(T) = h_k(T) − R_k T for the ideal-gas models; a single-component
 # stiffened gas carries no composition gradient for the channel to act on.
-@inline _species_internal_energy(eos, k::Int, T_ion) =
+Base.@propagate_inbounds _species_internal_energy(eos, k::Int, T_ion) =
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
 @inline _species_internal_energy(eos::Union{StiffenedGas,StiffenedGasCoeffs},
                                  ::Int, T_ion) = eos.cv * T_ion

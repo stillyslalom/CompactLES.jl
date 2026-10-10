@@ -646,12 +646,13 @@ end
     end
 end
 
-@inline transport_at(transport::ConstantTransport, eos, temperature, rho, cp, Y, I) =
+Base.@propagate_inbounds transport_at(transport::ConstantTransport, eos, temperature,
+                                      rho, cp, Y, I) =
     (mu=transport.mu0, kappa=transport.mu0 * cp[I] / transport.Pr,
      D=UniformDiffusivity(transport.mu0 / (rho[I] * transport.Sc)))
 
-@inline function transport_at(transport::CeaTransport{T,N}, eos, temperature, rho, cp,
-                              Y, I) where {T,N}
+Base.@propagate_inbounds function transport_at(transport::CeaTransport{T,N}, eos,
+                                               temperature, rho, cp, Y, I) where {T,N}
     fractions = ntuple(k -> @inbounds(Y[k][I]), Val(N))
     return _transport_coefficients(transport, temperature[I], rho[I], cp[I], fractions)
 end

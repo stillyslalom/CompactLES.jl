@@ -324,7 +324,8 @@ components in [`NavierStokes1T`](@ref), and the length of species-indexed
 diagnostics.
 """
 nspecies(eos::IdealMixture) = length(eos.sp)
-species_enthalpy(eos::IdealMixture, k::Int, T_ion) = eos.cpk[k] * T_ion
+Base.@propagate_inbounds species_enthalpy(eos::IdealMixture, k::Int, T_ion) =
+    eos.cpk[k] * T_ion
 
 # φ = cv_m/R_m, recovered from the stored primitives, not from Y: the
 # mixture gas constant is R_m = p/(ρT_ion) by definition of the state, and
