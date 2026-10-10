@@ -290,23 +290,34 @@ function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
                 end
                 i2 = n - nchi
             end
+            # The interior rows accumulate term by term into B, the stencil
+            # offset outermost, so the loop along the line is innermost and
+            # vectorizes; with the offsets innermost (their count is a run-time
+            # value) every row was a scalar chain. Each row receives the same
+            # additions in the same order as a running sum would, starting
+            # from the centre term or from zero, so the result is bitwise the
+            # same.
             if sym
                 for i in i1:i2
-                    acc = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
-                    for m in 1:M
-                        acc += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
-                                        f[_gidx(Val(D), i - m, j, k, n_halo_d)])
-                    end
-                    B[i, l] = acc
+                    B[i, l] = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
                 end
             else
                 for i in i1:i2
-                    acc = zero(T)
-                    for m in 1:M
-                        acc += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
-                                        f[_gidx(Val(D), i - m, j, k, n_halo_d)])
+                    B[i, l] = zero(T)
+                end
+            end
+            for m in 1:M
+                cm = ci[m]
+                if sym
+                    for i in i1:i2
+                        B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
+                                         f[_gidx(Val(D), i - m, j, k, n_halo_d)])
                     end
-                    B[i, l] = acc
+                else
+                    for i in i1:i2
+                        B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
+                                         f[_gidx(Val(D), i - m, j, k, n_halo_d)])
+                    end
                 end
             end
         end
@@ -515,26 +526,34 @@ function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
                     end
                     B[base+i, jr] = acc
                 end
-            elseif sym
-                for i in 1:nx
-                    acc = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
-                                          f[i+o1, kk+o2, jr+o3])
-                    for mm in 1:M
-                        acc += ci[mm] * (D == 2 ?
-                            (f[i+o1, jr+mm+o2, kk+o3] + f[i+o1, jr-mm+o2, kk+o3]) :
-                            (f[i+o1, kk+o2, jr+mm+o3] + f[i+o1, kk+o2, jr-mm+o3]))
-                    end
-                    B[base+i, jr] = acc
-                end
             else
-                for i in 1:nx
-                    acc = zero(T)
-                    for mm in 1:M
-                        acc += ci[mm] * (D == 2 ?
-                            (f[i+o1, jr+mm+o2, kk+o3] - f[i+o1, jr-mm+o2, kk+o3]) :
-                            (f[i+o1, kk+o2, jr+mm+o3] - f[i+o1, kk+o2, jr-mm+o3]))
+                # Term by term into B, the offset outermost, as in
+                # `_fill_lines!`: bitwise the running sum, vectorized along x.
+                if sym
+                    for i in 1:nx
+                        B[base+i, jr] = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
+                                                        f[i+o1, kk+o2, jr+o3])
                     end
-                    B[base+i, jr] = acc
+                else
+                    for i in 1:nx
+                        B[base+i, jr] = zero(T)
+                    end
+                end
+                for mm in 1:M
+                    cm = ci[mm]
+                    if sym
+                        for i in 1:nx
+                            B[base+i, jr] += cm * (D == 2 ?
+                                (f[i+o1, jr+mm+o2, kk+o3] + f[i+o1, jr-mm+o2, kk+o3]) :
+                                (f[i+o1, kk+o2, jr+mm+o3] + f[i+o1, kk+o2, jr-mm+o3]))
+                        end
+                    else
+                        for i in 1:nx
+                            B[base+i, jr] += cm * (D == 2 ?
+                                (f[i+o1, jr+mm+o2, kk+o3] - f[i+o1, jr-mm+o2, kk+o3]) :
+                                (f[i+o1, kk+o2, jr+mm+o3] - f[i+o1, kk+o2, jr-mm+o3]))
+                        end
+                    end
                 end
             end
         end
