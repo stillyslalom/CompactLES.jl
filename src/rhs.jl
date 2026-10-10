@@ -1221,12 +1221,13 @@ end
 # zero there (`_molecular_flux_point!`). Under `less_p` the ghost-differenced
 # flux leaves out the pressure, which the radial momentum of the r-z and
 # spherical metrics and the spherical θ-momentum take as a gradient
-# (`_pressure_gradient`); the remainder does not.
+# (`_pressure_gradient`); the remainder does not. The body adds the offsets
+# `o1`, `o2`, `o3` to its index, as the split bodies below do.
 @inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
                                        n_species, m1, m2, m3, i_energy,
-                                       remainder, viscous, less_p, i, j, k)
+                                       remainder, viscous, less_p, o1, o2, o3, i, j, k)
     @inbounds begin
-        I = CartesianIndex(i, j, k)
+        I = CartesianIndex(i + o1, j + o2, k + o3)
         f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
                                     m1, m2, m3, i_energy, viscous, I)
         out[I] = _area_scaled(Ad, I, remainder ? F[I] - f : ifelse(less_p, f - p[I], f))
@@ -1296,14 +1297,8 @@ takes the generic body (`_generic_split!`).
 """
 function _ghost_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
                        less_p::Bool)
-    decomp = solver.decomp
     eq = solver.equations
-    nl = decomp.n_local
-    pad = decomp.n_halo_d
-    nf = padded_extent(decomp)
-    whole = _fold_at(solver, d) !== nothing
-    b1, b2, b3 = ntuple(e -> whole || e == d ? nf[e] : nl[e], 3)
-    o1, o2, o3 = ntuple(e -> whole || e == d ? 0 : pad[e], 3)
+    b1, b2, b3, o1, o2, o3 = _line_box(solver, d)
     vel = (solver.u, solver.v, solver.w)
     m1, m2, m3 = eq.i_mom
     if c <= eq.n_species
@@ -1322,6 +1317,21 @@ function _ghost_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
     return nothing
 end
 
+# The launch box of a field the solves along `d` read, and the offsets that
+# place it in the padded block: the padded extent along `d` and the interior
+# across it, or the whole padded block where a fold lies along `d`
+# (`_ghost_split!`).
+function _line_box(solver::SolverLike, d::Int)
+    decomp = solver.decomp
+    nl = decomp.n_local
+    pad = decomp.n_halo_d
+    nf = padded_extent(decomp)
+    whole = _fold_at(solver, d) !== nothing
+    b1, b2, b3 = ntuple(e -> whole || e == d ? nf[e] : nl[e], 3)
+    o1, o2, o3 = ntuple(e -> whole || e == d ? 0 : pad[e], 3)
+    return b1, b2, b3, o1, o2, o3
+end
+
 # `_ghost_split!` through `_inviscid_flux_point!`, one pass per field over the
 # whole padded block.
 function _generic_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
@@ -1334,7 +1344,8 @@ function _generic_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
         pointwise!(_inviscid_flux_point!, dest, n1f, n2f, n3f,
                    dest, F, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, solver.field_tuples.Y, solver.ghost_flux[d], Ad, c, d,
-                   eq.n_species, m1, m2, m3, eq.i_energy, remainder, false, less_p)
+                   eq.n_species, m1, m2, m3, eq.i_energy, remainder, false, less_p,
+                   0, 0, 0)
     end
     return nothing
 end
@@ -1481,11 +1492,15 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
     for d in 1:3
         _remainder_ghosted(solver, d) || continue
         G = solver.ghost_flux[d]
+        # Over the lines along `d` alone, which every reader of the remainder
+        # takes (`_line_box`): its rank halos and records along `d` copy the
+        # transverse ghosts too, but nothing reads them.
+        b1, b2, b3, o1, o2, o3 = _line_box(solver, d)
         for c in 1:eq.n_cons
-            pointwise!(_remainder_flux_point!, G, n1f, n2f, n3f,
+            pointwise!(_remainder_flux_point!, G, b1, b2, b3,
                        G, solver.flux[d, c], Q, solver.rho, solver.u, solver.v,
                        solver.w, solver.p, ft.Y, c, d, eq.n_species, m1, m2, m3,
-                       eq.i_energy, decomp.n_local, decomp.n_halo_d, n3f)
+                       eq.i_energy, decomp.n_local, decomp.n_halo_d, n3f, o1, o2, o3)
         end
     end
     for d in 1:3
@@ -1557,12 +1572,15 @@ end
 
 # The remainder F − f of component `c` along `d` into `G[I, c]` at points
 # interior along every active dimension, zero elsewhere, as
-# `_molecular_flux_point!` lays out the molecular flux.
+# `_molecular_flux_point!` lays out the molecular flux. The body adds the
+# offsets `o1`, `o2`, `o3` to its index, so that a launch may cover part of the
+# padded block.
 @inline function _remainder_flux_point!(G, F, Q, rho, u, v, w, p, Y, c, d,
                                         n_species, m1, m2, m3, i_energy,
-                                        nl, pad, stride, i, j, k)
+                                        nl, pad, stride, o1, o2, o3, ib, jb, kb)
     T = eltype(rho)
     @inbounds begin
+        i, j, k = ib + o1, jb + o2, kb + o3
         I = CartesianIndex(i, j, k)
         kl = (k - 1) % stride + 1
         inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
@@ -1615,7 +1633,7 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
                    solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, true, true, less_p)
+                   eq.i_energy, true, true, less_p, 0, 0, 0)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ, iJ)
     elseif !_flux_remainder(solver, d)
         _ghost_split!(nothing, solver.tmp_b, solver, Fdc, Q, c, d, Ad, less_p)
@@ -1889,10 +1907,8 @@ end
 # flux with the molecular part read from `ghost_flux`, ghost layers included.
 # Collective over the patch's communicator.
 function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
-    decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
-    n1f, n2f, n3f = padded_extent(decomp)
     ft = solver.field_tuples
     dims = _ghost_flux_dims(solver)
     viscous = _ghost_viscous(solver)
@@ -1901,13 +1917,15 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
         dims[d] && size(G, 4) > 0 || continue
         viscous || _remainder_ghosted(solver, d) || continue
         Ad, iJ = _ghost_geometry(solver, d)
+        # Over the lines the solve along `d` reads (`_line_box`).
+        b1, b2, b3, o1, o2, o3 = _line_box(solver, d)
         for c in 1:n_cons
             # The pressure gradient was subtracted in phase one.
-            pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+            pointwise!(_inviscid_flux_point!, solver.tmp_b, b1, b2, b3,
                        solver.tmp_b, solver.flux[d, c], Q, solver.rho, solver.u,
                        solver.v, solver.w, solver.p, ft.Y, G, Ad, c, d, eq.n_species,
                        m1, m2, m3, eq.i_energy, false, true,
-                       _pressure_gradient(solver, d, c))
+                       _pressure_gradient(solver, d, c), o1, o2, o3)
             _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ,
                                  _flux_sign(solver, d, c))
         end
