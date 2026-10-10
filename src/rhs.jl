@@ -131,12 +131,31 @@ data any consumer reads without a fresh exchange). A fold dimension or a
 device plan takes the two-pass route unchanged. Same collective, halo, and
 fold contract as `deriv_along!`.
 """
+# Whether a derivative along the folded dimension `d` takes the fused scatter
+# of an unfolded one: a self-paired fold, whose route is the mirror fill and
+# one host solve through the fold's plan, on a patch with no derivative mask
+# along `d`. The fused scatter applies the same product or subtraction to the
+# same solve output as the separate pass, so the interior is bitwise the same,
+# and it saves that pass over the whole array.
+@inline _fused_fold(solver, ::Nothing, d::Int) = false
+@inline _fused_fold(solver, fold::FoldSpec, d::Int) =
+    fold.pair === nothing && !(fold_dplan(fold, 1) isa DevicePlan) &&
+    !_child_masked(solver, d)
+
 function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     plan = _plan_at(solver.deriv_plans, d)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_scaled!(out, plan, f, solver.decomp, solver.inv_h[d])
         _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
+    elseif _fused_fold(solver, fold, d)
+        # A self-paired fold is the mirror fill and the plain solve through
+        # the fold's plan, so the scale rides the scatter as above. A masked
+        # parent keeps the two-pass route, whose mask is subtracted before
+        # the scale.
+        fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
+        apply_along_scaled!(out, _fold_plan(fold, σf, Val(:deriv), 1, false), f,
+                            solver.decomp, solver.inv_h[d])
     else
         deriv_along!(out, f, solver, d, σf)
         _scale_grad!(out, solver, d)
@@ -163,6 +182,10 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
     _reflux_open!(solver, dQ, c, d, inv_J)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_subtract!(dQ, c, plan, f, solver.decomp, inv_J)
+    elseif _fused_fold(solver, fold, d)
+        fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
+        apply_along_subtract!(dQ, c, _fold_plan(fold, σf, Val(:div), 1, false), f,
+                              solver.decomp, inv_J)
     else
         div_along!(solver.tmp_a, f, solver, d, σf)
         nx, ny, nz = solver.decomp.n_local
