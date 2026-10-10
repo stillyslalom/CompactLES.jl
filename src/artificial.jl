@@ -759,7 +759,7 @@ at a reflecting wall, where the `:gaussian` smoother closes on the
 node-centred mirror with the even rows of [`wall_closures`](@ref). Which
 operator runs is `ArtificialProperties.smoother`; see [`smooth_along!`](@ref).
 
-`solver.tmp_a` is scratch and is overwritten. The halo exchanges along each
+`solver.tmp_a` is scratch and may be overwritten. The halo exchanges along each
 active dimension require all ranks to participate. Under
 `smoother = :compact`, every rank in each directional sub-communicator must also
 enter the distributed line solve.
@@ -773,11 +773,27 @@ function smooth!(f, solver)
         # traffic needed in a 3-D run, on a routine that runs once per sensor
         # per species per RHS.
         exchange_dim!(f, solver.decomp, d)
-        smooth_along!(solver.tmp_a, f, solver, d, 1)
-        copy_interior!(f, solver.tmp_a, solver.decomp)
+        if _smooth_in_place(solver, d)
+            smooth_along!(f, f, solver, d, 1)
+        else
+            smooth_along!(solver.tmp_a, f, solver, d, 1)
+            copy_interior!(f, solver.tmp_a, solver.decomp)
+        end
     end
     return f
 end
+
+# Whether the pass along `d` may write its result straight into the field it
+# reads. A host solve fills the whole line buffer from the field before it
+# scatters anything back, and the self-paired mirror fill writes only halos,
+# so the in-place pass gives the interior the copy would, without the copy's
+# pass over the array. A paired fold's butterfly and a device plan keep the
+# copy.
+_smooth_in_place(solver, d::Int) = _smooth_in_place(solver.folds[d], solver, d)
+_smooth_in_place(::Nothing, solver, d::Int) =
+    !(_smooth_plan(_plan_at(solver.smooth_plans, d), false) isa DevicePlan)
+_smooth_in_place(fold::FoldSpec, solver, d::Int) =
+    fold.pair === nothing && !(_fold_plan(fold, 1, Val(:smooth), 1, false) isa DevicePlan)
 
 @inline function _rho_sensor_point!(dest, rho, sensor, C, o1, o2, o3, i, j, k)
     @inbounds begin
