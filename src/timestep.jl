@@ -300,12 +300,13 @@ function _tile_concurrent(@nospecialize(p::Patch))
 end
 
 # `f(solver, pi, args...)` for every tile `pi` of `lev`: concurrently in the
-# groups of `_tile_groups`, or in level order where there are none.
-# Collectives must stay outside `f`; every rank calls this with the same `lev`.
+# groups of `_tile_groups`, or in level order where there are none or the
+# phase is new (`_new_tile_phase!`). Collectives must stay outside `f`; every
+# rank calls this with the same `lev`.
 function _foreach_tile(f::F, solver::Solver, lev::Level,
                        args::Vararg{Any,N}) where {F,N}
     groups = _tile_groups(solver, lev)
-    if groups === nothing
+    if groups === nothing || _new_tile_phase!(f, solver, lev, args)
         for pi in lev.patches
             f(solver, pi, args...)
         end
@@ -317,6 +318,34 @@ function _foreach_tile(f::F, solver::Solver, lev::Level,
     end
     _wait_tiles(tasks)
     return nothing
+end
+
+# Julia 1.12.7 on Windows can fault when several threads compile at once
+# (reference/bugreports/julia_codegen_bug_report.md), and the tiles of a level
+# reach the same uncompiled methods in the first step. The first time a phase
+# `f` meets a solver type, an argument list and a tile type, its tiles
+# therefore run one after another on the calling thread, which compiles what
+# the phase needs, and later calls run them concurrently. The record is a
+# set of types, which the lock guards against two drivers stepping at once.
+const TILE_PHASES_SEEN = Set{Any}()
+const TILE_PHASES_LOCK = ReentrantLock()
+
+@noinline function _new_tile_phase!(@nospecialize(f), @nospecialize(solver::Solver),
+                                    lev::Level, @nospecialize(args::Tuple))
+    patches = getfield(solver, :patches)
+    fresh = false
+    lock(TILE_PHASES_LOCK)
+    try
+        for pi in lev.patches
+            key = (typeof(f), typeof(solver), typeof(args), typeof(patches[pi]))
+            key in TILE_PHASES_SEEN && continue
+            push!(TILE_PHASES_SEEN, key)
+            fresh = true
+        end
+    finally
+        unlock(TILE_PHASES_LOCK)
+    end
+    return fresh
 end
 
 function _tile_group!(f::F, solver::Solver, group::Vector{Int},
