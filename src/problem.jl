@@ -293,15 +293,19 @@ A state on device storage is not inspected and comes back as an empty report.
 The sweep is a host loop, as the positivity failsafe is, and the storage choice
 is solver-wide, so this returns early on every rank at once and cannot deadlock.
 """
-function state_report(solver::Solver, Q;
-                      species_band::Real=solver.control.species_band)
+state_report(solver::Solver, Q; species_band::Real=solver.control.species_band) =
+    _state_report(solver, Q, species_band)
+
+# The keyword form forwards to positional ones, which the validation inside
+# `run!` calls directly, so no keyword sorter is compiled per solver type.
+function _state_report(solver::Solver, Q, species_band::Real)
     _cpu_storage(Q) || return StateReport()
     return _reduce_state_report(solver,
                                 _local_state_report(solver, Q, species_band))
 end
 
-function state_report(solver::Solver, states::Vector{<:ConservedState};
-                      species_band::Real=solver.control.species_band)
+function _state_report(solver::Solver, states::Vector{<:ConservedState},
+                       species_band::Real)
     isempty(states) || _cpu_storage(states[1]) || return StateReport()
     acc = _empty_local_report()
     for (ps, Q) in eachpatch(solver, states)
@@ -322,9 +326,15 @@ _merge_local_report(a, b) =
 # `comm` is a level's communicator for the substep sweep of a refined level.
 function _reduce_state_report(solver::Solver, local_report, comm=solver.comm)
     t0 = time_ns()
+    report = _reduced_state_report(local_report, comm)
+    _wait!(solver, t0)
+    return report
+end
+
+# Out of line, so the reductions are not compiled again per solver type.
+@noinline function _reduced_state_report(local_report, comm)
     counts = MPI.Allreduce(collect(Float64.(local_report[1:7])), +, comm)
     extrema_reduced = MPI.Allreduce([local_report[8], local_report[9]], min, comm)
-    _wait!(solver, t0)
     return StateReport(round(Int, counts[1]), round(Int, counts[2]),
                        round(Int, counts[3]), round(Int, counts[4]),
                        round(Int, counts[5]), round(Int, counts[6]),
@@ -344,15 +354,16 @@ end
     return q_min < -ρ_band || q_max - ρ > ρ_band
 end
 
-function _local_state_report(solver::SolverLike, Q, species_band)
-    decomp = solver.decomp
+_local_state_report(solver::SolverLike, Q, species_band) =
+    _state_sweep(solver.decomp, solver.eos, equation_layout(solver.equations), Q,
+                 species_band)
+
+# Keyed on the decomposition, the EOS, the equation layout and `Q`, so solver
+# types differing in their plans, folds or boundary conditions share it.
+function _state_sweep(decomp::Decomp, eos, eqi, Q, species_band)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    eos = solver.eos
-    n_species = solver.equations.n_species
-    n_cons = solver.equations.n_cons
-    m1, m2, m3 = solver.equations.i_mom
-    i_energy = solver.equations.i_energy
+    n_species, n_cons, i_energy, (m1, m2, m3) = eqi
     # Arithmetic in the state's own type, so the validation reads the same
     # numbers the solver does under Float32; the reduced extrema are Float64.
     T = eltype(Q)
@@ -429,8 +440,7 @@ function validate_state!(solver::Solver, Q; control::StepControl=solver.control,
                          stage::AbstractString="state",
                          floors::Tuple{Float64,Float64}=(0.0, 0.0),
                          warn::Bool=true)
-    report, failure = _apply_validity!(solver, Q; control=control, stage=stage,
-                                       floors=floors, warn=warn)
+    report, failure = _apply_validity!(solver, Q, control, stage, floors, warn)
     failure === nothing || throw(failure)
     return report
 end
@@ -454,20 +464,27 @@ function _validity_repair!(solver, Q, floors, control, stage, warn, rank)
     return nothing
 end
 
-function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control,
-                          stage::AbstractString="state",
-                          floors::Tuple{Float64,Float64}=(0.0, 0.0),
-                          warn::Bool=true)
+function _apply_validity!(solver::Solver, Q, control::StepControl,
+                          stage::AbstractString, floors::Tuple{Float64,Float64},
+                          warn::Bool)
     band = control.species_band
-    report = state_report(solver, Q; species_band=band)
+    report = _state_report(solver, Q, band)
     rank = MPI.Comm_rank(solver.comm)
     if control.validity === :repair && !state_valid(report) && floors[1] > 0
         # Off by default (`validity = :strict`), so behind `_cold` (timestep.jl).
         _validity_repair!(_cold(solver), Q, floors, control, stage, warn, rank)
-        report = state_report(solver, Q; species_band=band)
+        report = _state_report(solver, Q, band)
     end
-    failure = check_validity(control, report, stage, solver.step, solver.t,
-                             solver.dt_prev, solver.cfl)
+    return _validity_verdict(control, report, stage, solver.step, solver.t,
+                             solver.dt_prev, solver.cfl, warn, rank)
+end
+
+# The verdict and its warning, keyed on the scalars rather than the solver and
+# kept out of line, so the message formatting is compiled once and not inlined
+# into the caller of each solver type.
+@noinline function _validity_verdict(control, report, stage, step, t, dt_prev, cfl,
+                                     warn::Bool, rank::Int)
+    failure = check_validity(control, report, stage, step, t, dt_prev, cfl)
     if failure === nothing && warn && rank == 0 && !state_valid(report)
         @warn "validate_state!: $stage accepted under validity = " *
               ":$(control.validity). $report"

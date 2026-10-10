@@ -1816,7 +1816,10 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
     # The floors come from the state entering the run, so they are derived
     # before it is validated: a repair mode needs scales from a state that was
     # still valid, and this is the last point at which that is known.
-    validate_state!(solver, Q; control=control, stage="the state entering run!")
+    # `validate_state!` with its default floors and warning, called positionally.
+    _, failure_0 = _apply_validity!(solver, Q, control, "the state entering run!",
+                                    (0.0, 0.0), true)
+    failure_0 === nothing || throw(failure_0)
     _validate_transport_state!(solver, Q)
     if control.floor_ratio > 0 && rho_floor <= 0
         rank == 0 && @warn "run!: the positivity failsafe is inactive. The global " *
@@ -1863,9 +1866,9 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
             # back to the savepoint and lowers the CFL like any other failure,
             # so the endpoint cannot deliver a state that bypassed recovery.
             _ledger_open!(solver, Q)
-            _, failure = _apply_validity!(solver, Q; control=control,
-                                          stage="the state run! returns",
-                                          floors=(rho_floor, e_floor))
+            _, failure = _apply_validity!(solver, Q, control,
+                                          "the state run! returns",
+                                          (rho_floor, e_floor), true)
             _ledger!(solver, Q, :repair)
             failure === nothing && break
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
@@ -1910,9 +1913,9 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
            solver.step % control.validity_interval == 0
             repaired_0 = solver.floor_tally.cells
             _ledger_open!(solver, Q)
-            _, failure = _apply_validity!(solver, Q; control=control,
-                                          stage="the state entering the step",
-                                          floors=(rho_floor, e_floor))
+            _, failure = _apply_validity!(solver, Q, control,
+                                          "the state entering the step",
+                                          (rho_floor, e_floor), true)
             _ledger!(solver, Q, :repair)
             # A `:repair` policy rewrites interior points after `max_rate` has
             # read them, which leaves the halos, the boundary values and the
