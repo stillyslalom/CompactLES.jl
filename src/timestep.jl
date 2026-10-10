@@ -1773,9 +1773,15 @@ function run!(solver::Solver, Q, workspace::Workspace;
     return Q
 end
 
-function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int, callback,
-               control::StepControl)
+# The loop takes the callback unspecialized, so that it is compiled once per
+# solver type and not again for each script's callbacks, whose types are its
+# own closures. It reaches them through two dynamic calls per step, which
+# allocate nothing (see `_step_callbacks`).
+function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
+               @nospecialize(callback), control::StepControl)
     rank = MPI.Comm_rank(solver.comm)
+    qx, wrapped = _crossing(Q)
+    instant = Ref(solver.t)
     # The endpoint is carried in the solver's own time type from here on. A
     # `tfinal` the clock cannot represent is not reachable by any sequence of
     # steps, and comparing against the unconverted value leaves a remainder
@@ -1823,7 +1829,8 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int, callb
     # coefficients primed, so an output of either at t = 0 reads what the first
     # step starts from. A restarted solver (step > 0) has written its initial
     # frames already.
-    solver.step == 0 && run_start_callbacks!(callback, solver, Q) && (stopped = true)
+    solver.step == 0 && _start_callbacks(callback, solver, qx, wrapped)::Bool &&
+        (stopped = true)
     # Whether the levels are as the previous iteration's post-step
     # synchronization left them, so that the pre-step restriction would repeat
     # it (see `_presync!`). False entering the call, since the state may have
@@ -1949,7 +1956,8 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int, callb
         # instant is converted before the arithmetic below, exactly as `tfinal`
         # is. The trigger's landing tolerance is measured in the clock's
         # precision for the same reason (`_land_tol` in callbacks.jl).
-        next_instant = oftype(solver.t, callback_next_time(callback, solver))
+        _next_instant!(instant, callback, solver)
+        next_instant = instant[]
         gap = next_instant - solver.t
         # Soft landing. Clipping directly to the gap lands exactly but leaves an
         # arbitrarily small step before a scheduled instant: a dump every 1e-4
@@ -2030,10 +2038,10 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int, callb
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
         _ledger_open!(solver, Q)
-        stop, ran = run_callbacks!(callback, solver, Q)
+        flags = _step_callbacks(callback, solver, qx, wrapped)::Int
         _ledger!(solver, Q, :callback)
-        stop && (stopped = true)
-        ran && (levels_synced = false)
+        flags & 1 != 0 && (stopped = true)
+        flags & 2 != 0 && (levels_synced = false)
     end
     ft = solver.floor_tally
     if ft.steps > floor_0.steps && rank == 0
