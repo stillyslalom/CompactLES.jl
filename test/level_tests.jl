@@ -1205,8 +1205,8 @@ end
     @test fresh[nodes...] == own[2][nodes...]
     @test_throws ArgumentError CL.scalar_field(ps_last, :sensor)
     # A surviving tile keeps its identity through a regrid's repatching.
-    @test CL._repatch(first_tile, 99, first_tile.faces, first_tile.bcs).covered ===
-          first_tile.covered
+    @test CL._repatch(first_tile, 99, first_tile.faces, first_tile.bcs,
+                      first_tile.comm).covered === first_tile.covered
     # The multi-patch forward names the scratch as shared.
     err = try
         solver.sensor
@@ -3643,7 +3643,8 @@ end
 # in 1-D, either stepping mode, and on a corner box in 2-D, 8.4e-15 for tiles,
 # 2.2e-14 (box) and 1.9e-14 (tiles) for a level at the r-z axis across the
 # seam in z, static or regridded, and 4.4e-14 for a density step through a
-# box under the coarse-fine correction, whose composite mass holds to 4e-15.
+# box under the coarse-fine correction on every junction line, whose
+# composite mass holds to 4e-15.
 const SEAM_SHIFT_TOL = 1e-12
 # A box and tiles regridded across the seam, against the uniform run at the
 # fine spacing in equal steps, the largest difference over the run: measured
@@ -3734,29 +3735,43 @@ const SEAM_REGRID_TOL = 5e-9
     # The step crosses the box's low face as the run goes, so the gate flags
     # the junction and the coarse-fine correction runs; across the seam the
     # junction's parent face node, its correction node and its stencil lie
-    # in different images of the box.
+    # in different images of the box. The gate tests the uncovered nodes
+    # alone, so the steps after the step has entered the box go uncorrected
+    # and the composite mass drifts, by 4.3e-5 in both images; with the gate
+    # off every junction line is corrected in every step, and the mass holds
+    # to 3.4e-15.
     step_ic(s) = (x, y, z) -> begin
         xs = mod(x - s / N, 1.0)
         Prim(rho=xs < 0.15 ? 2.0 : 1.0, u=(0.5, 0.0, 0.0), p=1.0)
     end
-    contact = map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
-                   (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
-        local sv = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                          bcs=(per, per, per), cfl=0.4, refine=r)
-        local q = allocate_state(sv)
-        initialize!(sv, q, step_ic(s))
-        local m0 = volume_integral(sv, q, :rho)
-        CL._ledger_begin!(sv, q)
-        steps!(sv, q, 1, 30, 30, 0.3)
-        local led = CL._ledger_end!(sv, q)
-        (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
-         reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
+    for gated in (true, false)
+        CL.REFLUX_GATED[] = gated
+        contact = try
+            map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
+                 (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
+                local sv = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                  bcs=(per, per, per), cfl=0.4, refine=r)
+                local q = allocate_state(sv)
+                initialize!(sv, q, step_ic(s))
+                local m0 = volume_integral(sv, q, :rho)
+                CL._ledger_begin!(sv, q)
+                steps!(sv, q, 1, 30, 30, 0.3)
+                local led = CL._ledger_end!(sv, q)
+                (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
+                 reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
+            end
+        finally
+            CL.REFLUX_GATED[] = true
+        end
+        @test all(c -> c.reflux != 0, contact)
+        e = shifted_difference(contact[1].s, contact[1].q, contact[2].s, contact[2].q,
+                               36)
+        @info("density step through a box across the seam", gated, e,
+              contact[1].drift, contact[2].drift)
+        @test e < SEAM_SHIFT_TOL
+        @test abs(contact[1].drift - contact[2].drift) < 1e-12
+        @test all(c -> abs(c.drift) < (gated ? 1e-4 : 1e-12), contact)
     end
-    @test all(c -> c.reflux != 0, contact)
-    e = shifted_difference(contact[1].s, contact[1].q, contact[2].s, contact[2].q, 36)
-    @info "density step through a box across the seam" e contact[1].drift contact[2].drift
-    @test e < SEAM_SHIFT_TOL
-    @test all(c -> abs(c.drift) < 1e-12, contact)
 
     # --- A corner box across both seams, and a tiled level, 2-D -----------------
     a, qa = seam(dims=2, region=BlockRegion((10, 10, 0), (9, 9, 1)))

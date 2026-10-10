@@ -1274,7 +1274,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   feature they cannot resolve, by default, and the coupling's gate tests the
   parent's uncovered nodes alone; a level ahead of a converging shock carries
   1.05 times the uniform fine grid's disturbance, and the two-level Sod
-  crossings conserve mass to 1e-5 (commit pending).
+  crossings conserve mass to 1e-5 (commit `8dac5a8`).
 
 ### Scale, devices and I/O
 

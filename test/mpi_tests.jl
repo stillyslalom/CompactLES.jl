@@ -1906,11 +1906,14 @@ function test_deep_regrid_subsets()
     differ = 0
     subsets = 0
     moves = 0
-    # The first survivor moves at step 123 at np = 8. The parent's pass runs
-    # over the covered nodes here (`MASK_CHILD_RESIDUAL`): the move rests on
-    # tiles leaving and re-entering the set, which the default pass, leaving
-    # out the residual of a covered shock, does not do within 240 steps.
+    # The first survivor moves at step 123 at np = 8. The parent's filter pass
+    # and derivatives run over the covered nodes here (`MASK_CHILD_RESIDUAL`,
+    # `MASK_CHILD_DERIVATIVE`): the move rests on tiles leaving and
+    # re-entering the set, which the default pass, leaving out the residual
+    # of a covered shock, does not do within 240 steps, nor the default
+    # derivatives within 129.
     CL.MASK_CHILD_RESIDUAL[] = false
+    CL.MASK_CHILD_DERIVATIVE[] = false
     try
         for n in 3:3:129
             owners0 = [(lt.region, o) for (lt, o) in
@@ -1925,6 +1928,7 @@ function test_deep_regrid_subsets()
         end
     finally
         CL.MASK_CHILD_RESIDUAL[] = true
+        CL.MASK_CHILD_DERIVATIVE[] = true
     end
     _, rho = line_sample(solver, states, :rho)
     _, rho_ref = line_sample(ref, rstates, :rho)
@@ -3070,7 +3074,7 @@ function test_partitioned_coupling()
     run!(solver, states; tfinal=1.0, nmax=2)
     mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
     check("partitioned coupling: composite mass after two steps as serial",
-          abs(mass - 1.9875000026130345) / 2, 1e-14)
+          abs(mass - 1.9874998034257463) / 2, 1e-14)
 
     # One tile over every rank, up to eight: past five ranks some hold no
     # share of the chains' five components, so they receive no box and must
@@ -3277,7 +3281,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.00647935627792444), 1e-13)
+              abs(gmax(solver.t) - 0.006479403867811302), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -3379,7 +3383,7 @@ function test_tiled_level()
         check("rebalance on: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.0061220824661752295), 1e-13)
+              abs(gmax(solver.t) - 0.006325888739768244), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -3503,7 +3507,7 @@ function test_level_subset()
           abs(firesL - 3), 0.5)
 
     # Regridding under subset ownership: the region grows from 8 coarse nodes
-    # (22 fine, two ranks) to 26 (76 fine, eight), so the subset is resized
+    # (22 fine, two ranks) to 24 (70 fine, seven), so the subset is resized
     # and the communicator it replaces is freed rather than left to the
     # garbage collector, as a dropped `Decomp` is.
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -3525,7 +3529,7 @@ function test_level_subset()
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regrid: setup subset is two ranks", abs(owners0 - min(np, 2)), 0.5)
     check("regrid: subset recomputed for the grown region",
-          abs(owners1 - min(np, 8)), 0.5)
+          abs(owners1 - min(np, 7)), 0.5)
     check("regrid: the replaced level communicator was freed",
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
@@ -3534,10 +3538,10 @@ function test_level_subset()
     # times reached here and in the regridded Sod case are those of that rule.
     check("regrid under subsets: region offset tracks as serial (171)",
           abs(gmax(region.offset[1]) - 171), 0.5)
-    check("regrid under subsets: region extent tracks as serial (26)",
-          abs(gmax(region.extent[1]) - 26), 0.5)
+    check("regrid under subsets: region extent tracks as serial (24)",
+          abs(gmax(region.extent[1]) - 24), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.006887285892118579), 1e-13)
+          abs(gmax(solver.t) - 0.006895860842124445), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

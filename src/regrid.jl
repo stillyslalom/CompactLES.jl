@@ -1337,7 +1337,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
             bcs = _fine_bcs(active, faces[ti], boundaries[ti], root.bcs)
             if kept[ti]
                 oi = old_local[old_of[tr]]
-                p = _repatch(patches[oi], idx, faces[ti], bcs)
+                p = _repatch(patches[oi], idx, faces[ti], bcs, group.comm)
                 push!(new_states, states[oi])
                 push!(new_dQ, workspace.dQ[oi])
                 push!(new_du, workspace.du[oi])
@@ -1753,7 +1753,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
             oi = old_local[old_index[ti]]
             push!(new_patches, _repatch(patches[oi], idx, faces[ti],
                                         _fine_bcs(active, faces[ti], boundaries[ti],
-                                                  rbcs)))
+                                                  rbcs), group.comm))
             push!(new_states, states[oi])
             if workspace !== nothing
                 push!(new_dQ, workspace.dQ[oi])

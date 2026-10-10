@@ -1672,12 +1672,16 @@ _fine_bc(face::Int, on_boundary::Bool, bc) =
 
 # A patch with new id, faces and boundary conditions sharing every array and
 # plan of `p`: what a regrid hands a surviving tile whose neighbors changed.
-function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs)
+# `comm` is the tile group's new communicator over the same ranks: the regrid
+# frees the group `p.comm` belongs to, and `MPI.free` nulls that handle.
+function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs,
+                  comm::MPI.Comm)
     # `field_tuples` is derived, and the junction captures are rebuilt for
     # the new layout.
     names = filter(f -> f ∉ (:field_tuples, :reflux_captures), fieldnames(typeof(p)))
     args = map(names) do f
-        f === :id ? id : f === :faces ? faces : f === :bcs ? bcs : getfield(p, f)
+        f === :id ? id : f === :faces ? faces : f === :bcs ? bcs :
+        f === :comm ? comm : getfield(p, f)
     end
     return Patch(args...)
 end

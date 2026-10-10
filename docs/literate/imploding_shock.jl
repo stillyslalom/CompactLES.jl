@@ -106,6 +106,14 @@ nothing #hide
 # behind the shock is 8.7 at ``R = 0.3`` and rises as the shock converges, so
 # this level lies within the jump at every radius used below. The radius is
 # read on the finest level whose nodes span the jump.
+#
+# During each run the internal energy falls below zero at a few nodes for
+# some steps, and at the end of the refined run one node, beside the axis just
+# ahead of the shock, is still below zero. The ideal gas has no state at a
+# negative internal energy, and `run!` rejects such a state by default.
+# [`StepControl`](@ref) with `validity = :permissive` accepts it and warns
+# instead; [`state_report`](@ref) counts the points outside the model's
+# domain.
 
 function shock_radius(snaps)
     for snap in Iterators.reverse(snaps)   # finest level first
@@ -136,14 +144,18 @@ function implode(numerics)
         end
         nothing
     end)
-    run!(solver, states; tfinal = 0.221, nmax = 10_000, callback = record)
+    run!(solver, states; tfinal = 0.221, nmax = 10_000, callback = record,
+         control = StepControl(validity = :permissive))
     mass_change = volume_integral(solver, states, :rho) / mass0 - 1
     return (; solver, states, history, profiles, mass_change)
 end
 
+using Logging                                  #hide
+Logging.disable_logging(Logging.Warn)          #hide
 coarse = implode(Numerics(n_global = (256, 1, 1)))
 refined = implode(Numerics(n_global = (256, 1, 1), amr = amr))
 fine = implode(Numerics(n_global = (768, 1, 1)))
+Logging.disable_logging(Logging.BelowMinLevel) #hide
 runs = (("coarse, 256", coarse), ("refined, 256 + level", refined), ("fine, 768", fine))
 for (label, run) in runs
     @printf("%-22s %5d steps, relative mass change %.1e\n", label, run.solver.step,
@@ -183,7 +195,7 @@ fig
 # alone would place it, because the criterion also marks small density
 # disturbances that the refined level carries ahead of the shock once the box
 # has moved. At the end the refined run holds more nodes than the uniform fine
-# grid:
+# grid, and the one point outside the gas's domain:
 
 println(state_report(refined.solver, refined.states))
 
@@ -258,7 +270,7 @@ end
 
 # The coarse exponent over the full window happens to lie close to Guderley's,
 # but it falls by 0.4% as the window moves toward the axis. The refined run
-# gives the fine run's exponent to within 0.0005 in each window.
+# gives the fine run's exponent to within 0.001 in each window.
 #
 # The remaining 0.2% does not change with the resolution or the time step; at
 # half the fine spacing, ``\Delta r = 0.00065``, or with half the step, the
