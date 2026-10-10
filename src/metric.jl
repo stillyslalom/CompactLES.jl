@@ -157,6 +157,7 @@ function in that configuration; the two conditions guarding the call are global
 properties, so no rank can take the other branch on its own.
 """
 function init_geometry!(solver)
+    _share_uniform_geometry!(solver)
     if _cpu_storage(solver.inv_J)
         _fill_geometry!(solver, solver.inv_J, solver.area_d, solver.inv_h,
                         solver.inv_r, solver.cot_over_r)
@@ -185,6 +186,31 @@ function init_geometry!(solver)
     # analytic value. Without a resolved θ the two coincide.
     _assign!(solver.cot_over_r_gcl, solver.cot_over_r)
     solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
+    return solver
+end
+
+# Geometry that takes one value over the whole grid is held in one array. On an
+# unstretched Cartesian grid every scale factor is exactly 1, so the inverse
+# Jacobian, the three face areas and the three inverse scale factors are all
+# ones, and the fill below writes the same value through each alias. Off the
+# spherical metric cotθ/r is zero, as 1/r is on a Cartesian grid, and the
+# discrete-GCL cotθ/r equals the analytic one wherever `gcl_cotr!` does not
+# run. Nothing but this function writes these arrays, so pointing the
+# patch's fields at one of each before the fill changes no value; the arrays
+# they replace, allocated with the patch, are dropped. A stacked tile's views
+# and a stack's arrays keep their own storage.
+function _share_uniform_geometry!(solver)
+    p = _patch_of(solver)
+    ones_ = p.inv_J
+    ones_ isa Array || return solver
+    metric = solver.metric
+    if metric isa CartesianMetric && all(isnothing, solver.stretch)
+        p.area_d = (ones_, ones_, ones_)
+        p.inv_h = (ones_, ones_, ones_)
+    end
+    metric isa CartesianMetric && (p.cot_over_r = p.inv_r)
+    metric isa SphericalMetric && solver.decomp.active[2] ||
+        (p.cot_over_r_gcl = p.cot_over_r)
     return solver
 end
 
