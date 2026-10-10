@@ -120,17 +120,6 @@ function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     return out
 end
 
-"""
-    deriv_scaled_along!(out, f, solver, d, σf)
-
-Compact derivative of `f` along active dimension `d`, scaled pointwise by
-`solver.inv_h[d]` inside the scatter of the line solve. Interior results are
-bit-identical to [`deriv_along!`](@ref) followed by `_scale_grad!`; only halo
-cells of `out` differ (the two-pass rescale also scaled them, but they hold no
-data any consumer reads without a fresh exchange). A fold dimension or a
-device plan takes the two-pass route unchanged. Same collective, halo, and
-fold contract as `deriv_along!`.
-"""
 # Whether a derivative along the folded dimension `d` takes the fused scatter
 # of an unfolded one: a self-paired fold, whose route is the mirror fill and
 # one host solve through the fold's plan, on a patch with no derivative mask
@@ -142,6 +131,19 @@ fold contract as `deriv_along!`.
     fold.pair === nothing && !(fold_dplan(fold, 1) isa DevicePlan) &&
     !_child_masked(solver, d)
 
+"""
+    deriv_scaled_along!(out, f, solver, d, σf)
+
+Compact derivative of `f` along active dimension `d`, scaled pointwise by
+`solver.inv_h[d]` inside the scatter of the line solve. Interior results are
+bit-identical to [`deriv_along!`](@ref) followed by `_scale_grad!`; only halo
+cells of `out` differ (the two-pass rescale also scaled them, but they hold no
+data any consumer reads without a fresh exchange). A self-paired fold takes
+the same fused scatter after its mirror fill; a paired fold, a device plan
+and a parent patch whose derivatives along `d` take the child mask take the
+two-pass route unchanged. Same collective, halo, and fold contract as
+`deriv_along!`.
+"""
 function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     plan = _plan_at(solver.deriv_plans, d)
@@ -171,9 +173,10 @@ from conserved component `c` of `dQ` inside the scatter of the line solve:
 `dQ[I, c] -= inv_J[I] * (D f)[I]`, or `dQ[I, c] -= (D f)[I]` when
 `inv_J === nothing` (the unit-geometry case). Interior results are
 bit-identical to [`div_along!`](@ref) into scratch followed by the
-subtraction pass. A fold dimension or a device plan takes that two-pass route
-through `solver.tmp_a`. Same collective, halo, and fold contract as
-`div_along!`.
+subtraction pass. A self-paired fold takes the same fused scatter after its
+mirror fill; a paired fold, a device plan and a parent patch whose
+derivatives along `d` take the child mask take the two-pass route through
+`solver.tmp_a`. Same collective, halo, and fold contract as `div_along!`.
 """
 function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                              σf::Int, inv_J)
