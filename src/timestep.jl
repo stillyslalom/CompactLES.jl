@@ -713,10 +713,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # entered only by the ranks that own that tile.
     function shell!(θ)
         _ledger_open!(solver, states, lev)
-        for (t, lt) in enumerate(lev.transfers)
-            lt.fine_index == 0 ||
-                hermite_level_shell!(solver, states, lev.transfers, t, θ, parent_dt)
-        end
+        _foreach_tile(_tile_hermite_shell!, solver, lev, lev, states, θ, parent_dt)
         _ledger!(solver, states, :shell, lev)
     end
     # Hermite endpoints for the children: the RHS at t^n falls out of stage 1

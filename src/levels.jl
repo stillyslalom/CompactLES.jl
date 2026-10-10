@@ -2816,6 +2816,23 @@ _impose_shell!(solver, states, lt::LevelTransfer, fill) =
 _impose_shell_at!(solver, states, transfers, t::Int, fill, fine) =
     _impose_shell!(solver, states, transfers[t], fill, fine.decomp)
 
+# The shell of the tile held as patch `pi` of `lev`, the form `_foreach_tile`
+# calls.
+function _tile_shell!(solver, pi::Int, lev, states, fill)
+    t = lev.tiles[findfirst(==(pi), lev.patches)]
+    _impose_shell_at!(solver, states, lev.transfers, t, fill,
+                      _cold(getfield(solver, :patches)[pi]))
+    return nothing
+end
+
+# The size of the tile's communicator and this rank's place in it, read
+# without an MPI call where one rank holds the tile, so that the tiles of a
+# level may impose their shells concurrently (`_foreach_tile`).
+function _shell_ranks(fdcp::Decomp)
+    np = prod(fdcp.dims)
+    return np, np == 1 ? 0 : MPI.Comm_rank(fdcp.comm)
+end
+
 function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
     # A tile whose every face is shared with a same-level tile or lies on the
     # domain boundary has no shell slot to write (`_in_shell`), and no reader
@@ -2827,8 +2844,7 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
         return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
     Qf = states[lt.fine_index]
     comm = fdcp.comm
-    np = MPI.Comm_size(comm)
-    me = MPI.Comm_rank(comm)
+    np, me = _shell_ranks(fdcp)
     n_cons = solver.equations.n_cons
     K = length(lt.pplans)
     shell = lt.shell
@@ -3187,8 +3203,7 @@ end
 function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
     Qf = states[lt.fine_index]
     comm = fdcp.comm
-    np = MPI.Comm_size(comm)
-    me = MPI.Comm_rank(comm)
+    np, me = _shell_ranks(fdcp)
     n_cons = solver.equations.n_cons
     K = length(lt.pplans)
     shell = lt.shell
@@ -3521,19 +3536,14 @@ function prolong_level_ghosts!(solver, states)
         t0 = time_ns()
         _exchange_boxes!(solver, states, lev, lt -> lt.box_gather, false)
         _wait!(solver, t0)
-        patches = getfield(solver, :patches)
-        for (t, lt) in enumerate(lev.transfers)
-            # The imposition is collective over the tile's own communicator,
-            # which its holders alone enter.
-            lt.fine_index == 0 ||
-                _impose_shell_at!(solver, states, lev.transfers, t, BoxFill(),
-                                  _cold(patches[lt.fine_index]))
-            # The imposed shell replaces the halo values the previous exchange
-            # left wherever the two overlap (the edge-owning ranks' outer
-            # halos); interior rank-boundary halos keep their exchanged values,
-            # so the composite fine state is self-consistent without a further
-            # exchange.
-        end
+        # The imposition is collective over the tile's own communicator,
+        # which its holders alone enter, and reads and writes nothing of
+        # another tile's, so the tiles take it concurrently where they may.
+        # The imposed shell replaces the halo values the previous exchange
+        # left wherever the two overlap (the edge-owning ranks' outer halos);
+        # interior rank-boundary halos keep their exchanged values, so the
+        # composite fine state is self-consistent without a further exchange.
+        _foreach_tile(_tile_shell!, solver, lev, lev, states, BoxFill())
     end
     return states
 end
@@ -3873,4 +3883,12 @@ function hermite_level_shell!(solver, states, transfers::AbstractVector, t::Int,
     _impose_shell_at!(solver, states, transfers, t, HermiteFill(θ, dt),
                       _cold(patches[transfers[t].fine_index]))
     return states
+end
+
+# The same for the tile held as patch `pi` of `lev`, the form `_foreach_tile`
+# calls.
+function _tile_hermite_shell!(solver, pi::Int, lev, states, θ, dt)
+    t = lev.tiles[findfirst(==(pi), lev.patches)]
+    hermite_level_shell!(solver, states, lev.transfers, t, θ, dt)
+    return nothing
 end
