@@ -46,28 +46,9 @@ collective, so every rank of the solver's sub-communicator must call this.
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     line_solver.explicit && return B   # identity LHS: the fill is the answer
     L, n = size(B)
-    F = line_solver.F
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
-        @inbounds begin
-            for i in 2:n
-                li = F.l[i]
-                @simd for l in rng
-                    B[l, i] -= li * B[l, i-1]
-                end
-            end
-            dn = F.dinv[n]
-            @simd for l in rng
-                B[l, n] *= dn
-            end
-            for i in (n-1):-1:1
-                ci = F.c[i]
-                di = F.dinv[i]
-                @simd for l in rng
-                    B[l, i] = (B[l, i] - ci * B[l, i+1]) * di
-                end
-            end
-        end
+        _solve_t_range!(B, line_solver, rng)
     end
     line_solver.hasred || return B
 
@@ -76,16 +57,52 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where 
         line_solver.ends[2, l] = B[l, n]
     end
     _reduced_solve!(line_solver, L)
-    zp, zn = line_solver.zbp, line_solver.zbn
-    v, w = line_solver.v, line_solver.w
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
-        @inbounds for i in 1:size(B, 2)
-            vi = v[i]
-            wi = w[i]
+        _correct_t_range!(B, line_solver, rng)
+    end
+    return B
+end
+
+# The local Thomas sweep of the lines `rng` of B (lines × n), vectorized across
+# them; each line takes the arithmetic of `solve_col!`.
+@inline function _solve_t_range!(B::AbstractMatrix{T}, line_solver::LineSolver{T},
+                                 rng) where {T}
+    n = size(B, 2)
+    F = line_solver.F
+    @inbounds begin
+        for i in 2:n
+            li = F.l[i]
             @simd for l in rng
-                B[l, i] -= vi * zp[l] + wi * zn[l]
+                B[l, i] -= li * B[l, i-1]
             end
+        end
+        dn = F.dinv[n]
+        @simd for l in rng
+            B[l, n] *= dn
+        end
+        for i in (n-1):-1:1
+            ci = F.c[i]
+            di = F.dinv[i]
+            @simd for l in rng
+                B[l, i] = (B[l, i] - ci * B[l, i+1]) * di
+            end
+        end
+    end
+    return B
+end
+
+# The spike correction of the lines `rng` from the interface values of the
+# reduced stage.
+@inline function _correct_t_range!(B::AbstractMatrix{T}, line_solver::LineSolver{T},
+                                   rng) where {T}
+    zp, zn = line_solver.zbp, line_solver.zbn
+    v, w = line_solver.v, line_solver.w
+    @inbounds for i in 1:size(B, 2)
+        vi = v[i]
+        wi = w[i]
+        @simd for l in rng
+            B[l, i] -= vi * zp[l] + wi * zn[l]
         end
     end
     return B
@@ -99,32 +116,9 @@ solver's sub-communicator must call this.
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     L, n = size(B)
     q = line_solver.q
-    F = line_solver.F
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
-        @inbounds begin
-            for k in 1:(n-1)
-                for mrow in 1:min(q, n - k)
-                    lm = F.L[mrow, k]
-                    iszero(lm) && continue
-                    @simd for l in rng
-                        B[l, k+mrow] -= lm * B[l, k]
-                    end
-                end
-            end
-            for i in n:-1:1
-                for t in 1:min(q, n - i)
-                    ut = F.U[1+t, i]
-                    @simd for l in rng
-                        B[l, i] -= ut * B[l, i+t]
-                    end
-                end
-                u0 = inv(F.U[1, i])
-                @simd for l in rng
-                    B[l, i] *= u0
-                end
-            end
-        end
+        _solve_t_range!(B, line_solver, rng)
     end
     line_solver.hasred || return B
 
@@ -133,15 +127,54 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wh
         line_solver.ends[q+r, l] = B[l, n-q+r]
     end
     _reduced_solve!(line_solver, L)
-    V, W = line_solver.V, line_solver.W
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
-        @inbounds for i in 1:n, t in 1:q
-            vi = V[i, t]
-            wi = W[i, t]
-            @simd for l in rng
-                B[l, i] -= vi * line_solver.zbp[l, t] + wi * line_solver.zbn[l, t]
+        _correct_t_range!(B, line_solver, rng)
+    end
+    return B
+end
+
+@inline function _solve_t_range!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T},
+                                 rng) where {T}
+    n = size(B, 2)
+    q = line_solver.q
+    F = line_solver.F
+    @inbounds begin
+        for k in 1:(n-1)
+            for mrow in 1:min(q, n - k)
+                lm = F.L[mrow, k]
+                iszero(lm) && continue
+                @simd for l in rng
+                    B[l, k+mrow] -= lm * B[l, k]
+                end
             end
+        end
+        for i in n:-1:1
+            for t in 1:min(q, n - i)
+                ut = F.U[1+t, i]
+                @simd for l in rng
+                    B[l, i] -= ut * B[l, i+t]
+                end
+            end
+            u0 = inv(F.U[1, i])
+            @simd for l in rng
+                B[l, i] *= u0
+            end
+        end
+    end
+    return B
+end
+
+@inline function _correct_t_range!(B::AbstractMatrix{T},
+                                   line_solver::BandLineSolver{T}, rng) where {T}
+    n = size(B, 2)
+    q = line_solver.q
+    V, W = line_solver.V, line_solver.W
+    @inbounds for i in 1:n, t in 1:q
+        vi = V[i, t]
+        wi = W[i, t]
+        @simd for l in rng
+            B[l, i] -= vi * line_solver.zbp[l, t] + wi * line_solver.zbn[l, t]
         end
     end
     return B

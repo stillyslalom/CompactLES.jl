@@ -251,73 +251,82 @@ end
 function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
                       ::Val{D}) where {T,D}
     n_halo_d = decomp.n_halo_d
-    n = plan.n
-    o1, o2 = _odims(Val(D))
+    o1, _ = _odims(Val(D))
     n1 = decomp.n_local[o1]
+    @threaded plan.lines*plan.n for l in 1:plan.lines
+        _fill_line!(B, plan, f, l, n1, n_halo_d, Val(D))
+    end
+    return B
+end
+
+# The explicit stencil of one line `l` into column `l` of `B` (n × lines), the
+# line's orthogonal coordinates from `l` with the first of them, of extent
+# `n1`, varying fastest.
+@inline function _fill_line!(B::Matrix{T}, plan, f, l::Int, n1::Int, n_halo_d,
+                             ::Val{D}) where {T,D}
+    n = plan.n
     ci = plan.ci
     M = length(ci)
     a0 = plan.a0
     sym = plan.scheme.symmetric
     nclo = length(plan.clo)
     nchi = length(plan.chi)
-    @threaded plan.lines*n for l in 1:plan.lines
-        kk, jj = divrem(l - 1, n1)
-        j = jj + 1
-        k = kk + 1
-        i1, i2 = 1, n
-        @inbounds begin
-            if plan.lo_closed
-                for jr in 1:nclo
-                    rhs = plan.clo[jr]
-                    i0 = plan.clo_first[jr] - 1
-                    acc = zero(T)
-                    for κ in eachindex(rhs)
-                        acc += rhs[κ] * f[_gidx(Val(D), i0 + κ, j, k, n_halo_d)]
-                    end
-                    B[jr, l] = acc
+    kk, jj = divrem(l - 1, n1)
+    j = jj + 1
+    k = kk + 1
+    i1, i2 = 1, n
+    @inbounds begin
+        if plan.lo_closed
+            for jr in 1:nclo
+                rhs = plan.clo[jr]
+                i0 = plan.clo_first[jr] - 1
+                acc = zero(T)
+                for κ in eachindex(rhs)
+                    acc += rhs[κ] * f[_gidx(Val(D), i0 + κ, j, k, n_halo_d)]
                 end
-                i1 = nclo + 1
+                B[jr, l] = acc
             end
-            if plan.hi_closed
-                for jr in 1:nchi
-                    rhs = plan.chi[jr]
-                    i0 = n + 2 - plan.chi_first[jr]
-                    acc = zero(T)
-                    for κ in eachindex(rhs)
-                        acc += rhs[κ] * f[_gidx(Val(D), i0 - κ, j, k, n_halo_d)]
-                    end
-                    B[n + 1 - jr, l] = acc
+            i1 = nclo + 1
+        end
+        if plan.hi_closed
+            for jr in 1:nchi
+                rhs = plan.chi[jr]
+                i0 = n + 2 - plan.chi_first[jr]
+                acc = zero(T)
+                for κ in eachindex(rhs)
+                    acc += rhs[κ] * f[_gidx(Val(D), i0 - κ, j, k, n_halo_d)]
                 end
-                i2 = n - nchi
+                B[n + 1 - jr, l] = acc
             end
-            # The interior rows accumulate term by term into B, the stencil
-            # offset outermost, so the loop along the line is innermost and
-            # vectorizes; with the offsets innermost (their count is a run-time
-            # value) every row was a scalar chain. Each row receives the same
-            # additions in the same order as a running sum would, starting
-            # from the centre term or from zero, so the result is bitwise the
-            # same.
+            i2 = n - nchi
+        end
+        # The interior rows accumulate term by term into B, the stencil
+        # offset outermost, so the loop along the line is innermost and
+        # vectorizes; with the offsets innermost (their count is a run-time
+        # value) every row was a scalar chain. Each row receives the same
+        # additions in the same order as a running sum would, starting
+        # from the centre term or from zero, so the result is bitwise the
+        # same.
+        if sym
+            for i in i1:i2
+                B[i, l] = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
+            end
+        else
+            for i in i1:i2
+                B[i, l] = zero(T)
+            end
+        end
+        for m in 1:M
+            cm = ci[m]
             if sym
                 for i in i1:i2
-                    B[i, l] = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
+                    B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
+                                     f[_gidx(Val(D), i - m, j, k, n_halo_d)])
                 end
             else
                 for i in i1:i2
-                    B[i, l] = zero(T)
-                end
-            end
-            for m in 1:M
-                cm = ci[m]
-                if sym
-                    for i in i1:i2
-                        B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
-                                         f[_gidx(Val(D), i - m, j, k, n_halo_d)])
-                    end
-                else
-                    for i in i1:i2
-                        B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
-                                         f[_gidx(Val(D), i - m, j, k, n_halo_d)])
-                    end
+                    B[i, l] += cm * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
+                                     f[_gidx(Val(D), i - m, j, k, n_halo_d)])
                 end
             end
         end
@@ -364,20 +373,7 @@ solve is collective over the sub-communicator along that dimension, so every
 rank of it must call this.
 """
 function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
-    d = plan.dim
-    if d == 1
-        _fill_lines!(plan.B, plan, f, decomp, Val(1))
-        solve_lines!(plan.B, plan.line_solver)
-        _scatter_lines!(out, plan.B, plan, decomp, Val(1))
-    elseif d == 2
-        _fill_t!(plan.B, plan, f, decomp, Val(2))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t!(out, plan.B, plan, decomp, Val(2))
-    else
-        _fill_t!(plan.B, plan, f, decomp, Val(3))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t!(out, plan.B, plan, decomp, Val(3))
-    end
+    _apply_fused!(_PlainScatter(out), plan, f, decomp)
     return out
 end
 
@@ -486,73 +482,82 @@ end
 end
 
 function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
     n = plan.n
     nx = decomp.n_local[1]
     nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]   # threaded outer orthogonal dim
-    ci = plan.ci
-    M = length(ci)
-    a0 = plan.a0
-    sym = plan.scheme.symmetric
-    o1, o2, o3 = n_halo_d
     # Flattened (jr, kk), allowing a run whose orthogonal dimension is collapsed
     # to divide over the line index. That case is nout = 1, which covers
     # every transverse direction of a planar-2-D grid. Each (kk, jr) writes a
     # distinct nx-long block of B, so the pair is as independent as kk alone was.
     @threaded nout*n*nx for jk in outer_indices(n, nout)
         jr, kk = Tuple(jk)
-        @inbounds begin
-            kind = _row_kind(plan, jr)
-            base = (kk - 1) * nx
-            if kind == 1
-                rhs = plan.clo[jr]
-                i0 = plan.clo_first[jr] - 1
-                for i in 1:nx
-                    acc = zero(T)
-                    for κ in eachindex(rhs)
-                        acc += rhs[κ] * (D == 2 ? f[i+o1, i0+κ+o2, kk+o3] :
-                                                    f[i+o1, kk+o2, i0+κ+o3])
-                    end
-                    B[base+i, jr] = acc
+        _fill_t_row!(B, plan, f, jr, kk, 1, nx, nx, decomp.n_halo_d, Val(D))
+    end
+    return B
+end
+
+# Row `jr` of the lines `(i, kk)`, `i` in `i0:i1`, into B (lines × n): the
+# explicit stencil along dimension `D` at node `jr` of each line, the lines
+# numbered `(kk - 1) nx + i`.
+@inline function _fill_t_row!(B::Matrix{T}, plan, f, jr::Int, kk::Int, i0::Int,
+                              i1::Int, nx::Int, n_halo_d, ::Val{D}) where {T,D}
+    n = plan.n
+    ci = plan.ci
+    M = length(ci)
+    a0 = plan.a0
+    sym = plan.scheme.symmetric
+    o1, o2, o3 = n_halo_d
+    @inbounds begin
+        kind = _row_kind(plan, jr)
+        base = (kk - 1) * nx
+        if kind == 1
+            rhs = plan.clo[jr]
+            r0 = plan.clo_first[jr] - 1
+            for i in i0:i1
+                acc = zero(T)
+                for κ in eachindex(rhs)
+                    acc += rhs[κ] * (D == 2 ? f[i+o1, r0+κ+o2, kk+o3] :
+                                                f[i+o1, kk+o2, r0+κ+o3])
                 end
-            elseif kind == 2
-                rhs = plan.chi[n + 1 - jr]
-                i0 = n + 2 - plan.chi_first[n + 1 - jr]
-                for i in 1:nx
-                    acc = zero(T)
-                    for κ in eachindex(rhs)
-                        acc += rhs[κ] * (D == 2 ? f[i+o1, i0-κ+o2, kk+o3] :
-                                                    f[i+o1, kk+o2, i0-κ+o3])
-                    end
-                    B[base+i, jr] = acc
+                B[base+i, jr] = acc
+            end
+        elseif kind == 2
+            rhs = plan.chi[n + 1 - jr]
+            r0 = n + 2 - plan.chi_first[n + 1 - jr]
+            for i in i0:i1
+                acc = zero(T)
+                for κ in eachindex(rhs)
+                    acc += rhs[κ] * (D == 2 ? f[i+o1, r0-κ+o2, kk+o3] :
+                                                f[i+o1, kk+o2, r0-κ+o3])
+                end
+                B[base+i, jr] = acc
+            end
+        else
+            # Term by term into B, the offset outermost, as in
+            # `_fill_line!`: bitwise the running sum, vectorized along x.
+            if sym
+                for i in i0:i1
+                    B[base+i, jr] = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
+                                                    f[i+o1, kk+o2, jr+o3])
                 end
             else
-                # Term by term into B, the offset outermost, as in
-                # `_fill_lines!`: bitwise the running sum, vectorized along x.
+                for i in i0:i1
+                    B[base+i, jr] = zero(T)
+                end
+            end
+            for mm in 1:M
+                cm = ci[mm]
                 if sym
-                    for i in 1:nx
-                        B[base+i, jr] = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
-                                                        f[i+o1, kk+o2, jr+o3])
+                    for i in i0:i1
+                        B[base+i, jr] += cm * (D == 2 ?
+                            (f[i+o1, jr+mm+o2, kk+o3] + f[i+o1, jr-mm+o2, kk+o3]) :
+                            (f[i+o1, kk+o2, jr+mm+o3] + f[i+o1, kk+o2, jr-mm+o3]))
                     end
                 else
-                    for i in 1:nx
-                        B[base+i, jr] = zero(T)
-                    end
-                end
-                for mm in 1:M
-                    cm = ci[mm]
-                    if sym
-                        for i in 1:nx
-                            B[base+i, jr] += cm * (D == 2 ?
-                                (f[i+o1, jr+mm+o2, kk+o3] + f[i+o1, jr-mm+o2, kk+o3]) :
-                                (f[i+o1, kk+o2, jr+mm+o3] + f[i+o1, kk+o2, jr-mm+o3]))
-                        end
-                    else
-                        for i in 1:nx
-                            B[base+i, jr] += cm * (D == 2 ?
-                                (f[i+o1, jr+mm+o2, kk+o3] - f[i+o1, jr-mm+o2, kk+o3]) :
-                                (f[i+o1, kk+o2, jr+mm+o3] - f[i+o1, kk+o2, jr-mm+o3]))
-                        end
+                    for i in i0:i1
+                        B[base+i, jr] += cm * (D == 2 ?
+                            (f[i+o1, jr+mm+o2, kk+o3] - f[i+o1, jr-mm+o2, kk+o3]) :
+                            (f[i+o1, kk+o2, jr+mm+o3] - f[i+o1, kk+o2, jr-mm+o3]))
                     end
                 end
             end
@@ -589,8 +594,9 @@ end
 # The RHS is bandwidth-bound (see bench/phases.jl), and two of its per-solve
 # companions were separate full-array passes over data written by the scatter:
 # the 1/h gradient rescale and the flux-divergence subtraction into
-# dQ. The scatter variants below apply those operations in the scatter itself,
-# removing two array streams per line solve. The per-point arithmetic is the
+# dQ. The scaled and subtracting scatters (`_ScaledScatter`, `_SubtractScatter`
+# under the fused line solves below) apply those operations in the scatter
+# itself, removing two array streams per line solve. The per-point arithmetic is the
 # same product and the same subtraction in the same order as the two-pass
 # form, so interior results are bit-identical. Halo cells differ from the
 # two-pass rescale, which scaled them along with the interior: gradient-array
@@ -599,96 +605,6 @@ end
 
 @inline _jacobian_weight(::Nothing, I, b) = b
 @inline _jacobian_weight(inv_J, I, b) = @inbounds inv_J[I] * b
-
-function _scatter_lines_scaled!(out, B::Matrix{T}, plan, decomp::Decomp, scale,
-                                ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
-    n = plan.n
-    o1, _ = _odims(Val(D))
-    n1 = decomp.n_local[o1]
-    @threaded plan.lines*n for l in 1:plan.lines
-        kk, jj = divrem(l - 1, n1)
-        j = jj + 1
-        k = kk + 1
-        @inbounds for i in 1:n
-            G = _gidx(Val(D), i, j, k, n_halo_d)
-            out[G] = B[i, l] * scale[G]
-        end
-    end
-    return out
-end
-
-function _scatter_t_scaled!(out, B::Matrix{T}, plan, decomp::Decomp, scale,
-                            ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
-    n = plan.n
-    nx = decomp.n_local[1]
-    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
-    o1, o2, o3 = n_halo_d
-    @threaded nout*n*nx for jk in outer_indices(n, nout)
-        jr, kk = Tuple(jk)
-        @inbounds begin
-            base = (kk - 1) * nx
-            if D == 2
-                for i in 1:nx
-                    G = CartesianIndex(i + o1, jr + o2, kk + o3)
-                    out[G] = B[base+i, jr] * scale[G]
-                end
-            else
-                for i in 1:nx
-                    G = CartesianIndex(i + o1, kk + o2, jr + o3)
-                    out[G] = B[base+i, jr] * scale[G]
-                end
-            end
-        end
-    end
-    return out
-end
-
-function _scatter_lines_subtract!(dQ, c::Int, B::Matrix{T}, plan,
-                                  decomp::Decomp, inv_J, ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
-    n = plan.n
-    o1, _ = _odims(Val(D))
-    n1 = decomp.n_local[o1]
-    @threaded plan.lines*n for l in 1:plan.lines
-        kk, jj = divrem(l - 1, n1)
-        j = jj + 1
-        k = kk + 1
-        @inbounds for i in 1:n
-            G = _gidx(Val(D), i, j, k, n_halo_d)
-            dQ[G, c] -= _jacobian_weight(inv_J, G, B[i, l])
-        end
-    end
-    return dQ
-end
-
-function _scatter_t_subtract!(dQ, c::Int, B::Matrix{T}, plan, decomp::Decomp,
-                              inv_J, ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
-    n = plan.n
-    nx = decomp.n_local[1]
-    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
-    o1, o2, o3 = n_halo_d
-    @threaded nout*n*nx for jk in outer_indices(n, nout)
-        jr, kk = Tuple(jk)
-        @inbounds begin
-            base = (kk - 1) * nx
-            if D == 2
-                for i in 1:nx
-                    G = CartesianIndex(i + o1, jr + o2, kk + o3)
-                    dQ[G, c] -= _jacobian_weight(inv_J, G, B[base+i, jr])
-                end
-            else
-                for i in 1:nx
-                    G = CartesianIndex(i + o1, kk + o2, jr + o3)
-                    dQ[G, c] -= _jacobian_weight(inv_J, G, B[base+i, jr])
-                end
-            end
-        end
-    end
-    return dQ
-end
 
 apply_along_scaled!(out, ::Nothing, f, decomp::Decomp, scale) =
     error("apply_along_scaled! reached a dimension with no plan; the caller " *
@@ -703,20 +619,7 @@ are left untouched. Same collective and halo contract as `apply_along!`.
 """
 function apply_along_scaled!(out, plan::AbstractDirPlan, f, decomp::Decomp,
                              scale)
-    d = plan.dim
-    if d == 1
-        _fill_lines!(plan.B, plan, f, decomp, Val(1))
-        solve_lines!(plan.B, plan.line_solver)
-        _scatter_lines_scaled!(out, plan.B, plan, decomp, scale, Val(1))
-    elseif d == 2
-        _fill_t!(plan.B, plan, f, decomp, Val(2))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t_scaled!(out, plan.B, plan, decomp, scale, Val(2))
-    else
-        _fill_t!(plan.B, plan, f, decomp, Val(3))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t_scaled!(out, plan.B, plan, decomp, scale, Val(3))
-    end
+    _apply_fused!(_ScaledScatter(out, scale), plan, f, decomp)
     return out
 end
 
@@ -734,19 +637,263 @@ untouched. Same collective and halo contract as `apply_along!`.
 """
 function apply_along_subtract!(dQ, c::Int, plan::AbstractDirPlan, f,
                                decomp::Decomp, inv_J)
+    _apply_fused!(_SubtractScatter(dQ, c, inv_J), plan, f, decomp)
+    return dQ
+end
+
+# --- Fused line solves ------------------------------------------------------
+# `apply_along!` and its scaled and subtracting forms on a host plan run the
+# fill, the solve and the scatter of a block of lines one after another in
+# one threaded region, where the staged form ran each stage over every line
+# in a region of its own: a thread's lines, the y and z sweeps' share of
+# the buffer or the x sweep's block of `COL_BLOCK` columns, are solved and
+# scattered while they are still in its cache, and a solve takes one region
+# instead of three. Every line is filled, solved and scattered by the same
+# arithmetic as in the staged form, so the result is bitwise the same. Where
+# the solve has an interface stage (a periodic or decomposed dimension),
+# which needs the local solution of every line first, the correction and
+# the scatter follow in a second region.
+#
+# Measured on the line solves of bench/stepcost.jl's cases, pinned, at -t 8:
+# the velocity gradients of the planar helium cylinder fall from 0.97 to
+# 0.54 ms and its flux divergence from 1.80 to 1.31 ms, the 64^3
+# Taylor-Green vortex's from 1.92 to 1.71 and from 3.21 to 2.96 ms. At -t 1
+# the two forms are within 4% of each other either way.
+
+# What a scatter does with the solved value `b` at node `G`.
+struct _PlainScatter{O}
+    out::O
+end
+struct _ScaledScatter{O,S}
+    out::O
+    scale::S
+end
+struct _SubtractScatter{O,J}
+    dQ::O
+    c::Int
+    inv_J::J
+end
+@inline _put!(s::_PlainScatter, G, b) = (@inbounds s.out[G] = b; nothing)
+@inline _put!(s::_ScaledScatter, G, b) = (@inbounds s.out[G] = b * s.scale[G]; nothing)
+@inline _put!(s::_SubtractScatter, G, b) =
+    (@inbounds s.dQ[G, s.c] -= _jacobian_weight(s.inv_J, G, b); nothing)
+
+@inline _explicit(line_solver::LineSolver) = line_solver.explicit
+@inline _explicit(::BandLineSolver) = false
+
+# Columns per block of the x layout: `COL_BLOCK`, or half of it where the
+# lines would otherwise give fewer than two blocks per thread. The width sets
+# only how many columns the solve interleaves, not the arithmetic of any.
+_fused_cols(L::Int) = cld(L, COL_BLOCK) >= 2 * Threads.nthreads() ? COL_BLOCK :
+                      max(1, COL_BLOCK ÷ 2)
+
+function _apply_fused!(op, plan, f, decomp::Decomp)
     d = plan.dim
     if d == 1
-        _fill_lines!(plan.B, plan, f, decomp, Val(1))
-        solve_lines!(plan.B, plan.line_solver)
-        _scatter_lines_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(1))
+        _fused_lines!(op, plan, f, decomp, Val(1))
     elseif d == 2
-        _fill_t!(plan.B, plan, f, decomp, Val(2))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(2))
+        _fused_t!(op, plan, f, decomp, Val(2))
     else
-        _fill_t!(plan.B, plan, f, decomp, Val(3))
-        solve_lines_t!(plan.B, plan.line_solver)
-        _scatter_t_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(3))
+        _fused_t!(op, plan, f, decomp, Val(3))
     end
-    return dQ
+    return nothing
+end
+
+# The x layout, B (n × lines), one line per column.
+function _fused_lines!(op, plan, f, decomp::Decomp, ::Val{D}) where {D}
+    B = plan.B
+    line_solver = plan.line_solver
+    n, L = plan.n, plan.lines
+    n_halo_d = decomp.n_halo_d
+    o1, _ = _odims(Val(D))
+    n1 = decomp.n_local[o1]
+    explicit = _explicit(line_solver)
+    red = !explicit && line_solver.hasred
+    w = _fused_cols(L)
+    @threaded n*L for b in 1:cld(L, w)
+        lo = (b - 1) * w + 1
+        hi = min(lo + w - 1, L)
+        for l in lo:hi
+            _fill_line!(B, plan, f, l, n1, n_halo_d, Val(D))
+        end
+        explicit || solve_cols!(B, line_solver.F, lo, hi)
+        if !red
+            for l in lo:hi
+                _scatter_line!(op, B, l, n, n1, n_halo_d, Val(D))
+            end
+        end
+    end
+    red || return nothing
+    _record_ends_cols!(line_solver, B)
+    _reduced_solve!(line_solver, L)
+    @threaded n*L for b in 1:cld(L, w)
+        lo = (b - 1) * w + 1
+        hi = min(lo + w - 1, L)
+        for l in lo:hi
+            _correct_col!(B, line_solver, l)
+            _scatter_line!(op, B, l, n, n1, n_halo_d, Val(D))
+        end
+    end
+    return nothing
+end
+
+@inline function _scatter_line!(op, B, l::Int, n::Int, n1::Int, n_halo_d, ::Val{D}) where {D}
+    kk, jj = divrem(l - 1, n1)
+    j = jj + 1
+    k = kk + 1
+    @inbounds for i in 1:n
+        _put!(op, _gidx(Val(D), i, j, k, n_halo_d), B[i, l])
+    end
+    return nothing
+end
+
+# The interface values the reduced stage gathers, as `solve_lines!` records them.
+function _record_ends_cols!(line_solver::LineSolver, B)
+    n, L = size(B)
+    @inbounds for l in 1:L
+        line_solver.ends[1, l] = B[1, l]
+        line_solver.ends[2, l] = B[n, l]
+    end
+    return nothing
+end
+function _record_ends_cols!(line_solver::BandLineSolver, B)
+    n, L = size(B)
+    q = line_solver.q
+    @inbounds for l in 1:L, r in 1:q
+        line_solver.ends[r, l] = B[r, l]
+        line_solver.ends[q+r, l] = B[n-q+r, l]
+    end
+    return nothing
+end
+
+# The spike correction of one column, the arithmetic of `solve_lines!` and of
+# `_correct_lines!`.
+@inline function _correct_col!(B, line_solver::LineSolver, l::Int)
+    n = size(B, 1)
+    v, w = line_solver.v, line_solver.w
+    xl = line_solver.zbp[l]
+    xr = line_solver.zbn[l]
+    @inbounds for i in 1:n
+        B[i, l] -= v[i] * xl + w[i] * xr
+    end
+    return nothing
+end
+@inline function _correct_col!(B, line_solver::BandLineSolver, l::Int)
+    line_solver.q == 2 && return _correct_col!(B, line_solver, l, Val(2))
+    n = size(B, 1)
+    T = eltype(B)
+    V, W = line_solver.V, line_solver.W
+    zbp, zbn = line_solver.zbp, line_solver.zbn
+    q = line_solver.q
+    @inbounds for i in 1:n
+        acc = zero(T)
+        for t in 1:q
+            acc += V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
+        end
+        B[i, l] -= acc
+    end
+    return nothing
+end
+@inline function _correct_col!(B, line_solver::BandLineSolver, l::Int,
+                               ::Val{Q}) where {Q}
+    n = size(B, 1)
+    T = eltype(B)
+    V, W = line_solver.V, line_solver.W
+    zp = ntuple(t -> @inbounds(line_solver.zbp[l, t]), Val(Q))
+    zn = ntuple(t -> @inbounds(line_solver.zbn[l, t]), Val(Q))
+    @inbounds for i in 1:n
+        acc = zero(T)
+        for t in 1:Q
+            acc += V[i, t] * zp[t] + W[i, t] * zn[t]
+        end
+        B[i, l] -= acc
+    end
+    return nothing
+end
+
+# The transposed layout of the y and z sweeps, B (lines × n), the lines
+# numbered `(kk - 1) nx + i`.
+function _fused_t!(op, plan, f, decomp::Decomp, ::Val{D}) where {D}
+    B = plan.B
+    line_solver = plan.line_solver
+    n, L = plan.n, plan.lines
+    nx = decomp.n_local[1]
+    n_halo_d = decomp.n_halo_d
+    explicit = _explicit(line_solver)
+    red = !explicit && line_solver.hasred
+    @threaded n*L for rng in _line_chunks(L)
+        isempty(rng) && continue
+        _fill_t_lines!(B, plan, f, rng, nx, n_halo_d, Val(D))
+        explicit || _solve_t_range!(B, line_solver, rng)
+        red || _scatter_t_lines!(op, B, n, rng, nx, n_halo_d, Val(D))
+    end
+    red || return nothing
+    _record_ends_t!(line_solver, B)
+    _reduced_solve!(line_solver, L)
+    @threaded n*L for rng in _line_chunks(L)
+        isempty(rng) && continue
+        _correct_t_range!(B, line_solver, rng)
+        _scatter_t_lines!(op, B, n, rng, nx, n_halo_d, Val(D))
+    end
+    return nothing
+end
+
+# The lines `rng` split into runs of one x row each: `body(kk, i0, i1)`.
+@inline function _each_row_run(body, rng::UnitRange{Int}, nx::Int)
+    l = first(rng)
+    last_l = last(rng)
+    while l <= last_l
+        kk = (l - 1) ÷ nx + 1
+        i0 = l - (kk - 1) * nx
+        i1 = min(nx, i0 + (last_l - l))
+        body(kk, i0, i1)
+        l += i1 - i0 + 1
+    end
+    return nothing
+end
+
+@inline function _fill_t_lines!(B, plan, f, rng, nx, n_halo_d, ::Val{D}) where {D}
+    _each_row_run(rng, nx) do kk, i0, i1
+        for jr in 1:plan.n
+            _fill_t_row!(B, plan, f, jr, kk, i0, i1, nx, n_halo_d, Val(D))
+        end
+    end
+    return nothing
+end
+
+@inline function _scatter_t_lines!(op, B, n, rng, nx, n_halo_d, ::Val{D}) where {D}
+    o1, o2, o3 = n_halo_d
+    _each_row_run(rng, nx) do kk, i0, i1
+        base = (kk - 1) * nx
+        @inbounds for jr in 1:n
+            if D == 2
+                for i in i0:i1
+                    _put!(op, CartesianIndex(i + o1, jr + o2, kk + o3), B[base+i, jr])
+                end
+            else
+                for i in i0:i1
+                    _put!(op, CartesianIndex(i + o1, kk + o2, jr + o3), B[base+i, jr])
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+function _record_ends_t!(line_solver::LineSolver, B)
+    L, n = size(B)
+    @inbounds for l in 1:L
+        line_solver.ends[1, l] = B[l, 1]
+        line_solver.ends[2, l] = B[l, n]
+    end
+    return nothing
+end
+function _record_ends_t!(line_solver::BandLineSolver, B)
+    L, n = size(B)
+    q = line_solver.q
+    @inbounds for l in 1:L, r in 1:q
+        line_solver.ends[r, l] = B[l, r]
+        line_solver.ends[q+r, l] = B[l, n-q+r]
+    end
+    return nothing
 end

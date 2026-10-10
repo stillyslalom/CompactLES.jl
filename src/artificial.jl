@@ -787,10 +787,10 @@ function smooth!(f, solver)
 end
 
 # Whether the pass along `d` may write its result straight into the field it
-# reads. A host solve fills the whole line buffer from the field before it
-# scatters anything back, and the self-paired mirror fill writes only halos,
-# so the in-place pass gives the interior the copy would, without the copy's
-# pass over the array. A paired fold's butterfly and a device plan keep the
+# reads. A host solve fills a line's buffer from that line of the field alone,
+# before it scatters the line back, and the self-paired mirror fill writes
+# only halos, so the in-place pass gives the interior the copy would, without
+# the copy's pass over the array. A paired fold's butterfly and a device plan keep the
 # copy.
 _smooth_in_place(solver, d::Int) = _smooth_in_place(solver.folds[d], solver, d)
 _smooth_in_place(::Nothing, solver, d::Int) =
