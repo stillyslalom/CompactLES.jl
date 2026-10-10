@@ -1814,11 +1814,26 @@ end
 # Entries for the `_cold` calls in `compute_rhs!`. They take the arrays under
 # the `ConservedState` wrappers, which are already on the heap, and rewrap
 # them here: the immutable wrapper itself would be boxed crossing the dynamic
-# call, 16 B per argument per call.
-_cold_bulk_gradients!(solver, q, level_smoothed::Bool) =
-    _bulk_gradients!(solver, ConservedState(q), level_smoothed)
-_cold_ghost_flux_divergence!(dq, c::Int, Fdc, solver, q, d::Int) =
-    _ghost_flux_divergence!(ConservedState(dq), c, Fdc, solver, ConservedState(q), d)
+# call, 16 B per argument per call. A `PatchSolver` crosses as its root solver
+# and its patch (`_root_part`, `_patch_part`), both mutable and passed as the
+# references they are, and is rejoined here; the wrapper would be boxed at
+# each call, 32 B, sixteen times per right-hand side on a tile of a 2-D level.
+# Both parts cross behind `_cold`: with the patch's type known at the call,
+# inference follows the rejoined, partly typed `PatchSolver` through the whole
+# callee when the caller is compiled, which nearly doubled the inference of a
+# tile's right-hand side.
+_cold_bulk_gradients!(root, patch, q, level_smoothed::Bool) =
+    _bulk_gradients!(_rejoin(root, patch), ConservedState(q), level_smoothed)
+_cold_ghost_flux_divergence!(dq, c::Int, Fdc, root, patch, q, d::Int) =
+    _ghost_flux_divergence!(ConservedState(dq), c, Fdc, _rejoin(root, patch),
+                            ConservedState(q), d)
+
+@inline _root_part(solver::Solver) = solver
+@inline _root_part(ps::PatchSolver) = getfield(ps, :solver)
+@inline _patch_part(solver::Solver) = nothing
+@inline _patch_part(ps::PatchSolver) = getfield(ps, :patch)
+_rejoin(solver, ::Nothing) = solver
+_rejoin(solver, patch) = PatchSolver(solver, patch)
 
 @inline function _copy_component_point!(dest, Q, c, i, j, k)
     @inbounds dest[i, j, k] = Q[i, j, k, c]
@@ -2234,7 +2249,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
     # below it unreached. Behind a function barrier so that the default
     # path's inferred body (bench/audit.jl) does not carry the branch.
     _shared_species_diffusivity(solver) &&
-        _cold_bulk_gradients!(_cold(solver), parent(Q), coefficients_current)
+        _cold_bulk_gradients!(_cold(_root_part(solver)), _cold(_patch_part(solver)),
+                              parent(Q), coefficients_current)
     assemble_fluxes!(solver, Q)
     # Physical wall fluxes must enter the compact divergence, including its
     # near-wall rows. All ranks visit the hooks in the same order; the wall
@@ -2266,8 +2282,9 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
             # Setup constants of the patch, identical on every rank of its
             # communicator, so each rank takes the same solves.
             if ghost && _interface_dim(solver, d)
-                _cold_ghost_flux_divergence!(parent(dQ), c, Fdc, _cold(solver),
-                                             parent(Q), d)
+                _cold_ghost_flux_divergence!(parent(dQ), c, Fdc,
+                                             _cold(_root_part(solver)),
+                                             _cold(_patch_part(solver)), parent(Q), d)
             elseif unitgeom
                 div_subtract_along!(dQ, c, Fdc, solver, d, σ, nothing)
             else
