@@ -218,21 +218,35 @@ function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
                       bulk::Bool, child::Bool=false) where {T}
     f() = field(backend, decomp)
     return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring,
-                          bulk, child)
+                          bulk, child; active=decomp.active)
 end
 
 # The set from an allocator `f()` and the zero-extent placeholder `empty` of
 # the same storage type: `field` on a backend above, or the stacked arrays
 # of a device level's spanning patch (construction.jl).
+#
+# The fluxes, the species gradients and the conserved gradients of a collapsed
+# dimension are neither computed nor read: every pass over them, the flux
+# assembly, the species channels, the sharpening flux, the boundary hooks, the
+# exchanges and the ledger, takes only the active dimensions. Their slots
+# therefore hold one array between them, `sink`, which keeps every slot a
+# padded field of the workspace's storage (a view, a device tuple and an
+# extent check see the shape they expect) at the cost of one field instead of
+# 2 n_cons + n_species on a planar or r-z run. The positivity limiter, which
+# borrows flux rows as scratch, takes arrays of its own for a collapsed row
+# (`_limiter_flux_rows`).
 function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
-                        ring::Bool, bulk::Bool, child::Bool=false) where {F}
+                        ring::Bool, bulk::Bool, child::Bool=false;
+                        active::NTuple{3,Bool}=(true, true, true)) where {F}
+    sink = all(active) ? empty : f()
+    g(d) = active[d] ? f() : sink
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
                         (f(), f(), f()),
-                        [f() for _ in 1:3, _ in 1:n_species],
+                        [g(d) for d in 1:3, _ in 1:n_species],
                         f(), f(), f(), f(), f(),
                         ring ? f() : empty,
-                        [f() for _ in 1:3, _ in 1:n_cons],
-                        bulk ? [f() for _ in 1:3, _ in 1:n_cons] :
+                        [g(d) for d in 1:3, _ in 1:n_cons],
+                        bulk ? [g(d) for d in 1:3, _ in 1:n_cons] :
                                Matrix{typeof(empty)}(undef, 0, 0),
                         child ? f() : empty, child ? f() : empty)
 end

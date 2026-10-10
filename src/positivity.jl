@@ -658,7 +658,7 @@ function PositivityLimiter(solver)
     end
     anchor_face = ntuple(d -> decomp.active[d] ? clamp(decomp.n_local[d] ÷ 2, qd,
                                                        decomp.n_local[d] - qd) : 0, 3)
-    ws = solver.flux
+    ws = _limiter_flux_rows(solver, decomp.active, radial)
     # The ends at a same-level interface, whose node another patch holds too.
     # A coarse-fine end node is the parent's, not shared, and its face is
     # left alone as a Dirichlet node's is.
@@ -710,6 +710,23 @@ function PositivityLimiter(solver)
         line_counts, NTuple{3,Array{T,3}}[], send, recv, up(T.(_band_lhs(deriv))),
         up(T.(deriv.coeffs)), up(T.(filter_lhs)), up(_filter_face_stencil(filt, T)),
         decomp.periodic, measure, anchor_face, zero(T), zero(T), false, zeros(Int, 6))
+end
+
+# The workspace's flux rows the limiter borrows as scratch: the face values in
+# row 1 (and the pressure's in [3, 1] on a radial line), the filter's pre-pass
+# state, the rates and the speeds in row 2. A collapsed dimension's row holds
+# one shared array in every slot (`_rhs_workspace`), so the slots of such a row
+# that the limiter reads are replaced by arrays of its own.
+function _limiter_flux_rows(solver, active::NTuple{3,Bool}, radial::NTuple{3,Bool})
+    ws = copy(solver.flux)
+    for d in 1:3
+        active[d] && continue
+        slots = d < 3 ? axes(ws, 2) : (any(radial) ? (1:1) : (1:0))
+        for c in slots
+            ws[d, c] = zero(solver.tmp_a)
+        end
+    end
+    return ws
 end
 
 # A host array in the storage of `like`: the array itself on host storage, a

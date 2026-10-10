@@ -1585,7 +1585,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species, n_sensed)
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
-                             ring, bulk)
+                             ring, bulk; active=decomp1.active)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
     gflux_span = _ghost_flux_arrays(
         () -> StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
