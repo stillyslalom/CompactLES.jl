@@ -1923,8 +1923,11 @@ end
 # skips the n_species line solves per direction and the inflow condition takes
 # them itself (`correct_rhs!`, above its early return). The flux body then
 # multiplies whatever `grad_Y` last held by a zero diffusivity. The transport
-# type is a type parameter of the solver, so the test adds no dispatch.
-_species_gradients_skipped(solver) =
+# type is a type parameter of the solver, so the test adds no dispatch. A
+# single species has Y = 1 everywhere and no species flux to difference; its
+# `grad_Y` keeps the zeros it was allocated with (`field`), which is what the
+# line solves would return up to round-off.
+_species_gradients_skipped(solver) = solver.equations.n_species == 1 ||
     _shared_species_diffusivity(solver) && _zero_molecular_diffusion(solver.transport)
 _zero_molecular_diffusion(transport::ConstantTransport) = iszero(transport.mu0)
 _zero_molecular_diffusion(::AbstractTransport) = false
