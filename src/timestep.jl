@@ -1733,6 +1733,20 @@ callbacks.
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
               control::StepControl=solver.control)
+    # The loop is reached through a barrier. A caller compiled around `setup`,
+    # such as a script's `simulate` function or an `mpi_main` block, holds the
+    # partially typed solver `setup` infers to, and inference of that caller
+    # otherwise walks the whole loop at abstract types before it runs a line:
+    # 2.1 s of a 4 s first call of a one-dimensional run, all of it discarded
+    # once the call dispatches on the concrete solver. Behind the barrier the
+    # loop is inferred only for the concrete types it is called with, at the
+    # cost of one dynamic dispatch per call.
+    _cold(_run!)(solver, Q, workspace, tfinal, nmax, callback, control)
+    return Q
+end
+
+function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int, callback,
+               control::StepControl)
     rank = MPI.Comm_rank(solver.comm)
     # The endpoint is carried in the solver's own time type from here on. A
     # `tfinal` the clock cannot represent is not reachable by any sequence of
