@@ -360,7 +360,12 @@ function _arm_child_mask!(ps::PatchSolver)
     record = _child_mask_record(ps)
     record.patch = ps.patch.covered
     record.lines = lines
-    bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm)
+    # MPI is initialized `:funneled`, so only the main thread may call it, and
+    # a tile evaluated in a task (`_foreach_tile`) may run on another. Such a
+    # tile is held whole by one rank, whose reduction is its own bits, so the
+    # call is left out there and made everywhere else.
+    (prod(ps.decomp.dims) == 1 && Threads.threadid() != 1) ||
+        (bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm))
     ps.patch.child_masked = ntuple(d -> isodd(bits >> (d - 1)), 3)
     return ps
 end
@@ -1797,22 +1802,11 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
         fields = [ConservedState(p.ghost_flux[d]) for p in patches]
         _exchange_ghosts!(solver, fields, comm, records...)
     end
-    for (k, pi) in enumerate(lev.patches)
-        lt = lev.index == 0 ? nothing : lev.transfers[lev.tiles[k]]
-        lt === nothing && continue
-        ps = PatchSolver(solver, patches[pi])
-        for d in 1:3
-            _remainder_ghosted(ps, d) && _extrapolate_coarse_fine!(ps, d)
-        end
-        lt.gradients === nothing ||
-            _coarse_fine_ghost_fluxes!(ps, lt, patches[pi].level_scratch, states[pi])
-    end
+    lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, false,
+                                    lev, states)
     # The solves run as the right-hand sides did: per patch, or per stack.
     if isempty(lev.stacks)
-        for pi in lev.patches
-            _ghost_flux_solves!(PatchSolver(solver, patches[pi]), states[pi],
-                                dQs[pi], n_cons)
-        end
+        _foreach_tile(_tile_ghost_flux_solves!, solver, lev, true, states, dQs, n_cons)
     else
         for st in lev.stacks
             _ghost_flux_solves!(PatchSolver(solver, st.patch), _stack_state(st, states),
@@ -1821,6 +1815,29 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
     end
     return dQs
 end
+
+# One tile's parts of `_level_ghost_fluxes!`, the coarse-fine ghost layers of
+# its fluxes and its solves, called by `_foreach_tile`.
+function _tile_coarse_fine_fluxes!(solver, pi::Int, lev, states)
+    k = findfirst(==(pi), lev.patches)
+    lt = lev.transfers[lev.tiles[k]]
+    _coarse_fine_fluxes_at!(solver, _cold(getfield(solver, :patches)[pi]), lt, states, pi)
+    return nothing
+end
+function _coarse_fine_fluxes_at!(solver, p, lt, states, pi::Int)
+    ps = PatchSolver(solver, p)
+    for d in 1:3
+        _remainder_ghosted(ps, d) && _extrapolate_coarse_fine!(ps, d)
+    end
+    lt.gradients === nothing ||
+        _coarse_fine_ghost_fluxes!(ps, lt, p.level_scratch, states[pi])
+    return nothing
+end
+_tile_ghost_flux_solves!(solver, pi::Int, states, dQs, n_cons::Int) =
+    _ghost_flux_solves_at!(solver, _cold(getfield(solver, :patches)[pi]), states, dQs,
+                           pi, n_cons)
+_ghost_flux_solves_at!(solver, p, states, dQs, pi::Int, n_cons::Int) =
+    (_ghost_flux_solves!(PatchSolver(solver, p), states[pi], dQs[pi], n_cons); nothing)
 
 # The coarse-fine faces' ghost layers of `ghost_flux`, from the gradient ring.
 # `scratch` is the patch's `LevelScratch`, whose gradient ring a device patch

@@ -289,21 +289,51 @@ Callers seed `pool` with the workspaces already in use on the rank, which is
 how a regrid grows it: a new tile whose extent is unlike anything held gets
 its own set, and a departing tile's is available to a replacement of the same
 size.
+
+`slot` spreads the tiles of one extent over several sets where a level's
+tiles are evaluated concurrently (`_tile_groups`): the tile is handed the
+`mod1(slot, _workspace_slots(backend, decomp))`-th set of its extent, so
+consecutive tiles of a level take different sets up to that count. With one
+slot, the default, every tile of the extent shares one set.
 """
 function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
                         decomp::Decomp{T}, n_species::Int, n_cons::Int,
-                        ring::Bool, grad_Q_columns::Int, child::Bool=false) where {T}
+                        ring::Bool, grad_Q_columns::Int, child::Bool=false,
+                        slot::Int=1) where {T}
     n = ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
-    for w in pool
+    wanted = mod1(slot, _workspace_slots(backend, decomp))
+    seen = 0
+    for (k, w) in enumerate(pool)
         size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) &&
             (!isempty(w.grad_Q) == (grad_Q_columns > 0)) &&
-            (!isempty(w.child_mask) == child) &&
-            return w
+            (!isempty(w.child_mask) == child) || continue
+        # A tile holding gradients of its own (`_own_gradients`) shares the
+        # rest of its set, so the set is counted at its first entry only.
+        _shares_scratch(w, pool, k) && continue
+        seen += 1
+        seen == wanted && return w
     end
     w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, grad_Q_columns, child)
     push!(pool, w)
     return w
 end
+
+_shares_scratch(w, pool, k::Int) = any(i -> pool[i].tmp_a === w.tmp_a, 1:(k - 1))
+
+"""
+    _workspace_slots(backend, decomp) -> Int
+
+The number of [`RHSWorkspace`](@ref) sets the tiles of one padded extent are
+spread over: the session's thread count where a tile is held whole by one
+rank on host storage and its interior is below [`THREAD_MIN_WORK`](@ref),
+so that every threaded region inside it runs serially and the level's tiles
+are evaluated concurrently instead (`_tile_groups`); one otherwise. A set
+costs a few dozen fields of the tile's padded extent, which is under
+`THREAD_MIN_WORK` points wherever more than one is made.
+"""
+_workspace_slots(backend::AbstractBackend, decomp::Decomp) =
+    backend isa CPUBackend && Threads.nthreads() > 1 && prod(decomp.dims) == 1 &&
+    prod(decomp.n_local) < THREAD_MIN_WORK[] ? Threads.nthreads() : 1
 
 """
     RefluxCapture

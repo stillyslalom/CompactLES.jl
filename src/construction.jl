@@ -1241,7 +1241,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, root_folds=nothing,
-                           n_sensed::Int=0) where {T}
+                           n_sensed::Int=0, slot::Int=1) where {T}
     folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundary, bcs)
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm, folded)
     fbcs = _fine_bcs(active_g, faces, boundary, bcs)
@@ -1255,8 +1255,10 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # gradients of the shared-D_b species channels, which a refined patch
     # differences as the root does. A refined patch may be a parent itself,
     # so it takes the derivative mask's scratch as a refined root does.
+    # `slot`, the tile's place among its level's tiles on this rank, spreads
+    # a level evaluated concurrently over several sets (`rhs_workspace!`).
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
-                        ring, grad_Q_columns, true)
+                        ring, grad_Q_columns, true, slot)
     # A tile of a level whose artificial coefficients are computed level-wide
     # keeps the velocity gradients of that pass for its right-hand side. A
     # stacked tile has them in its own block of the stack's set already.
@@ -1533,7 +1535,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              level, faces[ti]; interface_divergence,
                                              ghost_viscous, ring,
                                              boundary=boundaries[ti], bcs,
-                                             root_folds, n_sensed))
+                                             root_folds, n_sensed, slot=k))
         end
         return patches, stacks
     end

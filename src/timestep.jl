@@ -241,6 +241,122 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
     return states
 end
 
+# --- Concurrent tiles ---------------------------------------------------------
+#
+# A tile of a refined level is small: a lattice cell of 12 parent nodes holds
+# 37 fine nodes a side, 1369 points in two dimensions, so every threaded region
+# inside its evaluation is below THREAD_MIN_WORK and runs serially, and with
+# the tiles advanced one after another a tiled level ran no faster at eight
+# threads than at one. Between the level's exchanges the tiles are independent:
+# each phase of a tile reads its own state, ghost layers and coefficients and
+# writes its own. Such a phase therefore runs the tiles concurrently, one task
+# per scratch set: the tiles sharing an `RHSWorkspace` run in level order in
+# one task, so a set serves one tile at a time, and `rhs_workspace!` spreads
+# a level's tiles over `_workspace_slots` sets where this applies. Each tile
+# takes the arithmetic it takes alone, so the state is the same bit for bit at
+# every thread count.
+#
+# The groups are formed only where every tile is below THREAD_MIN_WORK and
+# nothing inside a tile's evaluation is shared with another tile or
+# communicates: host storage, every tile held whole by this rank (its line solves and halo fills are then local, and no MPI
+# call is made off the main thread), no paired fold, whose butterfly exchanges
+# with a partner, no `CompositeBC` face, whose scratch is filled on first use,
+# no transport domain check, which reduces inside every right-hand side, and
+# the budget ledger off, whose accumulators are the rank's. Where a phase
+# takes divergences or filter passes (`alone`), a tile carrying coarse-fine
+# junction captures runs by itself first: the deferral of the junction's Ω
+# terms (`REFLUX_DEFER`) is one flag for the process, set and cleared by each
+# right-hand side.
+
+# The groups of `lev`'s tiles that may run concurrently, each a list of patch
+# indices in level order, or `nothing` where the level runs tile by tile.
+function _tile_groups(@nospecialize(solver::Solver), lev::Level)
+    (Threads.nthreads() > 1 && length(lev.patches) > 1 && isempty(lev.stacks)) ||
+        return nothing
+    (BUDGET_LEDGER.on || transport_has_domain(solver.transport)) && return nothing
+    patches = getfield(solver, :patches)
+    groups = Vector{Int}[]
+    sets = Any[]
+    for pi in lev.patches
+        p = patches[pi]
+        _tile_concurrent(p) || return nothing
+        a = getfield(p, :rhs_workspace).tmp_a
+        g = findfirst(s -> s === a, sets)
+        if g === nothing
+            push!(sets, a)
+            push!(groups, [pi])
+        else
+            push!(groups[g], pi)
+        end
+    end
+    return length(groups) > 1 ? groups : nothing
+end
+
+function _tile_concurrent(@nospecialize(p::Patch))
+    _cpu_storage(p.rho) && prod(p.decomp.dims) == 1 || return false
+    # A larger tile threads inside its own evaluation instead.
+    prod(p.decomp.n_local) < THREAD_MIN_WORK[] || return false
+    any(f -> f !== nothing && f.pair !== nothing, p.folds) && return false
+    return !any(bc -> bc[1] isa CompositeBC || bc[2] isa CompositeBC, p.bcs)
+end
+
+# `f(solver, pi, args...)` for every tile `pi` of `lev`: concurrently in the
+# groups of `_tile_groups`, or in level order where there are none. `alone`
+# runs a tile with junction captures by itself (see above). Collectives must
+# stay outside `f`; every rank calls this with the same `lev`.
+function _foreach_tile(f::F, solver::Solver, lev::Level, alone::Bool,
+                       args::Vararg{Any,N}) where {F,N}
+    groups = _tile_groups(solver, lev)
+    if groups === nothing
+        for pi in lev.patches
+            f(solver, pi, args...)
+        end
+        return nothing
+    end
+    patches = getfield(solver, :patches)
+    if alone
+        for pi in lev.patches
+            _junction_tile(patches[pi]) && f(solver, pi, args...)
+        end
+    end
+    tasks = Vector{Task}(undef, length(groups))
+    for (k, g) in enumerate(groups)
+        tasks[k] = Threads.@spawn _tile_group!(f, solver, g, alone, args...)
+    end
+    _wait_tiles(tasks)
+    return nothing
+end
+
+function _tile_group!(f::F, solver::Solver, group::Vector{Int}, alone::Bool,
+                      args::Vararg{Any,N}) where {F,N}
+    patches = getfield(solver, :patches)
+    for pi in group
+        alone && _junction_tile(patches[pi]) && continue
+        f(solver, pi, args...)
+    end
+    return nothing
+end
+
+_junction_tile(p) = !isempty(getfield(p, :reflux_captures))
+
+# Wait for every task before raising the first failure, so that no tile is
+# still running when the caller unwinds, and raise the exception the tile
+# threw, not the task's wrapper, which a caller testing for a
+# `SolverFailure` would not recognize.
+function _wait_tiles(tasks::Vector{Task})
+    failure = nothing
+    for t in tasks
+        try
+            wait(t)
+        catch e
+            failure === nothing &&
+                (failure = e isa TaskFailedException ? e.task.result : e)
+        end
+    end
+    failure === nothing || throw(failure)
+    return nothing
+end
+
 # --- Per-level phases -------------------------------------------------------
 #
 # The three phases a level's tiles take between synchronizations: boundary
@@ -272,15 +388,8 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
         # configuration either takes this on every step or never.
         _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce)
     elseif isempty(lev.stacks)
-        for pi in lev.patches
-            if enforce
-                _ledger_open!(solver, states, pi)
-                _tile_bcs!(solver, _cold(patches[pi]), states, pi)
-                _ledger!(solver, states, :wall_enforce, pi)
-            end
-            _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, prepared, false)
-            _ledger_faces!(solver, pi)
-        end
+        _foreach_tile(_enforced_tile_rhs!, solver, lev, true, states, dQs,
+                      prepared, enforce)
     else
         # A stacked level is device storage, which the ledger does not
         # sweep, so it takes no hooks.
@@ -301,12 +410,29 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
     return UInt8(0)
 end
 
+# The boundary conditions, when `enforce`, and the right-hand side of tile
+# `pi`, with their ledger hooks: one tile's part of `_level_rhs!`.
+function _enforced_tile_rhs!(solver, pi::Int, states, dQs, prepared::Bool,
+                             enforce::Bool)
+    patches = getfield(solver, :patches)
+    if enforce
+        _ledger_open!(solver, states, pi)
+        _tile_bcs!(solver, _cold(patches[pi]), states, pi)
+        _ledger!(solver, states, :wall_enforce, pi)
+    end
+    _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, prepared, false)
+    _ledger_faces!(solver, pi)
+    return nothing
+end
+
 function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
     patches = getfield(solver, :patches)
     n_cons = solver.equations.n_cons
     if isempty(lev.stacks)
+        _foreach_tile(_tile_update!, solver, lev, false, n_cons, states, dQs, dus,
+                      A, B, dt)
+        # The junction registers follow the stage update one tile at a time.
         for pi in lev.patches
-            _tile_rk_update!(_cold(patches[pi]), n_cons, states, dQs, dus, pi, A, B, dt)
             _reflux_fold!(solver, patches[pi], dQs[pi], A, B, dt)
         end
         return states
@@ -327,12 +453,16 @@ _tile_rk_update!(p, n_cons::Int, states, dQs, dus, pi::Int, A, B, dt) =
 _tile_filter!(solver, p, states, pi::Int) =
     filter_state!(PatchSolver(solver, p), states[pi])
 
+# The forms `_foreach_tile` calls.
+_tile_update!(solver, pi::Int, n_cons::Int, states, dQs, dus, A, B, dt) =
+    _tile_rk_update!(_cold(getfield(solver, :patches)[pi]), n_cons, states, dQs, dus,
+                     pi, A, B, dt)
+_tile_filter!(solver, pi::Int, states) =
+    _tile_filter!(solver, _cold(getfield(solver, :patches)[pi]), states, pi)
+
 function _level_filter!(solver::Solver, lev::Level, states)
-    patches = getfield(solver, :patches)
     if isempty(lev.stacks)
-        for pi in lev.patches
-            _tile_filter!(solver, _cold(patches[pi]), states, pi)
-        end
+        _foreach_tile(_tile_filter!, solver, lev, true, states)
         return states
     end
     for st in lev.stacks
@@ -795,16 +925,22 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
     ρ_min = T(Inf)
     dir = ntuple(_ -> zero(T), 3)
     subcycle = getfield(solver, :subcycle)
-    for (ps, Q) in eachpatch(solver, states)
-        exchange_state!(Q, ps.decomp)
-        primitives!(ps, Q)
-        r, m, rd = _local_max_rate(ps, Q)
+    patches = getfield(solver, :patches)
+    # Each patch's sweep into `swept`, a level's tiles concurrently where they
+    # may be (`_foreach_tile`), then the reduction in patch order.
+    S = eltype(eltype(states))
+    swept = Vector{Tuple{S,S,NTuple{3,S}}}(undef, length(patches))
+    for lev in getfield(solver, :levels)
+        _foreach_tile(_tile_rate!, solver, lev, false, states, swept)
+    end
+    for i in eachindex(patches)
+        r, m, rd = swept[i]
         # A subcycled level ℓ advances at dt / 3^ℓ, so its rate constrains the
         # coarse step three times more weakly per level. The per-direction
         # rates are scaled the same way, so that a level's filter pass, which
         # reads the root's `dt`, sees the level's own directional CFL.
         if subcycle
-            scale = oftype(r, 3)^ps.patch.level
+            scale = oftype(r, 3)^getfield(patches[i], :level)
             r /= scale
             rd = rd ./ scale
         end
@@ -816,6 +952,18 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
     red = MPI.Allreduce([rate, -ρ_min, dir[1], dir[2], dir[3]], max, solver.comm)
     _wait!(solver, t0)
     return (red[1], -red[2], (red[3], red[4], red[5]))
+end
+
+# The exchange, primitives pass and interior sweep of tile `pi` of `max_rate`.
+function _tile_rate!(solver, pi::Int, states, swept)
+    swept[pi] = _patch_rate!(solver, _cold(getfield(solver, :patches)[pi]), states[pi])
+    return nothing
+end
+function _patch_rate!(solver, p, Q)
+    ps = PatchSolver(solver, p)
+    exchange_state!(Q, ps.decomp)
+    primitives!(ps, Q)
+    return _local_max_rate(ps, Q)
 end
 
 # Charge the time since `t0` (a `time_ns` reading) to the rank's waiting

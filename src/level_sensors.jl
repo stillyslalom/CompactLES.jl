@@ -122,10 +122,12 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
     patches = getfield(solver, :patches)
     stacked = !isempty(lev.stacks)
     if enforce
-        for pi in lev.patches
-            stacked || _ledger_open!(solver, states, pi)
-            _tile_bcs!(solver, _cold(patches[pi]), states, pi)
-            stacked || _ledger!(solver, states, :wall_enforce, pi)
+        if stacked
+            for pi in lev.patches
+                _tile_bcs!(solver, _cold(patches[pi]), states, pi)
+            end
+        else
+            _foreach_tile(_enforced_tile!, solver, lev, false, states)
         end
     end
     _level_artificial!(solver, lev, states, prepared)
@@ -137,11 +139,22 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
                          _stack_state(st, dQs), true, true)
         end
     else
-        for pi in lev.patches
-            _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, true, true)
-            _ledger_faces!(solver, pi)
-        end
+        _foreach_tile(_current_tile_rhs!, solver, lev, true, states, dQs)
     end
+    return nothing
+end
+
+# One tile's parts of `_sensor_level_rhs!`, with their ledger hooks.
+function _enforced_tile!(solver, pi::Int, states)
+    _ledger_open!(solver, states, pi)
+    _tile_bcs!(solver, _cold(getfield(solver, :patches)[pi]), states, pi)
+    _ledger!(solver, states, :wall_enforce, pi)
+    return nothing
+end
+function _current_tile_rhs!(solver, pi::Int, states, dQs)
+    _tile_rhs!(solver, _cold(getfield(solver, :patches)[pi]), states, dQs, pi, true,
+               true)
+    _ledger_faces!(solver, pi)
     return nothing
 end
 
@@ -153,11 +166,10 @@ end
 # patches of several types, allocates nothing: a capturing closure is boxed at
 # every such call.
 function _each_unit(f::F, solver::Solver, lev::Level, states, arg=nothing) where {F}
-    patches = getfield(solver, :patches)
     if isempty(lev.stacks)
-        for pi in lev.patches
-            _unit_call(f, solver, _cold(patches[pi]), states, pi, arg)
-        end
+        # No unit takes a divergence or a filter pass, so a tile with junction
+        # captures need not run alone (`_foreach_tile`).
+        _foreach_tile(_tile_unit!, solver, lev, false, f, states, arg)
     else
         for st in lev.stacks
             f(PatchSolver(solver, st.patch), _stack_state(st, states), arg)
@@ -176,6 +188,8 @@ end
 # then widens to the declared type.
 _unit_call(f::F, solver, p, states, pi::Int, arg) where {F} =
     f(PatchSolver(solver, p), states[pi], arg)
+_tile_unit!(solver, pi::Int, f::F, states, arg) where {F} =
+    _unit_call(f, solver, _cold(getfield(solver, :patches)[pi]), states, pi, arg)
 
 # The boundary conditions and the right-hand side of tile `p`, `states[pi]`,
 # behind the same barrier.
