@@ -1790,17 +1790,27 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
     # so they run along one dimension), a refined level's its own per
     # dimension. Counted as waiting, as the state's record exchange is
     # (`_sync_level_records!`).
+    # The fluxes are wrapped as states are, so that a stacked tile's view, not
+    # the stack beneath it, is the array the records index.
     t0 = time_ns()
-    for d in 1:3
-        records = lev.index == 0 ? (solver.ghost_sends, solver.ghost_recvs) :
-                  (lev.ghost_sends[d], lev.ghost_recvs[d])
-        lev.index == 0 && !any(p -> size(p.ghost_flux[d], 4) > 0,
-                               view(patches, lev.patches)) && continue
-        lev.index > 0 && !lev.phases[d] && continue
-        # Wrapped as states are, so that a stacked tile's view, not the
-        # stack beneath it, is the array the records index.
-        fields = [ConservedState(p.ghost_flux[d]) for p in patches]
-        _exchange_ghosts!(solver, fields, comm, records...)
+    if lev.index == 0
+        # One record set for every dimension, whose buffers the dimensions
+        # take in turn.
+        for d in 1:3
+            any(p -> size(p.ghost_flux[d], 4) > 0, view(patches, lev.patches)) ||
+                continue
+            fields = [ConservedState(p.ghost_flux[d]) for p in patches]
+            _exchange_ghosts!(solver, fields, comm, solver.ghost_sends,
+                              solver.ghost_recvs)
+        end
+    else
+        # Every dimension's records in one round: each moves its own
+        # dimension's flux, which no other record reads or writes.
+        phased = [d for d in 1:3 if lev.phases[d]]
+        _exchange_ghost_sets!([[ConservedState(p.ghost_flux[d]) for p in patches]
+                               for d in phased], comm,
+                              [lev.ghost_sends[d] for d in phased],
+                              [lev.ghost_recvs[d] for d in phased])
     end
     _wait!(solver, t0)
     lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, lev,

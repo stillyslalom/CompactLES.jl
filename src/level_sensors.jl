@@ -487,9 +487,14 @@ function _sync_sensor_fields!(solver, lev::Level, lists, replicate::Bool, dims)
     patches = getfield(solver, :patches)
     comm = lev.level_comm.comm
     t0 = time_ns()
+    # The records of every dimension in one round: a record along `d` carries
+    # the edge and corner ghosts of the dimensions before it, which the
+    # dimension order would have filled first, but no reader takes those, and
+    # every other node it carries is the neighbor's interior.
+    phased = [d for d in dims if lev.phases[d]]
+    _exchange_field_ghosts!(lists, comm, [lev.ghost_sends[d] for d in phased],
+                            [lev.ghost_recvs[d] for d in phased])
     for d in dims
-        lev.phases[d] && _exchange_field_ghosts!(lists, comm, lev.ghost_sends[d],
-                                                 lev.ghost_recvs[d])
         for pi in lev.patches
             _exchange_fields_along!(lists[pi], _cold(patches[pi]), d)
         end
@@ -581,18 +586,23 @@ end
 
 # The ghost refill of `_exchange_ghosts!` (patches.jl) for a list of scalar
 # fields per patch, `lists[i]` for patch `i`, every field of a record in one
-# message. The record buffers are sized for the conserved components, at least
-# as many as the fields any caller passes, and only their leading part is sent.
-function _exchange_field_ghosts!(lists, comm::MPI.Comm, sends, recvs)
-    (isempty(recvs) && isempty(sends)) && return nothing
+# message, over the record sets `sends[k]` and `recvs[k]` of several dimensions
+# in one round. The record buffers are sized for the conserved components, at
+# least as many as the fields any caller passes, and only their leading part is
+# sent. The tags number the messages between two ranks within one dimension's
+# records, so two sets can hold messages of the same tag between the same
+# ranks; both ranks post them in set order, and MPI matches messages of one
+# source, tag and communicator in the order they were posted.
+function _exchange_field_ghosts!(lists, comm::MPI.Comm, sends::Vector, recvs::Vector)
+    (all(isempty, recvs) && all(isempty, sends)) && return nothing
     me = MPI.Comm_rank(comm)
     reqs = MPI.Request[]
-    for r in recvs
+    for set in recvs, r in set
         r.partner == me && continue
         n = length(lists[r.patch]) * prod(length.(r.mine))
         push!(reqs, MPI.Irecv!(view(r.buf, 1:n), comm; source=r.partner, tag=r.tag))
     end
-    for s in sends
+    for set in sends, s in set
         src = lists[s.patch]
         if s.partner == me
             dst = lists[s.partner_patch]
@@ -605,7 +615,7 @@ function _exchange_field_ghosts!(lists, comm::MPI.Comm, sends, recvs)
         end
     end
     MPI.Waitall(reqs)
-    for r in recvs
+    for set in recvs, r in set
         r.partner == me && continue
         _unpack_fields!(lists[r.patch], r.buf, r.mine)
     end

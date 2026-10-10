@@ -1449,6 +1449,38 @@ function _exchange_ghosts!(solver, states, comm::MPI.Comm, sends, recvs)
     return states
 end
 
+# `_exchange_ghosts!` over several record sets in one round, set `k` moving
+# the arrays `states[k]` through `sends[k]` and `recvs[k]`: the same copies,
+# for sets that neither read nor write each other's arrays. The tags number
+# the messages between two ranks within one set, so two sets can hold messages
+# of the same tag between the same ranks; both ranks post them in set order,
+# and MPI matches messages of one source, tag and communicator in the order
+# they were posted.
+function _exchange_ghost_sets!(states::Vector, comm::MPI.Comm, sends::Vector,
+                               recvs::Vector)
+    (all(isempty, recvs) && all(isempty, sends)) && return states
+    me = MPI.Comm_rank(comm)
+    reqs = MPI.Request[]
+    for set in recvs, r in set
+        r.partner == me && continue
+        push!(reqs, MPI.Irecv!(r.buf, comm; source=r.partner, tag=r.tag))
+    end
+    for (k, set) in enumerate(sends), s in set
+        if s.partner == me
+            _copy_block!(states[k][s.partner_patch], s.theirs, states[k][s.patch], s.mine)
+        else
+            _pack!(s.buf, states[k][s.patch], s.mine)
+            push!(reqs, MPI.Isend(s.buf, comm; dest=s.partner, tag=s.tag))
+        end
+    end
+    MPI.Waitall(reqs)
+    for (k, set) in enumerate(recvs), r in set
+        r.partner == me && continue
+        _unpack!(states[k][r.patch], r.buf, r.mine)
+    end
+    return states
+end
+
 """
     average_shared_planes!(solver, states)
 
