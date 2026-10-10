@@ -552,6 +552,21 @@ _reflux_captures(solver::PatchSolver) = getfield(getfield(solver, :patch), :refl
 _reflux_captures(solver::Solver) = getfield(getfield(solver, :patches)[1], :reflux_captures)
 _reflux_captures(solver) = ()
 
+# The hooks on a single-patch `Solver`, which has no junction: captures exist
+# only on the patches of a refined hierarchy, which the drivers reach as
+# `PatchSolver`s. These methods keep the hook bodies out of the compiled tree
+# of every single-patch solver type; the check makes a capture reaching one
+# of them an error rather than a dropped correction.
+_reflux_open!(solver::Solver, dQ, c::Int, d::Int, scale) = _no_junctions(solver)
+_reflux_close!(solver::Solver, dQ, c::Int, f, d::Int, scale) = _no_junctions(solver)
+_reflux_component!(solver::Solver, dQ, c::Int) = _no_junctions(solver)
+_reflux_filter!(solver::Solver, q, filtered, c::Int, d::Int, w) = _no_junctions(solver)
+@inline _no_junctions(solver::Solver) =
+    (isempty(_reflux_captures(solver)) || _junctions_on_solver(); nothing)
+@noinline _junctions_on_solver() =
+    error("a single-patch Solver holds coarse-fine junction captures; the " *
+          "conservative coupling runs per patch, through PatchSolver")
+
 _reflux_raw(Q::ConservedState) = parent(Q)
 _reflux_raw(Q) = Q
 
