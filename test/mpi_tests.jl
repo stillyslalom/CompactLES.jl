@@ -3070,7 +3070,7 @@ function test_partitioned_coupling()
     run!(solver, states; tfinal=1.0, nmax=2)
     mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
     check("partitioned coupling: composite mass after two steps as serial",
-          abs(mass - 1.9875010142315794) / 2, 1e-14)
+          abs(mass - 1.9875000026130345) / 2, 1e-14)
 
     # One tile over every rank, up to eight: past five ranks some hold no
     # share of the chains' five components, so they receive no box and must
@@ -3086,7 +3086,7 @@ function test_partitioned_coupling()
     run!(wave, Qw; tfinal=1.0, nmax=3)
     sq = volume_integral(wave, [view(parent(Q), :, :, :, 1) .^ 2 for Q in Qw])
     check("partitioned coupling: a tile over more ranks than components as serial",
-          abs(sq - 6.408851201236103) / 6.4, 1e-14)
+          abs(sq - 6.40884901332379) / 6.4, 1e-14)
 end
 
 function test_tiled_level()

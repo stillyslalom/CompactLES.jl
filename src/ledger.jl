@@ -5,7 +5,8 @@
 # like `_conserved_budget`, whose quadrature it shares: trapezoid weights,
 # one half at a node-centered edge and at a patch's interface end, the metric
 # Jacobian with its edge factor (the quadrature note in `diagnostics.jl`), and
-# on a composite solver the covered fraction of each coarse node's cell.
+# on a composite solver the quadrature the coarse-fine coupling conserves
+# (src/reflux.jl).
 # Every driver that writes the state brackets the write with two hooks:
 # `_ledger_open!` before it and `_ledger!(…, phase)` after it. A hook
 # recomputes the budget of the patches it names and adds the change since
@@ -32,8 +33,9 @@ const LEDGER_PHASES = (:rhs, :wall_enforce, :filter, :same_level, :shell, :restr
 # The right-hand side integrated through the stage recurrence: its own
 # integral, and the fluxes entering through physical, same-level and
 # coarse-fine patch faces, and, on a parent patch, through the boundary of
-# the region its child level covers. Not state writes, so outside the
-# telescoping sum. On a conservative coupling the last two cancel.
+# the region its child level covers; the last two are the junction
+# registers' where the coupling captures them. Not state writes, so outside
+# the telescoping sum. Their sum is the mismatch the correction removes.
 const LEDGER_DERIVED = (:rhs_integral, :wall_flux, :same_level_flux,
                         :coarse_fine_flux, :covered_face_flux)
 
@@ -189,6 +191,7 @@ end
         du = L.du_rhs[pi]
         @. du = A * du + dt * R
         _ledger_piece!(L, :rhs_integral, ℓ) .+= B .* du
+        _ledger_junction_faces!(L.stage_face[pi], solver, getfield(solver, :patches)[pi])
         duf = L.du_face[pi]
         @. duf = A * duf + dt * L.stage_face[pi]
         for (k, name) in enumerate(LEDGER_DERIVED[2:5])
@@ -254,6 +257,14 @@ end
         end
     end
     levels = getfield(solver, :levels)
+    # Where the coupling captures its junctions, columns 3 and 4 are the
+    # captures' (`_ledger_junction_faces!`), read once the whole right-hand
+    # side has run.
+    if !isempty(patch.reflux_captures)
+        J[:, 3] .= 0
+        L.stage_face[pi] = J
+        return nothing
+    end
     if patch.level + 2 <= length(levels)
         # A region across a periodic seam meets this patch in its images.
         images = _images(_level_period(solver, patch.level))
@@ -264,6 +275,30 @@ end
     end
     L.stage_face[pi] = J
     return nothing
+end
+
+# Columns 3 and 4 of a patch holding junction captures: each capture's stage
+# register is the flux its side sends through the junction's half node, the
+# child's with the rate of its correction Ω, so these are the faces of the
+# quadrature the budget takes, received on the child (3) and on the parent
+# (4), and their sum is the step's mismatch, the negative of what the
+# correction adds. The registers are complete once the right-hand side's
+# second phase has run, so this is read at the stage update.
+function _ledger_junction_faces!(J, solver, patch)
+    caps = patch.reflux_captures
+    isempty(caps) && return J
+    eq = solver.equations
+    comps = Int[1:eq.n_species; collect(eq.i_mom); eq.i_energy]
+    for cap in caps
+        k = cap.child ? 3 : 4
+        for l in eachindex(cap.entry)
+            cap.entry[l] == 0 && continue
+            for (b, c) in enumerate(comps)
+                J[b, k] -= Float64(cap.stage[l, c])
+            end
+        end
+    end
+    return J
 end
 
 # Column 4: the parent's flux across the parent-fed faces of child region

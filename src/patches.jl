@@ -81,8 +81,10 @@
 #       evaluation that wrote them; `max_rate` borrows grad_T_ion.
 #   tmp_a tmp_b   free scratch of any single call (the RHS, `max_rate`,
 #       `filter_state!`, the diagnostics, the tag sweep).
-#   child_mask child_solve   scratch of one masked derivative on a parent
-#       patch (`_mask_child_derivative!`); empty on a solver of one level.
+#   child_mask child_solve   the derivative mask of a parent patch, held from
+#       the arming of one right-hand side to its end (`ChildMaskRecord`), and
+#       the scratch of one masked derivative (`_mask_child_derivative!`);
+#       empty on a solver of one level.
 #   grad_u, strain_mag sensor   `compute_primitives_and_gradients!` and
 #       `compute_artificial!`. They keep the last pass, which may belong to
 #       another patch of the extent; `gradients_filled_by`/`sensors_filled_by`
@@ -99,6 +101,17 @@
 # or table state) would sit on the patch beside the primitives and go stale
 # with them on any write to Q. A nonlinear trial state is scratch of the solve
 # that owns it and is discarded with the stage on a rollback.
+
+# The patch whose parent-level derivative mask `child_mask` holds, as that
+# patch's `covered` array (the mark of `gradients_filled_by`), and per
+# dimension the range of the plan's lines holding a masked node. Set where a
+# right-hand side arms the mask and cleared where it ends
+# (`_release_child_mask!`), so that every derivative of one evaluation reads
+# the mask its primitives gave and no later state reads it.
+mutable struct ChildMaskRecord
+    patch::Array{UInt8,3}
+    lines::NTuple{3,UnitRange{Int}}
+end
 
 """
     RHSWorkspace
@@ -161,10 +174,15 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     # pass.
     gradients_filled_by::Base.RefValue{Array{UInt8,3}}
     sensors_filled_by::Base.RefValue{Array{UInt8,3}}
+    # The patch whose derivative mask `child_mask` holds for reuse, and its
+    # masked lines (`ChildMaskRecord`, rhs.jl).
+    child_mask_record::ChildMaskRecord
 end
 
 # The mark of a workspace no pass has written yet.
 const SCRATCH_UNFILLED = zeros(UInt8, 0, 0, 0)
+
+ChildMaskRecord() = ChildMaskRecord(SCRATCH_UNFILLED, (1:0, 1:0, 1:0))
 
 # `ws` with velocity-gradient arrays of its own from the allocator `g()`, and
 # their own mark, sharing every other field and the sensor mark with `ws`:
@@ -174,13 +192,13 @@ _own_gradients(ws::RHSWorkspace, g::F) where {F} =
     RHSWorkspace([g() for _ in 1:3, _ in 1:3], ws.grad_T_ion, ws.grad_Y,
                  ws.strain_mag, ws.sensor, ws.sensor_sp, ws.tmp_a, ws.tmp_b,
                  ws.ring_buf, ws.flux, ws.grad_Q, ws.child_mask, ws.child_solve,
-                 Ref(SCRATCH_UNFILLED), ws.sensors_filled_by)
+                 Ref(SCRATCH_UNFILLED), ws.sensors_filled_by, ws.child_mask_record)
 
 RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
              tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve) =
     RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
                  tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve,
-                 Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED))
+                 Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED), ChildMaskRecord())
 
 """
     RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk, child = false)
@@ -280,8 +298,8 @@ the line's position in `lines`, the padded ranges of the two transverse
 dimensions in ascending order. `stage` collects one right-hand side, `du` and
 `reg` follow it through the low-storage recurrence, and `reg` takes each
 filter pass directly; `om0` is scratch for the child's correction of the
-quadrature. `window` is the parent's padded range along `d` of the gate's
-nodes this rank holds, `wslot` the first one's place among the junction's
+quadrature. `window` lists the parent's padded indices along `d` of the
+gate's nodes this rank holds, `wslots` their places among the junction's
 `GATE_WIDTH`, and `rho0` the density there at the step's start.
 """
 struct RefluxCapture{T,M<:AbstractMatrix{T},V<:AbstractVector{T}}
@@ -310,8 +328,8 @@ struct RefluxCapture{T,M<:AbstractMatrix{T},V<:AbstractVector{T}}
     band::NTuple{6,Int}         # child: the quadrature correction's nodes
     omega::NTuple{6,T}
     entry::Vector{Int}          # per line, its line of the junction
-    window::UnitRange{Int}      # parent: the gate's nodes along d held here
-    wslot::Int                  # parent: the place of window[1] among them
+    window::Vector{Int}         # parent: the gate's nodes along d held here
+    wslots::Vector{Int}         # parent: their places among the gate's slots
     rho0::Matrix{Float64}       # parent: the density there at the step's start
     snap::M
     stage::M

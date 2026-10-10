@@ -12,12 +12,13 @@ For a patched or refined solver, pass the state vector returned by
 composite quadrature: a coarse node a child covers entirely contributes
 nothing, a coarse node on a child's face contributes its whole cell, and the
 child's nodes count from the third in from that face, so the two grids' cells
-meet half a coarse cell inside the child and nothing is counted twice.
+meet half a coarse cell inside the child and nothing is counted twice. The
+child's nodes beside the face also carry a correction of that rule, zero for a
+constant, that makes it the integral the coupling conserves.
 Profiles are reported at root-grid stations. Where the coarse--fine coupling
 reconciles the face fluxes, while a feature the coarse grid does not resolve
-crosses the face, it conserves this integral up to a term on the child's
-nodes beside the face that vanishes where the flow there is uniform; elsewhere
-a changing integral reveals the coupling's budget error.
+crosses the face, it conserves this integral; elsewhere a changing integral
+reveals the coupling's budget error.
 
 ## Integral and profile operations
 

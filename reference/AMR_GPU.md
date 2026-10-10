@@ -1064,8 +1064,8 @@ array (or one state) per held patch aligned with `solver.patches`:
 `volume_integral`, `domain_volume`, `volume_average`, `plane_profile`,
 `species_pdf`, `mix_width`, `molecular_mixing`, `tke_profile`,
 `turbulent_kinetic_energy` and `dissipation_rate`. An integral takes the
-conserved quadrature of the coupling, without the correction Ω (whole cells
-at a parent's face nodes, the child's nodes from the third in); the PDF
+conserved quadrature of the coupling (whole cells at a parent's face nodes,
+the child's nodes from the third in, and Ω beside each junction); the PDF
 weights a coarse node by the fraction of its cell no child covers
 (`uncovered_fraction`); a plane average uses the in-plane fraction
 (`uncovered_plane_fraction`, the orthant pairs across the profile

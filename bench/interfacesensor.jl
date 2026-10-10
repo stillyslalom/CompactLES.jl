@@ -790,8 +790,8 @@ function run_rows(rows, N, ts, nmax, refs)
             with_ghosts(() -> crossing_row(row, N, ts, nmax, refs[refkey(row)]),
                         row.ghosts)
         finally
-            CL.GHOST_FLUX_REMAINDER[] = false
-            CL.GHOST_REMAINDER_EXTRAPOLATE[] = false
+            CL.GHOST_FLUX_REMAINDER[] = true
+            CL.GHOST_REMAINDER_EXTRAPOLATE[] = true
         end
         print_crossing(row, r, ts)
     end
@@ -1293,8 +1293,8 @@ function startup_part(N, steps, tfinal)
             r = try
                 attempt(() -> startup_run(N, x0, tf, nm; lkw..., pkw...))
             finally
-                CL.GHOST_FLUX_REMAINDER[] = false
-                CL.GHOST_REMAINDER_EXTRAPOLATE[] = false
+                CL.GHOST_FLUX_REMAINDER[] = true
+                CL.GHOST_REMAINDER_EXTRAPOLATE[] = true
             end
             failed(r) && (say(@sprintf("  %-26s %s", pname, r)); continue)
             s, states, m = r

@@ -75,7 +75,7 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            layouts="uniform,samelevel,depth2,depth3",
                                            stepping="both", idiv="default",
                                            iflux="closure", ledger=false,
-                                           gradrem=false);
+                                           gradrem=true);
                                     positional=(:N, :tfinal))
 CL.GHOST_FLUX_REMAINDER[] = args.gradrem
 

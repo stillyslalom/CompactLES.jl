@@ -5499,7 +5499,7 @@ Patch AMR, the level hierarchy and the device backend. The mechanism is in
 
 `mpiexec -n 8 julia --project=. -t 1 bench/interfaceconservation.jl N=96 ny=24
 tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16 check=true`,
-and the same at 1, 2 and 4 ranks.
+8.5 minutes on the i9-12900K.
 
 The case is periodic passive-species shear on [0, 8π) × [0, 2π): two
 thermodynamically identical ideal species at uniform density and pressure,
@@ -5517,8 +5517,9 @@ species mass, of total mass and of total energy; 1e-3 of M₀c₀ per momentum
 component, which gives the initially zero transverse components a scale; the
 same for each layout's initial sampling offset from the uniform run; 0.01 in
 molecular mixing and 1% of the domain length in mix width for the mixing
-comparisons. The conserved snapshot is the covered-cell node quadrature with
-shared planes counted once, and each layout's drift is taken from its own
+comparisons. The conserved snapshot is the quadrature the coarse-fine
+coupling conserves (`volume_integral`'s composite form) with shared planes
+counted once, and each layout's drift is taken from its own
 initial integral, sampled sixteen times so that a cancelling excursion is not
 hidden by the endpoint. The regrid ledger records the jump across each
 transfer separately from the evolution between transfers.
@@ -5526,42 +5527,39 @@ transfer separately from the evolution between transfers.
 **Fixed layouts.** The sampled maximum of the normalized drift over two
 transits, and the largest mass-fraction excursion outside [0, 1] seen at any
 sample. The drift is an exchange between the two species: total mass,
-momentum and energy hold to 1e-11 in every layout, and the two species masses
+momentum and energy hold to 4e-11 in every layout, and the two species masses
 move by equal and opposite amounts.
 
 | layout | root steps | max drift | species excursion |
 |---|---|---|---|
-| uniform | 1184 | 1e-13 (round-off) | 0 |
-| two same-level patches | 1184 | 1.6e-9 | 4.2e-5 |
-| two levels, global step | 3532 | 7.0e-5 | 0 |
-| two levels, subcycled | 1184 | 6.9e-5 | 0 |
-| three levels, global step | 10570 | 7.6e-5 | 5.8e-4 |
-| three levels, subcycled | 1184 | 7.6e-5 | 0 |
+| uniform | 1184 | 5e-14 (round-off) | 0 |
+| two same-level patches | 1185 | 1.5e-9 | 2.6e-4 |
+| two levels, global step | 3532 | 7.1e-7 | 0 |
+| two levels, subcycled | 1184 | 4.9e-7 | 0 |
+| three levels, global step | 10568 | 8.5e-7 | 3.6e-4 |
+| three levels, subcycled | 1184 | 4.8e-7 | 0 |
 
-The initial sampling offsets from the uniform run are 8.1e-6 (two levels)
-and 8.7e-6 (three levels); the mixing comparisons stay within 2.1e-3 of the
-domain length in width and 1.2e-3 in molecular mixing over the history, both
-an order inside their budgets. The numbers are the same to the printed
-precision at 1, 2, 4 and 8 ranks, apart from the round-off of the uniform
-baseline.
+The initial sampling offsets from the uniform run are 3.0e-10 at two and
+three levels; the mixing comparisons stay within 1.6e-3 in width and 8.2e-4
+in molecular mixing over the history, against budgets of 0.25 and 0.01.
 
 **Moving refinement.** Sixteen regrids over two transits, global step and
 subcycled.
 
 | quantity | global step | subcycled |
 |---|---|---|
-| per-regrid jump, typical | 5e-5 | 5e-5 |
-| sum of the absolute jumps | 8.4e-4 | 8.4e-4 |
-| sampled max drift, transfers included | 1.0e-4 | 1.0e-4 |
-| sampled max drift, transfers subtracted | 2.1e-4 | 2.2e-4 |
-| final drift | 1.5e-5 | 2.2e-5 |
-| species excursion | 7.4e-4 | 5.6e-4 |
+| per-regrid jump, median | 1.4e-7 | 3.2e-7 |
+| sum of the absolute jumps | 3.8e-6 | 5.8e-6 |
+| sampled max drift, transfers included | 1.7e-5 | 1.3e-5 |
+| sampled max drift, transfers subtracted | 1.5e-5 | 8.9e-6 |
+| final drift | 1.6e-5 | 1.1e-5 |
+| species excursion | 7.1e-4 | 5.8e-4 |
 
-The absolute sum grows with the regrid count while the signed sum stays near
-2e-5, so the transfers do not accumulate a bias at this count; the budget
-compares the absolute sum, and a run regridding more than about twenty times
-at this spacing would exceed it on that measure alone. Regridding a
-three-level hierarchy is unsupported and is not measured.
+The signed sums of the jumps are 1.0e-6 and 1.7e-6. The evolution between
+transfers is the larger term, growing steadily over the run; the budget
+compares the absolute sum of the jumps, which at this spacing would reach it
+after some three thousand regrids. Regridding a three-level hierarchy is
+unsupported and is not measured.
 
 **Why the runs are permissive, and the bound is on.** With the artificial
 properties off entirely, strict validity ended the three-level global-step
@@ -5592,51 +5590,48 @@ shock or hardware-GPU claim follows from these passive-species cases.
 **Attribution.** `ledger=true` books each run's drift to the mechanism that
 made it (DESIGN.md, [attributing the conserved
 budgets](DESIGN.md#attributing-the-conserved-budgets)). Species 1 on its
-initial mass, two levels subcycled, 96 × 24 over two transits at 8 ranks; the
-row "at t = 5π" is the sample of largest drift. Total mass, momentum and
-energy stay at 1e-11 or below in every row, so the species exchange is the
-whole drift. Rows absent from a run (`restrict`, `same_level` on a refined
-layout, `unattributed`) were zero.
+initial mass, two levels subcycled, 96 × 24 over two transits at 8 ranks,
+18.7 minutes; the row "at t = 15π" is the sample of largest drift. Total
+mass, momentum and energy stay at 4e-11 or below in every row, so the
+species exchange is the whole drift. Rows absent from a run (`shell`,
+`restrict`, `same_level` on a refined layout, `unattributed`) were zero: the
+shell and the restriction write only nodes the quadrature does not count.
 
-| piece | at t = 5π | at t = 16π |
+| piece | at t = 15π | at t = 16π |
 |---|---|---|
-| right-hand side, both levels | +6.92e-5 | +3.54e-6 |
-| of which: root, less its face fluxes | +6.53e-5 | −3.7e-8 |
-| of which: level 1, less its face fluxes | −7.32e-6 | +1.9e-8 |
-| of which: coarse–fine flux mismatch | +1.12e-5 | +3.56e-6 |
-| imposed shell | +2.7e-7 | −9.9e-8 |
-| filter | −3.8e-8 | −1.1e-7 |
-| total drift | +6.94e-5 | +3.34e-6 |
-| telescoping residual | 2e-16 | 2e-15 |
-| right-hand side less its stage integral | 1e-15 | 7e-15 |
+| right-hand side, both levels | −3.68e-7 | −4.03e-8 |
+| of which: root, less its face fluxes | −4e-15 | −6e-15 |
+| of which: level 1, less its face fluxes | +7e-16 | −2e-15 |
+| of which: coarse–fine flux mismatch | −3.68e-7 | −4.03e-8 |
+| filter | −1.17e-7 | −9.79e-8 |
+| total drift | −4.85e-7 | −1.38e-7 |
+| telescoping residual | 1e-15 | 1e-15 |
+| right-hand side less its stage integral | 6e-15 | 7e-15 |
 
-The mismatch is the fine side's flux through its parent-fed faces plus the
-parent's flux across the covered region's boundary, both integrated through
-the stage recurrence; it is the quantity a refluxing register would
-redistribute. The root row is the parent operator near the covered region:
-its compact divergence reads covered nodes through the rows that straddle
-the region's boundary, and the mask removes them from the quadrature, so the
-root's uncovered integral does not telescope to its face fluxes. The same
-split holds for the global step (6.95e-5 at t = 5π, 3.06e-6 at the end), for
-three levels subcycled (root 6.53e-5, level 1 −1.6e-6, level 2 −6.4e-7,
-mismatch 1.24e-5 at t = 5π) and at 1, 2 and 4 ranks to three digits. The
-uniform run books 3e-14 to the right-hand side and the filter, and two
-same-level patches 1.6e-9, of which the filter carries 1.1e-9 and the
-same-level averaging 2e-15. Under moving refinement the sixteen regrid
-jumps sum to +2.29e-5, the right-hand side to −5.03e-5 and the imposed
-shell to +5.2e-6.
+The mismatch is each side's face flux at the junction's half node, the
+child's with the rate of Ω, integrated through the stage recurrence: the
+quantity the coarse-fine correction removes on a line it flags, and here
+it flags none. Each level's right-hand side less the fluxes through its
+faces is round-off, so the right-hand side's whole drift is the junction's.
+The same split holds under the global step (mismatch −5.15e-7 at t = 15π,
+−9.56e-8 at the end; filter −1.91e-7 and −2.37e-7) and at three levels
+(mismatch −5.94e-7 and −1.79e-7 under the global step, −3.63e-7 and
+−4.05e-8 subcycled). The uniform run books 3e-15 to the right-hand side and
+5e-14 to the filter, and two same-level patches 1.5e-9, of which the filter
+carries 9.0e-10, the right-hand side 5.6e-10 and the same-level averaging
+1e-16. Under moving refinement the sixteen regrid jumps sum to +1.0e-6, the
+right-hand side, all of it mismatch, to +1.38e-5 and the filter to +8.9e-7
+under the global step; subcycled, +1.65e-6, +5.9e-6 and +3.0e-6.
 
-At 192 × 48 the two-level subcycled drift at t = 5π is 1.37e-5, against
-6.94e-5 at 96 × 24, a ratio of 5.1; the mismatch falls from 1.12e-5 to
-1.08e-6 and the root row from 6.53e-5 to 1.42e-5. The drift is a truncation
-error of the coupling that converges at second order or better, concentrated
-in the right-hand side at the coarse–fine boundary, and the transfers
-(shell, restriction, filter) are two orders below it.
+Over t ≤ 5π the largest sampled two-level subcycled drift is 2.05e-7 at
+96 × 24 and 2.19e-9 at 192 × 48, a ratio of 93, and at t = 5π the mismatch
+falls from 2.08e-7 to 8.7e-11. The drift is a truncation error of the
+coupling at the junction, converging at high order once Ω is counted.
 
 **Decision.** Smooth flow takes no conservative correction. The attributed
-non-conservation is a converging operator defect at the coarse–fine
-boundary, 7e-5 at its largest against the 1e-3 budget at this resolution,
-and a correction applied on every line of a 2-D face costs the interface its
+non-conservation is the junction's flux mismatch, 5e-7 at its largest
+against the 1e-3 budget at this resolution and converging at high order, and
+a correction applied on every line of a 2-D face costs the interface its
 order ([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)).
 
 ### bench/reflux.jl: the conservative coarse-fine coupling
@@ -5686,9 +5681,35 @@ The uniform run at the level's spacing drifts by −4.45e-7 against the exact
 mass. The crossing leaves a static density crater beside the face, ρ ≈ 8.9
 against a plateau near 15 on the child, three child nodes wide, which is
 present uncorrected as well. On data that rough Ω is not small: at t = 0.6
-it carries −3.96e-4 of the mass, so `volume_integral`, which omits it, reads
-+3.96e-4 on the corrected run where the conserved quadrature reads −3.65e-7.
-Ω is −4e-7 at t = 0.2 and grows from t ≈ 0.45 as the shock reaches the face.
+it carries −3.96e-4 of the mass, so the cells alone read +3.96e-4 on the
+corrected run where the conserved quadrature, which `volume_integral` takes,
+reads −3.65e-7. Ω is −4e-7 at t = 0.2 and grows from t ≈ 0.45 as the shock
+reaches the face.
+
+**A moving converging shock.** The shock problem of `bench/movinglevel.jl`
+(256 root nodes, a subcycled box placed by the density sensor four root
+nodes ahead of the shock) keeps the shock inside the box's inner face and
+within `GATE_REACH` of it, so the junction is corrected in nearly every
+step, and its correction lands in the gas at rest ahead of the shock. The
+level's largest |ρ − 1| beyond 0.02 inside the front (fine grid 2.91e-4),
+with variants of the gate, and the Sod and Noh rows above:
+
+| gate | mask | moving shock | Sod mass, largest | Noh composite less inflow |
+|---|---|---|---|---|
+| none (`REFLUX[] = false`) | off | 1.08e-2 | 9.1e-5 | −1.18e-3 |
+| none | on | 3.38e-4 | 7.5e-4 | |
+| parent nodes either side of the face (default) | off | 1.92e-2 | 6.7e-8 | −3.65e-7 |
+| the same | on | 3.56e-3 | 8.9e-7 | |
+| covered nodes only | on | 3.56e-3 | | |
+| uncovered nodes only | off | 2.61e-2 | 2.1e-6 | +4.92e-6 |
+| uncovered nodes only | on | 3.05e-4 | 6.8e-6 | |
+| either side within 2 nodes | on | 4.80e-3 | | |
+| default, correction on the face node | on | 3.00e-3 | | |
+
+The gate fires on the restricted shock the covered nodes hold. Testing only
+the uncovered nodes brings the masked level to 1.05 times the fine grid's,
+where the default leaves it at 12, and loosens the Sod and Noh conservation
+by one to two orders, still two orders below the uncorrected coupling's.
 
 **Rejected placements.** A correction added to the parent's face node, which
 the shell copies to the child, fed back through the child's next step and
@@ -6190,10 +6211,11 @@ errors at t = 0.2 move by under 2% (base 5.57e-3 / 8.302e-2 / 2.730e-2 to 5.64e-
 2.755e-2; three levels 4.59e-3 to 4.52e-3; tile 8 fine 1.530e-2 to 1.564e-2), the two-patch
 row falls from 1.02e-2 to 8.25e-3 (shell) and 1.00e-1 to 8.60e-2 (root), the three-patch row
 from 7.95e-2 to 7.87e-2, and no row has an inadmissible step. On `test/validation.jl`'s Noh
-with a level at the axis the run holding the shock is unchanged in plateau (15.6523), mass
-drift and steps, its tile error against the uniform run 5.693e-3 to 5.658e-3; the run passing
-the shock out reads plateau 14.9422 to 14.9115, shock radius 0.2084 to 0.2086, mass drift
-−8.955e-4 to −8.551e-4 and e_min −0.0405 to −0.0376. `bench/couplingspectrum.jl` (art off) and
+with a level at the axis, the coarse-fine correction on, the run holding the shock is
+unchanged in plateau (15.6523) and mass drift (−9.7e-7), its steps 6641 to 6639 and its tile
+error against the uniform run 5.693e-3 to 5.658e-3; the run passing the shock out reads
+plateau 14.9341 to 14.9059, shock radius 0.2092 to 0.2094, mass drift −4.7e-7 to −3.6e-7 and
+e_min −0.0189 to −0.0162. `bench/couplingspectrum.jl` (art off) and
 `bench/interfaceconservation.jl iflux=ghost`'s mixing layer, whose remainder is zero, are
 unchanged to every printed digit.
 
@@ -6268,16 +6290,17 @@ sound speed; it was not adjusted for these candidates.
 
 | policy, global stepping | levels | steps | maximum sampled conserved drift | maximum species excursion |
 |---|---|---|---|---|
-| production | 2 | 3532 | 6.951e-5 | 0 |
-| normalized | 2 | 3532 | 6.948e-5 | 0 |
-| cadence | 2 | 3532 | 6.943e-5 | 0 |
-| production | 3 | 10570 | 7.567e-5 | 5.82e-4 |
-| normalized | 3 | 10568 | 7.578e-5 | 0 |
-| cadence | 3 | 10568 | 7.573e-5 | 0 |
+| production | 2 | 3532 | 7.052e-7 | 0 |
+| normalized | 2 | 3532 | 4.880e-7 | 0 |
+| cadence | 2 | 3532 | 4.848e-7 | 0 |
+| production | 3 | 10568 | 8.495e-7 | 3.64e-4 |
+| normalized | 3 | 10568 | 4.773e-7 | 0 |
+| cadence | 3 | 10568 | 4.803e-7 | 0 |
 
 Both candidates remove the sampled late undershoot while remaining well
 inside the conservation allowance. Subcycling remains positive at both depths
-and its production maximum drifts are 6.943e-5 and 7.574e-5. The agreement
+and its production maximum drifts are 4.851e-7 and 4.847e-7. The policies
+were run at 8 ranks, 5.3 minutes each. The agreement
 of the two candidate layer outcomes does not make their operators
 equivalent: one applies a weak pass at every fine-sized step, the other
 interleaves fewer stronger passes with shell imposition.
@@ -6296,42 +6319,43 @@ the existing 1e-3 allowance for each reported conserved-budget measure.
 
 | policy, global stepping | sum of absolute transfer jumps | maximum total drift | maximum drift with transfers subtracted | species excursion |
 |---|---|---|---|---|
-| production | 8.423e-4 | 1.002e-4 | 2.136e-4 | 7.42e-4 |
-| normalized | 8.423e-4 | 1.006e-4 | 2.200e-4 | 6.76e-4 |
-| cadence | 8.422e-4 | 1.009e-4 | 2.213e-4 | 5.53e-4 |
+| production | 3.824e-6 | 1.708e-5 | 1.467e-5 | 7.06e-4 |
+| normalized | 5.948e-6 | 1.406e-5 | 1.027e-5 | 5.64e-4 |
+| cadence | 5.710e-6 | 1.254e-5 | 8.908e-6 | 5.71e-4 |
 
 Every conservation measure passes, but moving refinement still has a
 species excursion beyond the validity dead band under either trial.
-The unchanged subcycled control has cumulative jumps 8.422e-4, maximum
-total drift 1.009e-4, transfer-subtracted drift 2.213e-4 and species
-excursion 5.56e-4. These policies therefore resolve the fixed-layer
+The unchanged subcycled control has cumulative jumps 5.801e-6, maximum
+total drift 1.259e-5, transfer-subtracted drift 8.927e-6 and species
+excursion 5.76e-4. These policies therefore resolve the fixed-layer
 reproducer, not general species positivity. Three-level moving
 refinement is unsupported and is not measured.
 
 **Smooth evolution and reflection.** The shared entropy-wave case runs to
 `t=0.5` at root `N=48,96,192`, CFL 0.25 and 0.125, with the filter on.
 The interface maximum counts actual patch faces, not MPI block ends;
-the L2 norm uses the solver's masked composite quadrature. The following
-orders fit all three spacings at CFL 0.25.
+the L2 norm uses the solver's composite quadrature, the coupling's
+conserved one. Serial, about 15 seconds per policy. The following orders
+fit all three spacings at CFL 0.25.
 
 | policy, global stepping | levels | interface order | L2 order | L2 error, N=192 |
 |---|---|---|---|---|
-| production | 2 | 4.120 | 4.334 | 3.162e-9 |
-| normalized | 2 | 4.100 | 4.116 | 3.523e-9 |
-| cadence | 2 | 4.106 | 4.120 | 3.501e-9 |
-| production | 3 | 4.416 | 5.126 | 2.177e-9 |
-| normalized | 3 | 4.101 | 4.112 | 3.569e-9 |
-| cadence | 3 | 4.111 | 4.121 | 3.489e-9 |
+| production | 2 | 7.293 | 6.860 | 6.829e-11 |
+| normalized | 2 | 7.758 | 6.450 | 4.514e-11 |
+| cadence | 2 | 7.755 | 6.444 | 4.512e-11 |
+| production | 3 | 7.161 | 6.992 | 1.643e-10 |
+| normalized | 3 | 7.751 | 6.451 | 4.513e-11 |
+| cadence | 3 | 7.773 | 6.449 | 4.510e-11 |
 
 Both trials bring the two depths close to the subcycled order, about
-4.09 at the interface and 4.11 in L2. They increase the finest-grid
-global-step L2 error by about 11% at two levels and 60--64% at three
-levels. Thus the long-layer improvement does not mean every smooth error
-is smaller. Across both stepping modes the largest relative change on
-halving CFL is 1.24% (production), 1.04% (normalized) and 1.62% (cadence),
-below the accuracy instrument's 10% temporal-contamination criterion.
-These measured orders do not identify an individual operator mode or
-establish sixth-order AMR.
+7.91 at the interface and 6.44 in L2, and lower the finest-grid
+global-step L2 error by 34% at two levels and 73% at three. Under the
+global step the largest relative change on halving CFL is 0.18%
+(production), 0.49% (normalized) and 1.6% (cadence), below the accuracy
+instrument's 10% temporal-contamination criterion; subcycled it is 0.8%
+up to N = 96 and 21% at N = 192, where the interface error is 6e-12 and
+the step's own error shows. These measured orders do not identify an
+individual operator mode.
 
 The filtered acoustic pulse crosses both faces of the nest at root
 `N=192`, measured at `t=pi/sqrt(1.4)` against a filtered uniform run.
@@ -6716,7 +6740,8 @@ the constants stay at 4 and 2.
 
 **Subcycling.** Orders are unchanged at a third of the steps, and the
 subcycled Sod gate improves on the global-dt one: ahead-of-shock noise
-5.7e-11 against 6.4e-10, mass drift 9.8e-5 against 1.36e-4. At C10 the
+1.1e-10 against 3.5e-10, mass drift 2.3e-8 against 6.2e-8 under the
+coarse-fine correction. At C10 the
 two-level wave measures 3.84 / 3.54 (8.2e-8, 5.7e-9, 4.9e-10; subcycled
 3.88 / 3.53) and the Sod crossing leaves 5.4e-10 of momentum noise ahead of
 the shock (subcycled 4.0e-10; C6 6.4e-10 and 1.3e-10).
@@ -6749,10 +6774,10 @@ moving the first discontinuity to x = 0.3 fails at step 1 at two levels as at
 three; CFL 0.1 runs.
 
 **Composite diagnostics.** Taylor–Green at 24³ with an 8³ region refined
-off-centre, 61 steps: the masked composite energy history stays within 2.5e-4
-of the single-level history, the fine sampling's own quadrature difference,
-where the unmasked sum sits 1.4e-2 above it. Settled the per-orthant covered
-mask against a per-dimension factor.
+off-centre, 61 steps: the composite energy history stays within 4.1e-8 of
+the single-level history in the conserved quadrature, where the unmasked
+sum sits 1.3e-2 above it. Settled the per-orthant covered mask against a
+per-dimension factor.
 
 **Restart.** The tiled and box Sod regrid cases checkpointed at step 23 and
 continued to step 130 agree with the uninterrupted run at every slot, tag
@@ -6779,12 +6804,11 @@ dividing by r at the fine nodes against interpolating Q:
 | Cartesian, μ = 0.002 | 3.65e-7 | 7.43e-9 | 2.11e-10 |
 | Q, closure rows, inviscid | 1.09e-6 | 5.89e-8 | 5.67e-9 |
 
-The relative mass drift of the 2-D case is −1.193e-5 at 37 root nodes and
-−3.137e-6 at 73 under either interpolation, against −1.197e-5 and −3.092e-6
-on the Cartesian metric and 4.9e-7 and −7.2e-8 for the root alone; the
-ledger closes to 1.2e-16, and the level's coarse-fine flux and the parent's
-flux into the covered region cancel to 3e-6 of the mass. Settled: the
-conserved variables are interpolated. A standing wave touching the annulus
+The relative mass drift of the 2-D case is 8.73e-7 at 37 root nodes and
+6.25e-8 at 73, against 8.42e-7 and 5.73e-8 for the root alone, and on the
+Cartesian metric 5.72e-7 and 5.68e-8 refined, 4.89e-7 and 4.78e-8 alone;
+the ledger closes to round-off. Settled: the conserved variables are
+interpolated. A standing wave touching the annulus
 walls was not used for the rows: its data violate a compatibility condition
 of the curved wall, which caps its order near two on any grid
 ([the slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)).
@@ -6905,14 +6929,16 @@ and by 8.4e-15 for two tiles abutting across the seam (a shift of 30, the
 lattice edge 6 dividing N = 48); a level at the axis of an r-z run across
 the seam in z, static or regridded onto the axis, differs by 2.2e-14 as a box
 and 1.9e-14 as tiles after 8 steps. The composite mass drift of the 2-D corner
-box over 12 steps is 4.7485312626e-6 on both sides of the seam, and the
-ledger's coarse-fine and covered-face columns sum to 2.3761251418e-6 on both.
+box over 12 steps is −5.92193e-10 on both sides of the seam, to 1e-15, and
+the ledger's coarse-fine and covered-face columns sum to −5.92194e-10 on
+both: the whole drift is the junction's flux mismatch.
 A box and tiles regridded across the seam under `level_boundaries`, following
 a window at unit speed, stay within 4.8e-10 (box) and 4.3e-10 (tiles) of the
 uniform fine run over 96 steps. The same entropy wave with a level clear of
-the seam, and with one across it, drifts in composite mass by 1.78e-4 over
-t = 0.5 at N = 48, the node quadrature of a moving field on a nonuniform
-grid, of opposite sign in the two placements.
+the seam, and with one across it, drifts in composite mass by −3.9e-11 and
++1.8e-11 over t = 0.5 at N = 48. A density step through a box across the
+seam, which the coarse-fine correction acts on, matches its translation to
+4.4e-14 and conserves mass to 4e-15.
 
 **A converging shock on the axis level.** The instrument is
 `noh_axis_level` (`test/cases.jl`): cylindrical Noh from the cold start at
@@ -7195,43 +7221,48 @@ every step (shock). `-plain` filters the parent's covered nodes as well
 derivative mask, which the package leaves off (`MASK_CHILD_DERIVATIVE[] =
 true`), and `-plainD` the plain derivatives (`derivative_mask=both`). The
 shock runs accept the state at the axis near t_c, which can carry a negative
-internal energy at a few nodes (`validity = :permissive`). Single runs,
-package at the commit that adds the derivative mask unless a table says
-otherwise, under the overwritten-node CFL ceiling.
+internal energy at a few nodes (`validity = :permissive`). Single runs
+under the overwritten-node CFL ceiling and the conservative coarse-fine
+coupling (2.4 minutes for both problems); the masses are in the conserved
+quadrature.
 
 | bubble | away, root | away, level | He mass | layout changes |
 |---|---|---|---|---|
 | coarse | 5.86e-3 | | 4.9e-15 | |
 | fine | 3.97e-6 | | 4.4e-14 | |
-| moving | 1.76e-6 | 3.17e-5 | −6.3e-7 | 2 |
-| moving-plainD | 1.97e-6 | 3.91e-5 | −3.8e-6 | 2 |
-| moving-plain | 2.39e-4 | 1.04e-3 | −2.3e-4 | 14 |
-| moving-plain-plainD | 2.56e-4 | 1.19e-3 | −2.9e-4 | 14 |
-| fixed | 1.34e-7 | 3.94e-6 | −3.1e-6 | 0 |
-| fixed-plainD | 3.95e-8 | 3.94e-6 | −3.1e-6 | 0 |
-| fixed-plain | 2.94e-6 | 3.94e-6 | −3.2e-6 | 0 |
+| moving | 2.13e-6 | 3.09e-5 | −5.4e-6 | 2 |
+| moving-plainD | 2.17e-6 | 3.68e-5 | +7.7e-7 | 2 |
+| moving-plain | 3.11e-4 | 9.05e-4 | +1.0e-4 | 12 |
+| moving-plain-plainD | 2.59e-4 | 1.05e-3 | +8.0e-5 | 13 |
+| fixed | 1.34e-7 | 3.93e-6 | −1.3e-6 | 0 |
+| fixed-plainD | 3.95e-8 | 3.93e-6 | −1.3e-6 | 0 |
+| fixed-plain | 2.94e-6 | 3.93e-6 | −1.4e-6 | 0 |
 
 | shock | root steps | beyond 0.02 | beyond 0.05 | layout changes | inadmissible |
 |---|---|---|---|---|---|
 | coarse | 673 | 7.50e-3 | 7.23e-4 | 0 | 0 |
 | fine | 2023 | 2.91e-4 | 2.69e-7 | 0 | 0 |
-| moving | 677 | 3.37e-4 | 8.79e-6 | 161 | 2 |
-| moving-plainD | 762 | 1.08e-2 | 6.28e-4 | 114 | 0 |
-| moving-plain | 675 | 2.08e-2 | 1.54e-2 | 154 | 2 |
-| moving-plain-plainD | 763 | 5.29e-2 | 2.48e-2 | 173 | 0 |
+| moving | 673 | 3.56e-3 | 3.83e-5 | 125 | 2 |
+| moving-plainD | 762 | 1.92e-2 | 2.64e-4 | 105 | 0 |
+| moving-plain | 675 | 2.60e-2 | 2.48e-2 | 152 | 3 |
+| moving-plain-plainD | 762 | 4.37e-2 | 2.54e-2 | 171 | 0 |
 | fixed | 673 | 2.96e-4 | 1.98e-7 | 0 | 0 |
-| fixed-plainD | 797 | 2.21e-4 | 1.71e-7 | 0 | 2 |
+| fixed-plainD | 797 | 2.22e-4 | 1.71e-7 | 0 | 2 |
 | fixed-plain-plainD | 798 | 3.35e-4 | 2.44e-7 | 0 | 2 |
 
 The shock's columns take the larger of the root and the level; the last
 column counts the inadmissible nodes at t = 0.221, after the collapse. The
 fixed covers carry the uniform fine grid's disturbance to within a factor of
-two under every pass; the moving ones carry 300 (bubble) and 9.2e4 (shock,
-beyond 0.05) times it with neither mask, and 8 and 33 times it with both
-(1.16 times it beyond 0.02). The mass change of the plain bubble run accrues
-mostly between regrids, 7.6e-6 of its 2.9e-4 in the steps that changed the
-layout. With the derivative mask the shock's root takes 11 to 16% fewer
-steps.
+two under every pass; the moving ones carry 260 (bubble) and 9.4e4 (shock,
+beyond 0.05) times it with neither mask, and 8 and 140 times it with both
+(12 times it beyond 0.02). The coarse-fine correction raises the moving
+shock's: with the correction off (`REFLUX[] = false`) the rows read 3.38e-4
+(moving, beyond 0.02, 1.16 times the fine grid's) and 1.08e-2 (moving-plainD),
+and how the correction does it is under
+[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling).
+The mass change of the plain bubble run, +1.0e-4, is +1.3e-4 in the steps
+that changed the layout. With the derivative mask the shock's root takes 12
+to 16% fewer steps.
 
 **Attribution.** A scratch script (not kept) replaced the state at regrids,
 reset parent nodes to the exact solution after each step, or switched the
@@ -7342,25 +7373,20 @@ registers restoring the dropped source at the masked nodes left 31 shell and
 42 other inadmissible nodes on the Noh box and 934 unguaranteed faces on
 Woodward–Colella, where the plain derivatives leave none.
 
-**Composite conservation.** The mask is off by default because the Sod
-shocks of `test/level_tests.jl`, which cross a level in both directions, lose
-composite mass under it. Magnitude of the relative drift at t = 0.2:
+**Composite conservation.** The Sod shocks of `test/level_tests.jl`, which
+cross a level in both directions, relative mass drift at t = 0.2 in the
+conserved quadrature, with the coarse-fine correction and without it (the
+uncorrected columns without Ω, since that coupling builds no captures):
 
-| case | plain | mask |
-|---|---|---|
-| global step, C6 | 9.19e-5 | 5.32e-4 |
-| global step, `:d8` and pentadiagonal filter | 6.1e-5 | 5.30e-4 |
-| subcycled, C6 | 1.17e-4 | 7.50e-4 |
-| subcycled, C10 | 1.02e-4 | 2.04e-3 |
+| case | plain | mask | plain, uncorrected | mask, uncorrected |
+|---|---|---|---|---|
+| global step, C6 | +6.2e-8 | −8.8e-7 | +8.5e-5 | −5.2e-4 |
+| global step, `:d8` and pentadiagonal filter | −5.4e-9 | −1.4e-7 | +2.6e-6 | −5.3e-4 |
+| subcycled, C6 | +2.3e-8 | +3.7e-8 | +9.1e-5 | −7.5e-4 |
+| subcycled, C10 | +3.8e-9 | −7.4e-9 | +7.0e-5 | −2.0e-3 |
 
-On the first case the masked drift falls from −8.2e-5 to −2.67e-4 between
-t = 0.06 and 0.08, as the shock enters the level, while the plain run's
-recovers to +5.3e-5, and it is −5.18e-4 at `cfl = 0.3` with the plain run's
-step count; restoring the dropped source at the masked nodes, which keeps the
-parent line's sum, leaves −4.74e-4. The removed tail therefore carries part
-of the mass the parent's uncovered nodes exchange through the coarse-fine
-face, on which the composite budget rests while the face takes no flux
-correction (A14).
+The removed tail carries part of the mass the parent's uncovered nodes
+exchange through the coarse-fine face, and the correction returns it.
 
 **The tutorial configuration.** The Advected bubbles tutorial itself (96²
 root, three bubbles, tiles of 12, against the uniform 288² grid): the largest

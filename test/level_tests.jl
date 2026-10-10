@@ -128,33 +128,8 @@ const SUBCYCLE_CFL = 0.125
     @test errs10[3] < 5e-14
 end
 
-# Trapezoid mass over the two-level composite: the coarse level outside the
-# covered region plus the fine level inside it, the shared boundary plane
-# taking half weight from each.
-function _two_level_mass(solver, states, N)
-    region = CL.refined_region(solver)
-    ps = PatchSolver(solver, solver.patches[1])
-    pad = ps.decomp.n_halo_d[1]
-    h = ps.h[1]
-    lo = region.offset[1] + 1
-    hi = region.offset[1] + region.extent[1]
-    m = 0.0
-    for i in 1:N
-        w = (i == 1 || i == N) ? 0.5 : 1.0
-        (lo < i < hi) && continue
-        (i == lo || i == hi) && (w = 0.5)
-        m += w * states[1][i + pad, 1, 1, 1] * h
-    end
-    pf = PatchSolver(solver, solver.patches[2])
-    padf = pf.decomp.n_halo_d[1]
-    hf = pf.h[1]
-    nf = pf.decomp.n_local[1]
-    for i in 1:nf
-        w = (i == 1 || i == nf) ? 0.5 : 1.0
-        m += w * states[2][i + padf, 1, 1, 1] * hf
-    end
-    return m
-end
+# The composite mass in the quadrature the coarse-fine coupling conserves.
+_two_level_mass(solver, states) = volume_integral(solver, states, :rho)
 
 @testset "two levels: Sod shock through the refinement boundary" begin
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -172,7 +147,7 @@ end
                     refine=BlockRegion((120, 0, 0), (41, 1, 1)))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
-    m0 = _two_level_mass(solver, states, N)
+    m0 = _two_level_mass(solver, states)
     run!(solver, states; tfinal=0.1, nmax=20000)
     # Ahead of the shock (x > 0.85) the exact solution is still quiescent, so
     # any momentum there beyond round-off is interface-generated noise.
@@ -194,23 +169,23 @@ end
     end
     # Run on to t = 0.2 (shock exits the region) and measure conservation.
     run!(solver, states; tfinal=0.2, nmax=40000)
-    drift = abs(_two_level_mass(solver, states, N) - m0) / m0
+    drift = abs(_two_level_mass(solver, states) - m0) / m0
     @info "two-level Sod mass drift" drift
-    # Measured 1.32e-4 (1.28e-4 under the closure rows; :filter halves it at
-    # three decades of smooth accuracy — src/levels.jl header). The
+    # Measured 6.2e-8 under the coarse-fine correction, 8.5e-5 without it
+    # (`REFLUX[] = false`); 8.9e-7 under the parent's derivative mask. The
     # unrefined run drifts 5e-11.
-    @test drift < 5e-4
+    @test drift < 1e-5
 
     # The :d8 detector and the pentadiagonal filter at the same faces. The
     # momentum ahead of the shock measured 7.3e-6 (2.0e-6 on the unrefined
-    # run with the same numerics) and the mass drift 6.1e-5.
+    # run with the same numerics) and the mass drift 5.4e-9.
     s8 = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.4, filt=pyranda_filter(),
                 art=ArtificialProperties(detector=:d8),
                 refine=BlockRegion((120, 0, 0), (41, 1, 1)))
     q8 = allocate_state(s8)
     initialize!(s8, q8, ic)
-    m8 = _two_level_mass(s8, q8, N)
+    m8 = _two_level_mass(s8, q8)
     run!(s8, q8; tfinal=0.1, nmax=20000)
     p8 = PatchSolver(s8, s8.patches[1])
     @test maximum(abs(q8[1][padded_index(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
@@ -219,7 +194,7 @@ end
     for (psq, Q) in CL.eachpatch(s8, q8)
         @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:psq.decomp.n_local[1]) > 0.05
     end
-    @test abs(_two_level_mass(s8, q8, N) - m8) / m8 < 5e-4
+    @test abs(_two_level_mass(s8, q8) - m8) / m8 < 1e-5
 end
 
 
@@ -586,7 +561,7 @@ end
                         deriv=deriv, n_halo=n_halo)
         states = allocate_state(solver)
         initialize!(solver, states, ic)
-        m0 = _two_level_mass(solver, states, N)
+        m0 = _two_level_mass(solver, states)
         run!(solver, states; tfinal=0.1, nmax=20000)
         ps = PatchSolver(solver, solver.patches[1])
         pad = ps.decomp.n_halo_d[1]
@@ -601,11 +576,11 @@ end
             @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n) > 0.05
         end
         run!(solver, states; tfinal=0.2, nmax=40000)
-        drift = abs(_two_level_mass(solver, states, N) - m0) / m0
+        drift = abs(_two_level_mass(solver, states) - m0) / m0
         @info "subcycled two-level Sod mass drift, $label" drift
-        # Measured 1.17e-4 (C6) and 1.02e-4 (C10) against the global-dt gate's
-        # 1.32e-4.
-        @test drift < 5e-4
+        # Measured 2.3e-8 (C6) and 3.8e-9 (C10) against the global step's
+        # 6.2e-8.
+        @test drift < 1e-5
     end
 end
 
@@ -913,7 +888,8 @@ end
 
 @testset "regridding rebuilds the d8 detector and a pentadiagonal filter" begin
     # Rebuilt patches take the detector's interface plans, its buffer and the
-    # banded filter. Composite drift measured 1.5e-4 (tiled) and 1.2e-5 (box).
+    # banded filter. Composite mass drift measured 6.3e-6 (tiled) and 3.5e-7
+    # (box), the regrids' transfers included.
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
@@ -2425,9 +2401,10 @@ const WALL_LEVEL_TOL = 1e-7
     @test first(CL._restrict_window(lt)[1]) == 1
     # The composite quadrature counts the covered wall node once, the wall
     # node's outer half-cell covered with its inner. The cells meet without
-    # overlap at the coarse-fine face, so a linear field leaves only the two
+    # overlap at the coarse-fine face, so a linear field leaves the two
     # walls' half cells, which no longer cancel: one at the tile's spacing
-    # and one at the root's, f'(H² − h²)/8 together for f = 1 + 2x.
+    # and one at the root's, f'(H² − h²)/8 together for f = 1 + 2x. The
+    # junction's Ω on the tile's high face adds −f'(H² − h²)/24.
     @test domain_volume(solver) ≈ 1.0 atol = 1e-14
     lin = map(getfield(solver, :patches)) do p
         ps = PatchSolver(solver, p)
@@ -2438,7 +2415,7 @@ const WALL_LEVEL_TOL = 1e-7
         a
     end
     H = solver.patches[1].h[1]
-    @test volume_integral(solver, lin) ≈ 2.0 + 2 * (H^2 - (H / 3)^2) / 8 atol = 1e-13
+    @test volume_integral(solver, lin) ≈ 2.0 + 2 * (H^2 - (H / 3)^2) / 12 atol = 1e-13
     root = PatchSolver(solver, solver.patches[1])
     @test root.covered[padded_index(root, 1, 1, 1)] == 0xff
     # Against the uniform run at the level's spacing in the same equal steps,
@@ -2529,9 +2506,12 @@ const PLANE_LEVEL_TOL = 1e-10
         end
         # At a plane every cell is whole, and at the coarse-fine face the
         # root's face node takes its whole cell and the tile's cells start
-        # beyond it, so every cell is centred on its node and a linear field
-        # integrates exactly.
-        @test volume_integral(s, lin) ≈ 2.0 atol = 1e-13
+        # beyond it, so every cell is centred on its node and the cells
+        # integrate a linear field exactly. The junction's Ω adds
+        # ±f'(h² − (h/3)²)/24 with the face on the tile's low or high side.
+        h = root.h[1]
+        face = (k == 1 ? -1 : 1) * 2 * (h^2 - (h / 3)^2) / 24
+        @test volume_integral(s, lin) ≈ 2.0 + face atol = 1e-13
         # Against the uniform run at the level's spacing in the same equal
         # steps, the tile differs by the refinement's error alone.
         f, fq = plane_level(N; refined=false)
@@ -2725,9 +2705,8 @@ const RZ_LEVEL_TOL = 1e-6
     # Composite conservation on an annulus periodic in z, a pulse crossing
     # the level: the budget ledger's pieces telescope to the r-weighted
     # drift, the level's coarse-fine flux and the parent's flux into the
-    # covered region cancel to the drift's order, and the drift is the
-    # Cartesian coupling's (1.20e-5 for this case on the Cartesian metric,
-    # 1.14e-5 here).
+    # covered region cancel to the drift's order, and the drift measured
+    # 8.7e-7.
     s = rz((37, 1, 36); bcs=(wall, per, per),
            refine=BlockRegion((12, 0, 12), (12, 1, 12)),
            art=ArtificialProperties(enabled=false), cfl=0.5, filter_interval=0)
@@ -2962,16 +2941,17 @@ const AXIS_FILTER_TOL = 2e-5
     # The composite quadrature: the root's node at h/2 is covered on both
     # halves of [0, h], and the tile's node at h/6 carries the axis edge
     # factor of its own spacing, as the root alone carries its own. The
-    # cells meet without overlap at the coarse-fine face, so the composite
-    # departs from the root alone by the axis's edge term on the linear r,
-    # −h²/24 at the root's spacing, taken at the tile's instead:
-    # (h² − (h/3)²)/24 = h²/27.
+    # cells meet without overlap at the coarse-fine face, so they depart
+    # from the root alone by the axis's edge term on the linear r, −h²/24
+    # at the root's spacing, taken at the tile's instead:
+    # (h² − (h/3)²)/24 = h²/27. The junction's Ω on the tile's high face
+    # takes −(h² − (h/3)²)/24 of the volume's integrand r, which cancels it.
     @test CL.uncovered_fraction(root.covered[padded_index(root, 1, 1, 1)]) == 0
     @test CL.quad_weight(fine, 1, 1) == 1.0
     @test CL._edge_factor(fine, 1, 1, padded_index(fine, 1, 1, 1)) ≈ 11 / 12
     alone = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) + h^2 / 27 atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) atol = 1e-15
     # Against the uniform run at the level's spacing in the same equal steps,
     # the tile differs by the refinement's error alone.
     n = 3N
@@ -3038,14 +3018,12 @@ const AXIS_FILTER_TOL = 2e-5
     @test fine.folds[3].sigvel == root.folds[3].sigvel == (1, 1, -1)
     @test fine.folds[1].sigvel == root.folds[1].sigvel
     @test xcoord(fine, 1, 1) ≈ root.h[1] / 6 && xcoord(fine, 3, 1) ≈ root.h[3] / 6
-    # The axis's edge term at the tile's spacing, h²/27 per unit of z (the
-    # axis tile above), over the tile's cells in z, which end half a root
-    # cell inside its face, (m − 1)h from the plane.
-    h = root.h[1]
-    m = lt.region.extent[3]
+    # The axis's edge term at the tile's spacing and the junction's Ω on the
+    # tile's r face cancel per unit of z, as on the axis tile above, and the
+    # z face's Ω takes nothing from an integrand r constant along z.
     alone = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, zplane),
                    metric=CylindricalMetric())
-    @test domain_volume(s) ≈ domain_volume(alone) + h^2 / 27 * (m - 1) * h atol = 1e-15
+    @test domain_volume(s) ≈ domain_volume(alone) atol = 1e-15
     # A uniform state at rest stays at rest to round-off through both folds,
     # the viscous ghost fluxes, the artificial properties, the d8 detector and
     # the filter.
@@ -3663,8 +3641,9 @@ end
 # round-off of the root's cyclic line solves alone. The largest difference
 # over the conserved components and every patch: measured 1.1e-14 for a box
 # in 1-D, either stepping mode, and on a corner box in 2-D, 8.4e-15 for tiles,
-# and 2.2e-14 (box) and 1.9e-14 (tiles) for a level at the r-z axis across the
-# seam in z, static or regridded.
+# 2.2e-14 (box) and 1.9e-14 (tiles) for a level at the r-z axis across the
+# seam in z, static or regridded, and 4.4e-14 for a density step through a
+# box under the coarse-fine correction, whose composite mass holds to 4e-15.
 const SEAM_SHIFT_TOL = 1e-12
 # A box and tiles regridded across the seam, against the uniform run at the
 # fine spacing in equal steps, the largest difference over the run: measured
@@ -3750,6 +3729,34 @@ const SEAM_REGRID_TOL = 5e-9
     end
     # One box does not wrap around onto itself.
     @test_throws "periodic dimension 1" seam(region=BlockRegion((0, 0, 0), (N - 7, 1, 1)))
+
+    # --- A density step through a box across the seam, the correction on ---
+    # The step crosses the box's low face as the run goes, so the gate flags
+    # the junction and the coarse-fine correction runs; across the seam the
+    # junction's parent face node, its correction node and its stencil lie
+    # in different images of the box.
+    step_ic(s) = (x, y, z) -> begin
+        xs = mod(x - s / N, 1.0)
+        Prim(rho=xs < 0.15 ? 2.0 : 1.0, u=(0.5, 0.0, 0.0), p=1.0)
+    end
+    contact = map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
+                   (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
+        local sv = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                          bcs=(per, per, per), cfl=0.4, refine=r)
+        local q = allocate_state(sv)
+        initialize!(sv, q, step_ic(s))
+        local m0 = volume_integral(sv, q, :rho)
+        CL._ledger_begin!(sv, q)
+        steps!(sv, q, 1, 30, 30, 0.3)
+        local led = CL._ledger_end!(sv, q)
+        (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
+         reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
+    end
+    @test all(c -> c.reflux != 0, contact)
+    e = shifted_difference(contact[1].s, contact[1].q, contact[2].s, contact[2].q, 36)
+    @info "density step through a box across the seam" e contact[1].drift contact[2].drift
+    @test e < SEAM_SHIFT_TOL
+    @test all(c -> abs(c.drift) < 1e-12, contact)
 
     # --- A corner box across both seams, and a tiled level, 2-D -----------------
     a, qa = seam(dims=2, region=BlockRegion((10, 10, 0), (9, 9, 1)))

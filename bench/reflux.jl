@@ -123,8 +123,8 @@ function main()
                 @printf("  %-12s right-hand sides %.6f  filter %+.2e  correction %+.2e\n",
                         reflux ? "corrected" : "uncorrected", piece(:rhs), piece(:filter),
                         piece(:reflux))
-                @printf("  %-12s inflow %.6f  composite less inflow, of the final " *
-                        "mass %+.2e\n", "", inflow,
+                @printf("  %-12s inflow %.6f  composite less inflow, of final mass %+.2e\n",
+                        "", inflow,
                         (r.final[1] - r.initial[1] - inflow) / noh_cylinder_mass(NOH_T))
             end
         end

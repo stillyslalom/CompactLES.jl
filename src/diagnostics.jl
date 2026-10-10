@@ -162,14 +162,21 @@ quadrature), so the plane is counted exactly once in the total. Across a
 coarse-fine face a coarse node takes its whole cell unless a child covers all
 of it, and a refined patch's nodes count from the third in from a face its
 parent feeds, so the two grids' cells meet half a coarse cell inside the
-child without overlapping and a linear field integrates exactly. Every rank
-of `solver.comm` must call it, a rank holding no piece of a refined level
-included.
+child without overlapping. Where the coarse-fine coupling reconciles the
+face fluxes, the child's nodes beside each such face add the correction Ω
+that makes this the integral the coupling conserves. Ω vanishes on a
+constant and takes ±(H² − h²) g′/24 per unit face area from a linear
+integrand g = f J at a face on the child's low or high side, H and h the two
+spacings, so it cancels across a child whose two faces along a dimension are
+both coarse-fine. Every rank of `solver.comm` must call it, a rank holding
+no piece of a refined level included.
 """
 function volume_integral(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}})
+    _reflux_current!(solver)
     acc = 0.0
     for (i, p) in enumerate(getfield(solver, :patches))
-        acc += _local_volume_integral(PatchSolver(solver, p), fs[i], true)
+        ps = PatchSolver(solver, p)
+        acc += _local_volume_integral(ps, fs[i], true) + _junction_integral(ps, fs[i])
     end
     return MPI.Allreduce(acc, +, solver.comm)
 end
@@ -295,14 +302,15 @@ end
 
 ∫ dV, i.e. `volume_integral` of unity. Every rank in `solver.comm` must call
 this function. On a multi-patch or refined solver this is the composite
-quadrature with the covered masks applied, so it is the physical volume
-exactly once.
+quadrature of `volume_integral`, so it is the physical volume exactly once.
 """
 function domain_volume(solver::SolverLike)
     if _composite(solver)
+        _reflux_current!(solver)
         acc = 0.0
         for p in getfield(solver, :patches)
-            acc += _local_domain_volume(PatchSolver(solver, p), true)
+            ps = PatchSolver(solver, p)
+            acc += _local_domain_volume(ps, true) + _junction_integral(ps, nothing)
         end
         return MPI.Allreduce(acc, +, solver.comm)
     end

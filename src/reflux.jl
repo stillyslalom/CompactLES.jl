@@ -139,10 +139,11 @@ end
 # neighbour the node counts half in each, so the patch whose counted nodes
 # lie beyond it takes the relation at its last interior face and half the
 # node's increment, and the patch on the child's side half the node's
-# increment alone.
-function _parent_coefficients(band::Vector{Float64}, gp::Int, n::Int, side::Int)
+# increment alone. A patch spanning a periodic dimension has no ends along it.
+function _parent_coefficients(band::Vector{Float64}, gp::Int, n::Int, side::Int,
+                              periodic::Bool=false)
     s = side == 1 ? 1 : -1
-    lo_end, hi_end = gp == 1, gp == n
+    lo_end, hi_end = periodic ? (false, false) : (gp == 1, gp == n)
     if !(lo_end || hi_end)
         j = side == 1 ? gp : gp - 1
         c, rs = _anchor_coefficients(band, j, j)
@@ -283,6 +284,8 @@ end
 
 _reflux_lines(box) = length(box[1]) * length(box[2])
 
+_float_type(::Solver{T}) where {T} = T
+
 # Rebuild the captures if the layout has changed since they were built. The
 # rebuild runs at setup and after a regrid and reads the schemes at their
 # abstract types, so it sits behind `_cold`, out of the step's inference.
@@ -320,7 +323,10 @@ Rebuild the junction captures of every held patch for the current layout,
 empty where the configuration does not take the conservative coupling.
 Rank-local.
 """
-function _build_reflux!(solver::Solver{T}) where {T}
+function _build_reflux!(@nospecialize(solver::Solver))
+    # Setup, so compiled once rather than per solver type: every solver type
+    # a run meets at a regrid or a diagnostic otherwise compiles its own.
+    T = _float_type(solver)
     patches = getfield(solver, :patches)
     for p in patches
         empty!(p.reflux_captures)
@@ -349,18 +355,25 @@ function _build_reflux!(solver::Solver{T}) where {T}
             s = jc.side == 1 ? 1.0 : -1.0
             gb = jc.side == 1 ? lt.region.offset[jc.d] + 1 :
                                 lt.region.offset[jc.d] + lt.region.extent[jc.d]
-            # The parent's side, on each parent patch holding part of it.
-            for q in lt.coarse_local
+            # The parent's side, on each parent patch holding part of it, in
+            # each periodic image of the tile the patch meets: across a seam
+            # the face node and the lines lie in different images. A patch
+            # spanning a periodic dimension wraps its stencil along it.
+            P = lt.period
+            o = jc.d == 1 ? (2, 3) : jc.d == 2 ? (1, 3) : (1, 2)
+            for q in lt.coarse_local, σ in _images(P)
                 q == 0 && continue
                 p = patches[q]
-                gp = gb - p.region.offset[jc.d]
-                1 <= gp <= p.region.extent[jc.d] || continue
                 np = p.region.extent[jc.d]
-                dc, drsc, dj = _parent_coefficients(dband, gp, np, jc.side)
-                fc, frsc, fj = _parent_coefficients(fband, gp, np, jc.side)
-                cap = _reflux_capture(T, solver, p, ℓp, jn, false, jc.d, s, jc.box,
+                gp = gb + σ[jc.d] - p.region.offset[jc.d]
+                1 <= gp <= np || continue
+                wrap = P[jc.d] > 0 && np == P[jc.d] ? np : 0
+                box = ntuple(k -> jc.box[k] .+ σ[o[k]], 2)
+                dc, drsc, dj = _parent_coefficients(dband, gp, np, jc.side, wrap > 0)
+                fc, frsc, fj = _parent_coefficients(fband, gp, np, jc.side, wrap > 0)
+                cap = _reflux_capture(T, solver, p, ℓp, jn, false, jc.d, s, box,
                                       dc, dj, drs, drsc, fc, fj, frs, frsc, gp,
-                                      Int[], Float64[], n_cons, gb, lt)
+                                      Int[], Float64[], n_cons, gb, lt, wrap)
                 cap === nothing || push!(p.reflux_captures, cap)
             end
             # The child's side.
@@ -392,10 +405,13 @@ function _build_reflux!(solver::Solver{T}) where {T}
 end
 
 # One capture on patch `p`, or `nothing` where this rank holds none of its
-# lines. Indices along `d` are patch-global (1-based) on entry.
-function _reflux_capture(::Type{T}, solver, p, ℓp, jn, child, d, sgn, box,
-                         dc, dr, drs, drsc, fc, fr, frs, frsc, gface,
-                         band, om, n_cons, gb, lt) where {T}
+# lines. Indices along `d` are patch-global (1-based) on entry; `wrap` is the
+# patch's period along `d` when it spans a periodic dimension, 0 otherwise,
+# and then every index along `d` is taken modulo it.
+function _reflux_capture(::Type{T}, @nospecialize(solver), @nospecialize(p), ℓp, jn,
+                         child, d, sgn, box, dc, dr, drs, drsc, fc, fr, frs, frsc,
+                         gface, band, om, n_cons, gb, @nospecialize(lt),
+                         wrap::Int=0) where {T}
     ps = PatchSolver(solver, p)
     decomp = p.decomp
     pad = decomp.n_halo_d
@@ -403,6 +419,9 @@ function _reflux_capture(::Type{T}, solver, p, ℓp, jn, child, d, sgn, box,
     off = decomp.offset
     o = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     local_of(g, e) = (i = g - off[e]; 1 <= i <= nl[e] ? i + pad[e] : 0)
+    wrapd(g) = wrap > 0 ? mod1(g, wrap) : g
+    # An anchor of 0 is none, but under `wrap` there is always one.
+    anchor(g) = wrap > 0 ? local_of(wrapd(g), d) : local_of(g, d)
     # The transverse lines held here, as padded ranges.
     lines = ntuple(2) do k
         e = o[k]
@@ -422,7 +441,7 @@ function _reflux_capture(::Type{T}, solver, p, ℓp, jn, child, d, sgn, box,
     any(isempty, lines) && return nothing
     allnodes = sort(collect(union(keys(dc), keys(fc))))
     length(allnodes) <= 6 || error("reflux: more than six captured nodes")
-    nodes = ntuple(k -> k <= length(allnodes) ? local_of(allnodes[k], d) : 0, 6)
+    nodes = ntuple(k -> k <= length(allnodes) ? local_of(wrapd(allnodes[k]), d) : 0, 6)
     dcoef = ntuple(k -> T(k <= length(allnodes) ? get(dc, allnodes[k], 0.0) : 0.0), 6)
     fcoef = ntuple(k -> T(k <= length(allnodes) ? get(fc, allnodes[k], 0.0) : 0.0), 6)
     pad8(v) = ntuple(k -> T(k <= length(v) ? v[k] : 0.0), 8)
@@ -444,20 +463,23 @@ function _reflux_capture(::Type{T}, solver, p, ℓp, jn, child, d, sgn, box,
     # face node itself is the child's boundary plane through the shell, and
     # a correction there fed back on itself: on a cold inflow into the tile
     # along r it grew without bound, where one node out it decays.
-    bnode = child ? 0 : local_of(gface - round(Int, sgn), d)
+    bnode = child ? 0 : local_of(wrapd(gface - round(Int, sgn)), d)
     # The gate's nodes: the parent's within `GATE_REACH` + 2 of its face node
     # on either side, the reach of the density test's taps, covered ones
     # included: they hold the child's restricted solution, where a feature
     # leaving the child is first seen. Slot s of the junction's `GATE_WIDTH`
-    # is the node gface - GATE_REACH - 3 + s on every patch and rank.
-    window = 1:0
-    wslot = 0
+    # is the node gface - GATE_REACH - 3 + s on every patch and rank, taken
+    # across the seam under `wrap`.
+    window = Int[]
+    wslots = Int[]
     if !child
-        glo = max(gface - GATE_REACH - 2, 1, off[d] + 1)
-        ghi = min(gface + GATE_REACH + 2, p.region.extent[d], off[d] + nl[d])
-        if glo <= ghi
-            window = (glo - off[d] + pad[d]):(ghi - off[d] + pad[d])
-            wslot = glo - (gface - GATE_REACH - 2) + 1
+        for s in 1:GATE_WIDTH
+            g = wrapd(gface - GATE_REACH - 3 + s)
+            1 <= g <= p.region.extent[d] || continue
+            a = local_of(g, d)
+            a == 0 && continue
+            push!(window, a)
+            push!(wslots, s)
         end
     end
     lo_box = (box[1].start, box[2].start)
@@ -513,10 +535,10 @@ function _reflux_capture(::Type{T}, solver, p, ℓp, jn, child, d, sgn, box,
     omh = ntuple(k -> T(k <= length(om) ? om[k] * Float64(p.h[d]) : 0.0), 6)
     z() = zeros(T, nline, n_cons)
     return RefluxCapture{T,Matrix{T},Vector{T}}(
-        ℓp, jn, child, d, T(sgn), nodes, dcoef, local_of(dr, d), pad8(drs),
-        length(drs) ÷ 2, T(drsc), fcoef, local_of(fr, d), pad8(frs),
+        ℓp, jn, child, d, T(sgn), nodes, dcoef, anchor(dr), pad8(drs),
+        length(drs) ÷ 2, T(drsc), fcoef, anchor(fr), pad8(frs),
         length(frs) ÷ 2, T(frsc), T(p.h[d]), lines, kap, kapf, bnode, wb, bandp,
-        omh, entry, window, wslot, zeros(Float64, nline, length(window)),
+        omh, entry, window, wslots, zeros(Float64, nline, length(window)),
         zeros(T, nline, 12), z(), z(), z(), z())
 end
 
@@ -548,20 +570,63 @@ _reflux_node_term(solver, d::Int, scale) =
     return nothing
 end
 
+# Inside `compute_rhs!`'s loop over components, each of which starts from a
+# zeroed `dQ[:, c]` and takes only divergences and the radial pressure
+# gradient, the child's rate of Ω is taken once per component from `dQ`
+# itself (`_reflux_component!`), less the pressure gradient's, rather than
+# from each divergence's increment: one read of Ω's nodes where every
+# divergence along every dimension took two. A divergence outside the loop
+# (the second phase of a level's right-hand side) takes its increment.
+const REFLUX_DEFER = Ref(false)
+
+@noinline function _reflux_defer!(solver, on::Bool)
+    REFLUX_DEFER[] = on && !isempty(_reflux_captures(solver))
+    return nothing
+end
+
+# The child's rate of Ω from component `c` of `dQ`, which the component's
+# divergences have filled since it was zeroed.
+@noinline function _reflux_component!(solver, dQ, c::Int)
+    REFLUX_DEFER[] || return nothing
+    q = _reflux_raw(dQ)
+    inv_J = solver.inv_J
+    @inbounds for cap in _reflux_captures(solver)
+        cap.child || continue
+        T = eltype(cap.stage)
+        for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
+            cap.entry[l] == 0 && continue
+            Δ = zero(T)
+            for k in 1:6
+                b = cap.band[k]
+                b == 0 && continue
+                I = _reflux_index(cap, b, i1, i2)
+                Δ += cap.omega[k] * q[I, c] / inv_J[I]
+            end
+            cap.stage[l, c] -= cap.kap[l] * Δ
+        end
+    end
+    return nothing
+end
+
 # Before a divergence of component `c` along `d` enters `dQ`: the values at
 # the captured nodes, and on the child's side at the nodes of Ω, whatever
-# the dimension of the divergence.
-@noinline function _reflux_open!(solver, dQ, c::Int, d::Int)
+# the dimension of the divergence, unless the component loop defers Ω and
+# this is a divergence rather than the pressure gradient.
+@noinline function _reflux_open!(solver, dQ, c::Int, d::Int, scale)
     caps = _reflux_captures(solver)
     isempty(caps) && return nothing
+    node = _reflux_node_term(solver, d, scale)
+    band = !REFLUX_DEFER[] || node
     q = _reflux_raw(dQ)
-    for cap in caps
-        (cap.d == d || cap.child) || continue
+    @inbounds for cap in caps
+        flux = cap.d == d && !node
+        omega = cap.child && band
+        (flux || omega) || continue
         for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
             for k in 1:6
-                a = cap.d == d ? cap.nodes[k] : 0
+                a = flux ? cap.nodes[k] : 0
                 a == 0 || (cap.snap[l, k] = q[_reflux_index(cap, a, i1, i2), c])
-                b = cap.child ? cap.band[k] : 0
+                b = omega ? cap.band[k] : 0
                 b == 0 || (cap.snap[l, 6 + k] = q[_reflux_index(cap, b, i1, i2), c])
             end
         end
@@ -581,12 +646,30 @@ end
 @noinline function _reflux_close!(solver, dQ, c::Int, f, d::Int, scale)
     caps = _reflux_captures(solver)
     isempty(caps) && return nothing
-    _reflux_node_term(solver, d, scale) && return nothing
+    node = _reflux_node_term(solver, d, scale)
+    # Under the component loop's deferral the pressure gradient's increment
+    # is in the `dQ` the component's Ω is taken from, so it is returned here.
+    node && !REFLUX_DEFER[] && return nothing
     q = _reflux_raw(dQ)
     inv_J = solver.inv_J
-    for cap in caps
+    @inbounds for cap in caps
         T = eltype(cap.stage)
-        if cap.child
+        if node
+            cap.child || continue
+            for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
+                cap.entry[l] == 0 && continue
+                Δ = zero(T)
+                for k in 1:6
+                    b = cap.band[k]
+                    b == 0 && continue
+                    I = _reflux_index(cap, b, i1, i2)
+                    Δ += cap.omega[k] * (q[I, c] - cap.snap[l, 6 + k]) / inv_J[I]
+                end
+                cap.stage[l, c] += cap.kap[l] * Δ
+            end
+            continue
+        end
+        if cap.child && !REFLUX_DEFER[]
             for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
                 cap.entry[l] == 0 && continue
                 Δ = zero(T)
@@ -638,7 +721,7 @@ end
 @noinline function _reflux_filter!(solver, q, filtered, c::Int, d::Int, w)
     caps = _reflux_captures(solver)
     isempty(caps) && return nothing
-    for cap in caps
+    @inbounds for cap in caps
         T = eltype(cap.reg)
         p = _patch_of(solver)
         for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
@@ -810,11 +893,18 @@ function _reflux_begin_step!(solver::Solver, states::Vector{<:ConservedState})
     end
     ns = solver.equations.n_species
     for (pi, p) in enumerate(getfield(solver, :patches))
-        for cap in p.reflux_captures
-            fill!(cap.du, 0)
-            fill!(cap.reg, 0)
-            _reflux_density!(cap.rho0, cap, states[pi], ns)
-        end
+        _reflux_reset!(p.reflux_captures, states[pi], ns)
+    end
+    return nothing
+end
+
+# A patch's registers emptied and its gate densities taken (a function
+# barrier, as the held patches differ in type).
+function _reflux_reset!(caps, Q, ns)
+    for cap in caps
+        fill!(cap.du, 0)
+        fill!(cap.reg, 0)
+        _reflux_density!(cap.rho0, cap, Q, ns)
     end
     return nothing
 end
@@ -849,38 +939,15 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     base = cumsum([0; [_reflux_lines(j.box) for j in junctions]])
     buf = zeros(Float64, base[end] * stride)
     at(jn, line, k) = (base[jn] + line - 1) * stride + k
-    rho1 = Matrix{Float64}(undef, 0, 0)
     for (pi, p) in enumerate(patches)
-        for cap in p.reflux_captures
-            cap.level == ℓp || continue
-            if !cap.child
-                size(rho1) == size(cap.rho0) || (rho1 = similar(cap.rho0))
-                _reflux_density!(rho1, cap, states[pi], ns)
-            end
-            for l in eachindex(cap.entry)
-                e = cap.entry[l]
-                e == 0 && continue
-                for c in 1:n_cons
-                    buf[at(cap.junction, e, c)] += Float64(cap.reg[l, c])
-                end
-                cap.child && continue
-                cap.bnode > 0 && (buf[at(cap.junction, e, n_cons + 1)] += Float64(cap.wb[l]))
-                o = at(cap.junction, e, n_cons + 1) + cap.wslot - 1
-                for k in eachindex(cap.window)
-                    buf[o + k] += cap.rho0[l, k]
-                    buf[o + W + k] += rho1[l, k]
-                    buf[o + 2W + k] += 1
-                end
-            end
-        end
+        _reflux_gather!(buf, p.reflux_captures, states[pi], ℓp, ns, n_cons, base, stride)
     end
     t0 = time_ns()
     MPI.Allreduce!(buf, +, lev.level_comm.comm)
     _wait!(solver, t0)
     held = _reflux_carry(solver)
-    carry = get!(() -> zeros(Float64, base[end] * n_cons), held.carry, ℓp)
-    length(carry) == base[end] * n_cons || (carry = held.carry[ℓp] =
-                                                zeros(Float64, base[end] * n_cons))
+    # One binding: the comprehension below captures it.
+    carry = _carry_vector!(held, ℓp, base[end] * n_cons)
     cat(jn, k, c) = (base[jn] + k - 1) * n_cons + c
     # Each connected run of flagged lines, or of lines holding a correction
     # back, takes its summed registers as one change of state over the run's
@@ -896,13 +963,13 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
                              any(c -> carry[cat(jn, k, c)] != 0, 1:n_cons)
                              for k in 1:n1*n2])
         for run in _flagged_runs(flagged, n1, n2)
-            W = sum(buf[at(jn, k, n_cons + 1)] for k in run)
-            W > 0 || continue
-            push!(runs, (jn, run, W))
+            Wr = sum(buf[at(jn, k, n_cons + 1)] for k in run)
+            Wr > 0 || continue
+            push!(runs, (jn, run, Wr))
             for c in 1:n_cons
                 E = sum(buf[at(jn, k, c)] + carry[cat(jn, k, c)] for k in run)
                 for k in run
-                    change[cat(jn, k, c)] = E / W
+                    change[cat(jn, k, c)] = E / Wr
                 end
             end
         end
@@ -920,50 +987,103 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     eq = solver.equations
     for (pi, p) in enumerate(patches)
-        q = parent(states[pi])
-        for cap in p.reflux_captures
-            (cap.level == ℓp && !cap.child && cap.bnode > 0) || continue
-            for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
-                e = cap.entry[l]
-                r = get(run_of, (cap.junction, e), 0)
-                (e == 0 || r == 0) && continue
-                I = _reflux_index(cap, cap.bnode, i1, i2)
-                θs[r] = min(θs[r], _reflux_admissible_fraction(q, I, eq, change,
-                                                               cat(cap.junction, e, 1) - 1))
-            end
-        end
+        _reflux_guard!(θs, run_of, p.reflux_captures, parent(states[pi]), eq, change,
+                       base, n_cons, ℓp)
     end
     t1 = time_ns()
     MPI.Allreduce!(θs, min, lev.level_comm.comm)
     _wait!(solver, t1)
     fill!(carry, 0)
-    for (r, (jn, run, W)) in enumerate(runs), k in run, c in 1:n_cons
+    for (r, (jn, run, _)) in enumerate(runs), k in run, c in 1:n_cons
         i = cat(jn, k, c)
         # What a line holds back is its share of the run's, by its weight.
         carry[i] = (1 - θs[r]) * change[i] * buf[at(jn, k, n_cons + 1)]
         change[i] *= θs[r]
     end
     for (pi, p) in enumerate(patches)
-        q = parent(states[pi])
-        for cap in p.reflux_captures
-            cap.level == ℓp || continue
-            if !cap.child && cap.bnode > 0
-                for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
-                    e = cap.entry[l]
-                    e == 0 && continue
-                    I = _reflux_index(cap, cap.bnode, i1, i2)
-                    for c in 1:n_cons
-                        δ = T(change[cat(cap.junction, e, c)])
-                        q[I, c] += δ
-                    end
-                end
-            end
-            fill!(cap.du, 0)
-            fill!(cap.reg, 0)
-            cap.child || _reflux_density!(cap.rho0, cap, states[pi], ns)
-        end
+        _reflux_change!(p.reflux_captures, states[pi], change, base, n_cons, ℓp, ns)
     end
     return nothing
+end
+
+# The three per-patch passes of `_reflux_apply!`, each a function barrier,
+# since the held patches differ in type. Each line's registers, its
+# correction node's weight and the gate's densities into `buf`:
+function _reflux_gather!(buf, caps, Q, ℓp, ns, n_cons, base, stride)
+    W = GATE_WIDTH
+    at(jn, line, k) = (base[jn] + line - 1) * stride + k
+    rho1 = Matrix{Float64}(undef, 0, 0)
+    for cap in caps
+        cap.level == ℓp || continue
+        if !cap.child
+            size(rho1) == size(cap.rho0) || (rho1 = similar(cap.rho0))
+            _reflux_density!(rho1, cap, Q, ns)
+        end
+        @inbounds for l in eachindex(cap.entry)
+            e = cap.entry[l]
+            e == 0 && continue
+            for c in 1:n_cons
+                buf[at(cap.junction, e, c)] += Float64(cap.reg[l, c])
+            end
+            cap.child && continue
+            cap.bnode > 0 && (buf[at(cap.junction, e, n_cons + 1)] += Float64(cap.wb[l]))
+            o = at(cap.junction, e, n_cons + 1)
+            for (k, s) in enumerate(cap.wslots)
+                buf[o + s] += cap.rho0[l, k]
+                buf[o + W + s] += rho1[l, k]
+                buf[o + 2W + s] += 1
+            end
+        end
+    end
+    return buf
+end
+
+# the positivity guard's fraction of each run at the nodes this patch holds:
+function _reflux_guard!(θs, run_of, caps, q, eq, change, base, n_cons, ℓp)
+    for cap in caps
+        (cap.level == ℓp && !cap.child && cap.bnode > 0) || continue
+        for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
+            e = cap.entry[l]
+            r = get(run_of, (cap.junction, e), 0)
+            (e == 0 || r == 0) && continue
+            I = _reflux_index(cap, cap.bnode, i1, i2)
+            o = (base[cap.junction] + e - 1) * n_cons
+            θs[r] = min(θs[r], _reflux_admissible_fraction(q, I, eq, change, o))
+        end
+    end
+    return θs
+end
+
+# and the change itself, the registers emptied and the next step's densities.
+function _reflux_change!(caps, Q, change, base, n_cons, ℓp, ns)
+    q = parent(Q)
+    for cap in caps
+        cap.level == ℓp || continue
+        T = eltype(cap.reg)
+        if !cap.child && cap.bnode > 0
+            @inbounds for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
+                e = cap.entry[l]
+                e == 0 && continue
+                I = _reflux_index(cap, cap.bnode, i1, i2)
+                o = (base[cap.junction] + e - 1) * n_cons
+                for c in 1:n_cons
+                    q[I, c] += T(change[o + c])
+                end
+            end
+        end
+        fill!(cap.du, 0)
+        fill!(cap.reg, 0)
+        cap.child || _reflux_density!(cap.rho0, cap, Q, ns)
+    end
+    return nothing
+end
+
+# Parent level `ℓp`'s held-back corrections, `n` long, emptied if the
+# layout's line count changed.
+function _carry_vector!(held::RefluxCarry, ℓp::Int, n::Int)
+    v = get(held.carry, ℓp, nothing)
+    (v === nothing || length(v) != n) && (v = held.carry[ℓp] = zeros(Float64, n))
+    return v
 end
 
 # The largest of 1, 1/2, .., 2⁻¹⁰ and 0 by which the change `change[o + c]`
@@ -1012,6 +1132,31 @@ function _junction_budget!(out, solver::PatchSolver, Q)
         end
     end
     return out
+end
+
+# Ω of a scalar field over the junctions a child patch holds, the term the
+# composite `volume_integral` adds to its cells; `f === nothing` takes the
+# field one, for `domain_volume`, where Ω is nonzero only on a metric whose
+# Jacobian varies across the face.
+_junction_integral(solver, f) = 0.0
+function _junction_integral(solver::PatchSolver, f)
+    p = getfield(solver, :patch)
+    acc = 0.0
+    for cap in p.reflux_captures
+        cap.child || continue
+        for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
+            cap.entry[l] == 0 && continue
+            for k in 1:6
+                a = cap.band[k]
+                a == 0 && continue
+                I = _reflux_index(cap, a, i1, i2)
+                v = f === nothing ? 1.0 : Float64(f[I])
+                acc += Float64(cap.kap[l]) * Float64(cap.omega[k]) * v /
+                       Float64(p.inv_J[I])
+            end
+        end
+    end
+    return acc
 end
 
 # The composite budget in the conserved quadrature, which `_conserved_budget`

@@ -1578,15 +1578,18 @@ hook books anything since the previous one as `:unattributed`, so a write
 no bracket covers is visible, and the pieces telescope to the total drift.
 Beside the snapshots the ledger integrates, with the low-storage weights,
 each stage's right-hand-side integral and the flux entering each patch
-through its physical, same-level and coarse–fine faces, taken from the flux
-`compute_rhs!` differenced after `correct_flux!`, and on a parent the flux
-across the parent-fed faces of each covered region with that face's own
-trapezoid weights. The first reproduces the `:rhs` piece to round-off; the
-physical faces give the boundary-flux closure, the right-hand side less the
-flux delivered through the walls, which is the defect of a compact
-derivative that is not summation-by-parts against this quadrature; and the
-fine and parent sides of the coarse–fine faces sum to the point-flux mismatch
-at the face nodes, which is not the junction flux the correction uses. Every hook is rank-local and the
+through its physical and same-level faces, taken from the flux
+`compute_rhs!` differenced after `correct_flux!`, and through each
+coarse–fine junction, taken from the correction's stage registers: the face
+flux at the junction's half node on each side, the child's with the rate of
+Ω. The first reproduces the `:rhs` piece to round-off; the physical faces
+give the boundary-flux closure, the right-hand side less the flux delivered
+through the walls, which is the defect of a compact derivative that is not
+summation-by-parts against this quadrature; and the two sides of the
+junctions sum to the mismatch the correction removes where it applies, each
+level's right-hand side less its face fluxes telescoping to round-off. On a
+solver the correction does not run on the junction columns are the face
+nodes' point fluxes, which do not partition this quadrature. Every hook is rank-local and the
 reduction is taken once at the end, so a hook inside a level only its owners
 enter strands no rank. Off, a hook is a field load and a branch. The
 measurements are in

@@ -70,10 +70,9 @@
 #   Noh nu=2 on a level at the axis, N=256, against the uniform run on 767 nodes
 #   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass -4.45e-7, 6640 steps):
 #     level over 85 nodes   plateau 15.6523  deficit 50.8%  shock 0.2033
-#                           mass -5.3e-7, conserved -9.7e-7
-#                           max |rho - uniform| 5.7e-3  6639 steps
+#                           mass -9.7e-7  max |rho - uniform| 5.7e-3  6639 steps
 #     level over 43 nodes   plateau 14.906   deficit 51.8%  shock 0.2094
-#                           mass +3.96e-4, conserved -3.6e-7  6029 steps
+#                           mass -3.6e-7  6029 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no
@@ -136,15 +135,14 @@
 # remainder through the gradient rows moved the level over 85 nodes from
 # 6641 to 6639 steps and its closing e_min from -0.0087 to -0.0086, and the
 # level over 43 nodes to plateau 14.9115, shock 0.2086 and 6010 steps. The
-# conserved quadrature, whole cells at the parent's face node and the
-# level's nodes from the third in, moved the masses to -5.3e-7 and -1.18e-3.
-# The conservative coupling leaves the level over 85 nodes bitwise, since no
-# unresolved feature reaches its face, and moves the level over 43 nodes to
-# the row above; its conserved mass is within 1e-6 of the exact one, as the
-# uniform run's is, and `volume_integral`, which omits the correction on the
-# level's nodes beside its face, reads +3.96e-4 there, the correction's
-# share at the density crater the crossing leaves beside the face. No guard
-# moved; the conserved masses are guarded at 1e-5.
+# conserved quadrature, whole cells at the parent's face node, the level's
+# nodes from the third in and the junction's correction Ω beside its face,
+# moved the masses to -9.7e-7 and -1.18e-3. The conservative coupling leaves
+# the level over 85 nodes bitwise, since no unresolved feature reaches its
+# face, and moves the level over 43 nodes to the row above, whose mass is
+# within 1e-6 of the exact one, as the uniform run's is; without Ω it would
+# read +3.96e-4, Ω's share at the density crater the crossing leaves beside
+# the face. No guard moved; both masses are guarded at 1e-5.
 #
 # The four nu = 2 rows moved when the radial momentum of the r-z metric took
 # its pressure term as dp/dr instead of (1/r)D(r p) - p/r, the form that
@@ -575,9 +573,7 @@ end
 # differences to it as well as the errors against the exact solution. Over
 # the first N ÷ 6 + 1 nodes the shock leaves the tile through its coarse-fine
 # face near t = 0.5; the post-shock state inside the tile falls towards the
-# uniform coarse run's, and the coupling's correction holds the mass in the
-# quadrature it conserves. The `volume_integral` mass of that row is a
-# measured "no worse than" guard.
+# uniform coarse run's, and the coupling's correction holds the mass.
 let ufine = noh_axis_level(; refined=false)
     @test ufine.completed
     uplat, udef, ushock, _ = noh_metrics(ufine.x, ufine.rho, 2)
@@ -591,15 +587,14 @@ let ufine = noh_axis_level(; refined=false)
         @test r.completed
         plat, deficit, Rnum, epre = noh_metrics(r.x, r.rho, 2)
         drift = r.mass / exact_mass - 1
-        conserved = r.conserved_mass / exact_mass - 1
         # The tile's nodes are the uniform run's nodes 1:length(tile).
         tile = findall(i -> abs(r.x[i] - ufine.x[i]) < 1e-12, 1:length(r.x) - 1)
         dtile = maximum(i -> abs(r.rho[i] - ufine.rho[i]), tile)
         sayf("  level over %d root nodes (%s)  plateau %.4f  deficit %+.1f%%  " *
              "shock %.4f  L1 pre-shock rho %.2e\n", m, label, plat, 100deficit,
              Rnum, epre)
-        sayf("        mass %+.2e, conserved %+.2e  max |rho - uniform| on the tile " *
-             "%.2e  %d steps\n", drift, conserved, dtile, r.steps)
+        sayf("        mass %+.2e  max |rho - uniform| on the tile %.2e  %d steps\n",
+             drift, dtile, r.steps)
         sayf("        closing state: %d inadmissible cell(s), e_min %+.4f\n",
              r.report.inadmissible, r.report.e_min)
         @test abs(plat / 16 - 1) < 0.10
@@ -609,16 +604,13 @@ let ufine = noh_axis_level(; refined=false)
         @test r.report.inadmissible <= 12
         @test r.report.e_min > -1.0
         @test r.report.nonfinite == 0 && r.report.negative_density == 0
-        @test abs(conserved) < 1e-5
+        @test abs(drift) < 1e-5
         if m == Dict(NOH_N)[2] ÷ 3
             @test abs(plat - uplat) < 1e-3
             @test abs(deficit - udef) < 5e-3
             @test abs(Rnum - ushock) < 1e-3
             @test dtile < 0.05
-            @test abs(drift) < 1e-5
             @test abs(r.steps - ufine.steps) <= 10
-        else
-            @test abs(drift) < 3e-3
         end
     end
 end

@@ -492,8 +492,13 @@ promotion.
   to twenty times as far in composite mass, so the mask is off by default
   ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
   With the conservative coupling (A14) the Sod crossings conserve to 1e-6
-  with the mask on, so what remains is measuring the mask's default against
-  the gate below and the level rows it moves.
+  with the mask on, but the coupling's gate fires on the restricted shock
+  inside the level's face and its correction raises the moving level to 12
+  times the fine grid's; gating on the uncovered nodes alone gives 1.05 times
+  at 1e-6 to 1e-5 conservation
+  ([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+  Remaining: choose the gate and the mask's default, which costs 40% of a
+  step while armed.
   **Gate:** on the shock configuration, the level's |ρ − 1| more than 0.02
   inside the front within a small factor of the uniform fine grid's, with
   the two-level Sod drifts of `test/level_tests.jl` inside their guards.
@@ -1285,7 +1290,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **A14** — Coarse-fine junction lines holding an unresolved feature
   take the step's difference of the two grids' face fluxes, less a high-order
   quadrature correction's change, on the parent; a Noh tile passing its shock
-  out conserves mass to 4e-7 against 1.2e-3 (commit pending).
+  out conserves mass to 4e-7 against 1e-3 (commit `3e35ff3`).
 - [x] **A15** — `CompositeBC` divides a face among member conditions by a
   coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
   on it (commit `9574aea`).

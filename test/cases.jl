@@ -343,11 +343,8 @@ node j. `subcycle` selects the Berger–Oliger step.
 
 Returns the composite density profile (`x`, `rho`: the tile's nodes, then the
 root's beyond the tile), whether the run reached `NOH_T`, the closing
-[`StateReport`](@ref), the step count, and the composite mass ∫ρ dV per radian
-and unit length twice: `mass` in the quadrature of `volume_integral` and
-`conserved_mass` in the one the coarse-fine coupling conserves, which adds a
-correction on the level's nodes beside its face. Serial only: the profile is
-read from one rank.
+[`StateReport`](@ref), the step count and the composite mass ∫ρ dV per radian
+and unit length. Serial only: the profile is read from one rank.
 """
 function noh_axis_level(; N=Dict(NOH_N)[2], m=N ÷ 3, refined=true, subcycle=false,
                         cfl=NOH_CFL, nmax=NMAX)
@@ -378,8 +375,7 @@ function noh_axis_level(; N=Dict(NOH_N)[2], m=N ÷ 3, refined=true, subcycle=fal
     end
     return (x=xs, rho=ρ, completed=completed(solver, NOH_T),
             report=state_report(solver, states), steps=solver.step,
-            mass=volume_integral(solver, states, :rho),
-            conserved_mass=CL._conserved_budget(solver, states).total_mass)
+            mass=volume_integral(solver, states, :rho))
 end
 
 "The exact Noh mass ∫ρ r dr over [0, R] at time t, cylindrical, per radian."
