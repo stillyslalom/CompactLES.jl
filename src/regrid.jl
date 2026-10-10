@@ -1239,7 +1239,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         # partition; a repartition by volume would undo theirs.
         spec.rebalance > 0 ||
             ((owners, np_new) = _balanced_owners(wanted, active, root_lc.size,
-                                                 owners, np_new))
+                                                 owners, np_new,
+                                                 [haskey(old_of, r) for r in wanted]))
     else
         weights = _measured_weights(wanted, active, old_regions, lev.owners, busy)
         owners, np_new = _tile_owners(wanted, active, root_lc.size; weights)
@@ -1588,7 +1589,9 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     fit = [last(o) < parent_np for o in old_owners]
     owners, np_new = _place_tiles(wanted, active, parent_np, old_regions[fit],
                                   old_owners[fit])
-    owners, np_new = _balanced_owners(wanted, active, parent_np, owners, np_new)
+    survived = Set(old_regions[fit])
+    owners, np_new = _balanced_owners(wanted, active, parent_np, owners, np_new,
+                                      [r in survived for r in wanted])
     old_index = [something(findfirst(==(r), old_regions), 0) for r in wanted]
     kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
             for ti in eachindex(wanted)]

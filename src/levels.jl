@@ -534,12 +534,49 @@ function _knapsack_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
     return owners, np
 end
 
+# The ranks of a whole-tile partition `fresh` renumbered to keep surviving
+# tiles where they are: the knapsack's ranks are interchangeable, so each of
+# its rank sets goes to the rank already holding the largest volume of its
+# surviving tiles under `owners` (`survived` marks them), greedily from the
+# largest such volume, and the sets holding no survivor take the ranks left
+# in order. Every rank's load is unchanged, and fewer tiles move.
+function _keep_survivors(fresh::Vector{UnitRange{Int}}, regions::Vector{BlockRegion},
+                         active::NTuple{3,Bool}, np::Int,
+                         owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool})
+    held = zeros(np, np)     # [fresh rank, current rank] surviving volume
+    for t in eachindex(regions)
+        survived[t] || continue
+        for r in owners[t]
+            held[first(fresh[t]) + 1, r + 1] +=
+                _tile_volume(regions[t], active) / length(owners[t])
+        end
+    end
+    pairs = [(a, b) for a in 1:np, b in 1:np if held[a, b] > 0]
+    sort!(pairs; by=((a, b),) -> (-held[a, b], a, b))
+    to = zeros(Int, np)
+    taken = falses(np)
+    for (a, b) in pairs
+        (to[a] == 0 && !taken[b]) || continue
+        to[a] = b
+        taken[b] = true
+    end
+    rest = [b for b in 1:np if !taken[b]]
+    for a in 1:np
+        to[a] == 0 && (to[a] = popfirst!(rest))
+    end
+    return [(to[first(rg) + 1] - 1):(to[first(rg) + 1] - 1) for rg in fresh]
+end
+
 # A level's partition from scratch by fine volume: whole tiles by
-# `_knapsack_owners` when the tiles outnumber the ranks, each tile on a rank
-# range of its own by `_tile_owners` otherwise.
-_fresh_partition(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int) =
-    length(regions) > np ? _knapsack_owners(regions, active, np) :
-                           _tile_owners(regions, active, np)
+# `_knapsack_owners` when the tiles outnumber the ranks, its ranks numbered
+# to keep the survivors of `owners` in place, and each tile on a rank range
+# of its own by `_tile_owners` otherwise.
+function _fresh_partition(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int,
+                          owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool})
+    length(regions) > np || return _tile_owners(regions, active, np)
+    fresh, np_fresh = _knapsack_owners(regions, active, np)
+    return _keep_survivors(fresh, regions, active, np, owners, survived), np_fresh
+end
 
 # The gain in the most loaded rank's fine volume, stored placement over a
 # fresh partition, at which a regrid adopts the fresh partition
@@ -555,7 +592,7 @@ _fresh_partition(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int) 
 const PLACEMENT_GAIN = 1.1
 
 """
-    _balanced_owners(regions, active, np, owners, np_level) -> (owners, np_level)
+    _balanced_owners(regions, active, np, owners, np_level, survived) -> (owners, np_level)
 
 The placement `owners` (from `_place_tiles`) unless the level's most loaded
 rank carries more than `PLACEMENT_GAIN` times the fine volume it would under
@@ -565,12 +602,15 @@ mean, so a level whose tiles cannot be spread evenly (fewer tiles than ranks
 at the scheme minimum, or a few tiles per rank) is not repartitioned at
 every regrid for an imbalance no partition removes. Depends on the reduced
 tile set and the stored owners alone, so every rank takes the same decision
-without a measurement.
+without a measurement. `survived` marks the tiles whose region and owners
+survive from the last layout, which a whole-tile partition keeps in place
+where its loads allow.
 """
 function _balanced_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
-                          np::Int, owners::Vector{UnitRange{Int}}, np_level::Int)
+                          np::Int, owners::Vector{UnitRange{Int}}, np_level::Int,
+                          survived::AbstractVector{Bool}=falses(length(regions)))
     isempty(regions) && return owners, np_level
-    fresh, np_fresh = _fresh_partition(regions, active, np)
+    fresh, np_fresh = _fresh_partition(regions, active, np, owners, survived)
     _peak_load(regions, active, owners, np) >
         PLACEMENT_GAIN * _peak_load(regions, active, fresh, np) &&
         return fresh, np_fresh

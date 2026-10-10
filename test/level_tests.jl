@@ -475,6 +475,10 @@ end
           ([0:0, 0:0, 0:0, 1:1, 1:1], 2)
     @test CL._balanced_owners(five, act, 2, [0:0, 1:1, 1:1, 1:1, 1:1], 2) ==
           CL._knapsack_owners(five, act, 2)
+    # The same repartition with every tile a survivor: the knapsack's rank
+    # holding t1, t4 and t5 becomes rank 1, which holds the most of them.
+    @test CL._balanced_owners(five, act, 2, [1:1, 1:1, 1:1, 1:1, 0:0], 2, trues(5)) ==
+          ([1:1, 0:0, 0:0, 1:1, 1:1], 2)
     # Unequal tiles: a 49-node tile and two 25-node ones split 49 : 50.
     big = BlockRegion((0, 0, 0), (17, 1, 1))
     @test CL._knapsack_owners([t(1), big, t(3)], act, 2) == ([1:1, 0:0, 1:1], 2)
