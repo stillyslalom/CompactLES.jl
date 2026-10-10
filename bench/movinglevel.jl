@@ -10,10 +10,10 @@
 # and, under `mask=both`, the two refined runs again with the parent's filter
 # pass taking the residual of the covered nodes as well
 # (`CompactLES.MASK_CHILD_RESIDUAL[] = false`, suffix `-plain`). The refined
-# runs take the parent's derivative mask, which the package leaves off
+# runs take the parent's derivative mask, the package default
 # (`CompactLES.MASK_CHILD_DERIVATIVE[]`), and under `derivative_mask=both`
 # run again with the plain derivatives (suffix `-plainD`); `derivative_mask=off`
-# gives the package default alone.
+# gives the plain derivatives alone.
 #
 #   bubble  the Advected bubbles tutorial reduced to one helium bubble in a
 #           periodic box of `bubble_n`² root nodes 10 mm apart, the edge width
@@ -243,7 +243,7 @@ function main()
             end
         end
         CL.MASK_CHILD_RESIDUAL[] = true
-        CL.MASK_CHILD_DERIVATIVE[] = false
+        CL.MASK_CHILD_DERIVATIVE[] = true
     end
 end
 

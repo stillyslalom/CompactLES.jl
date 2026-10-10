@@ -5689,8 +5689,9 @@ reaches the face.
 **A moving converging shock.** The shock problem of `bench/movinglevel.jl`
 (256 root nodes, a subcycled box placed by the density sensor four root
 nodes ahead of the shock) keeps the shock inside the box's inner face and
-within `GATE_REACH` of it, so the junction is corrected in nearly every
-step, and its correction lands in the gas at rest ahead of the shock. The
+within `GATE_REACH` of it, so a gate testing the covered nodes corrects the
+junction in nearly every step, and its correction lands in the gas at rest
+ahead of the shock. The
 level's largest |ρ − 1| beyond 0.02 inside the front (fine grid 2.91e-4),
 with variants of the gate, and the Sod and Noh rows above:
 
@@ -5698,17 +5699,18 @@ with variants of the gate, and the Sod and Noh rows above:
 |---|---|---|---|---|
 | none (`REFLUX[] = false`) | off | 1.08e-2 | 9.1e-5 | −1.18e-3 |
 | none | on | 3.38e-4 | 7.5e-4 | |
-| parent nodes either side of the face (default) | off | 1.92e-2 | 6.7e-8 | −3.65e-7 |
+| parent nodes either side of the face | off | 1.92e-2 | 6.7e-8 | −3.65e-7 |
 | the same | on | 3.56e-3 | 8.9e-7 | |
 | covered nodes only | on | 3.56e-3 | | |
 | uncovered nodes only | off | 2.61e-2 | 2.1e-6 | +4.92e-6 |
-| uncovered nodes only | on | 3.05e-4 | 6.8e-6 | |
+| uncovered nodes only (default) | on | 3.05e-4 | 6.8e-6 | |
 | either side within 2 nodes | on | 4.80e-3 | | |
-| default, correction on the face node | on | 3.00e-3 | | |
+| either side, correction on the face node | on | 3.00e-3 | | |
 
-The gate fires on the restricted shock the covered nodes hold. Testing only
-the uncovered nodes brings the masked level to 1.05 times the fine grid's,
-where the default leaves it at 12, and loosens the Sod and Noh conservation
+Tested either side of the face, the gate fires on the restricted shock the
+covered nodes hold. Testing only the uncovered nodes, the default, brings
+the masked level to 1.05 times the fine grid's, where testing either side
+leaves it at 12, and loosens the Sod and Noh conservation
 by one to two orders, still two orders below the uncorrected coupling's.
 
 **Rejected placements.** A correction added to the parent's face node, which
@@ -7218,12 +7220,12 @@ ahead of the shock (|ρ − 1| more than 0.02 and more than 0.05 inside the shoc
 radius, over 0.02 < R < 0.3), over composite nodes at the end (bubble) or over
 every step (shock). `-plain` filters the parent's covered nodes as well
 (`MASK_CHILD_RESIDUAL[] = false`). The refined runs take the parent's
-derivative mask, which the package leaves off (`MASK_CHILD_DERIVATIVE[] =
-true`), and `-plainD` the plain derivatives (`derivative_mask=both`). The
+derivative mask, the package default (`MASK_CHILD_DERIVATIVE[]`), and
+`-plainD` the plain derivatives (`derivative_mask=both`). The
 shock runs accept the state at the axis near t_c, which can carry a negative
 internal energy at a few nodes (`validity = :permissive`). Single runs
 under the overwritten-node CFL ceiling and the conservative coarse-fine
-coupling (2.4 minutes for both problems); the masses are in the conserved
+coupling with its gate testing either side of the face (2.4 minutes for both problems); the masses are in the conserved
 quadrature.
 
 | bubble | away, root | away, level | He mass | layout changes |
@@ -7258,7 +7260,8 @@ beyond 0.05) times it with neither mask, and 8 and 140 times it with both
 (12 times it beyond 0.02). The coarse-fine correction raises the moving
 shock's: with the correction off (`REFLUX[] = false`) the rows read 3.38e-4
 (moving, beyond 0.02, 1.16 times the fine grid's) and 1.08e-2 (moving-plainD),
-and how the correction does it is under
+and with the default gate, which tests the uncovered nodes alone, the moving
+row reads 3.05e-4, 1.05 times; how the correction does it is under
 [bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling).
 The mass change of the plain bubble run, +1.0e-4, is +1.3e-4 in the steps
 that changed the layout. With the derivative mask the shock's root takes 12

@@ -479,30 +479,6 @@ promotion.
   cases at N = 36 to 144 unfiltered; the unfiltered interface rows of
   `test/convergence.jl` unchanged or better.
 
-- [ ] **A18 — Remove the disturbances a moving refined level leaves behind.**
-  The parent's filter pass leaves out the residual of a restricted feature
-  it cannot resolve (commit `04d3cff`), which brought the Advected bubbles
-  tutorial's disturbance to 1 to 10 times the uniform fine grid's. A
-  converging shock's level still carries 37 times the fine grid's ahead of
-  the front. The cause is the parent's compact gradients and divergences
-  carrying the restricted shock's tail to the nodes beside a coarse-fine
-  face; the regrid fill only moves it inward with the level. Dropping their
-  source at those nodes (`MASK_CHILD_DERIVATIVE`) brings the level to 1.16
-  times the fine grid's, but a Sod shock crossing a level then drifts five
-  to twenty times as far in composite mass, so the mask is off by default
-  ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
-  With the conservative coupling (A14) the Sod crossings conserve to 1e-6
-  with the mask on, but the coupling's gate fires on the restricted shock
-  inside the level's face and its correction raises the moving level to 12
-  times the fine grid's; gating on the uncovered nodes alone gives 1.05 times
-  at 1e-6 to 1e-5 conservation
-  ([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
-  Remaining: choose the gate and the mask's default, which costs 40% of a
-  step while armed.
-  **Gate:** on the shock configuration, the level's |ρ − 1| more than 0.02
-  inside the front within a small factor of the uniform fine grid's, with
-  the two-level Sod drifts of `test/level_tests.jl` inside their guards.
-
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   `bench/amrwin.jl` times warm root-only, box, tiled and uniform-fine runs
   of a planar Sod tube, three blobs in a periodic box, the converging shock
@@ -1294,6 +1270,11 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [x] **A15** — `CompositeBC` divides a face among member conditions by a
   coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
   on it (commit `9574aea`).
+- [x] **A18** — The parent's derivatives drop the source of a restricted
+  feature they cannot resolve, by default, and the coupling's gate tests the
+  parent's uncovered nodes alone; a level ahead of a converging shock carries
+  1.05 times the uniform fine grid's disturbance, and the two-level Sod
+  crossings conserve mass to 1e-5 (commit pending).
 
 ### Scale, devices and I/O
 

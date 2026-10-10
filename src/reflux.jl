@@ -58,10 +58,13 @@
 # quadratures differ by order H³ per line, more beside the r-z axis, which
 # summed per line is again a first-order source (a 2-D entropy wave fell from
 # sixth order to second). A junction line is therefore corrected only in a
-# step in which the parent's density, within `GATE_REACH` nodes of the face,
-# holds a feature its spacing does not resolve (the masks' fourth-difference
-# test); smooth flow is left to the uncorrected coupling, whose drift
-# converges with the spacing. Each connected run of flagged lines on a face
+# step in which the parent's density, at an uncovered node within
+# `GATE_REACH` nodes of the face, holds a feature its spacing does not
+# resolve (the masks' fourth-difference test); smooth flow is left to the
+# uncorrected coupling, whose drift converges with the spacing. The covered
+# nodes are not tested: they hold the restricted shock the child resolves,
+# and correcting for it put the parent's error into the gas ahead of a
+# converging shock. Each connected run of flagged lines on a face
 # takes its summed correction as one change over the run, so the tangential
 # difference, which telescopes along the run, is not put on any one node.
 #
@@ -465,9 +468,10 @@ function _reflux_capture(::Type{T}, @nospecialize(solver), @nospecialize(p), ℓ
     # along r it grew without bound, where one node out it decays.
     bnode = child ? 0 : local_of(wrapd(gface - round(Int, sgn)), d)
     # The gate's nodes: the parent's within `GATE_REACH` + 2 of its face node
-    # on either side, the reach of the density test's taps, covered ones
-    # included: they hold the child's restricted solution, where a feature
-    # leaving the child is first seen. Slot s of the junction's `GATE_WIDTH`
+    # on either side. The test's centres are the uncovered ones
+    # (`_reflux_gated`), and the taps of those nearest the face reach the
+    # first two covered nodes, which hold the child's restricted solution.
+    # Slot s of the junction's `GATE_WIDTH`
     # is the node gface - GATE_REACH - 3 + s on every patch and rank, taken
     # across the seam under `wrap`.
     window = Int[]
@@ -763,14 +767,19 @@ end
 
 # A junction line is corrected in a step when the density's undivided fourth
 # difference along it exceeds `CHILD_MASK_THRESHOLD` times the density, the
-# test of the parent's filter and derivative masks, at a parent node within
-# `GATE_REACH` nodes of the face, at the step's start or its end. A feature
-# the parent spacing does not resolve, which is what the masks drop and what
-# crossing the face lost mass on, is then carried conservatively, and smooth
-# flow is left as the uncorrected coupling advances it. A feature deep inside
-# the child leaves the face to the uncorrected coupling too: on the cold
-# inflow ahead of a Noh shock the tile holds, corrections there took the
-# pre-shock density error from 2e-4 to 1e-2.
+# test of the parent's filter and derivative masks, at an uncovered parent
+# node within `GATE_REACH` nodes of the face, at the step's start or its end.
+# A feature the parent spacing does not resolve, which is what the masks drop
+# and what crossing the face lost mass on, is then carried conservatively,
+# and smooth flow is left as the uncorrected coupling advances it. The
+# covered nodes and the face node are not tested. The covered nodes hold the
+# restricted shock the child resolves: tested there, the gate corrected the
+# lines of a converging shock the level carries, and the correction put the
+# parent's error into the gas ahead of it, twelve times the uniform fine
+# grid's disturbance against 1.05 times untested. A feature deep inside the
+# child leaves the face to the uncorrected coupling for the same reason: on
+# the cold inflow ahead of a Noh shock the tile holds, corrections there took
+# the pre-shock density error from 2e-4 to 1e-2.
 const GATE_REACH = 8
 
 # The gate's nodes of a junction line: the tested ones and two either side.
@@ -805,11 +814,15 @@ end
 # Whether the gate flags a junction line, from its slots in the reduced
 # buffer at offset `o`: the summed densities at the step's start and end and
 # the count of patches holding each node, two where same-level tiles share
-# it. A node is tested where all five of its taps are held.
-function _reflux_gated(buf, o::Int)
+# it. The tested nodes are the uncovered ones beside the face, below it on
+# the child's low face (`side` 1) and above it on its high face, slot s being
+# the node s - `GATE_REACH` - 3 from the face node; a node is tested where
+# all five of its taps are held.
+function _reflux_gated(buf, o::Int, side::Int)
     W = GATE_WIDTH
     thr = CHILD_MASK_THRESHOLD[]
-    for pass in 0:1, s in 3:W-2
+    centres = side == 1 ? (3:GATE_REACH+2) : (GATE_REACH+4:W-2)
+    for pass in 0:1, s in centres
         all(t -> buf[o + 2W + s + t] > 0, -2:2) || continue
         ρ(t) = buf[o + pass * W + s + t] / buf[o + 2W + s + t]
         r0 = ρ(0)
@@ -959,7 +972,8 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     change = zeros(Float64, base[end] * n_cons)
     for (jn, jc) in enumerate(junctions)
         n1, n2 = length(jc.box[1]), length(jc.box[2])
-        flagged = BitVector([!REFLUX_GATED[] || _reflux_gated(buf, at(jn, k, n_cons + 1)) ||
+        flagged = BitVector([!REFLUX_GATED[] ||
+                             _reflux_gated(buf, at(jn, k, n_cons + 1), jc.side) ||
                              any(c -> carry[cat(jn, k, c)] != 0, 1:n_cons)
                              for k in 1:n1*n2])
         for run in _flagged_runs(flagged, n1, n2)

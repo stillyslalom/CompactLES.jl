@@ -433,10 +433,12 @@ is a jump on the parent's spacing, and the parent's compact solves spread its
 response along the line to the margin the shell is interpolated from. The
 filter pass therefore drops its residual at the covered nodes where the
 density is unresolved. The same treatment of the gradients and divergences
-removes a converging shock's precursor; without the conservative coupling
-it worsened composite conservation, and it stays opt-in
-(`MASK_CHILD_DERIVATIVE`;
-[measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+removes a converging shock's precursor and is the default
+(`MASK_CHILD_DERIVATIVE`); without the conservative coupling it worsened
+composite conservation, and the coupling's gate tests only the parent's
+uncovered nodes, since a correction for the restricted shock at the covered
+ones put the parent's error ahead of the front
+([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
 
 **Distribution of the coupling.** Data moves point to point and work
 divides over a tile's own ranks (`LevelCoupling`, `src/levels.jl`). A

@@ -50,7 +50,7 @@ function sod(; subcycle, mask, reflux)
     b0 = CL._conserved_budget(s, q)
     run!(s, q; tfinal=0.2, nmax=40000)
     b1 = CL._conserved_budget(s, q)
-    CL.MASK_CHILD_DERIVATIVE[] = false
+    CL.MASK_CHILD_DERIVATIVE[] = true
     CL.REFLUX[] = true
     return ((b1.total_mass - b0.total_mass) / b0.total_mass,
             (b1.total_energy - b0.total_energy) / b0.total_energy)

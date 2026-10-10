@@ -237,15 +237,17 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 # there. The measurements are under bench/movinglevel.jl in
 # reference/CALIBRATION_APPENDIX.md.
 #
-# The mask is off by default. The tail it removes also carries part of the
-# mass the parent's uncovered nodes exchange through a coarse-fine face, and
-# with no flux correction at the face the composite budget rests on it: a Sod
-# shock crossing a level drifted five to twenty times as far with the mask,
-# whatever the step and with the dropped source restored at the masked nodes.
+# The tail the mask removes also carries part of the mass the parent's
+# uncovered nodes exchange through a coarse-fine face: with no flux
+# correction at the face, a Sod shock crossing a level drifted five to twenty
+# times as far with the mask, whatever the step and with the dropped source
+# restored at the masked nodes. The conservative coupling (src/reflux.jl)
+# corrects the junction fluxes where the parent's uncovered nodes hold an
+# unresolved feature, and with it the masked crossings conserve mass to 1e-5.
 
-# `true` gives every parent patch the masked derivatives; off by default (see
-# above).
-const MASK_CHILD_DERIVATIVE = Ref(false)
+# `true`, the default, gives every parent patch the masked derivatives;
+# `false` gives every patch the plain ones.
+const MASK_CHILD_DERIVATIVE = Ref(true)
 
 # A node may take the mask when it and this many nodes on either side of it
 # along the line are covered over their whole cells, so the first is the
