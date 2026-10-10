@@ -123,7 +123,40 @@ end
 # No hard state enforcement; the physics enters through the RHS correction.
 enforce!(::NSCBCOutflowBC, Q, solver, d, side) = nothing
 
+# The hook forwards to a body keyed on the field storage (`PatchFields`), the
+# EOS, the metric and the condition, not on the solver type, so that its point
+# launch and plane logic are compiled once per precision and array type and not
+# again for every solver configuration that carries the condition. The line
+# solves, which depend on the plans, go through the solver's parts (see
+# `_ops_parts`) as dynamic calls, one per whole-array derivative.
 function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
+    s, patch = _ops_parts(solver)
+    eq = solver.equations
+    _nscbc_outflow!(bc, patch_fields(solver), solver.eos, solver.metric,
+                    solver.inv_r, solver.L_domain[d], eq.i_mom, eq.i_energy,
+                    eq.n_species, Q, dQ, d, side, s, patch)
+    return nothing
+end
+
+# The solver as two heap objects, the `Solver` and the `Patch` or `nothing`,
+# which cross a dynamic call without allocating where the immutable
+# `PatchSolver` wrapper would be boxed; `_ops_solver` rejoins them.
+@inline _ops_parts(s::Solver) = (s, nothing)
+@inline _ops_parts(ps::PatchSolver) = (getfield(ps, :solver), getfield(ps, :patch))
+@inline _ops_solver(s, ::Nothing) = s
+@inline _ops_solver(s, patch) = PatchSolver(s, patch)
+
+# The coordinate derivative of `f` along `d` through the solver's plans, and the
+# mass-fraction gradients `compute_rhs!` skipped: the dynamic calls of the
+# bodies below, taking only arrays, the solver's parts and a small integer.
+_ops_deriv!(out, f, s, patch, d::Int) =
+    (deriv_along!(out, f, _ops_solver(s, patch), d, 1); nothing)
+_ops_species_gradients!(s, patch) =
+    (_species_gradients!(_ops_solver(s, patch)); nothing)
+
+function _nscbc_outflow!(bc::NSCBCOutflowBC, f::PatchFields, eos, metric, inv_r,
+                         L_d, m, i_energy, n_species, Q, dQ, d::Int, side::Int,
+                         @nospecialize(s), @nospecialize(patch))
     # Run distributed solves before the boundary-plane ownership check.
     # `deriv_along!` is collective over the dimension's sub-communicator, so
     # every rank must reach it, including ranks that own none of this plane.
@@ -133,7 +166,7 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
 
     # One-sided coordinate derivative of p along d (full-field call; the
     # closure rows make the boundary values one-sided), scaled to physical.
-    deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
+    _ops_deriv!(f.tmp_a, f.p, s, patch, d)
 
     # Transverse pressure gradients for the Yoo & Im correction, only along
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
@@ -148,21 +181,20 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # reused: io.jl exposes it as the `:sensor` output field, so clobbering it
     # would make a post-step dump of the sensor show a pressure derivative.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
-    act1 = solver.decomp.active[t1]
-    act2 = solver.decomp.active[t2]
-    act1 && deriv_along!(solver.tmp_b, solver.p, solver, t1, 1)
-    act2 && deriv_along!(solver.sensor_sp, solver.p, solver, t2, 1)
+    act1 = f.decomp.active[t1]
+    act2 = f.decomp.active[t2]
+    act1 && _ops_deriv!(f.tmp_b, f.p, s, patch, t1)
+    act2 && _ops_deriv!(f.sensor_sp, f.p, s, patch, t2)
 
     # Only now may ranks that own no piece of this face drop out.
-    plane = wallplane(solver.decomp, d, side)
+    plane = wallplane(f.decomp, d, side)
     plane === nothing && return nothing
 
     T = eltype(Q)
-    Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
-    m = solver.equations.i_mom
-    ft = solver.field_tuples
+    Lref = bc.Lref > 0 ? T(bc.Lref) : L_d
+    ft = f.ft
     # The curved transverse directions of a high radial face (header).
-    curv = side == 2 ? _curved_transverse(solver.metric, d) : (false, false)
+    curv = side == 2 ? _curved_transverse(metric, d) : (false, false)
     # Scalars ride in tuples: a splatted kernel-argument tuple longer than 32
     # elements lowers through the dynamic apply and is an InvalidIRError on
     # device (measured on the first NSCBC device run). The bc carries its own
@@ -170,13 +202,13 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # converted to the state's here: an unconverted Float64 field promotes the
     # whole LODI algebra below to Float64 in a Float32 solver.
     plane_pointwise!(_nscbc_outflow_point!, Q, plane,
-                     dQ, solver.eos, solver.rho, solver.u, solver.v, solver.w,
-                     solver.p, solver.c, solver.T_ion, solver.cp_mix, ft.Y,
-                     ft.grad_u, solver.tmp_a, solver.tmp_b, solver.sensor_sp,
-                     solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
-                     solver.inv_r, (T(bc.pinf), T(bc.sigma), T(bc.beta_t)), Lref,
+                     dQ, eos, f.rho, f.u, f.v, f.w,
+                     f.p, f.c, f.T_ion, f.cp_mix, ft.Y,
+                     ft.grad_u, f.tmp_a, f.tmp_b, f.sensor_sp,
+                     f.inv_h[d], f.inv_h[t1], f.inv_h[t2],
+                     inv_r, (T(bc.pinf), T(bc.sigma), T(bc.beta_t)), Lref,
                      side == 2, (act1, act2, curv...), (d, t1, t2), m,
-                     solver.equations.i_energy, solver.equations.n_species)
+                     i_energy, n_species)
     return nothing
 end
 
@@ -435,13 +467,35 @@ end
 
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
+# As for the outflow, the hook forwards to bodies keyed on the field storage.
+# A pointwise `target` evaluates a host closure at each face point's
+# coordinates, which the solver supplies, so that path stays keyed on it.
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
+    s, patch = _ops_parts(solver)
+    f = patch_fields(solver)
+    eq = (solver.equations.i_mom, solver.equations.i_energy,
+          solver.equations.n_species)
+    skipped = _species_gradients_skipped(solver)
+    if bc.target === nothing
+        _nscbc_inflow!(bc, f, solver.eos, solver.L_domain[d], eq, skipped, Q, dQ,
+                       d, side, s, patch)
+    else
+        _nscbc_inflow_target!(bc, solver, f, eq, skipped, Q, dQ, d, side, s, patch)
+    end
+    return nothing
+end
+
+# The derivatives both inflow paths read, before either returns on a rank
+# holding none of the face: collective, so every rank runs them.
+function _nscbc_inflow_derivatives!(bc::NSCBCInflowBC, f::PatchFields, d::Int,
+                                    skipped::Bool, @nospecialize(s),
+                                    @nospecialize(patch))
     # Run these distributed solves before the boundary-plane ownership check.
     # Every rank must call them before any rank returns early; see the
     # outflow method above.
     # One-sided coordinate derivatives of p and ρ along d.
-    deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
-    deriv_along!(solver.tmp_b, solver.rho, solver, d, 1)
+    _ops_deriv!(f.tmp_a, f.p, s, patch, d)
+    _ops_deriv!(f.tmp_b, f.rho, s, patch, d)
     # Coordinate derivatives of p and ρ along the active transverse
     # dimensions, for the transverse terms, and only when those are weighted
     # at all. `beta_t` and `active` are setup constants, identical on every
@@ -458,56 +512,74 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     # first). `sensor` is not touched, for the reason given there.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
     transverse = bc.beta_t != 0
-    act1 = transverse && solver.decomp.active[t1]
-    act2 = transverse && solver.decomp.active[t2]
-    dp_t1, dr_t1 = solver.sensor_sp, solver.grad_T_ion[1]
-    dp_t2, dr_t2 = solver.grad_T_ion[2], solver.grad_T_ion[3]
+    act1 = transverse && f.decomp.active[t1]
+    act2 = transverse && f.decomp.active[t2]
+    dp_t1, dr_t1 = f.sensor_sp, f.grad_T_ion[1]
+    dp_t2, dr_t2 = f.grad_T_ion[2], f.grad_T_ion[3]
     # `compute_rhs!` skips the mass-fraction gradients where nothing else reads
     # them; these transverse terms do, so the skip is made up here, collectively.
-    _species_gradients_skipped(solver) && _species_gradients!(solver)
-    act1 && deriv_along!(dp_t1, solver.p, solver, t1, 1)
-    act1 && deriv_along!(dr_t1, solver.rho, solver, t1, 1)
-    act2 && deriv_along!(dp_t2, solver.p, solver, t2, 1)
-    act2 && deriv_along!(dr_t2, solver.rho, solver, t2, 1)
+    skipped && _ops_species_gradients!(s, patch)
+    act1 && _ops_deriv!(dp_t1, f.p, s, patch, t1)
+    act1 && _ops_deriv!(dr_t1, f.rho, s, patch, t1)
+    act2 && _ops_deriv!(dp_t2, f.p, s, patch, t2)
+    act2 && _ops_deriv!(dr_t2, f.rho, s, patch, t2)
     # A collapsed transverse dimension contributes the curvature parts of its
     # velocity gradient (zero on a Cartesian grid), read from `grad_u` alone.
-    crv1 = transverse && !solver.decomp.active[t1]
-    crv2 = transverse && !solver.decomp.active[t2]
+    crv1 = transverse && !f.decomp.active[t1]
+    crv2 = transverse && !f.decomp.active[t2]
+    return (t1, t2), (act1, act2, crv1, crv2)
+end
 
-    plane = wallplane(solver.decomp, d, side)
-    plane === nothing && return nothing
-
-    T = eltype(Q)
-    Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
-    # The bc carries its own element type, fixed by the type of `T_ion` at
-    # construction, and `Prim` targets are Float64 by definition. Both are
-    # converted to the state's type before any arithmetic: an unconverted
-    # Float64 target or relaxation rate promotes the whole LODI algebra below
-    # to Float64 in a Float32 solver.
-    #
-    # The scalars ride in tuples. With the six derivative arrays of the
-    # transverse terms, a flat argument list would pass the 32-element splat
-    # limit recorded at the outflow launch.
+# The relaxation constants and flags. The bc carries its own element type, fixed
+# by the type of `T_ion` at construction, and `Prim` targets are Float64 by
+# definition. Both are converted to the state's type before any arithmetic: an
+# unconverted Float64 target or relaxation rate promotes the whole LODI algebra
+# to Float64 in a Float32 solver. The scalars ride in tuples: with the six
+# derivative arrays of the transverse terms, a flat argument list would pass the
+# 32-element splat limit recorded at the outflow launch.
+function _nscbc_inflow_setup(bc::NSCBCInflowBC, ::Type{T}, L_d, side::Int,
+                             acts) where {T}
+    act1, act2, crv1, crv2 = acts
+    Lref = bc.Lref > 0 ? T(bc.Lref) : L_d
     coef = (T(bc.eta_u), T(bc.eta_T), T(bc.eta_t), T(bc.eta_Y), T(bc.beta_t),
             Lref)
-    flags = (side == 1, act1, act2, crv1, crv2)
+    return coef, (side == 1, act1, act2, crv1, crv2)
+end
+
+function _nscbc_inflow!(bc::NSCBCInflowBC, f::PatchFields, eos, L_d, eq,
+                        skipped::Bool, Q, dQ, d::Int, side::Int,
+                        @nospecialize(s), @nospecialize(patch))
+    (t1, t2), acts = _nscbc_inflow_derivatives!(bc, f, d, skipped, s, patch)
+    plane = wallplane(f.decomp, d, side)
+    plane === nothing && return nothing
+    T = eltype(Q)
+    coef, flags = _nscbc_inflow_setup(bc, T, L_d, side, acts)
     dts = (d, t1, t2)
-    eq = (solver.equations.i_mom, solver.equations.i_energy,
-          solver.equations.n_species)
-    if bc.target === nothing
-        # Constant targets: one launchable plane body, with the composition
-        # tuple and field collections materialized at launch.
-        ft = solver.field_tuples
-        YT = map(T, (bc.Y...,))   # splat first: `T.(bc.Y)` would allocate
-        plane_pointwise!(_nscbc_inflow_point!, Q, plane,
-                         dQ, solver.eos, solver.rho, solver.u, solver.v,
-                         solver.w, solver.p, solver.c, solver.T_ion,
-                         solver.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
-                         solver.tmp_a, solver.tmp_b, dp_t1, dr_t1, dp_t2, dr_t2,
-                         solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
-                         (map(T, bc.u), T(bc.T_ion)), YT, coef, flags, dts, eq)
-        return nothing
-    end
+    dp_t1, dr_t1 = f.sensor_sp, f.grad_T_ion[1]
+    dp_t2, dr_t2 = f.grad_T_ion[2], f.grad_T_ion[3]
+    # Constant targets: one launchable plane body, with the composition
+    # tuple and field collections materialized at launch.
+    ft = f.ft
+    YT = map(T, (bc.Y...,))   # splat first: `T.(bc.Y)` would allocate
+    plane_pointwise!(_nscbc_inflow_point!, Q, plane,
+                     dQ, eos, f.rho, f.u, f.v, f.w, f.p, f.c, f.T_ion,
+                     f.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
+                     f.tmp_a, f.tmp_b, dp_t1, dr_t1, dp_t2, dr_t2,
+                     f.inv_h[d], f.inv_h[t1], f.inv_h[t2],
+                     (map(T, bc.u), T(bc.T_ion)), YT, coef, flags, dts, eq)
+    return nothing
+end
+
+function _nscbc_inflow_target!(bc::NSCBCInflowBC, solver, f::PatchFields, eq,
+                               skipped::Bool, Q, dQ, d::Int, side::Int, s, patch)
+    (t1, t2), acts = _nscbc_inflow_derivatives!(bc, f, d, skipped, s, patch)
+    plane = wallplane(f.decomp, d, side)
+    plane === nothing && return nothing
+    T = eltype(Q)
+    coef, flags = _nscbc_inflow_setup(bc, T, solver.L_domain[d], side, acts)
+    dts = (d, t1, t2)
+    dp_t1, dr_t1 = f.sensor_sp, f.grad_T_ion[1]
+    dp_t2, dr_t2 = f.grad_T_ion[2], f.grad_T_ion[3]
     # A pointwise `target` is an arbitrary host closure; the loop stays on the
     # host, which a device-resident patch cannot serve yet. The per-point
     # algebra is the launched body's, `_nscbc_inflow_apply!`, with the
