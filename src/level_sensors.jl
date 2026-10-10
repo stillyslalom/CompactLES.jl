@@ -88,15 +88,26 @@ _sharpen_gradient(p, art::ArtificialProperties, sp::Int, d::Int) =
 # serves every species or in each `D_art[k]` under `:fickian`.
 function _sensor_arrays(p, art::ArtificialProperties, n_species::Int)
     out = empty(p.Y)
-    shared_strain = art.mu_sensor === :strain && _strain_beta(art)
-    shared_strain || push!(out, p.mu_art)
-    push!(out, p.beta_art)
-    push!(out, p.kappa_art)
-    if n_species > 1
-        _shared_species_diffusivity(art, n_species) ? push!(out, p.D_art[1]) :
-                                                      append!(out, p.D_art)
-    end
+    _foreach_sensor_array(f -> push!(out, f), p, art, n_species)
     return out
+end
+
+# `g(f)` for each array of `_sensor_arrays`, in its order, without collecting
+# them.
+@inline function _foreach_sensor_array(g::G, p, art::ArtificialProperties,
+                                       n_species::Int) where {G}
+    shared_strain = art.mu_sensor === :strain && _strain_beta(art)
+    shared_strain || g(p.mu_art)
+    g(p.beta_art)
+    g(p.kappa_art)
+    if n_species > 1
+        if _shared_species_diffusivity(art, n_species)
+            g(p.D_art[1])
+        else
+            foreach(g, p.D_art)
+        end
+    end
+    return nothing
 end
 
 _strain_beta(art::ArtificialProperties) =
@@ -113,7 +124,7 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
     if enforce
         for pi in lev.patches
             stacked || _ledger_open!(solver, states, pi)
-            apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
+            _tile_bcs!(solver, _cold(patches[pi]), states, pi)
             stacked || _ledger!(solver, states, :wall_enforce, pi)
         end
     end
@@ -127,27 +138,99 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
         end
     else
         for pi in lev.patches
-            compute_rhs!(PatchSolver(solver, patches[pi]), states[pi], dQs[pi],
-                         true, true)
+            _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, true, true)
             _ledger_faces!(solver, pi)
         end
     end
     return nothing
 end
 
-# One call of `f(ps, Q)` per evaluation unit of the level: each tile on the
-# host, each stack of tiles on a device backend (`TileStack`), as the
-# right-hand side runs.
-function _each_unit(f::F, solver::Solver, lev::Level, states) where {F}
+# One call of `f(ps, Q, arg)` per evaluation unit of the level: each tile on
+# the host, each stack of tiles on a device backend (`TileStack`), as the
+# right-hand side runs. `f` is a function, not a closure, and `arg` a value
+# already on the heap or one Julia keeps boxed (a `Bool`, a small `Int`, a
+# vector), so that the call on each tile, dynamic since `solver.patches` holds
+# patches of several types, allocates nothing: a capturing closure is boxed at
+# every such call.
+function _each_unit(f::F, solver::Solver, lev::Level, states, arg=nothing) where {F}
     patches = getfield(solver, :patches)
     if isempty(lev.stacks)
         for pi in lev.patches
-            f(PatchSolver(solver, patches[pi]), states[pi])
+            _unit_call(f, solver, _cold(patches[pi]), states, pi, arg)
         end
     else
         for st in lev.stacks
-            f(PatchSolver(solver, st.patch), _stack_state(st, states))
+            f(PatchSolver(solver, st.patch), _stack_state(st, states), arg)
         end
+    end
+    return nothing
+end
+
+# `f(ps, Q, arg)` for tile `p`, behind a barrier on its concrete type: built
+# here, the `PatchSolver` and the state wrapper are not boxed as arguments of
+# the dynamic call. Such a barrier leaves `p` undeclared and is reached through
+# `_cold`. An argument inferred as the abstract `Patch` is covered by the one
+# method, so Julia invokes its specialization on `Patch` statically, and every
+# field read of `p` in it is dynamic and boxes what it reads; a declared
+# `p::Patch` has the same effect at a dynamic call, whose specialization Julia
+# then widens to the declared type.
+_unit_call(f::F, solver, p, states, pi::Int, arg) where {F} =
+    f(PatchSolver(solver, p), states[pi], arg)
+
+# The boundary conditions and the right-hand side of tile `p`, `states[pi]`,
+# behind the same barrier.
+_tile_bcs!(solver, p, states, pi::Int) =
+    apply_bcs!(PatchSolver(solver, p), states[pi])
+_tile_rhs!(solver, p, states, dQs, pi::Int, prepared::Bool, current::Bool) =
+    compute_rhs!(PatchSolver(solver, p), states[pi], dQs[pi], prepared, current)
+
+# The fields `select(p, solver)` of each tile of `lev` this rank holds, indexed
+# by patch index and unassigned at the indices of other patches. Gathered once
+# per pass, so that the exchanges and fills read each list at its concrete
+# type.
+function _level_field_lists(solver::Solver, lev::Level, select::F) where {F}
+    patches = getfield(solver, :patches)
+    held = [select(patches[pi], solver) for pi in lev.patches]
+    lists = similar(held, length(patches))
+    for (k, pi) in enumerate(lev.patches)
+        lists[pi] = held[k]
+    end
+    return lists
+end
+
+_sensed_list(p, solver) = p.sensed_fields
+_sensor_list(p, solver) = _sensor_arrays(p, solver.art, solver.equations.n_species)
+_sharpen_list(p, solver) =
+    [_sharpen_gradient(p, solver.art, sp, d)
+     for sp in 1:(solver.equations.n_species - 1) for d in 1:3 if p.decomp.active[d]]
+
+# The units of `_level_artificial!` and `_level_sharpening_gradients!`.
+function _unit_sensed!(ps, Q, prepared::Bool)
+    compute_primitives_and_gradients!(ps, Q, prepared, true)
+    _sensed_fields!(ps)
+    return nothing
+end
+_unit_detect!(ps, Q, ::Nothing) = (_level_sensor_detect!(ps, Q); nothing)
+_unit_coefficients!(ps, Q, ::Nothing) = (_level_coefficients!(ps); nothing)
+function _unit_smooth_sensors!(ps, Q, d::Int)
+    _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f
+        smooth_along!(ps.tmp_a, f, ps, d, 1, true)
+        copy_interior!(f, ps.tmp_a, ps.decomp)
+    end
+    return nothing
+end
+function _unit_sharpen_gradients!(ps, Q, ::Nothing)
+    art = ps.art
+    for sp in 1:(ps.equations.n_species - 1)
+        _volume_fraction_gradients!(ntuple(d -> _sharpen_gradient(ps, art, sp, d), 3),
+                                    ps, sp)
+    end
+    return nothing
+end
+function _unit_smooth_gradients!(ps, Q, d::Int)
+    for f in _sharpen_list(ps, ps)
+        smooth_along!(ps.tmp_a, f, ps, d, 1, true)
+        copy_interior!(f, ps.tmp_a, ps.decomp)
     end
     return nothing
 end
@@ -172,27 +255,16 @@ solves and halo exchanges are collective over its own communicator.
 """
 function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
                             held=nothing)
-    art = solver.art
-    n_species = solver.equations.n_species
-    _each_unit(solver, lev, states) do ps, Q
-        compute_primitives_and_gradients!(ps, Q, prepared, true)
-        _sensed_fields!(ps)
-    end
-    _sync_sensor_fields!(solver, lev, p -> p.sensed_fields, art.detector !== :d8, 1:3)
-    _each_unit(solver, lev, states) do ps, Q
-        _level_sensor_detect!(ps, Q)
-    end
-    sensors(p) = _sensor_arrays(p, art, n_species)
+    _each_unit(_unit_sensed!, solver, lev, states, prepared)
+    _sync_sensor_fields!(solver, lev, _level_field_lists(solver, lev, _sensed_list),
+                         solver.art.detector !== :d8, 1:3)
+    _each_unit(_unit_detect!, solver, lev, states)
+    sensors = _level_field_lists(solver, lev, _sensor_list)
     n_global = solver.n_global
     for d in 1:3
         n_global[d] > 1 || continue
         _sync_sensor_fields!(solver, lev, sensors, false, d:d)
-        _each_unit(solver, lev, states) do ps, Q
-            for f in sensors(ps)
-                smooth_along!(ps.tmp_a, f, ps, d, 1, true)
-                copy_interior!(f, ps.tmp_a, ps.decomp)
-            end
-        end
+        _each_unit(_unit_smooth_sensors!, solver, lev, states, d)
     end
     if held !== nothing
         patches = getfield(solver, :patches)
@@ -200,9 +272,7 @@ function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
             held[pi] = _dense_copy(patches[pi].kappa_art)
         end
     end
-    _each_unit(solver, lev, states) do ps, Q
-        _level_coefficients!(ps)
-    end
+    _each_unit(_unit_coefficients!, solver, lev, states)
     return nothing
 end
 
@@ -220,29 +290,16 @@ coefficients are current. Runs after `_level_artificial!`, whose primitives it
 reads, on the same ranks at the same point.
 """
 function _level_sharpening_gradients!(solver::Solver, lev::Level, states)
-    art = solver.art
-    N = solver.equations.n_species
-    _each_unit(solver, lev, states) do ps, Q
-        for sp in 1:(N - 1)
-            _volume_fraction_gradients!(ntuple(d -> _sharpen_gradient(ps, art, sp, d), 3),
-                                        ps, sp)
-        end
-    end
-    # The active gradients of every species in one exchange per direction:
-    # at most 3(N − 1) fields, within the n_cons = N + 4 a record's buffer
-    # holds for N ≤ `SHARPEN_MAX_SPECIES`.
-    gradients(p) = [_sharpen_gradient(p, art, sp, d)
-                    for sp in 1:(N - 1) for d in 1:3 if p.decomp.active[d]]
+    _each_unit(_unit_sharpen_gradients!, solver, lev, states)
+    # The active gradients of every species in one exchange per direction
+    # (`_sharpen_list`): at most 3(N − 1) fields, within the n_cons = N + 4 a
+    # record's buffer holds for N ≤ `SHARPEN_MAX_SPECIES`.
+    gradients = _level_field_lists(solver, lev, _sharpen_list)
     n_global = solver.n_global
     for d in 1:3
         n_global[d] > 1 || continue
         _sync_sensor_fields!(solver, lev, gradients, false, d:d)
-        _each_unit(solver, lev, states) do ps, Q
-            for f in gradients(ps)
-                smooth_along!(ps.tmp_a, f, ps, d, 1, true)
-                copy_interior!(f, ps.tmp_a, ps.decomp)
-            end
-        end
+        _each_unit(_unit_smooth_gradients!, solver, lev, states, d)
     end
     return nothing
 end
@@ -402,11 +459,11 @@ end
 # --- Exchange ------------------------------------------------------------------
 
 """
-    _sync_sensor_fields!(solver, lev, fields_of, replicate, dims)
+    _sync_sensor_fields!(solver, lev, lists, replicate, dims)
 
-Fill the ghost layers along each dimension of `dims` of the fields
-`fields_of(patch)` of every tile of `lev` this rank holds: the rank halos;
-the neighbor's interior at a shared face, over the level's same-level records
+Fill the ghost layers along each dimension of `dims` of the fields `lists[i]`
+of every tile `i` of `lev` this rank holds (`_level_field_lists`): the rank
+halos; the neighbor's interior at a shared face, over the level's same-level records
 of that dimension, taken in dimension order as the state's are
 (`_sync_level_records!`); and at a coarse-fine face the tile's own edge,
 repeated when `replicate` and mirrored about the half-offset point otherwise.
@@ -414,34 +471,37 @@ Every reader of these layers is a line operator along one dimension at the
 tile's interior transverse nodes, so no edge or corner ghost is filled.
 Point-to-point over the level's communicator and collective over each tile's.
 """
-function _sync_sensor_fields!(solver, lev::Level, fields_of::F, replicate::Bool,
-                              dims) where {F}
+function _sync_sensor_fields!(solver, lev::Level, lists, replicate::Bool, dims)
     patches = getfield(solver, :patches)
     comm = lev.level_comm.comm
     t0 = time_ns()
     for d in dims
-        lev.phases[d] && _exchange_field_ghosts!(patches, fields_of, comm,
-                                                 lev.ghost_sends[d], lev.ghost_recvs[d])
+        lev.phases[d] && _exchange_field_ghosts!(lists, comm, lev.ghost_sends[d],
+                                                 lev.ghost_recvs[d])
         for pi in lev.patches
-            p = patches[pi]
-            fields = fields_of(p)
-            isempty(fields) || !p.decomp.active[d] ||
-                exchange_dim_batch!(fields, p.decomp, d)
+            _exchange_fields_along!(lists[pi], _cold(patches[pi]), d)
         end
     end
     _wait!(solver, t0)
     for pi in lev.patches
-        p = patches[pi]
-        _fill_coarse_fine!(fields_of(p), p, replicate, dims)
+        _fill_coarse_fine!(lists[pi], patches[pi], replicate, first(dims), last(dims))
     end
     return nothing
 end
 
-# The coarse-fine faces of patch `p` along `dims`, at the ranks owning them,
-# filled for every field.
-function _fill_coarse_fine!(fields, p, replicate::Bool, dims)
+# The rank halos of `fields` along `d` on patch `p`, behind a barrier on the
+# patch's type (`_unit_call`): its decomposition, read from an abstractly typed
+# patch, would be boxed.
+function _exchange_fields_along!(fields, p, d::Int)
+    isempty(fields) || !p.decomp.active[d] || exchange_dim_batch!(fields, p.decomp, d)
+    return nothing
+end
+
+# The coarse-fine faces of patch `p` along dimensions `dlo:dhi`, at the ranks
+# owning them, filled for every field.
+function _fill_coarse_fine!(fields, p, replicate::Bool, dlo::Int, dhi::Int)
     decomp = p.decomp
-    for d in dims
+    for d in dlo:dhi
         decomp.active[d] || continue
         lo = parent_fed(p.bcs[d][1])
         hi = parent_fed(p.bcs[d][2])
@@ -508,23 +568,22 @@ end
 end
 
 # The ghost refill of `_exchange_ghosts!` (patches.jl) for a list of scalar
-# fields per patch, every field of a record in one message. The record buffers
-# are sized for the conserved components, at least as many as the fields any
-# caller passes, and only their leading part is sent.
-function _exchange_field_ghosts!(patches, fields_of::F, comm::MPI.Comm, sends,
-                                 recvs) where {F}
+# fields per patch, `lists[i]` for patch `i`, every field of a record in one
+# message. The record buffers are sized for the conserved components, at least
+# as many as the fields any caller passes, and only their leading part is sent.
+function _exchange_field_ghosts!(lists, comm::MPI.Comm, sends, recvs)
     (isempty(recvs) && isempty(sends)) && return nothing
     me = MPI.Comm_rank(comm)
     reqs = MPI.Request[]
     for r in recvs
         r.partner == me && continue
-        n = length(fields_of(patches[r.patch])) * prod(length.(r.mine))
+        n = length(lists[r.patch]) * prod(length.(r.mine))
         push!(reqs, MPI.Irecv!(view(r.buf, 1:n), comm; source=r.partner, tag=r.tag))
     end
     for s in sends
-        src = fields_of(patches[s.patch])
+        src = lists[s.patch]
         if s.partner == me
-            dst = fields_of(patches[s.partner_patch])
+            dst = lists[s.partner_patch]
             for c in eachindex(src)
                 _copy_field_block!(dst[c], s.theirs, src[c], s.mine)
             end
@@ -536,7 +595,7 @@ function _exchange_field_ghosts!(patches, fields_of::F, comm::MPI.Comm, sends,
     MPI.Waitall(reqs)
     for r in recvs
         r.partner == me && continue
-        _unpack_fields!(fields_of(patches[r.patch]), r.buf, r.mine)
+        _unpack_fields!(lists[r.patch], r.buf, r.mine)
     end
     return nothing
 end

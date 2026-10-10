@@ -1587,7 +1587,7 @@ function _sync_level_records!(solver, states, lev::Level)
                           lev.ghost_recvs[d])
         d == last && break
         for pi in lev.patches
-            exchange_state!(states[pi], patches[pi].decomp)
+            _exchange_patch_state!(states, pi, _cold(patches[pi]))
         end
     end
     _wait!(solver, t0)
@@ -1610,7 +1610,7 @@ function _seed_planes!(solver, states, lev::Level, fresh::AbstractVector{Bool})
         _combine_planes!(solver, states, lev.level_comm.comm,
                          lev.plane_pairs[d], weight)
         for pi in lev.patches
-            exchange_state!(states[pi], patches[pi].decomp)
+            _exchange_patch_state!(states, pi, _cold(patches[pi]))
         end
     end
     return states
@@ -1626,7 +1626,7 @@ function _sync_level!(solver, states, lev::Level)
     _sync_level_records!(solver, states, lev)
     patches = getfield(solver, :patches)
     for pi in lev.patches
-        exchange_state!(states[pi], patches[pi].decomp)
+        _exchange_patch_state!(states, pi, _cold(patches[pi]))
     end
     return states
 end

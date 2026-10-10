@@ -1473,7 +1473,13 @@ function sync_patches!(solver, states)
         _sync_level_records!(solver, states, levels[ℓ])
     end
     for (i, patch) in enumerate(solver.patches)
-        exchange_state!(states[i], patch.decomp)
+        _exchange_patch_state!(states, i, _cold(patch))
     end
     return states
 end
+
+# The rank halos of `states[i]` on `patch`, behind a barrier on the patch's
+# concrete type (`_unit_call`): its decomposition, read from an abstractly typed
+# patch, would be boxed.
+_exchange_patch_state!(states, i::Int, patch) =
+    exchange_state!(states[i], patch.decomp)

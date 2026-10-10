@@ -273,13 +273,12 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
         _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce)
     elseif isempty(lev.stacks)
         for pi in lev.patches
-            ps = PatchSolver(solver, patches[pi])
             if enforce
                 _ledger_open!(solver, states, pi)
-                apply_bcs!(ps, states[pi])
+                _tile_bcs!(solver, _cold(patches[pi]), states, pi)
                 _ledger!(solver, states, :wall_enforce, pi)
             end
-            compute_rhs!(ps, states[pi], dQs[pi], prepared)
+            _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, prepared, false)
             _ledger_faces!(solver, pi)
         end
     else
@@ -307,8 +306,7 @@ function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
     n_cons = solver.equations.n_cons
     if isempty(lev.stacks)
         for pi in lev.patches
-            _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi], dus[pi],
-                        A, B, dt)
+            _tile_rk_update!(_cold(patches[pi]), n_cons, states, dQs, dus, pi, A, B, dt)
             _reflux_fold!(solver, patches[pi], dQs[pi], A, B, dt)
         end
         return states
@@ -320,11 +318,20 @@ function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
     return states
 end
 
+# The update and the filter of tile `p`, `states[pi]`, behind a barrier on
+# its concrete type, as `_tile_rhs!` is (`_unit_call`): the patch and the state
+# vectors are heap objects, while its decomposition and a `PatchSolver` would be
+# boxed as arguments of the dynamic call.
+_tile_rk_update!(p, n_cons::Int, states, dQs, dus, pi::Int, A, B, dt) =
+    _rk_update!(p.decomp, n_cons, states[pi], dQs[pi], dus[pi], A, B, dt)
+_tile_filter!(solver, p, states, pi::Int) =
+    filter_state!(PatchSolver(solver, p), states[pi])
+
 function _level_filter!(solver::Solver, lev::Level, states)
     patches = getfield(solver, :patches)
     if isempty(lev.stacks)
         for pi in lev.patches
-            filter_state!(PatchSolver(solver, patches[pi]), states[pi])
+            _tile_filter!(solver, _cold(patches[pi]), states, pi)
         end
         return states
     end
