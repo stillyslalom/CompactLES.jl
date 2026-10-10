@@ -135,6 +135,30 @@ if MPIPreferences.binary != "system"
             s, Q = setup(s, Q; bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per, per))
             run!(s, Q; tfinal=1e9, nmax=4)
         end
+        # What a script calls before and around `setup`, at types every script
+        # shares whatever its solver: species by name from the bundled CEA data,
+        # compositions, states, the shock and interface solutions, and the
+        # scheduled triggers, whose sort a script would otherwise compile.
+        mix = IdealMixture(["Air", "SF6"])
+        light = Prim(Y=mass_fractions(mix, "Air" => 1.0; basis=:mole), p=1e5,
+                     T_ion=300.0)
+        heavy = Prim(Y=mass_fractions(mix, "Air" => 0.25, "SF6" => 0.75; basis=:mole),
+                     p=1e5, T_ion=300.0)
+        thermodynamic_state(mix, light)
+        incident = shock_jump(mix, light, 1.2)
+        riemann_interface(mix, incident.post, heavy)
+        AtTime([2e-6, 1e-6])
+        EveryTime(1e-6)
+        # A two-gas line between walls with the artificial properties on, the
+        # most common start of a script, run under the scheduled triggers.
+        s, Q = setup(Problem(eos=mix, domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                             bcs=(walls, per, per),
+                             ic=(x, y, z) -> x < 0.5 ? incident.post : heavy),
+                     Numerics(n_global=(32, 1, 1)))
+        run!(s, Q; tfinal=1e9, nmax=2,
+             callback=(Callback(EveryTime(1e-6), (s, q) -> nothing),
+                       Callback(AtTime([1e-6, 2e-6]), (s, q) -> nothing),
+                       Callback(EveryStep(1), (s, q) -> nothing)))
         # A folded line between two face-centred symmetry planes, with the
         # artificial properties and the state filter on.
         sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
