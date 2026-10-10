@@ -341,7 +341,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                spec.interface_rhs, spec.backend,
                                                ws_pool, solver.equations.n_species,
                                                n_cons,
-                                               _shared_species_diffusivity(solver),
+                                               _grad_Q_columns(solver),
                                                1, 1, spec.tile;
                                                interface_divergence=
                                                    spec.interface_divergence,

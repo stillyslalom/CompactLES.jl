@@ -287,6 +287,21 @@ _sharpening(art::ArtificialProperties, n_species::Integer) =
     art.species_flux === :partial_density && art.C_sharpen > 0
 _sharpening(solver) = _sharpening(solver.art, solver.equations.n_species)
 
+# The columns of `grad_Q` a solver's species channel writes and reads, which
+# the workspace allocates (`_rhs_workspace`): every conserved component under
+# `:bulk` or with the sharpening flux, whose gradients follow the partial
+# densities (`_sharpening_fluxes!`); the partial densities alone under
+# `:partial_density` otherwise (`_bulk_gradients!`); none without a shared
+# diffusivity.
+function _grad_Q_columns(art::ArtificialProperties, n_species::Integer,
+                         n_cons::Integer)
+    _shared_species_diffusivity(art, n_species) || return 0
+    (art.species_flux === :bulk || _sharpening(art, n_species)) && return n_cons
+    return n_species
+end
+_grad_Q_columns(solver) =
+    _grad_Q_columns(solver.art, solver.equations.n_species, solver.equations.n_cons)
+
 # The two constants the step rate reads, a zero strength where the flux is off.
 _sharpening_constants(solver) =
     (_sharpening(solver) ? solver.art.C_sharpen : zero(solver.art.C_sharpen),

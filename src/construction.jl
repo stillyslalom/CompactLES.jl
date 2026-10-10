@@ -957,7 +957,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     ws_pool = rhs_workspace_pool(backend, T)
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
                              ring_det,
-                             _shared_species_diffusivity(art, n_species), nlev > 1)
+                             _grad_Q_columns(art, n_species, n_cons), nlev > 1)
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
@@ -1080,7 +1080,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  filt, smoo, art.smoother,
                                                  interface_rhs, backend, ws_pool,
                                                  n_species, n_cons,
-                                                 _shared_species_diffusivity(art, n_species),
+                                                 _grad_Q_columns(art, n_species, n_cons),
                                                  id0, ℓ, tile; interface_divergence,
                                                  ghost_viscous=
                                                      _ghost_viscous(interface_flux,
@@ -1226,7 +1226,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            smoother::Symbol,
                            interface_rhs::Symbol, backend::AbstractBackend,
                            ws_pool::AbstractVector,
-                           n_species::Int, n_cons::Int, bulk::Bool, id::Int,
+                           n_species::Int, n_cons::Int, grad_Q_columns::Int, id::Int,
                            level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
@@ -1244,12 +1244,12 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                         gaussian=smoother === :gaussian, folded, root_folds)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    # `ring` adds the `:d8` ringing buffer; `bulk` selects the conserved
+    # `ring` adds the `:d8` ringing buffer; `grad_Q_columns` selects the conserved
     # gradients of the shared-D_b species channels, which a refined patch
     # differences as the root does. A refined patch may be a parent itself,
     # so it takes the derivative mask's scratch as a refined root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
-                        ring, bulk, true)
+                        ring, grad_Q_columns, true)
     # A tile of a level whose artificial coefficients are computed level-wide
     # keeps the velocity gradients of that pass for its right-hand side. A
     # stacked tile has them in its own block of the stack's set already.
@@ -1508,7 +1508,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               deriv, filt, smoo, smoother::Symbol,
                               interface_rhs::Symbol, backend::AbstractBackend,
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
-                              bulk::Bool, id0::Int, level::Int, tile::Int;
+                              grad_Q_columns::Int, id0::Int, level::Int, tile::Int;
                               interface_divergence=nothing,
                               ghost_viscous::Bool=false,
                               ring::Bool=false,
@@ -1522,7 +1522,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
             push!(patches, _build_fine_patch(T, tregions[ti], active_g, h, n_halo,
                                              comm, deriv, filt, smoo, smoother,
                                              interface_rhs, backend, ws_pool,
-                                             n_species, n_cons, bulk, id0 + k,
+                                             n_species, n_cons, grad_Q_columns, id0 + k,
                                              level, faces[ti]; interface_divergence,
                                              ghost_viscous, ring,
                                              boundary=boundaries[ti], bcs,
@@ -1541,7 +1541,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         [faces[held[k]] for k in ks], members,
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
-                                        bulk, level; interface_divergence,
+                                        grad_Q_columns, level; interface_divergence,
                                         ghost_viscous, ring, boundary=key[2], bcs,
                                         smoother, root_folds, n_sensed)
         for (slot, k) in enumerate(ks)
@@ -1558,7 +1558,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
                            deriv, filt, smoo, interface_rhs::Symbol,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
-                           bulk::Bool, level::Int; interface_divergence=nothing,
+                           grad_Q_columns::Int, level::Int;
+                           interface_divergence=nothing,
                            ghost_viscous::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
@@ -1585,7 +1586,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species, n_sensed)
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
-                             ring, bulk; active=decomp1.active)
+                             ring, grad_Q_columns; active=decomp1.active)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
     gflux_span = _ghost_flux_arrays(
         () -> StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
@@ -1772,7 +1773,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         # the bulk channel's conserved gradients go through the same
         # interface plans as `grad_Y`.
         ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, ring_det,
-                            _shared_species_diffusivity(art, n_species))
+                            _grad_Q_columns(art, n_species, n_cons))
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, rplans,
               empty3, empty3,

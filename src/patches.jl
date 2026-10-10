@@ -201,24 +201,25 @@ RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
                  Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED), ChildMaskRecord())
 
 """
-    RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk, child = false)
+    RHSWorkspace(backend, decomp, n_species, n_cons, ring, grad_Q_columns, child = false)
 
 Allocate one scratch set on `backend` for a patch decomposed as `decomp`.
 `ring` selects the `detector = :d8` ringing buffer, which is a zero-extent
-placeholder under the default `:delta4`; `bulk` selects the `grad_Q`
-gradients of the conserved components, `grad_Q[d, c]`, which the species
-channels with one shared diffusivity (`species_flux = :partial_density` and
-`:bulk`) difference into their fluxes and which is a 0 × 0 matrix of the
+placeholder under the default `:delta4`; a positive `grad_Q_columns` selects
+the `grad_Q` gradients of the conserved components, `grad_Q[d, c]`, which the
+species channels with one shared diffusivity (`species_flux =
+:partial_density` and `:bulk`) difference into their fluxes, the first
+`grad_Q_columns` of them (`_grad_Q_columns`); it is a 0 × 0 matrix of the
 same array type otherwise, so the types do not depend on the option. `child`
 selects the two arrays of the parent-level derivative mask, which a solver
 with more than one level allocates (`_mask_child_derivative!`).
 """
 function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
                       n_species::Int, n_cons::Int, ring::Bool,
-                      bulk::Bool, child::Bool=false) where {T}
+                      grad_Q_columns::Int, child::Bool=false) where {T}
     f() = field(backend, decomp)
     return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring,
-                          bulk, child; active=decomp.active)
+                          grad_Q_columns, child; active=decomp.active)
 end
 
 # The set from an allocator `f()` and the zero-extent placeholder `empty` of
@@ -234,19 +235,23 @@ end
 # extent check see the shape they expect) at the cost of one field instead of
 # 2 n_cons + n_species on a planar or r-z run. The positivity limiter, which
 # borrows flux rows as scratch, takes arrays of its own for a collapsed row
-# (`_limiter_flux_rows`).
+# (`_limiter_flux_rows`). The columns of `grad_Q` past `grad_Q_columns`,
+# which the channel leaves alone, share the same array.
 function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
-                        ring::Bool, bulk::Bool, child::Bool=false;
+                        ring::Bool, grad_Q_columns::Int, child::Bool=false;
                         active::NTuple{3,Bool}=(true, true, true)) where {F}
-    sink = all(active) ? empty : f()
+    bulk = grad_Q_columns > 0
+    shared = !all(active) || (bulk && grad_Q_columns < n_cons)
+    sink = shared ? f() : empty
     g(d) = active[d] ? f() : sink
+    gq(d, c) = c <= grad_Q_columns ? g(d) : sink
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
                         (f(), f(), f()),
                         [g(d) for d in 1:3, _ in 1:n_species],
                         f(), f(), f(), f(), f(),
                         ring ? f() : empty,
                         [g(d) for d in 1:3, _ in 1:n_cons],
-                        bulk ? [g(d) for d in 1:3, _ in 1:n_cons] :
+                        bulk ? [gq(d, c) for d in 1:3, c in 1:n_cons] :
                                Matrix{typeof(empty)}(undef, 0, 0),
                         child ? f() : empty, child ? f() : empty)
 end
@@ -271,7 +276,8 @@ rhs_workspace_pool(backend::AbstractBackend, ::Type{T}) where {T} =
     RHSWorkspace{T,typeof(empty_field(backend, T))}[]
 
 """
-    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring, bulk, child = false)
+    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring, grad_Q_columns,
+                   child = false)
 
 The [`RHSWorkspace`](@ref) serving a patch decomposed as `decomp`: an existing
 set of `pool` whose arrays already carry the padded extent this patch needs,
@@ -286,14 +292,15 @@ size.
 """
 function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
                         decomp::Decomp{T}, n_species::Int, n_cons::Int,
-                        ring::Bool, bulk::Bool, child::Bool=false) where {T}
+                        ring::Bool, grad_Q_columns::Int, child::Bool=false) where {T}
     n = ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
     for w in pool
         size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) &&
-            (!isempty(w.grad_Q) == bulk) && (!isempty(w.child_mask) == child) &&
+            (!isempty(w.grad_Q) == (grad_Q_columns > 0)) &&
+            (!isempty(w.child_mask) == child) &&
             return w
     end
-    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk, child)
+    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, grad_Q_columns, child)
     push!(pool, w)
     return w
 end
