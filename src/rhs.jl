@@ -360,12 +360,10 @@ function _arm_child_mask!(ps::PatchSolver)
     record = _child_mask_record(ps)
     record.patch = ps.patch.covered
     record.lines = lines
-    # MPI is initialized `:funneled`, so only the main thread may call it, and
-    # a tile evaluated in a task (`_foreach_tile`) may run on another. Such a
-    # tile is held whole by one rank, whose reduction is its own bits, so the
-    # call is left out there and made everywhere else.
-    (prod(ps.decomp.dims) == 1 && Threads.threadid() != 1) ||
-        (bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm))
+    # A patch held whole by one rank reduces over itself, so the reduction is
+    # left out there: it is the identity, and MPI, initialized `:funneled`,
+    # may not be called from the task a tile is evaluated in (`_foreach_tile`).
+    prod(ps.decomp.dims) == 1 || (bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm))
     ps.patch.child_masked = ntuple(d -> isodd(bits >> (d - 1)), 3)
     return ps
 end
@@ -1790,7 +1788,9 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
     n_cons = solver.equations.n_cons
     # The same-level records: the root's are the solver's (a slab layout,
     # so they run along one dimension), a refined level's its own per
-    # dimension.
+    # dimension. Counted as waiting, as the state's record exchange is
+    # (`_sync_level_records!`).
+    t0 = time_ns()
     for d in 1:3
         records = lev.index == 0 ? (solver.ghost_sends, solver.ghost_recvs) :
                   (lev.ghost_sends[d], lev.ghost_recvs[d])
@@ -1802,6 +1802,7 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
         fields = [ConservedState(p.ghost_flux[d]) for p in patches]
         _exchange_ghosts!(solver, fields, comm, records...)
     end
+    _wait!(solver, t0)
     lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, lev,
                                     states)
     # The solves run as the right-hand sides did: per patch, or per stack.
