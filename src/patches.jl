@@ -332,9 +332,22 @@ are evaluated concurrently instead (`_tile_groups`); one otherwise. A set
 costs a few dozen fields of the tile's padded extent, which is under
 `THREAD_MIN_WORK` points wherever more than one is made.
 """
-_workspace_slots(backend::AbstractBackend, decomp::Decomp) =
-    backend isa CPUBackend && Threads.nthreads() > 1 && prod(decomp.dims) == 1 &&
-    prod(decomp.n_local) < THREAD_MIN_WORK[] ? Threads.nthreads() : 1
+function _workspace_slots(backend::AbstractBackend, decomp::Decomp)
+    (backend isa CPUBackend && prod(decomp.dims) == 1) || return 1
+    TILE_SLOTS[] > 0 && return TILE_SLOTS[]
+    return Threads.nthreads() > 1 && prod(decomp.n_local) < THREAD_MIN_WORK[] ?
+           Threads.nthreads() : 1
+end
+
+"""
+Test and benchmark toggle: a positive value spreads the tiles of one extent
+held whole on host storage over that many [`RHSWorkspace`](@ref) sets and
+evaluates a level's tiles as concurrent tasks (`_tile_groups`) whatever their
+size and the session's thread count, so that one thread exercises the
+concurrent path; 0, the default, takes the rule of `_workspace_slots`. Read
+when the tiles are built and at every concurrent phase.
+"""
+const TILE_SLOTS = Ref(0)
 
 """
     RefluxCapture

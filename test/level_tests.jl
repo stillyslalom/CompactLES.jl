@@ -1109,10 +1109,17 @@ end
     # are equal by construction, hold one set between them. Nothing else in the
     # gate moves if the pooling silently stops. The velocity gradients are the
     # exception on a level that computes its artificial coefficients
-    # level-wide, as this one does: each tile holds its own.
+    # level-wide, as this one does: each tile holds its own. One set per
+    # extent is the layout of tiles evaluated one after another, which a
+    # session of one thread takes; `TILE_SLOTS` holds it at any thread count.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    CL.TILE_SLOTS[] = 1
+    solver = try
+        Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+               refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    finally
+        CL.TILE_SLOTS[] = 0
+    end
     padded(p) = ntuple(d -> p.decomp.n_local[d] + 2 * p.decomp.n_halo_d[d], 3)
     extents = unique(padded(p) for p in solver.patches)
     sets = unique(objectid(p.rhs_workspace.tmp_a) for p in solver.patches)
@@ -1152,8 +1159,18 @@ end
     initial(x, y, z) =
         Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0), p=1.0)
     gradient_names = (:divergence, :qcriterion, :vorticity_magnitude)
-    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    # The tiles share one workspace as a session of one thread lays them out
+    # (`TILE_SLOTS`, see the testset above).
+    CL.TILE_SLOTS[] = 1
+    solver, plain = try
+        Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+               refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6),
+        Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+               refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
+               art=ArtificialProperties(enabled=false))
+    finally
+        CL.TILE_SLOTS[] = 0
+    end
     states = allocate_state(solver)
     initialize!(solver, states, initial)
     run!(solver, states; tfinal=1.0, nmax=1)
@@ -1175,9 +1192,6 @@ end
         @test CL.scalar_field(ps_first, name) isa AbstractArray
         @test CL.scalar_field(ps_last, name) isa AbstractArray
     end
-    plain = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                   refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
-                   art=ArtificialProperties(enabled=false))
     plain_states = allocate_state(plain)
     initialize!(plain, plain_states, initial)
     run!(plain, plain_states; tfinal=1.0, nmax=1)
@@ -1214,6 +1228,48 @@ end
         e
     end
     @test occursin("right-hand-side scratch", sprint(showerror, err))
+end
+
+@testset "tiled level: concurrent tiles take the arithmetic of sequential ones" begin
+    # Tiles spread over several workspace sets and evaluated as tasks
+    # (`_foreach_tile`) give the state of tiles evaluated in level order on one
+    # set, bit for bit: with and without subcycling, through the level-wide
+    # artificial-property pass, the coarse-fine junction captures, each tile
+    # holding its own deferral, and the shell impositions.
+    # `TILE_SLOTS` forces the concurrent path at any thread count; on one
+    # thread the tasks run one after another in another order than the level's.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    initial(x, y, z) =
+        Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0),
+             p=1.0 + 0.1exp(-4((x - π)^2 + (y - π)^2)))
+    function evolve(slots, subcycle)
+        CL.TILE_SLOTS[] = slots
+        try
+            s = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                       refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
+                       subcycle=subcycle)
+            q = allocate_state(s)
+            initialize!(s, q, initial)
+            run!(s, q; tfinal=1.0, nmax=3)
+            sets = length(unique(objectid(p.rhs_workspace.tmp_a)
+                                 for p in s.patches[2:end]))
+            # The interiors: a halo may hold values no pass reads.
+            inner(p, x) = parent(x)[ntuple(d -> p.decomp.n_halo_d[d] .+
+                                              (1:p.decomp.n_local[d]), 3)..., :]
+            return [inner(p, x) for (p, x) in zip(s.patches, q)], s, sets
+        finally
+            CL.TILE_SLOTS[] = 0
+        end
+    end
+    for subcycle in (false, true)
+        serial, s1, sets1 = evolve(1, subcycle)
+        tasks, s3, sets3 = evolve(3, subcycle)
+        @test sets1 == 1 && sets3 == 3
+        @test any(p -> !isempty(p.reflux_captures), s3.patches[2:end])
+        @test length(serial) == length(tasks)
+        @test all(a == b for (a, b) in zip(serial, tasks))
+        @test s1.t == s3.t
+    end
 end
 
 @testset "tiled level: artificial coefficients across shared faces" begin

@@ -245,9 +245,9 @@ end
 #
 # A tile of a refined level is small: a lattice cell of 12 parent nodes holds
 # 37 fine nodes a side, 1369 points in two dimensions, so every threaded region
-# inside its evaluation is below THREAD_MIN_WORK and runs serially, and with
-# the tiles advanced one after another a tiled level ran no faster at eight
-# threads than at one. Between the level's exchanges the tiles are independent:
+# inside its evaluation is below THREAD_MIN_WORK and runs serially, and a level
+# whose tiles are advanced one after another runs no faster at eight threads
+# than at one. Between the level's exchanges the tiles are independent:
 # each phase of a tile reads its own state, ghost layers and coefficients and
 # writes its own. Such a phase therefore runs the tiles concurrently, one task
 # per scratch set: the tiles sharing an `RHSWorkspace` run in level order in
@@ -270,8 +270,8 @@ end
 # The groups of `lev`'s tiles that may run concurrently, each a list of patch
 # indices in level order, or `nothing` where the level runs tile by tile.
 function _tile_groups(@nospecialize(solver::Solver), lev::Level)
-    (Threads.nthreads() > 1 && length(lev.patches) > 1 && isempty(lev.stacks)) ||
-        return nothing
+    (Threads.nthreads() > 1 || TILE_SLOTS[] > 0) || return nothing
+    (length(lev.patches) > 1 && isempty(lev.stacks)) || return nothing
     (BUDGET_LEDGER.on || transport_has_domain(solver.transport)) && return nothing
     patches = getfield(solver, :patches)
     groups = Vector{Int}[]
@@ -294,7 +294,7 @@ end
 function _tile_concurrent(@nospecialize(p::Patch))
     _cpu_storage(p.rho) && prod(p.decomp.dims) == 1 || return false
     # A larger tile threads inside its own evaluation instead.
-    prod(p.decomp.n_local) < THREAD_MIN_WORK[] || return false
+    TILE_SLOTS[] > 0 || prod(p.decomp.n_local) < THREAD_MIN_WORK[] || return false
     any(f -> f !== nothing && f.pair !== nothing, p.folds) && return false
     return !any(bc -> bc[1] isa CompositeBC || bc[2] isa CompositeBC, p.bcs)
 end
