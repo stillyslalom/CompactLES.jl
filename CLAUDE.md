@@ -71,11 +71,15 @@ before anything runs. Precompiling the package takes about a minute and a
 half, most of it the workload in `src/precompile.jl`, which runs the test
 suites' solver configurations at np = 1 under a singleton `MPI.Init` so that
 a test rank compiles a quarter of what it otherwise would; it is skipped
-under a system MPI. Its device block is behind the `precompile_device`
-preference and off by default, since only `test/device_tests.jl` and the MPI
-suite's device phases execute that path; turn it on before running either
-locally, as CI does, or they compile it themselves (`PRECOMPILE_DEVICE` in
-that file has the call). Julia 1.11+ keys the cache on content, so `touch`
+under a system MPI. Two of its blocks sit behind preferences that are off
+by default: the device block behind `precompile_device`, since only
+`test/device_tests.jl` and the MPI suite's device phases execute that path,
+and the Float32 block behind `precompile_float32`, since every process that
+loads the image reads that block and only the suites' Float32 testsets and
+phases use it. Turn both on before running the serial or MPI suite locally,
+as CI does, or those suites compile the trees themselves
+(`PRECOMPILE_DEVICE` and `PRECOMPILE_FLOAT32` in that file have the call).
+Julia 1.11+ keys the cache on content, so `touch`
 does not rebuild it; force one with
 `Base.compilecache(Base.identify_package("CompactLES"))`, though a changed
 preference rebuilds on its own. `bench/tgv_energy.jl` is the intended first production workload

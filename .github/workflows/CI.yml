@@ -34,14 +34,14 @@ jobs:
           version: ${{ matrix.version }}
           arch: x64
       - uses: julia-actions/cache@v3
-      # The device testsets and the MPI device phases run here, so the
-      # workload's device block earns its precompile cost in this job and
-      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Neither
-      # this step nor buildpkg precompiles: an image Pkg.instantiate built
-      # here would predate the preference and be rebuilt by the first `using`
-      # (measured 330 s of every job), and the serial suite builds its own at
-      # -O1 with bounds checks in any case.
-      - name: Set the device precompile preference
+      # The device testsets and the Float32 testsets run here, so the
+      # workload's device and Float32 blocks earn their precompile cost in
+      # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
+      # src/precompile.jl. Neither this step nor buildpkg precompiles: an
+      # image Pkg.instantiate built here would predate the preferences and be
+      # rebuilt by the first `using` (measured 330 s of every job), and the
+      # serial suite builds its own at -O1 with bounds checks in any case.
+      - name: Set the precompile preferences
         shell: julia --project=. --color=yes {0}
         env:
           JULIA_PKG_PRECOMPILE_AUTO: "0"
@@ -51,7 +51,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true; force=true)
+              "precompile_device" => true, "precompile_float32" => true;
+              force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # At -O1: the serial suite is compile-bound, and -O1 reuses the -O2
       # image buildpkg made (see test/runtests.jl). julia-runtest has no
@@ -86,14 +87,15 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
-      # The device testsets and the MPI device phases run here, so the
-      # workload's device block earns its precompile cost in this job and
-      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Neither
-      # this step nor buildpkg precompiles: an image Pkg.instantiate built
-      # here would predate the preference and be rebuilt by the first `using`
-      # (measured 330 s of every job). The first `using CompactLES`, in
-      # convergence.jl, builds the image every later process loads.
-      - name: Set the device precompile preference
+      # The MPI suite's device phases and Float32 phases run here, so the
+      # workload's device and Float32 blocks earn their precompile cost in
+      # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
+      # src/precompile.jl. Neither this step nor buildpkg precompiles: an
+      # image Pkg.instantiate built here would predate the preferences and be
+      # rebuilt by the first `using` (measured 330 s of every job). The first
+      # `using CompactLES`, in convergence.jl, builds the image every later
+      # process loads.
+      - name: Set the precompile preferences
         shell: julia --project=. --color=yes {0}
         env:
           JULIA_PKG_PRECOMPILE_AUTO: "0"
@@ -103,7 +105,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true; force=true)
+              "precompile_device" => true, "precompile_float32" => true;
+              force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # Whether the restored depot holds a loadable image of this source, with
       # the CPU name and the loader's reason for each CompactLES image it
@@ -162,10 +165,10 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
-      # As in the numerics job: the MPI device phases run here, and neither
-      # this step nor buildpkg precompiles, so that the one image build
-      # happens after the preference is set.
-      - name: Set the device precompile preference
+      # As in the numerics job: the MPI device and Float32 phases run here,
+      # and neither this step nor buildpkg precompiles, so that the one image
+      # build happens after the preferences are set.
+      - name: Set the precompile preferences
         shell: julia --project=. --color=yes {0}
         env:
           JULIA_PKG_PRECOMPILE_AUTO: "0"
@@ -175,7 +178,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true; force=true)
+              "precompile_device" => true, "precompile_float32" => true;
+              force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # As in the numerics job, for comparison with it.
       - name: Report the restored package image

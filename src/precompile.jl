@@ -64,6 +64,29 @@ image; nothing needs to be forced by hand.
 """
 const PRECOMPILE_DEVICE = @load_preference("precompile_device", false)
 
+"""
+Whether the workload covers single precision: a `Float32` solver on a periodic
+box and on a refined line, each advanced through `run!`. A second element type
+compiles a second copy of the tree beneath `step!`, and every process that
+loads the package reads that copy from the image whether or not it runs in
+`Float32`. Off by default. On the development workstation the block adds
+about 20 s to the package precompile, 50 MiB to the image and 0.1 s to every
+`using CompactLES`; without it, the first `Float32` run of a process compiles
+for about 13 s more, on every rank of an MPI run.
+
+Turn it on where `Float32` runs are the rule rather than the exception, and
+where the serial suite or the MPI suite runs, which is what CI does:
+
+```julia
+using Preferences, CompactLES
+Preferences.set_preferences!(CompactLES, "precompile_float32" => true)
+```
+
+Like `precompile_device`, the preference is read at precompile time, so
+setting it rebuilds the package image.
+"""
+const PRECOMPILE_FLOAT32 = @load_preference("precompile_float32", false)
+
 if MPIPreferences.binary != "system"
 @setup_workload begin
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -171,10 +194,12 @@ if MPIPreferences.binary != "system"
                              end),
                      Numerics(n_global=(16, 1, 1)))
         run!(s, Q; tfinal=1e9, nmax=2)
-        # Two species on the host and device backends, Cartesian and cylindrical.
+        # Two species, Cartesian and cylindrical, on the host backend and,
+        # under `PRECOMPILE_DEVICE`, on the device backend.
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-        for backend in (CPUBackend(), DeviceBackend(cpu))
+        for backend in (PRECOMPILE_DEVICE ? (CPUBackend(), DeviceBackend(cpu)) :
+                        (CPUBackend(),))
             s = Solver(n_global=(16, 12, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
                        bcs=(walls, per, per), backend=backend)
             Q = allocate_state(s)
@@ -241,37 +266,37 @@ if MPIPreferences.binary != "system"
             Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
         run!(s, Q; tfinal=0.03, nmax=3)
         refined_region(s)
-        # Float32 throughout. A second element type recompiles the whole tree
-        # beneath step!, and the suite reaches it on a plain grid, on a refined
-        # hierarchy and, under `PRECOMPILE_DEVICE`, on the device backend.
-        # This block and the device hierarchy below it cost 36.5 s of
-        # precompile and 47.4 MB of image, and take 38 s off the serial
-        # suite's compilation. The saving lands only on the Solver type
-        # tuples named here; one that is not compiles in full wherever it is
-        # first built, which is why the 3-D refined device case is left to the
-        # suite rather than spending a third dimension of image on it.
-        T = Float32
-        f32 = (precision=T, art=ArtificialProperties(enabled=false))
-        for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
-                      ((;),))
-            s = Solver(; n_global=(16, 12, 12),
-                       L_domain=(one(T), one(T), one(T)), bcs=per3,
-                       cfl=T(0.2), f32..., extra...)
+        # Float32 throughout, under `PRECOMPILE_FLOAT32`. A second element type
+        # recompiles the whole tree beneath step!, and the suites reach it on a
+        # plain grid, on a refined hierarchy and, under `PRECOMPILE_DEVICE`, on
+        # the device backend. The saving lands only on the Solver type tuples
+        # named here; one that is not compiles in full wherever it is first
+        # built, which is why the 3-D refined device case is left to the suite
+        # rather than spending a third dimension of image on it.
+        if PRECOMPILE_FLOAT32
+            T = Float32
+            f32 = (precision=T, art=ArtificialProperties(enabled=false))
+            for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
+                          ((;),))
+                s = Solver(; n_global=(16, 12, 12),
+                           L_domain=(one(T), one(T), one(T)), bcs=per3,
+                           cfl=T(0.2), f32..., extra...)
+                Q = allocate_state(s)
+                initialize!(s, Q, (x, y, z) ->
+                    Prim(rho=1 + T(0.01) * sin(2π * x), T_ion=one(T),
+                         u=(T(0.1), zero(T), zero(T))))
+                run!(s, Q; tfinal=T(0.01), nmax=2)
+                compute_dt(s, Q)
+            end
+            s = Solver(; n_global=(48, 1, 1), L_domain=(T(2π), one(T), one(T)),
+                       bcs=per3, filter_interval=0, cfl=T(0.2),
+                       refine=BlockRegion((20, 0, 0), (8, 1, 1)), f32...)
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) ->
-                Prim(rho=1 + T(0.01) * sin(2π * x), T_ion=one(T),
-                     u=(T(0.1), zero(T), zero(T))))
+                Prim(u=(T(0.5), zero(T), zero(T)), p=one(T),
+                     rho=1 + T(0.1) * sin(x)))
             run!(s, Q; tfinal=T(0.01), nmax=2)
-            compute_dt(s, Q)
         end
-        s = Solver(; n_global=(48, 1, 1), L_domain=(T(2π), one(T), one(T)),
-                   bcs=per3, filter_interval=0, cfl=T(0.2),
-                   refine=BlockRegion((20, 0, 0), (8, 1, 1)), f32...)
-        Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) ->
-            Prim(u=(T(0.5), zero(T), zero(T)), p=one(T),
-                 rho=1 + T(0.1) * sin(x)))
-        run!(s, Q; tfinal=T(0.01), nmax=2)
         # The device backend on a subcycled, tiled, regridding hierarchy, with
         # the device-storage branches and the KA bodies both selected. On a real
         # device those are the only path; the suite reaches them through the two
