@@ -448,6 +448,41 @@ end
     # With no survivor the level is partitioned afresh.
     @test CL._place_tiles([t(5), t(6)], act, 8, [t(1)], [3:4]) ==
           CL._tile_owners([t(5), t(6)], act, 8)
+    # Fresh tiles outnumbering the free ranks go one at a time to the group
+    # left least loaded, the nearest on the curve among equals: t5 joins
+    # t4's group as above, and t6 then joins t3's rather than piling onto it.
+    @test CL._place_tiles([t(1), t(2), t(3), t(4), t(5), t(6)], act, 8,
+                          [t(1), t(2), t(3), t(4)], oA) ==
+          ([2:3, 4:5, 6:7, 0:1, 0:1, 6:7], 8)
+    # One rank free for three fresh tiles: the free rank takes the first and,
+    # by proximity among equal loads, the second; the third goes to t3's.
+    @test CL._place_tiles([t(1), t(2), t(3), t(4), t(5), t(6)], act, 4,
+                          [t(1), t(2), t(3)], [0:0, 1:1, 2:2]) ==
+          ([0:0, 1:1, 2:2, 3:3, 3:3, 2:2], 4)
+    # The volume check against a fresh partition. C's two departures left
+    # ranks 4 and 5 idle and t4 and t5 sharing two ranks, twice the peak of
+    # a fresh partition, which is taken; A's placement is kept.
+    @test CL._balanced_owners([t(3), t(4), t(5), t(6)], act, 8, oC, nC) ==
+          CL._tile_owners([t(3), t(4), t(5), t(6)], act, 8)
+    @test CL._balanced_owners([t(1), t(2), t(3), t(4)], act, 8, oA, nA) == (oA, nA)
+    # Five single-rank tiles on two ranks: three on one rank is the best any
+    # partition does and is kept, four is a third worse and is repartitioned,
+    # whole tiles largest first onto the least loaded rank, the nearest on
+    # the curve among equals.
+    five = [t(1), t(2), t(3), t(4), t(5)]
+    @test CL._knapsack_owners(five, act, 2) == ([0:0, 1:1, 1:1, 0:0, 0:0], 2)
+    @test CL._balanced_owners(five, act, 2, [0:0, 0:0, 0:0, 1:1, 1:1], 2) ==
+          ([0:0, 0:0, 0:0, 1:1, 1:1], 2)
+    @test CL._balanced_owners(five, act, 2, [0:0, 1:1, 1:1, 1:1, 1:1], 2) ==
+          CL._knapsack_owners(five, act, 2)
+    # Unequal tiles: a 49-node tile and two 25-node ones split 49 : 50.
+    big = BlockRegion((0, 0, 0), (17, 1, 1))
+    @test CL._knapsack_owners([t(1), big, t(3)], act, 2) == ([1:1, 0:0, 1:1], 2)
+    # Two 37-node tiles and three 25-node ones: largest first leaves 87 : 62,
+    # and swapping a 37 for a 25 between the two ranks evens it to 75 : 74.
+    a, b = BlockRegion((0, 0, 0), (13, 1, 1)), BlockRegion((20, 0, 0), (13, 1, 1))
+    @test CL._knapsack_owners([a, b, t(1), t(2), t(3)], act, 2) ==
+          ([1:1, 1:1, 0:0, 0:0, 0:0], 2)
     # Measured weights: a tile costs the busy time of its owner ranks, a
     # group's shared by volume, and a fresh tile the mean cost per node.
     w = CL._measured_weights([t(1), t(2), t(3)], act, [t(1), t(2)],

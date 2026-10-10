@@ -48,10 +48,12 @@ One solver runs on four axes of configuration, combinable except where
   of its parent's, and within it each tile over its own rank range, the
   ranges dealt out along a Morton curve by tile volume; a rank holds the
   root and the tiles of its range only. Ownership is stored across regrids,
-  a survivor keeping its range; a tiled level repartitions on the per-rank
-  busy time the run measures when that stays imbalanced past a threshold
-  for a set number of checks, and a tile whose range moves migrates block
-  to block. The level coupling moves point to point between the parent
+  a survivor keeping its range and a fresh tile going to the least loaded
+  group; each level is repartitioned by volume when that lowers its peak
+  rank load by more than `PLACEMENT_GAIN`, or, with one regridded level, on
+  the per-rank busy time the run measures when that stays imbalanced past a
+  threshold for a set number of checks, and a tile whose range moves
+  migrates block to block. The level coupling moves point to point between the parent
   ranks holding a tile's box and covered nodes and the tile's own ranks,
   which divide its interpolation chains by conserved component, so a rank's
   coupling memory and traffic follow the tiles it holds.
@@ -1024,9 +1026,9 @@ Rank 0 belongs to every level that holds a tile, since the subsets are
 prefixes of the rank list, while a rank outside a level's parent holds none
 of its layout; the broadcast keeps every split and free collective and
 every rank's tag history equal. A survivor whose owner range leaves its
-parent's shrunken subset moves: its state is gathered replicated over the
-run's communicator, because its old owners may lie outside the parent's new
-subset, and the box regrid's carry-over writes it into the rebuilt tile.
+parent's shrunken subset moves, as does one the partition by volume moves:
+its state migrates block to block over the run's communicator, which every
+rank enters because its old owners may lie outside the parent's new subset.
 Rebalancing is refused with more than one regridded level, and the device
 backend is refused too, since the tile sweep and the carry run on the host.
 A restart rebuilds each level from the record the same way
@@ -1250,16 +1252,36 @@ tile keeps its range, and a fresh tile is placed by the rule above
 restricted to the ranks the survivors leave free (`_place_tiles`): the free
 ranks are dealt to the fresh tiles as if contiguous, a range that would
 straddle a gap between them is cut at the gap so that every group stays a
-contiguous rank range, and when no rank is free a fresh tile joins the
-group of the survivor nearest it on the curve among the groups whose rank
-count admits the tile (a tile clipped at the margin admits fewer), the level
-being partitioned afresh when none does. The level's rank count is
+contiguous rank range, and when the fresh tiles outnumber the free ranks
+each joins the group, or takes the free rank, left with the least fine
+volume per rank, largest tile first and the nearest on the curve among
+equals, among the groups whose rank count admits the tile (a tile clipped
+at the margin admits fewer), the level being partitioned afresh when none
+does (`_join_groups!`). The level's rank count is
 one past the highest rank in use, so a departure can leave a rank inside
 the level holding no tile; such a rank enters the level's point-to-point
 records with none of its own and the cross-level exchanges with no piece to
 post. A recomputed partition at every
 regrid would move a survivor whenever a tile entered ahead of it on the
-curve; stored ownership moves state only when a rebalance decides to.
+curve; stored ownership moves state only when the partition has drifted.
+
+After placement the level's most loaded rank is compared with a fresh
+partition by fine volume (`_balanced_owners`): whole tiles by largest-first
+assignment with swaps when the tiles outnumber the ranks
+(`_knapsack_owners`), rank ranges by `_tile_owners` otherwise. The fresh
+partition is adopted when it lowers the peak by more than `PLACEMENT_GAIN`
+(1.1, WarpX's threshold for the same decision). Comparing with the
+achievable peak rather than the mean keeps a level of a few tiles per rank
+from repartitioning at every regrid for an imbalance no partition removes.
+The decision reads only the reduced tile set and the stored owners, so it
+needs no measurement and applies to every regridded level, each on its own,
+since under subcycling the levels advance in turn. A moved survivor carries
+its whole tile, shared and imposed planes included (`_EVERY_FACE`), and
+seeds its shared planes as a survivor, so a tile held by one rank before
+and after continues bit for bit; a tile decomposed over several ranks
+continues at round-off, and so does the conservative coupling, whose
+junction registers are summed by an `Allreduce` whose order follows the
+ranks contributing.
 
 Each regrid frees the tile groups and splits them afresh; a surviving
 tile's Cartesian communicator is independent of the group it was split from
@@ -1273,7 +1295,8 @@ on the tiles' own decompositions alone.
 
 ### Rebalancing on measured load
 
-The partition is recomputed only by a rebalance. Every rank measures its own
+With rebalancing on, the partition by volume is not applied, since it
+would undo the measured weights. Every rank measures its own
 busy time per step, the step wall less the time it spent inside the
 collectives every rank enters (the rate and floor reductions, the level box
 and restriction exchanges) and in the refined level's record exchange

@@ -922,16 +922,20 @@ end
 #
 # Ownership is stored, not recomputed: `Level.owners` is the authority, a
 # surviving tile keeps its range there, and a fresh tile is placed among the
-# ranks the survivors leave free (`_place_tiles`). The partition is
-# recomputed only by a rebalance, when the per-rank busy time the run
-# measures over the last interval is imbalanced past `RegridSpec.rebalance`
-# at `RegridSpec.persist` consecutive checks (`_rebalance_due!`); the
-# weights are then the measured per-tile costs (`_measured_weights`), so
-# the interface factor is measured inside the job rather than calibrated. A
-# surviving tile whose owner range a rebalance moved is rebuilt on its new
-# owners and takes its evolved solution back by point-to-point migration
-# from the old owners' blocks (`_migrate_tile!`), one tile at a time at the
-# regrid cadence, with no replica of the tile on any rank.
+# ranks the survivors leave free or on the least loaded group
+# (`_place_tiles`). The partition is recomputed by volume when the stored
+# placement leaves the most loaded rank past `PLACEMENT_GAIN` times what
+# a fresh partition would give it (`_balanced_owners`), and by a
+# rebalance, when the per-rank busy time the run measures over the last
+# interval is imbalanced past `RegridSpec.rebalance` at `RegridSpec.persist`
+# consecutive checks (`_rebalance_due!`); the weights are then the measured
+# per-tile costs (`_measured_weights`), so the interface factor is measured
+# inside the job rather than calibrated, and the volume rule is not applied,
+# since it would undo them. A surviving tile whose owner range a repartition
+# moved is rebuilt on its new owners and takes its evolved solution back by
+# point-to-point migration from the old owners' blocks (`_migrate_tile!`),
+# one tile at a time at the regrid cadence, with no replica of the tile on
+# any rank.
 
 # Levels over the lattice cells (the maximum over the buffered nodes meeting
 # each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so every rank derives the
@@ -999,6 +1003,13 @@ end
 _shared_boundary(a::NTuple{3,NTuple{2,Bool}}, b::NTuple{3,NTuple{2,Bool}}) =
     ntuple(d -> (a[d][1] && b[d][1], a[d][2] && b[d][2]), 3)
 
+# A tile's block table over `comm` for `_migrate_tile!`: every rank's owned
+# block of it, from `decomp` on the ranks holding one (one Allgather; the
+# share fields are unused there). Collective over `comm`.
+_block_table(decomp::Union{Nothing,Decomp}, comm::MPI.Comm) =
+    [OwnedBlock(r - 1, b, 0, 1) for (r, b) in enumerate(_owned_blocks(decomp, comm))
+     if prod(b.extent) > 0]
+
 # Tag of the migration messages. They run on the root communicator, on
 # which nothing else is in flight during a regrid, and one tile's messages
 # complete before the next tile's are posted, so one tag serves every tile.
@@ -1048,13 +1059,15 @@ end
 # old block ∩ new block ∩ interior per rank pair, and posts only the sends
 # and receives of its own; a rank with neither posts nothing, and no
 # collective runs. The interior holds one node off both boundary planes
-# along every active dimension, the rule `_carry_over!` applies: the old
-# planes were imposed data and the new ones are re-imposed by the next
-# shell fill. A plane on the domain boundary (`keep`) is the tile's own
-# solution and moves with the rest. `Q_old`/`d_old` are this rank's old
-# block of the tile and `Q_new`/`d_new` its new one, `nothing` where it
-# holds none. The sends complete before this returns, so the caller may
-# free the old decomposition afterwards.
+# along every active dimension but those of the faces in `keep`, the rule
+# `_carry_over!` applies. A tile whose region survives keeps every face
+# (`_EVERY_FACE`): its planes shared with neighbors are solution, its
+# imposed planes are re-imposed by the next shell fill on a tile left in
+# place as on a moved one, and with the whole tile carried the moved tile
+# continues bit for bit as the tile left in place would. `Q_old`/`d_old`
+# are this rank's old block of the tile and `Q_new`/`d_new` its new one,
+# `nothing` where it holds none. The sends complete before this returns, so
+# the caller may free the old decomposition afterwards.
 function _migrate_tile!(::Type{T}, Q_new, d_new, Q_old, d_old, Nf::NTuple{3,Int},
                         active::NTuple{3,Bool}, old_blocks::Vector{OwnedBlock},
                         new_blocks::Vector{OwnedBlock}, comm::MPI.Comm,
@@ -1207,20 +1220,26 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     new_of = Dict(r => i for (i, r) in enumerate(wanted))
     n_cons = solver.equations.n_cons
     # Ownership is stored: a surviving tile keeps its range and a fresh one
-    # is placed among the ranks left free, so the tile set changing around
-    # a survivor does not move it. A rebalance repartitions the whole level
-    # instead, weighted by the costs the last interval measured. Either
-    # way the inputs are the reduced tile flags and the owners every rank
-    # holds, so every rank derives the same assignment. A tile stays in
-    # place, arrays and state included, when both its region and its range
-    # survive; otherwise it is rebuilt, and one whose region survived takes
-    # its solution back below. The level's rank count moves when a fresh
+    # is placed among the ranks left free or on the least loaded group, so
+    # the tile set changing around a survivor does not move it unless the
+    # placement has drifted from a balanced one. A rebalance repartitions
+    # the whole level instead, weighted by the costs the last interval
+    # measured. Either way the inputs are the reduced tile flags and the
+    # owners every rank holds, so every rank derives the same assignment. A
+    # tile stays in place, arrays and state included, when both its region
+    # and its range survive; otherwise it is rebuilt, and one whose region
+    # survived takes its solution back below. The level's rank count moves when a fresh
     # tile takes ranks beyond the old level or a departure vacates its top
     # ranks; a survivor's Cartesian communicator is independent of the
     # level communicator the resize replaces, so it survives the resize.
     if busy === nothing || isempty(wanted)
         owners, np_new = _place_tiles(wanted, active, root_lc.size,
                                       old_regions, lev.owners)
+        # Under a measured rebalance the measured weights govern the
+        # partition; a repartition by volume would undo theirs.
+        spec.rebalance > 0 ||
+            ((owners, np_new) = _balanced_owners(wanted, active, root_lc.size,
+                                                 owners, np_new))
     else
         weights = _measured_weights(wanted, active, old_regions, lev.owners, busy)
         owners, np_new = _tile_owners(wanted, active, root_lc.size; weights)
@@ -1404,6 +1423,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
     is_fresh = falses(length(wanted))
     is_fresh[fresh] .= true
+    # The tiles whose region is new; a moved survivor is rebuilt as a fresh
+    # tile is but carries its whole state, planes included.
+    is_new = [!haskey(old_of, r) for r in wanted]
     for ti in fresh
         li = local_of[ti]
         li == 0 || init_geometry!(PatchSolver(solver, patches[li]))
@@ -1414,7 +1436,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         li = local_of[ti]
         r = wanted[ti]
         haskey(old_of, r) || continue
-        # A rebuilt tile whose region survived takes its evolved interior
+        # A rebuilt tile whose region survived takes its evolved state
         # back over the interpolated initialization, block to block from
         # its old owners. Both block tables name ranks of the root
         # communicator and every rank holds both, so every rank posts from
@@ -1427,19 +1449,19 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         Qref = audit ? ConservedState(copy(parent(states[li]))) : nothing
         _migrate_tile!(T, Q_new, d_new, Q_old, d_old, Nf, active,
                        lev.coupling.fine_blocks[old_of[r]], coupling.fine_blocks[ti],
-                       root_lc.comm, boundaries[ti])
+                       root_lc.comm, _EVERY_FACE)
         if audit
             _carry_over!(Qref, d_new, r, carried[r], Nf, r, active, n_cons,
-                         boundaries[ti], folds[ti], folds[ti])
+                         _EVERY_FACE, folds[ti], folds[ti])
             differ = count(Array(parent(Qref)) .!= Array(parent(states[li])))
             res = MIGRATION_AUDIT_RESULT[]
             MIGRATION_AUDIT_RESULT[] = (tiles=res.tiles + 1,
                                         mismatches=res.mismatches + differ)
         end
     end
-    # A fresh tile's plane shared with a survivor takes the survivor's
+    # A new tile's plane shared with a survivor takes the survivor's
     # evolved values rather than averaging its interpolation into them.
-    !isempty(fresh) && new_lc.owned && _seed_planes!(solver, states, levels[2], is_fresh)
+    any(is_new) && new_lc.owned && _seed_planes!(solver, states, levels[2], is_new)
     # Every old transfer was replaced above, surviving tiles included, and a
     # departing or rebuilt tile's decomposition has no further reader, the
     # migration's sends having completed inside `_migrate_tile!`. Free
@@ -1479,10 +1501,13 @@ end
 # this is the one-level rule's last restriction of a departing tile, taken
 # while every old communicator is still live. A surviving tile whose owner
 # range no longer fits its parent's shrunken subset moves: its state is
-# gathered replicated over the run's communicator, since its old owners may
-# lie outside the parent's new subset, and copied into the rebuilt tile by the
-# box regrid's carry-over. Rebalancing is not offered here (the constructor
-# refuses it), so no other tile moves.
+# migrated block to block over the run's communicator (`_migrate_tile!`),
+# which every rank enters since its old owners may lie outside the parent's
+# new subset. A survivor also moves when the level is partitioned afresh by
+# volume (`_balanced_owners`), each level on its own, since under
+# subcycling the levels advance in turn. The measured rebalance is not
+# offered here (the constructor refuses it): one busy time per rank cannot
+# separate the levels' shares of it.
 
 # The tag buffer of a level that may have children: a child cell reaches
 # `buffer + tile` of its own parent's nodes past a tagged node and needs
@@ -1563,6 +1588,7 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     fit = [last(o) < parent_np for o in old_owners]
     owners, np_new = _place_tiles(wanted, active, parent_np, old_regions[fit],
                                   old_owners[fit])
+    owners, np_new = _balanced_owners(wanted, active, parent_np, owners, np_new)
     old_index = [something(findfirst(==(r), old_regions), 0) for r in wanted]
     kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
             for ti in eachindex(wanted)]
@@ -1678,7 +1704,7 @@ same on every rank), after level ℓ − 1 has taken its own new layout.
 A kept tile (region and owner range unchanged) keeps its arrays and state
 under a new id, faces and transfer; every other tile is built fresh. With
 `init`, a fresh tile is filled by interpolation of its parent, a moved
-survivor then takes its old interior back through the replicated carry, and
+survivor then takes its whole old state back by migration, and
 the planes fresh tiles share with survivors are seeded from the survivors; a
 restart passes `init = false` and reads the state afterwards. The patch
 vector, `states` and, when given, the workspace's stage arrays are spliced
@@ -1708,19 +1734,19 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     lev.patches == collect((base + 1):(base + nold)) ||
         error("regrid: level $ℓ's patches are not the contiguous run after its parents'")
     old_local = Dict(zip(lev.tiles, lev.patches))
-    # The moved survivors' states, replicated while the old decompositions
-    # are live. The list is the broadcast decision's, so every rank enters
-    # the same gathers.
-    carried = Dict{Int,Array{T,4}}()
+    # The moved survivors: this rank's old block of each, state and
+    # decomposition, held past the swap for the migration's sends, and the
+    # tile's old block table over the run's communicator, taken while the old
+    # decompositions are live. The list is the broadcast decision's, so every
+    # rank enters the same table gathers.
+    moved = Dict{Int,Tuple{Any,Any,Vector{OwnedBlock}}}()
     boundaries = _region_boundaries(solver, wanted, ℓ)
     folds = _region_folds(solver, boundaries)
     for ti in eachindex(wanted)
         (old_index[ti] == 0 || kept[ti]) && continue
         li = get(old_local, old_index[ti], 0)
-        carried[ti] = _gather_replicated(T, wanted[ti], active, n_cons,
-                                         li == 0 ? nothing :
-                                         (states[li], patches[li].decomp), comm,
-                                         folds[ti])
+        Q_old, d_old = li == 0 ? (nothing, nothing) : (states[li], patches[li].decomp)
+        moved[ti] = (Q_old, d_old, _block_table(d_old, comm))
     end
     kept_old = Set(old_index[ti] for ti in eachindex(wanted) if kept[ti])
     dropped = Decomp{T}[patches[li].decomp for (li, t) in zip(lev.patches, lev.tiles)
@@ -1852,16 +1878,26 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         is_fresh = falses(length(wanted))
         is_fresh[fresh] .= true
         isempty(fresh) || _fill_tiles_from_parent!(solver, states, levels[ℓ + 1], is_fresh)
-        for ti in fresh
+    end
+    # A moved survivor takes its whole state back over the interpolated
+    # initialization, block to block from its old owners. Every rank enters,
+    # an old owner outside the parent's new subset included, since it holds
+    # blocks to send; the block tables name ranks of the run's communicator.
+    if init
+        for ti in sort!(collect(keys(moved)))
+            Q_old, d_old, old_table = moved[ti]
             li = local_of[ti]
-            (li != 0 && haskey(carried, ti)) || continue
-            r = wanted[ti]
-            _carry_over!(states[li], patches[li].decomp, r, carried[ti],
-                         fine_extent(r, active, folds[ti]), r, active, n_cons,
-                         boundaries[ti], folds[ti], folds[ti])
+            d_new = li == 0 ? nothing : patches[li].decomp
+            _migrate_tile!(T, li == 0 ? nothing : states[li], d_new, Q_old, d_old,
+                           fine_extent(wanted[ti], active, folds[ti]), active,
+                           old_table, _block_table(d_new, comm), comm, _EVERY_FACE)
         end
-        !isempty(fresh) && new_lc.owned &&
-            _seed_planes!(solver, states, levels[ℓ + 1], is_fresh)
+    end
+    if init && parent_lc.owned
+        # A moved survivor carries its planes and seeds as a survivor.
+        is_new = [old_index[ti] == 0 for ti in eachindex(wanted)]
+        any(is_new) && new_lc.owned &&
+            _seed_planes!(solver, states, levels[ℓ + 1], is_new)
     end
     # The old transfers' chains are on COMM_SELF; the dropped tiles'
     # decompositions are freed by their old owners in the order they held

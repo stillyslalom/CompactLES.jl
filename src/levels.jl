@@ -353,11 +353,11 @@ it, and a fresh tile is placed by the rule [`_tile_owners`](@ref) applies to
 a whole level, restricted to the ranks the survivors leave free. The free
 ranks are dealt to the fresh tiles as if they were contiguous, and a range
 that would straddle a gap between free ranks is cut at the gap, so a group
-stays a contiguous rank range, and down to a count the tile admits; when the survivors leave no rank free, a
-fresh tile joins the group of the survivor nearest it on the space-filling
-curve among the groups whose rank count admits the tile, and the level is
-partitioned afresh when none does. With no survivor the level is partitioned
-afresh. The level's rank
+stays a contiguous rank range, and down to a count the tile admits. When
+the fresh tiles outnumber the free ranks, each joins an existing group or
+takes a free rank alone, whichever leaves the least fine volume per rank
+(`_join_groups!`), and the level is partitioned afresh when no group admits
+the tile. With no survivor the level is partitioned afresh. The level's rank
 count is one past the highest rank any range uses, so a rank inside the
 level may hold no tile of it after a departure. Every input is identical on
 every rank (the wanted set is reduced, and the previous owners are held by
@@ -386,22 +386,9 @@ function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
             taken[r + 1] = true
         end
         free = [r for r in 0:(np - 1) if !taken[r + 1]]
-        if isempty(free)
-            keys = [_morton(r.offset) for r in regions]
-            # A group's ranges all decompose each of its tiles, so a fresh
-            # tile joins only a group whose rank count admits it (a tile
-            # clipped at the margin can admit fewer ranks than a lattice
-            # cell); with no such group the level is partitioned afresh. The
-            # answer depends on the extent and the count alone, and a level
-            # holds a handful of each.
-            seen = Dict{Tuple{NTuple{3,Int},Int},Bool}()
-            admits(r, g) = get!(() -> _admits(r, active, g), seen, (r.extent, g))
-            for t in fresh
-                fit = [s for s in survivors if admits(regions[t], length(owners[s]))]
-                isempty(fit) && return _tile_owners(regions, active, np)
-                nearest = fit[argmin([abs(keys[t] - keys[s]) for s in fit])]
-                owners[t] = owners[nearest]
-            end
+        if length(free) < length(fresh)
+            _join_groups!(owners, regions, active, survivors, fresh, free) ||
+                return _tile_owners(regions, active, np)
         else
             virtual, _ = _tile_owners(regions[fresh], active, length(free))
             for (k, t) in enumerate(fresh)
@@ -421,6 +408,173 @@ function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
         end
     end
     return owners, maximum(last, owners) + 1
+end
+
+# Fine volume of a tile, the per-rank cost `_tile_owners` weighs by default.
+_tile_volume(r::BlockRegion, active::NTuple{3,Bool}) = Float64(prod(fine_extent(r, active)))
+
+# Place the `fresh` tiles one at a time, largest first, each in the group
+# that carries the least fine volume per rank once it holds the tile: a group
+# of `survivors` or a single rank of `free`. Equal loads go to the group
+# holding the tile nearest on the space-filling curve, so a front entering
+# a balanced level stays together where it can. A fresh tile joins only a
+# group whose rank count admits it, since a group's ranks decompose each of
+# its tiles (a tile clipped at the margin can admit fewer ranks than a
+# lattice cell). Fresh tiles cluster at the moving features, so a rule of
+# proximity alone would stack a front onto one group while ranks vacated by
+# departures sit idle. Writes `owners[fresh]`; false when some tile fits no
+# group, for the caller to partition afresh.
+function _join_groups!(owners::Vector{UnitRange{Int}}, regions::Vector{BlockRegion},
+                       active::NTuple{3,Bool}, survivors::Vector{Int},
+                       fresh::Vector{Int}, free::Vector{Int})
+    keys = [_morton(r.offset) for r in regions]
+    groups = unique([owners[s] for s in survivors])
+    append!(groups, [r:r for r in free])
+    index = Dict(g => i for (i, g) in enumerate(groups))
+    load = zeros(length(groups))
+    members = [Int[] for _ in groups]
+    for s in survivors
+        i = index[owners[s]]
+        load[i] += _tile_volume(regions[s], active) / length(owners[s])
+        push!(members[i], s)
+    end
+    # The answer depends on the extent and the count alone, and a level holds
+    # a handful of each.
+    seen = Dict{Tuple{NTuple{3,Int},Int},Bool}()
+    admits(r, g) = get!(() -> _admits(r, active, g), seen, (r.extent, g))
+    order = sort(fresh; by=t -> (-_tile_volume(regions[t], active), keys[t]))
+    for t in order
+        vol = _tile_volume(regions[t], active)
+        best = 0
+        bestkey = (Inf, typemax(Int))
+        for (i, g) in enumerate(groups)
+            admits(regions[t], length(g)) || continue
+            near = isempty(members[i]) ? typemax(Int) :
+                   minimum(abs(keys[t] - keys[m]) for m in members[i])
+            key = (load[i] + vol / length(g), near)
+            key < bestkey && (best = i; bestkey = key)
+        end
+        best == 0 && return false
+        owners[t] = groups[best]
+        load[best] = bestkey[1]
+        push!(members[best], t)
+    end
+    return true
+end
+
+# The fine volume of the most loaded rank among `np` under `owners`, each
+# tile's volume divided evenly over its range.
+function _peak_load(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                    owners::Vector{UnitRange{Int}}, np::Int)
+    load = zeros(np)
+    for (r, rg) in zip(regions, owners), k in rg
+        load[k + 1] += _tile_volume(r, active) / length(rg)
+    end
+    return maximum(load; init=0.0)
+end
+
+# Whole-tile owners of a level with more tiles than ranks, one rank per tile:
+# largest tile first onto the least loaded rank (among equals the rank
+# holding the tile nearest on the space-filling curve, then the lowest), then
+# moves of one tile, or swaps of two, between the most and the least loaded
+# rank while they lower the larger of the two loads. With a few tiles per
+# rank, cutting the curve into runs of equal weight (`_tile_owners`) can leave
+# the heaviest rank up to a tile above the mean, where an assignment free of
+# the curve's order pairs large tiles with small ones. The cost is locality:
+# tiles adjacent in space land on different ranks, and their shared planes
+# are exchanged between ranks rather than within one.
+function _knapsack_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                          np::Int)
+    n = length(regions)
+    keys = [_morton(r.offset) for r in regions]
+    vol = [_tile_volume(r, active) for r in regions]
+    load = zeros(np)
+    held = [Int[] for _ in 1:np]
+    for t in sort(collect(1:n); by=t -> (-vol[t], keys[t]))
+        best = 0
+        bestkey = (Inf, typemax(Int), 0)
+        for r in 1:np
+            near = isempty(held[r]) ? typemax(Int) :
+                   minimum(abs(keys[t] - keys[m]) for m in held[r])
+            key = (load[r], near, r)
+            key < bestkey && (best = r; bestkey = key)
+        end
+        load[best] += vol[t]
+        push!(held[best], t)
+    end
+    for _ in 1:n * np
+        h, l = argmax(load), argmin(load)
+        best = (load[h], 0, 0)
+        for t in held[h]
+            moved = max(load[h] - vol[t], load[l] + vol[t])
+            moved < best[1] && (best = (moved, t, 0))
+            for u in held[l]
+                vol[u] < vol[t] || continue
+                swapped = max(load[h] - vol[t] + vol[u], load[l] + vol[t] - vol[u])
+                swapped < best[1] && (best = (swapped, t, u))
+            end
+        end
+        _, t, u = best
+        t == 0 && break
+        filter!(!=(t), held[h])
+        push!(held[l], t)
+        load[h] -= vol[t]
+        load[l] += vol[t]
+        if u != 0
+            filter!(!=(u), held[l])
+            push!(held[h], u)
+            load[l] -= vol[u]
+            load[h] += vol[u]
+        end
+    end
+    owners = Vector{UnitRange{Int}}(undef, n)
+    for r in 1:np, t in held[r]
+        owners[t] = (r - 1):(r - 1)
+    end
+    return owners, np
+end
+
+# A level's partition from scratch by fine volume: whole tiles by
+# `_knapsack_owners` when the tiles outnumber the ranks, each tile on a rank
+# range of its own by `_tile_owners` otherwise.
+_fresh_partition(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int) =
+    length(regions) > np ? _knapsack_owners(regions, active, np) :
+                           _tile_owners(regions, active, np)
+
+# The gain in the most loaded rank's fine volume, stored placement over a
+# fresh partition, at which a regrid adopts the fresh partition
+# (`_balanced_owners`). Under subcycling each level advances in turn and its
+# slowest rank sets the pace of its substeps, so the excess over the fresh
+# partition is wall time lost on every rank. Adopting it moves surviving
+# tiles, at the cost of rebuilding them and carrying their state, and a tile
+# decomposed over several ranks then computes to round-off on its new
+# decomposition rather than bit for bit. A tenth is the threshold WarpX
+# applies to the same decision; a smaller predicted gain is comparable to the
+# cost differences between tiles of equal volume (the share of interface and
+# boundary work) that the volume model leaves out.
+const PLACEMENT_GAIN = 1.1
+
+"""
+    _balanced_owners(regions, active, np, owners, np_level) -> (owners, np_level)
+
+The placement `owners` (from `_place_tiles`) unless the level's most loaded
+rank carries more than `PLACEMENT_GAIN` times the fine volume it would under
+a fresh partition (`_fresh_partition`), in which case the fresh partition.
+The comparison is with the partition the tiles admit rather than with the
+mean, so a level whose tiles cannot be spread evenly (fewer tiles than ranks
+at the scheme minimum, or a few tiles per rank) is not repartitioned at
+every regrid for an imbalance no partition removes. Depends on the reduced
+tile set and the stored owners alone, so every rank takes the same decision
+without a measurement.
+"""
+function _balanced_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                          np::Int, owners::Vector{UnitRange{Int}}, np_level::Int)
+    isempty(regions) && return owners, np_level
+    fresh, np_fresh = _fresh_partition(regions, active, np)
+    _peak_load(regions, active, owners, np) >
+        PLACEMENT_GAIN * _peak_load(regions, active, fresh, np) &&
+        return fresh, np_fresh
+    return owners, np_level
 end
 
 """
@@ -874,6 +1028,11 @@ _block_nodes(b::BlockRegion, off::NTuple{3,Int}=(0, 0, 0)) =
     ntuple(d -> (off[d] + b.offset[d] + 1):(off[d] + b.offset[d] + b.extent[d]), 3)
 
 const _NO_BOUNDARY = ((false, false), (false, false), (false, false))
+
+# Every face kept: the carry of a tile whose region survives copies all of
+# its nodes, so that a tile moved to new owners continues as one left in
+# place does (`_migrate_tile!`, `_swap_level!`).
+const _EVERY_FACE = ((true, true), (true, true), (true, true))
 
 # The buffer of a transfer's box per face, in parent nodes: `LEVEL_BUFFER`
 # along an active dimension, none at a face on the domain boundary, where

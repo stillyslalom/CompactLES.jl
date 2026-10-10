@@ -152,10 +152,14 @@ exact placement; sensor and predicate placement reaches those faces and
 crosses a seam as well, and is clamped to the margin at every face under
 `level_boundaries = false`.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags
-move. A positive `regrid_interval` allows tiled regions to enter and leave;
-`rebalance` may then move ownership among ranks after persistent measured
-imbalance in a two-level hierarchy. A multi-level nested vector regrids only
-with a positive `tile`.
+move. A positive `regrid_interval` allows tiled regions to enter and leave.
+A surviving tile keeps its ranks and a new one goes to the least loaded
+ranks; each level is repartitioned by fine-node count when that lowers its
+most loaded rank's share by more than a tenth, and `rebalance` may instead
+move ownership after persistent measured imbalance in a two-level hierarchy.
+A moved tile continues bit for bit when it is held by one rank before and
+after; one decomposed over several ranks continues at round-off. A
+multi-level nested vector regrids only with a positive `tile`.
 
 Refinement uses interpolation to fill new fine nodes and restriction to
 update covered parent nodes. Where a feature the parent spacing does not
