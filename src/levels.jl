@@ -2312,6 +2312,7 @@ function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
     any(lt -> lt.fine_index != 0 && any(any, lt.folded), lev.transfers) || return lev
     span = _level_span(solver.n_global, ntuple(d -> solver.n_global[d] > 1, 3),
                        lev.index - 1, root.bcs)
+    equations = solver.equations
     for lt in lev.transfers
         lt.fine_index == 0 && continue
         any(any, lt.folded) || continue
@@ -2321,21 +2322,44 @@ function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
         pad = lt.pdecomps[1].n_halo_d
         for d in 1:3, side in 1:2
             lt.folded[d][side] || continue
-            fold = root.folds[d]
-            lo, hi = first(span[d]), last(span[d])
-            at(n) = n - first(box[d]) + 1 + pad[d]
-            for c in axes(A, 4)
-                σ = conserved_parity(solver.equations, fold.sigvel, c)
-                for m in 1:LEVEL_BUFFER
-                    dst, src = side == 1 ? (at(lo - m), at(lo + m - 1)) :
-                                           (at(hi + m), at(hi + 1 - m))
-                    sl(i) = ntuple(e -> e == d ? (i:i) : axes(A, e), 3)
-                    view(A, sl(dst)..., c) .= σ .* view(A, sl(src)..., c)
+            # Padded index of parent node n along d.
+            shift = 1 + pad[d] - first(box[d])
+            _mirror_box_layers!(A, equations, root.folds[d].sigvel, d, side,
+                                first(span[d]) + shift, last(span[d]) + shift)
+        end
+    end
+    return lev
+end
+
+# The `LEVEL_BUFFER` layers of `A` beyond the fold along `d`, each the signed
+# copy of its mirror node, for every component. `lo` and `hi` are the padded
+# indices of the span's first and last parent node. A function barrier with
+# explicit loops: the slab views of a broadcast, `OneTo` across and a
+# `UnitRange` along `d`, have a type that depends on `d`, so each copy was a
+# dynamic dispatch.
+function _mirror_box_layers!(A::Array{T,4}, equations, sigvel, d::Int, side::Int,
+                             lo::Int, hi::Int) where {T}
+    n1, n2, n3 = size(A, 1), size(A, 2), size(A, 3)
+    for c in axes(A, 4)
+        σ = T(conserved_parity(equations, sigvel, c))
+        for m in 1:LEVEL_BUFFER
+            dst, src = side == 1 ? (lo - m, lo + m - 1) : (hi + m, hi + 1 - m)
+            if d == 1
+                for k in 1:n3, j in 1:n2
+                    A[dst, j, k, c] = σ * A[src, j, k, c]
+                end
+            elseif d == 2
+                for k in 1:n3, i in 1:n1
+                    A[i, dst, k, c] = σ * A[i, src, k, c]
+                end
+            else
+                for j in 1:n2, i in 1:n1
+                    A[i, j, dst, c] = σ * A[i, j, src, c]
                 end
             end
         end
     end
-    return lev
+    return A
 end
 
 # The node count of level ℓ's node space along each dimension, the root's
