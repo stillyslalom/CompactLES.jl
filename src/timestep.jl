@@ -827,10 +827,14 @@ _wait!(solver::Solver, t0::UInt64) =
 # bitwise. The azimuthal rate cap (modes.jl) is read by the loop alone, which
 # setup's host-backend restriction on `polar_truncation` makes sufficient.
 function _local_max_rate(solver::SolverLike, Q)
-    if _cpu_storage(Q) && (!FORCE_KA[] || _truncating(solver.truncation))
+    _cpu_storage(Q) || return _local_max_rate_launch(solver, Q)
+    if !FORCE_KA[] || _truncating(solver.truncation)
         return _local_max_rate_loop(solver, Q)
     end
-    return _local_max_rate_launch(solver, Q)
+    # Host storage takes the launch only under the test toggle, so the launch
+    # is behind `_cold` there rather than compiled into every host solver type.
+    T = eltype(Q)
+    return _local_max_rate_launch(_cold(solver), Q)::Tuple{T,T,NTuple{3,T}}
 end
 
 # The diffusive rate shared by the three sweeps below. The thermal term is
@@ -947,6 +951,15 @@ function _local_max_rate_loop(solver::SolverLike, Q)
               solver.kappa_art, solver.D_art, solver.metric, solver.inv_r,
               solver.cot_over_r, solver.overwritten,
               _overwritten_weight(T(solver.cfl)))
+    return _max_rate_sweep(fields, nx, ny, nz)
+end
+
+# The threaded sweep, keyed on the field tuple, whose type depends on the
+# element and array types, the EOS, the transport and the metric but not on
+# the plans, folds or boundary conditions, so solver types differing only in
+# those share it.
+function _max_rate_sweep(fields, nx::Int, ny::Int, nz::Int)
+    T = eltype(fields[1])
     # Chunks of the flattened (j, k) range, each reduced on its own and then
     # combined. Maximum and minimum are exact, so the result does not depend
     # on how the points are grouped: the threaded sweep returns the serial

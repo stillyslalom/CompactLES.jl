@@ -278,7 +278,9 @@ but the intended ones, so *any* report elsewhere is a regression. The
 baseline is one site in `apply_bcs!` (`enforce!`) and five in
 `compute_rhs!`, and seven in `step!`: those six and the `_cold` barrier in
 front of `_build_reflux!`, which rebuilds the coarse-fine captures after a
-layout change. Of the five in `compute_rhs!`, three are the boundary hooks
+layout change. Both `compute_dt` probes report one: the `_cold` barrier in
+front of `_local_max_rate_launch`, which host storage takes only under the
+`FORCE_KA` test toggle. Of the five in `compute_rhs!`, three are the boundary hooks
 (`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through the detector's
 `_face_mirror`): face conditions are stored abstractly on the `Patch` so that a
 combination of them does not recompile the right-hand-side tree, and the

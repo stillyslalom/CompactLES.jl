@@ -108,5 +108,7 @@ summarize("smooth!", @report_opt target_modules=(CL,) CL.smooth!(solver.sensor, 
 summarize("_detect!", @report_opt target_modules=(CL,) CL._detect!(solver.sensor, solver.tmp_a, solver, 1, true))
 summarize("_bulk_diffusivity!", @report_opt target_modules=(CL,) CL._bulk_diffusivity!(sb))
 summarize("_bulk_gradients!", @report_opt target_modules=(CL,) CL._bulk_gradients!(sb, Qb))
+summarize("_local_max_rate_launch",
+          @report_opt target_modules=(CL,) CL._local_max_rate_launch(solver, Q))
 
 println("\njet check complete")

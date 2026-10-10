@@ -170,6 +170,9 @@ function float64_in_point_bodies()
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=2)
+        # The launch form of the rate sweep, which host storage reaches only
+        # under `FORCE_KA` and so is not compiled by the run above.
+        CL._local_max_rate_launch(s, Q)
     end
     counts = Pair{Symbol,Int}[]
     scanned = 0
