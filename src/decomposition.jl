@@ -55,6 +55,9 @@ struct Decomp{T}
                                         # comm and sub are then that communicator
     send_buf::Vector{Vector{T}}         # per-dim halo send buffers
     recv_buf::Vector{Vector{T}}         # per-dim halo recv buffers
+    line_buffers::Vector{Matrix}        # the packed-line buffers of the plans
+                                        # built on this decomposition, one per
+                                        # shape and element type (`line_buffer`)
 end
 
 """
@@ -181,7 +184,25 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
     recv_buf = [zeros(T, cnt(d)) for d in 1:3]
     Decomp{T}(cart, pdims, coords, periodic, n_global, n_local, offset, n_halo, active,
               n_halo_d, neighbors, sub, sub_rank, sub_size, !borrowed, send_buf,
-              recv_buf)
+              recv_buf, Matrix[])
+end
+
+# The packed-line buffer of a plan on `decomp` whose lines fill a matrix of size
+# `dims`. Every plan built on one decomposition with the same buffer shape and
+# element type receives the same matrix. A buffer holds nothing between calls:
+# each application fills every line it solves before the solve reads it and
+# scatters them before it returns, and the applications on a rank run one
+# after another. Sharing therefore leaves every result unchanged and replaces
+# one interior-sized matrix per plan (the derivative, divergence, filter,
+# smoother and detector plans of each dimension, and each parity of a fold)
+# with one per shape.
+function line_buffer(decomp::Decomp, ::Type{T}, dims::NTuple{2,Int}) where {T}
+    for B in decomp.line_buffers
+        B isa Matrix{T} && size(B) == dims && return B::Matrix{T}
+    end
+    B = zeros(T, dims)
+    push!(decomp.line_buffers, B)
+    return B
 end
 
 """

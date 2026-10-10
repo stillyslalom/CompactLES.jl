@@ -235,7 +235,7 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     tr = dim > 1
     DirPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
                scheme.a0, ci, clo, chi, clo_first, chi_first,
-               tr ? zeros(T, lines, n) : zeros(T, n, lines))
+               line_buffer(decomp, T, tr ? (lines, n) : (n, lines)))
 end
 
 # Map (line coordinate i, orthogonal coordinates j < k in ascending dim order)

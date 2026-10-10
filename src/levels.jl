@@ -618,7 +618,8 @@ function _box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf,
         push!(decomps, Decomp{T}(dc.comm, dc.dims, dc.coords, dc.periodic, dc.n_global,
                                  dc.n_local, dc.offset, dc.n_halo, dc.active, halo,
                                  dc.neighbors, dc.sub, dc.sub_rank, dc.sub_size,
-                                 dc.owns_communicators, dc.send_buf, dc.recv_buf))
+                                 dc.owns_communicators, dc.send_buf, dc.recv_buf,
+                                 dc.line_buffers))
     end
     return plans, decomps
 end

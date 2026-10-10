@@ -185,5 +185,5 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
     tr = dim > 1
     BandPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
                 scheme.a0, ci, clo, chi, clo_first, chi_first,
-                tr ? zeros(T, lines, n) : zeros(T, n, lines))
+                line_buffer(decomp, T, tr ? (lines, n) : (n, lines)))
 end
