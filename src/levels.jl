@@ -2802,18 +2802,30 @@ end
 # the box stays there; only the Allgatherv of a decomposed patch stages the
 # packed rings through the host. A tile with no parent-fed face reads no
 # gradient ring and takes none.
-function _impose_shell!(solver, states, lt::LevelTransfer, fill)
+_impose_shell!(solver, states, lt::LevelTransfer, fill) =
+    _impose_shell!(solver, states, lt, fill,
+                   getfield(solver, :patches)[lt.fine_index].decomp)
+
+# `_impose_shell!` for `transfers[t]` on its tile `fine`, which the caller
+# passes through `_cold`. This barrier, compiled for the tile's concrete type
+# (`_unit_call`), reads the tile's decomposition unboxed, and the imposition,
+# which takes the decomposition and not the tile, is compiled once for every
+# tile type. Read from an abstractly typed tile, the decomposition is boxed,
+# and so is the transfer at each dynamic call taking it; the transfer crosses
+# this dynamic call as its vector and index for the same reason.
+_impose_shell_at!(solver, states, transfers, t::Int, fill, fine) =
+    _impose_shell!(solver, states, transfers[t], fill, fine.decomp)
+
+function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
     # A tile whose every face is shared with a same-level tile or lies on the
     # domain boundary has no shell slot to write (`_in_shell`), and no reader
     # of the ring, so the chain is skipped. `imposed` is a property of the
     # transfer, the same on every rank of the tile's communicator, so the
     # ranks skip the ring gather together.
     _imposes_shell(lt) || return states
-    lt.gradients === nothing || return _impose_shell_gradients!(solver, states, lt, fill)
-    patches = getfield(solver, :patches)
-    fine = patches[lt.fine_index]
+    lt.gradients === nothing ||
+        return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
     Qf = states[lt.fine_index]
-    fdcp = fine.decomp
     comm = fdcp.comm
     np = MPI.Comm_size(comm)
     me = MPI.Comm_rank(comm)
@@ -2872,35 +2884,11 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
                                         _linear_sources(fill, lt, owned), lt, fdcp,
                                         n_owned)
     else
-        scratch = fine.level_scratch
-        stages = scratch.stages
-        _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
-        for k in 1:K
-            # One launch per stage, over the bounding box of the stage's
-            # boxes, rather than one per box.
-            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned,
-                              _bounding_box(shell.boxes[k]))
-        end
-        dsend = _device_send_stage(parent(Qf), ringlen * n_owned)
-        pointwise!(_ring_pack_point!, parent(Qf), ringlen, n_owned, 1,
-                   dsend, stages[K+1], (table...,), shift, padb, ringlen)
-        if np == 1
-            # The packed stage is the ring itself, column by column, and
-            # stays on the device for the shell write.
-            dring = reshape(dsend, ringlen, n_cons)
-            fallback && _shell_fallback!(dring, _linear_sources_dev(fill, scratch, lt, owned),
-                                         lt, fdcp, solver)
-            _write_shell_from_ring!(Qf, dring, table, lt, fdcp, n_cons)
-            return states
-        end
-        _tracked_copy!(sendbuf, 1, dsend, 1, ringlen * n_owned)
-        if gathered
-            dlinear = _device_send_stage(parent(Qf), ringlen * n_owned)
-            _shell_linear_ring!(dlinear, 0, ringlen, parent(Qf),
-                                _linear_sources_dev(fill, scratch, lt, owned), lt, fdcp,
-                                n_owned)
-            _tracked_copy!(sendbuf, ringlen * n_owned + 1, dlinear, 1, ringlen * n_owned)
-        end
+        # Behind a barrier (`_cold`), which also keeps the tile's type out of
+        # the host body.
+        fine = _cold(getfield(solver, :patches)[lt.fine_index])
+        _impose_shell_dev!(solver, Qf, lt, fill, fine, sendbuf, owned, fallback,
+                           gathered) && return states
     end
     counts = gathered ? 2 .* shell.counts : shell.counts
     recv = _fit!(shell.buffers.recv, sum(counts))
@@ -2920,6 +2908,54 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     gathered && _select_admissible!(ring, shell.linear, lt, fdcp, solver)
     _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
     return states
+end
+
+# The device branch of `_impose_shell!`: the chain and the ring pack on the
+# device, then on one rank the shell write from the packed ring (`true`), and
+# on a decomposed patch this rank's rings staged into `sendbuf` for the gather
+# (`false`).
+function _impose_shell_dev!(solver, Qf, lt::LevelTransfer, fill, fine, sendbuf, owned,
+                            fallback::Bool, gathered::Bool)
+    fdcp = fine.decomp
+    np = MPI.Comm_size(fdcp.comm)
+    n_cons = solver.equations.n_cons
+    n_owned = length(owned)
+    K = length(lt.pplans)
+    shell = lt.shell
+    table = shell.table
+    ringlen = shell.len
+    padb = lt.pdecomps[K+1].n_halo_d
+    shift = _box_shift(lt)
+    scratch = fine.level_scratch
+    stages = scratch.stages
+    _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
+    for k in 1:K
+        # One launch per stage, over the bounding box of the stage's
+        # boxes, rather than one per box.
+        _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned,
+                          _bounding_box(shell.boxes[k]))
+    end
+    dsend = _device_send_stage(parent(Qf), ringlen * n_owned)
+    pointwise!(_ring_pack_point!, parent(Qf), ringlen, n_owned, 1,
+               dsend, stages[K+1], (table...,), shift, padb, ringlen)
+    if np == 1
+        # The packed stage is the ring itself, column by column, and
+        # stays on the device for the shell write.
+        dring = reshape(dsend, ringlen, n_cons)
+        fallback && _shell_fallback!(dring, _linear_sources_dev(fill, scratch, lt, owned),
+                                     lt, fdcp, solver)
+        _write_shell_from_ring!(Qf, dring, table, lt, fdcp, n_cons)
+        return true
+    end
+    _tracked_copy!(sendbuf, 1, dsend, 1, ringlen * n_owned)
+    if gathered
+        dlinear = _device_send_stage(parent(Qf), ringlen * n_owned)
+        _shell_linear_ring!(dlinear, 0, ringlen, parent(Qf),
+                            _linear_sources_dev(fill, scratch, lt, owned), lt, fdcp,
+                            n_owned)
+        _tracked_copy!(sendbuf, ringlen * n_owned + 1, dlinear, 1, ringlen * n_owned)
+    end
+    return false
 end
 
 # --- Admissible shell fallback ----------------------------------------------
@@ -3148,11 +3184,8 @@ end
 
 @inline _linear_weight(::Type{T}, f, s) where {T} = T(ifelse(s == 0, 3 - f, f)) / T(3)
 
-function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
-    patches = getfield(solver, :patches)
-    fine = patches[lt.fine_index]
+function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
     Qf = states[lt.fine_index]
-    fdcp = fine.decomp
     comm = fdcp.comm
     np = MPI.Comm_size(comm)
     me = MPI.Comm_rank(comm)
@@ -3174,6 +3207,8 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     per = gathered ? 5 : 4
     sendbuf = _fit!(shell.buffers.send, per * ringlen * n_owned)
     if _device_path(Qf)
+        # Behind a barrier, as in `_impose_shell!`.
+        fine = _cold(getfield(solver, :patches)[lt.fine_index])
         _impose_shell_gradients_dev!(solver, fine, Qf, lt, fill, owned, sendbuf, shift,
                                      n_cons, fallback)
         return states
@@ -3486,10 +3521,13 @@ function prolong_level_ghosts!(solver, states)
         t0 = time_ns()
         _exchange_boxes!(solver, states, lev, lt -> lt.box_gather, false)
         _wait!(solver, t0)
-        for lt in lev.transfers
+        patches = getfield(solver, :patches)
+        for (t, lt) in enumerate(lev.transfers)
             # The imposition is collective over the tile's own communicator,
             # which its holders alone enter.
-            lt.fine_index == 0 || _impose_shell!(solver, states, lt, BoxFill())
+            lt.fine_index == 0 ||
+                _impose_shell_at!(solver, states, lev.transfers, t, BoxFill(),
+                                  _cold(patches[lt.fine_index]))
             # The imposed shell replaces the halo values the previous exchange
             # left wherever the two overlap (the edge-owning ranks' outer
             # halos); interior rank-boundary halos keep their exchanged values,
@@ -3825,5 +3863,14 @@ endpoint states, as [`prolong_level_ghosts!`](@ref) describes.
 """
 function hermite_level_shell!(solver, states, lt::LevelTransfer, θ, dt)
     _impose_shell!(solver, states, lt, HermiteFill(θ, dt))
+    return states
+end
+
+# The same for the transfer `transfers[t]`, the form the subcycled driver
+# calls (`_impose_shell_at!`).
+function hermite_level_shell!(solver, states, transfers::AbstractVector, t::Int, θ, dt)
+    patches = getfield(solver, :patches)
+    _impose_shell_at!(solver, states, transfers, t, HermiteFill(θ, dt),
+                      _cold(patches[transfers[t].fine_index]))
     return states
 end

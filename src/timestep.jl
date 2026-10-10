@@ -595,9 +595,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # entered only by the ranks that own that tile.
     function shell!(θ)
         _ledger_open!(solver, states, lev)
-        for lt in lev.transfers
+        for (t, lt) in enumerate(lev.transfers)
             lt.fine_index == 0 ||
-                hermite_level_shell!(solver, states, lt, θ, parent_dt)
+                hermite_level_shell!(solver, states, lev.transfers, t, θ, parent_dt)
         end
         _ledger!(solver, states, :shell, lev)
     end
