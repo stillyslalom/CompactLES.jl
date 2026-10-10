@@ -542,10 +542,11 @@ Names are spelled out in full. Current vocabulary:
   quadrature's node factor), `GATE_REACH` / `GATE_WIDTH` / `_reflux_density!`
   / `_reflux_gated` (the gate, tested on the window's densities summed over
   the level's ranks, so it reads no halo),
-  `RefluxCarry` (what the positivity guard holds back), `REFLUX_DEFER` /
-  `_reflux_component!` (the child's Ω rate taken once per component inside
-  `compute_rhs!`'s loop), `_reflux_gather!` / `_reflux_guard!` /
-  `_reflux_change!` (the apply's per-patch passes, function barriers),
+  `RefluxCarry` (what the positivity guard holds back), `reflux_deferred`
+  (a `Patch` field) / `_reflux_component!` (the child's Ω rate taken once
+  per component inside `compute_rhs!`'s loop), `_reflux_gather!` /
+  `_reflux_guard!` / `_reflux_change!` (the apply's per-patch passes,
+  function barriers),
   `_junction_integral` (Ω in `volume_integral`), `_ledger_junction_faces!`
   (the ledger's junction columns from the registers)
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage

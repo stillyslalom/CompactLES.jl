@@ -1802,11 +1802,11 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
         fields = [ConservedState(p.ghost_flux[d]) for p in patches]
         _exchange_ghosts!(solver, fields, comm, records...)
     end
-    lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, false,
-                                    lev, states)
+    lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, lev,
+                                    states)
     # The solves run as the right-hand sides did: per patch, or per stack.
     if isempty(lev.stacks)
-        _foreach_tile(_tile_ghost_flux_solves!, solver, lev, true, states, dQs, n_cons)
+        _foreach_tile(_tile_ghost_flux_solves!, solver, lev, states, dQs, n_cons)
     else
         for st in lev.stacks
             _ghost_flux_solves!(PatchSolver(solver, st.patch), _stack_state(st, states),

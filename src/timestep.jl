@@ -258,15 +258,14 @@ end
 #
 # The groups are formed only where every tile is below THREAD_MIN_WORK and
 # nothing inside a tile's evaluation is shared with another tile or
-# communicates: host storage, every tile held whole by this rank (its line solves and halo fills are then local, and no MPI
-# call is made off the main thread), no paired fold, whose butterfly exchanges
-# with a partner, no `CompositeBC` face, whose scratch is filled on first use,
-# no transport domain check, which reduces inside every right-hand side, and
-# the budget ledger off, whose accumulators are the rank's. Where a phase
-# takes divergences or filter passes (`alone`), a tile carrying coarse-fine
-# junction captures runs by itself first: the deferral of the junction's Ω
-# terms (`REFLUX_DEFER`) is one flag for the process, set and cleared by each
-# right-hand side.
+# communicates: host storage, every tile held whole by this rank (its line
+# solves and halo fills are then local, and no MPI call is made off the main
+# thread), no paired fold, whose butterfly exchanges with a partner, no
+# `CompositeBC` face, whose scratch is filled on first use, no transport
+# domain check, which reduces inside every right-hand side, and the budget
+# ledger off, whose accumulators are the rank's. A tile's coarse-fine junction
+# hooks write its own captures and read its own deferral flag
+# (`Patch.reflux_deferred`), so a tile with captures runs with the others.
 
 # The groups of `lev`'s tiles that may run concurrently, each a list of patch
 # indices in level order, or `nothing` where the level runs tile by tile.
@@ -301,10 +300,9 @@ function _tile_concurrent(@nospecialize(p::Patch))
 end
 
 # `f(solver, pi, args...)` for every tile `pi` of `lev`: concurrently in the
-# groups of `_tile_groups`, or in level order where there are none. `alone`
-# runs a tile with junction captures by itself (see above). Collectives must
-# stay outside `f`; every rank calls this with the same `lev`.
-function _foreach_tile(f::F, solver::Solver, lev::Level, alone::Bool,
+# groups of `_tile_groups`, or in level order where there are none.
+# Collectives must stay outside `f`; every rank calls this with the same `lev`.
+function _foreach_tile(f::F, solver::Solver, lev::Level,
                        args::Vararg{Any,N}) where {F,N}
     groups = _tile_groups(solver, lev)
     if groups === nothing
@@ -313,31 +311,21 @@ function _foreach_tile(f::F, solver::Solver, lev::Level, alone::Bool,
         end
         return nothing
     end
-    patches = getfield(solver, :patches)
-    if alone
-        for pi in lev.patches
-            _junction_tile(patches[pi]) && f(solver, pi, args...)
-        end
-    end
     tasks = Vector{Task}(undef, length(groups))
     for (k, g) in enumerate(groups)
-        tasks[k] = Threads.@spawn _tile_group!(f, solver, g, alone, args...)
+        tasks[k] = Threads.@spawn _tile_group!(f, solver, g, args...)
     end
     _wait_tiles(tasks)
     return nothing
 end
 
-function _tile_group!(f::F, solver::Solver, group::Vector{Int}, alone::Bool,
+function _tile_group!(f::F, solver::Solver, group::Vector{Int},
                       args::Vararg{Any,N}) where {F,N}
-    patches = getfield(solver, :patches)
     for pi in group
-        alone && _junction_tile(patches[pi]) && continue
         f(solver, pi, args...)
     end
     return nothing
 end
-
-_junction_tile(p) = !isempty(getfield(p, :reflux_captures))
 
 # Wait for every task before raising the first failure, so that no tile is
 # still running when the caller unwinds, and raise the exception the tile
@@ -388,7 +376,7 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
         # configuration either takes this on every step or never.
         _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce)
     elseif isempty(lev.stacks)
-        _foreach_tile(_enforced_tile_rhs!, solver, lev, true, states, dQs,
+        _foreach_tile(_enforced_tile_rhs!, solver, lev, states, dQs,
                       prepared, enforce)
     else
         # A stacked level is device storage, which the ledger does not
@@ -429,7 +417,7 @@ function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
     patches = getfield(solver, :patches)
     n_cons = solver.equations.n_cons
     if isempty(lev.stacks)
-        _foreach_tile(_tile_update!, solver, lev, false, n_cons, states, dQs, dus,
+        _foreach_tile(_tile_update!, solver, lev, n_cons, states, dQs, dus,
                       A, B, dt)
         # The junction registers follow the stage update one tile at a time.
         for pi in lev.patches
@@ -462,7 +450,7 @@ _tile_filter!(solver, pi::Int, states) =
 
 function _level_filter!(solver::Solver, lev::Level, states)
     if isempty(lev.stacks)
-        _foreach_tile(_tile_filter!, solver, lev, true, states)
+        _foreach_tile(_tile_filter!, solver, lev, states)
         return states
     end
     for st in lev.stacks
@@ -931,7 +919,7 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
     S = eltype(eltype(states))
     swept = Vector{Tuple{S,S,NTuple{3,S}}}(undef, length(patches))
     for lev in getfield(solver, :levels)
-        _foreach_tile(_tile_rate!, solver, lev, false, states, swept)
+        _foreach_tile(_tile_rate!, solver, lev, states, swept)
     end
     for i in eachindex(patches)
         r, m, rd = swept[i]

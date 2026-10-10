@@ -595,18 +595,25 @@ end
 # itself (`_reflux_component!`), less the pressure gradient's, rather than
 # from each divergence's increment: one read of Ω's nodes where every
 # divergence along every dimension took two. A divergence outside the loop
-# (the second phase of a level's right-hand side) takes its increment.
-const REFLUX_DEFER = Ref(false)
-
-@noinline function _reflux_defer!(solver, on::Bool)
-    REFLUX_DEFER[] = on && !isempty(_reflux_captures(solver))
+# (the second phase of a level's right-hand side) takes its increment. The
+# deferral is held on the patch (`Patch.reflux_deferred`), so that the tiles
+# of a level evaluated concurrently each read their own.
+@noinline function _reflux_defer!(solver::PatchSolver, on::Bool)
+    p = getfield(solver, :patch)
+    setfield!(p, :reflux_deferred, on && !isempty(getfield(p, :reflux_captures)))
     return nothing
 end
+# A single-patch `Solver` holds no junction, and its hooks read no deferral.
+_reflux_defer!(solver, on::Bool) = nothing
+
+@inline _reflux_deferred(solver::PatchSolver) =
+    getfield(getfield(solver, :patch), :reflux_deferred)
+@inline _reflux_deferred(solver) = false
 
 # The child's rate of Ω from component `c` of `dQ`, which the component's
 # divergences have filled since it was zeroed.
 @noinline function _reflux_component!(solver, dQ, c::Int)
-    REFLUX_DEFER[] || return nothing
+    _reflux_deferred(solver) || return nothing
     q = _reflux_raw(dQ)
     inv_J = solver.inv_J
     @inbounds for cap in _reflux_captures(solver)
@@ -635,7 +642,7 @@ end
     caps = _reflux_captures(solver)
     isempty(caps) && return nothing
     node = _reflux_node_term(solver, d, scale)
-    band = !REFLUX_DEFER[] || node
+    band = !_reflux_deferred(solver) || node
     q = _reflux_raw(dQ)
     @inbounds for cap in caps
         flux = cap.d == d && !node
@@ -668,7 +675,8 @@ end
     node = _reflux_node_term(solver, d, scale)
     # Under the component loop's deferral the pressure gradient's increment
     # is in the `dQ` the component's Ω is taken from, so it is returned here.
-    node && !REFLUX_DEFER[] && return nothing
+    deferred = _reflux_deferred(solver)
+    node && !deferred && return nothing
     q = _reflux_raw(dQ)
     inv_J = solver.inv_J
     @inbounds for cap in caps
@@ -688,7 +696,7 @@ end
             end
             continue
         end
-        if cap.child && !REFLUX_DEFER[]
+        if cap.child && !deferred
             for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
                 cap.entry[l] == 0 && continue
                 Δ = zero(T)

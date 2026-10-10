@@ -1679,8 +1679,9 @@ _fine_bc(face::Int, on_boundary::Bool, bc) =
 function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs,
                   comm::MPI.Comm)
     # `field_tuples` is derived, and the junction captures are rebuilt for
-    # the new layout.
-    names = filter(f -> f ∉ (:field_tuples, :reflux_captures), fieldnames(typeof(p)))
+    # the new layout, their deferral clear.
+    names = filter(f -> f ∉ (:field_tuples, :reflux_captures, :reflux_deferred),
+                   fieldnames(typeof(p)))
     args = map(names) do f
         f === :id ? id : f === :faces ? faces : f === :bcs ? bcs :
         f === :comm ? comm : getfield(p, f)

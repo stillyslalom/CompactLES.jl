@@ -72,6 +72,7 @@
 #   covered overwritten child_deep   `_fill_covered!` at setup and at every
 #       regrid.
 #   child_masked   `_arm_child_mask!` at every right-hand side.
+#   reflux_deferred   `compute_rhs!`, around its component loop.
 #   ghost_flux   written and consumed within one level's right-hand side.
 #   level_scratch   within one parent step.
 #   pairbuf pairout   within one line operation.
@@ -424,8 +425,9 @@ parameters of their own for a third reason: `nothing` in either holds a whole
 operator path (the fold closures, the `:d8` detector) off the default
 configuration's inference path entirely.
 
-The struct is mutable, although no field is reassigned after construction,
-because of those dynamic calls and the `_cold` barriers: an argument passed
+The struct is mutable, although no field but the flags `child_masked` and
+`reflux_deferred` is reassigned after construction, because of those dynamic
+calls and the `_cold` barriers: an argument passed
 through one is boxed, and an immutable `Patch`, held inline in its
 [`PatchSolver`](@ref) with the plans and the workspace it carries, would be
 copied whole into each box, and into every `PatchSolver` built from an entry
@@ -529,6 +531,11 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # a child (`RefluxCapture`, src/reflux.jl); rebuilt whenever the layout
     # changes, empty on a solver without refinement.
     reflux_captures::RC
+    # Whether the right-hand side running on this patch defers the child's
+    # rate of Ω to its component loop (`_reflux_defer!`): set around that
+    # loop and clear outside it. Per patch, so that the tiles of a level
+    # evaluated concurrently each hold their own.
+    reflux_deferred::Bool
 end
 
 # The positional argument list every construction site uses; `field_tuples`
@@ -556,7 +563,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
                  sensed_fields, child_deep, child_masked, field_tuples,
                  RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
-                               typeof(similar(rho, 0))}[])
+                               typeof(similar(rho, 0))}[], false)
 end
 
 # --- Covered masks ----------------------------------------------------------

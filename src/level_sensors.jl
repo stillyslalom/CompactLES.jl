@@ -127,7 +127,7 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
                 _tile_bcs!(solver, _cold(patches[pi]), states, pi)
             end
         else
-            _foreach_tile(_enforced_tile!, solver, lev, false, states)
+            _foreach_tile(_enforced_tile!, solver, lev, states)
         end
     end
     _level_artificial!(solver, lev, states, prepared)
@@ -139,7 +139,7 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
                          _stack_state(st, dQs), true, true)
         end
     else
-        _foreach_tile(_current_tile_rhs!, solver, lev, true, states, dQs)
+        _foreach_tile(_current_tile_rhs!, solver, lev, states, dQs)
     end
     return nothing
 end
@@ -167,9 +167,7 @@ end
 # every such call.
 function _each_unit(f::F, solver::Solver, lev::Level, states, arg=nothing) where {F}
     if isempty(lev.stacks)
-        # No unit takes a divergence or a filter pass, so a tile with junction
-        # captures need not run alone (`_foreach_tile`).
-        _foreach_tile(_tile_unit!, solver, lev, false, f, states, arg)
+        _foreach_tile(_tile_unit!, solver, lev, f, states, arg)
     else
         for st in lev.stacks
             f(PatchSolver(solver, st.patch), _stack_state(st, states), arg)
