@@ -521,14 +521,43 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
             pointwise!(_ring_accum_point!, out, nx, ny, nz,
                        out, signed, h_d, ih_d, wpow, maxred, o1, o2, o3)
         else
-            pointwise!(_delta4_point!, out, nx, ny, nz,
-                       out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
+            # The nodes whose taps may meet a clamp or a mirror, at most two at
+            # each end, take the general body; the rest of the line takes the
+            # stencil with no edge logic, which vectorizes along x. Both sum
+            # the same terms in the same order there, so the split leaves the
+            # sensor bitwise as one launch of the general body would.
+            lo = (lomin > -1) | mirror_lo | wall_lo ? 2 : 0
+            hi = (himax < n_d + 2) | mirror_hi | wall_hi ? 2 : 0
+            n3p = nz + 2 * o3
+            general = (out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
                        mirror_lo, mirror_hi, fsgn, wall_lo, wall_hi, wsgn,
-                       maxred, nz + 2 * o3, o1, o2, o3)
+                       maxred, n3p, o1, o2, o3)
+            if n_d < lo + hi + 1
+                pointwise!(_delta4_point!, out, nx, ny, nz, general..., (0, 0, 0))
+                continue
+            end
+            if lo > 0
+                pointwise!(_delta4_point!, out, _along(nx, ny, nz, d, lo)...,
+                           general..., (0, 0, 0))
+            end
+            pointwise!(_delta4_interior_point!, out,
+                       _along(nx, ny, nz, d, n_d - lo - hi)...,
+                       out, f, h_d, ih_d, wpow, d, maxred, _shift(d, lo),
+                       o1, o2, o3)
+            if hi > 0
+                pointwise!(_delta4_point!, out, _along(nx, ny, nz, d, hi)...,
+                           general..., _shift(d, n_d - hi))
+            end
         end
     end
     return out
 end
+
+# The launch box with its extent along `d` replaced by `n`, and the index
+# shift along `d` that starts it at node `s + 1`.
+@inline _along(nx, ny, nz, d::Int, n::Int) =
+    (d == 1 ? n : nx, d == 2 ? n : ny, d == 3 ? n : nz)
+@inline _shift(d::Int, s::Int) = (d == 1 ? s : 0, d == 2 ? s : 0, d == 3 ? s : 0)
 
 # The signed δ⁴ along `d` of the line through `il`. A ghost tap past a folded
 # end is read from the half-offset mirror scaled by `sgn`, one past a wall from
@@ -558,9 +587,11 @@ end
 
 @inline function _delta4_point!(out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
                                 mirror_lo, mirror_hi, fsgn, wall_lo, wall_hi,
-                                wsgn, maxred, n3p, o1, o2, o3,
+                                wsgn, maxred, n3p, o1, o2, o3, s,
                                 i, j, k)
     @inbounds begin
+        # `s` shifts the launch box along the line (`delta4_sum!`).
+        i += s[1]; j += s[2]; k += s[3]
         I = CartesianIndex(i + o1, j + o2, k + o3)
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
         # The line coordinate along d, which the clamp below compares with
@@ -590,6 +621,24 @@ end
         end
         # `ih_d` is read at `I`, the same index the field is, so a stacked
         # level picks up the tile's own geometry through the shift in `k`.
+        v = _sensor_weight(h_d, ih_d[I], wpow) * abs(acc)
+        out[I] = maxred ? max(out[I], v) : out[I] + v
+    end
+    return nothing
+end
+
+# `_delta4_point!` at a node whose five taps all lie on the block, read in
+# place: the clamped branch there without the clamp, which leaves each tap
+# where it is.
+@inline function _delta4_interior_point!(out, f, h_d, ih_d, wpow, d, maxred, s,
+                                         o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1 + s[1], j + o2 + s[2], k + o3 + s[3])
+        e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
+        acc = zero(eltype(out))
+        for m in -2:2
+            acc += D4[m + 3] * f[I + m * e]
+        end
         v = _sensor_weight(h_d, ih_d[I], wpow) * abs(acc)
         out[I] = maxred ? max(out[I], v) : out[I] + v
     end
