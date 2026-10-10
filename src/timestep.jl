@@ -935,75 +935,103 @@ end
 
 function _local_max_rate_loop(solver::SolverLike, Q)
     decomp = solver.decomp
-    o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    n_species = solver.equations.n_species
-    tr = solver.transport
-    modes = solver.truncation
+    T = eltype(Q)
+    # The fields are read into a tuple before the sweep, so the per-point body
+    # takes plain arrays and no property lookup through the solver.
+    fields = (Q, solver.rho, solver.c, solver.cp_mix, solver.u, solver.v, solver.w,
+              solver.p, solver.T_ion, solver.inv_h, solver.h, decomp.active,
+              decomp.n_halo_d, solver.equations.n_species, solver.transport,
+              solver.truncation, _sharpening_constants(solver), solver.eos,
+              solver.field_tuples.Y, solver.mu_art, solver.beta_art,
+              solver.kappa_art, solver.D_art, solver.metric, solver.inv_r,
+              solver.cot_over_r, solver.overwritten,
+              _overwritten_weight(T(solver.cfl)))
+    # Chunks of the flattened (j, k) range, each reduced on its own and then
+    # combined. Maximum and minimum are exact, so the result does not depend
+    # on how the points are grouped: the threaded sweep returns the serial
+    # one's values bit for bit.
+    outer = outer_indices(ny, nz)
+    chunks = _line_chunks(length(outer))
+    parts = Vector{NTuple{5,T}}(undef, length(chunks))
+    @threaded nx * ny * nz for t in 1:length(chunks)
+        @inbounds parts[t] = _rate_sweep(fields, outer, chunks[t], nx)
+    end
+    rate, ρ_min, r1, r2, r3 = zero(T), T(Inf), zero(T), zero(T), zero(T)
+    for part in parts
+        rate = max(rate, part[1])
+        ρ_min = min(ρ_min, part[2])
+        r1 = max(r1, part[3]); r2 = max(r2, part[4]); r3 = max(r3, part[5])
+    end
+    return (rate, ρ_min, (r1, r2, r3))
+end
+
+function _rate_sweep(fields, outer, range, nx)
+    Q, rho, carr, cparr, u, v, w, parr, Tarr, inv_h, h, active, halo, n_species,
+        tr, modes, sharp, eos, Y, mu_art, beta_art, kappa_art, D_art, metric,
+        inv_r, cot_over_r, overwritten, weight = fields
+    o1, o2, o3 = halo
     capped = _truncating(modes)
-    sharp = _sharpening_constants(solver)
     T = eltype(Q)
     rate = zero(T)
     ρ_min = T(Inf)
     r1 = zero(T); r2 = zero(T); r3 = zero(T)
-    overwritten = solver.overwritten
     masked = !isempty(overwritten)
-    weight = _overwritten_weight(T(solver.cfl))
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        ρQ = zero(T)
-        for sp in 1:n_species
-            ρQ += Q[I, sp]
-        end
-        ρ_min = min(ρ_min, ρQ)
-        ρ = solver.rho[I]
-        ri = one(T) / ρ
-        c = solver.c[I]
-        cp = solver.cp_mix[I]
-        uv = (solver.u[I], solver.v[I], solver.w[I])
-        acc = zero(T)
-        dsum = zero(T)
-        for d in 1:3
-            decomp.active[d] || continue      # no resolved variation
-            idx = solver.inv_h[d][I] / solver.h[d]      # inverse physical spacing
-            # At a truncated ring the θ spacing is that of the highest mode kept.
-            d == 2 && capped && (idx = _theta_spacing(modes, I[1], idx))
-            acc += abs(uv[d]) * idx
-            dsum += idx * idx
-            # The direction's own hyperbolic rate, the same expression as the
-            # launch path's so the two agree bitwise.
-            rd = (abs(uv[d]) + c) * idx
-            if d == 1
-                r1 = max(r1, rd)
-            elseif d == 2
-                r2 = max(r2, rd)
-            else
-                r3 = max(r3, rd)
+    @inbounds for jk in range
+        j, k = Tuple(outer[jk])
+        for i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            ρQ = zero(T)
+            for sp in 1:n_species
+                ρQ += Q[I, sp]
             end
+            ρ_min = min(ρ_min, ρQ)
+            ρ = rho[I]
+            c = carr[I]
+            cp = cparr[I]
+            uv = (u[I], v[I], w[I])
+            acc = zero(T)
+            dsum = zero(T)
+            for d in 1:3
+                active[d] || continue      # no resolved variation
+                idx = inv_h[d][I] / h[d]      # inverse physical spacing
+                # At a truncated ring the θ spacing is that of the highest mode kept.
+                d == 2 && capped && (idx = _theta_spacing(modes, I[1], idx))
+                acc += abs(uv[d]) * idx
+                dsum += idx * idx
+                # The direction's own hyperbolic rate, the same expression as the
+                # launch path's so the two agree bitwise.
+                rd = (abs(uv[d]) + c) * idx
+                if d == 1
+                    r1 = max(r1, rd)
+                elseif d == 2
+                    r2 = max(r2, rd)
+                else
+                    r3 = max(r3, rd)
+                end
+            end
+            acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
+            # Curvature-source stiffness. When an angular dimension is RESOLVED,
+            # its source rate (|u_ang|/r) is smaller than its advective rate
+            # (|u_ang|/(r Δang)) and is covered above. When it is COLLAPSED
+            # (axisymmetric flow with swirl is the important case), the
+            # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
+            # source at small r. That term is added here.
+            acc += _curvature_rate_point(metric, active[2], active[3], inv_r,
+                                         cot_over_r, I, uv)
+            molecular = transport_at(tr, eos, Tarr, rho, cparr, Y, I)
+            ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, molecular, mu_art,
+                                beta_art, kappa_art, D_art, I, n_species)
+            acc += _sharpening_rate(sharp, c, inv_h, h, active, I)
+            acc += 2 * ν * dsum
+            # An overwritten node's rate is scaled (`Patch.overwritten`); its
+            # density and its direction rates above, which the positivity check
+            # and the filter's relaxation read, are not.
+            masked && overwritten[I] != 0 && (acc *= weight)
+            rate = max(rate, acc)
         end
-        acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
-        # Curvature-source stiffness. When an angular dimension is RESOLVED,
-        # its source rate (|u_ang|/r) is smaller than its advective rate
-        # (|u_ang|/(r Δang)) and is covered above. When it is COLLAPSED
-        # (axisymmetric flow with swirl is the important case), the
-        # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
-        # source at small r. That term is added here.
-        acc += curvature_rate(solver, solver.metric, I, uv)
-        molecular = transport_at(tr, solver.eos, solver.T_ion, solver.rho,
-                                  solver.cp_mix, solver.field_tuples.Y, I)
-        ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
-                            molecular, solver.mu_art, solver.beta_art,
-                            solver.kappa_art, solver.D_art, I,
-                            solver.equations.n_species)
-        acc += _sharpening_rate(sharp, c, solver.inv_h, solver.h, decomp.active, I)
-        acc += 2 * ν * dsum
-        # An overwritten node's rate is scaled (`Patch.overwritten`); its
-        # density and its direction rates above, which the positivity check
-        # and the filter's relaxation read, are not.
-        masked && overwritten[I] != 0 && (acc *= weight)
-        rate = max(rate, acc)
     end
-    return (rate, ρ_min, (r1, r2, r3))
+    return (rate, ρ_min, r1, r2, r3)
 end
 
 """
