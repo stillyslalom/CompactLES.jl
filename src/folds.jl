@@ -231,6 +231,10 @@ end
     CartesianIndex(i1, i2, i3)
 end
 
+# The butterfly reads only the decomposition, given directly or on a solver.
+@inline _decomp_of(decomp::Decomp) = decomp
+@inline _decomp_of(solver) = solver.decomp
+
 """
     pair_forward!(w, f, solver, fold, σ)
 
@@ -242,10 +246,11 @@ When the partner block is on this rank, the lower half of the mapping dimension
 (`pdim`, or `revdim` when the shift is degenerate) receives e at the canonical
 slot and the upper half receives o at the partner slot. Otherwise each rank
 keeps the single combo named by `keep_e` after a pairwise full-block
-`MPI.Sendrecv!`, so both partners must reach this call.
+`MPI.Sendrecv!`, so both partners must reach this call. `solver` may also be
+the `Decomp` alone, which is all of it the butterfly reads.
 """
 function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
-    decomp = solver.decomp
+    decomp = _decomp_of(solver)
     pair = fold.pair
     sf = eltype(f)(σ)
     o1, o2, o3 = decomp.n_halo_d
@@ -311,10 +316,11 @@ Inverse butterfly applied in place to the interior of the operator result
 untouched and `out` is returned.
 
 When the partner block is off-rank the result blocks are exchanged through one
-pairwise `MPI.Sendrecv!`, so both partners must reach this call.
+pairwise `MPI.Sendrecv!`, so both partners must reach this call. As for
+`pair_forward!`, `solver` may be the `Decomp` alone.
 """
 function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
-    decomp = solver.decomp
+    decomp = _decomp_of(solver)
     pair = fold.pair
     sf = eltype(out)(σ)
     o1, o2, o3 = decomp.n_halo_d
@@ -419,9 +425,18 @@ on-rank, `solver.pairout` for the second parity result. Neither may alias `out`.
 The line solves are collective along the folded dimension and a paired fold
 adds pairwise exchanges, so every rank must reach this call.
 """
-function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv),
-                     σw::Int=1, ghosts::Bool=false)
-    decomp = solver.decomp
+@inline fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv),
+                     σw::Int=1, ghosts::Bool=false) =
+    _fold_apply!(out, f, solver.decomp, solver.pairbuf, solver.pairout, fold, σ, role,
+                 σw, ghosts)
+
+# The body reads the decomposition and the pair buffers alone, so it is keyed
+# on the fold, the role and the array types, not on the solver: every solver
+# type with the same fold and scheme shares one compiled copy. Keyed on the
+# solver, its five roles were compiled again for each new solver type, about
+# 4.9k LLVM instructions on each documentation page with a fold.
+function _fold_apply!(out, f, decomp::Decomp, pairbuf, pairout, fold::FoldSpec,
+                      σ::Int, role::Val, σw::Int, ghosts::Bool)
     d = fold.dim
     if fold.pair === nothing
         fold_fill!(f, decomp, d, fold.lo, fold.hi, σ)
@@ -429,8 +444,8 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         return out
     end
     pair = fold.pair
-    w = solver.pairbuf
-    pair_forward!(w, f, solver, fold, σ)
+    w = pairbuf
+    pair_forward!(w, f, decomp, fold, σ)
     exchange_dim!(w, decomp, d)   # rank-boundary halos along the fold dim
     if pair.local_pair
         # Mixed parities per pdim half: run both plans and select. The line
@@ -446,13 +461,13 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         fold_fill!(w, decomp, d, fold.lo, fold.hi, 1)
         apply_along!(out, _fold_plan(fold, 1, role, σw, ghosts), w, decomp)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, -1)
-        apply_along!(solver.pairout, _fold_plan(fold, -1, role, σw, ghosts), w, decomp)
+        apply_along!(pairout, _fold_plan(fold, -1, role, σw, ghosts), w, decomp)
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
         o1, o2, o3 = decomp.n_halo_d
         nx, ny, nz = decomp.n_local
         pointwise!(_pair_select_point!, out, nx, ny, nz,
-                   out, solver.pairout, sd, half, o1, o2, o3)
+                   out, pairout, sd, half, o1, o2, o3)
     else
         # The e combo mirrors even and the o combo odd, as in the local
         # branch above; σ plays no part in the mirror.
@@ -460,7 +475,7 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σc)
         apply_along!(out, _fold_plan(fold, σc, role, σw, ghosts), w, decomp)
     end
-    pair_backward!(out, solver, fold, σ)
+    pair_backward!(out, decomp, fold, σ)
     return out
 end
 
