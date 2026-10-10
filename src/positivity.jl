@@ -791,7 +791,11 @@ _positivity_setup!(solver, Q) = false
 function _positivity_setup!(solver, Q::Union{ConservedState,Vector{<:ConservedState}})
     lim = getfield(solver, :positivity)
     lim === nothing && return false
-    return _positivity_bounds!(lim, solver, Q)
+    # The limiter is off by default, so its bounds and the limiter
+    # construction a refined run reaches through them sit behind `_cold`; a
+    # declared limiter type in the call would otherwise have them compiled
+    # with every solver type's run loop.
+    return _positivity_bounds!(lim, _cold(solver), Q)::Bool
 end
 
 _positivity_bounds!(lim::PositivityLimiter, solver, Q) =

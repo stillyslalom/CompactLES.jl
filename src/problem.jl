@@ -1161,6 +1161,10 @@ that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
+    # The problem is not specialized on: its type is that of the initial
+    # condition, a closure new to every script, and nothing in the setup
+    # path reads the closure but `initialize!`, which is compiled for it.
+    @nospecialize prob
     solver, Q = _setup(prob, num)
     # The deck as given, before the default control is filled in, so a phase
     # change to other boundary conditions derives that default again.
@@ -1169,6 +1173,7 @@ function setup(prob::Problem, num::Numerics)
 end
 
 function _setup(prob::Problem, num::Numerics)
+    @nospecialize prob
     num.control === nothing && (num = Numerics(num; control=_default_control(prob)))
     legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing
@@ -1185,6 +1190,7 @@ end
 
 function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                                   seed_only::Bool=false)
+    @nospecialize prob
     origin = ntuple(d -> prob.domain[d][1], 3)
     L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
     all(d -> all(isfinite, prob.domain[d]), 1:3) ||

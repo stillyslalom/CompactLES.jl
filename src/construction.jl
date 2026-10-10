@@ -295,6 +295,13 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 level_boundaries::Bool=true,
                 implicit::Union{Nothing,ImplicitConduction}=nothing,
                 positivity_limiter::Bool=false) where {T}
+    # One compiled body for every configuration of a precision. Specialized,
+    # this body was compiled again for each combination of the types of its
+    # arguments, the user's tuple of boundary conditions among them, at
+    # 12k LLVM instructions a time. It runs once per solver, assembles
+    # objects and calls the routines that build the grid-sized arrays, which
+    # are compiled for the concrete types they are called with.
+    @nospecialize
     bcs = _face_conditions(bcs)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)

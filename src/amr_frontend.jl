@@ -424,6 +424,7 @@ function _amr_seed_region(n_global::NTuple{3,Int}, n_halo::Int)
 end
 
 function _setup_amr(prob, num, amr::AMR)
+    @nospecialize prob
     _check_amr_scope(prob, num)
     amr = _resolve_amr(amr, num)
     if amr.initial isa Shape || (amr.initial isa AbstractVector && !isempty(amr.initial) &&
