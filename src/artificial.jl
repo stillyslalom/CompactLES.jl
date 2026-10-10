@@ -487,7 +487,7 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
         # hook: `_face_mirror` stays the one dispatch site of this routine.
         lomin = lo_edge && !(iface && bcs[d][1] isa InterfaceBC) ? 1 : -1
         himax = hi_edge && !(iface && bcs[d][2] isa InterfaceBC) ? n_d : n_d + 2
-        fold = solver.folds[d]
+        fold = _fold_at(solver, d)
         mirror = fold !== nothing
         mirror_lo = mirror && lo_edge && fold.lo
         mirror_hi = mirror && hi_edge && fold.hi
@@ -841,9 +841,9 @@ end
 # only halos, so the in-place pass gives the interior the copy would, without
 # the copy's pass over the array. A paired fold's butterfly and a device plan
 # keep the copy.
-_smooth_in_place(solver, d::Int) = _smooth_in_place(solver.folds[d], solver, d)
+_smooth_in_place(solver, d::Int) = _smooth_in_place(_fold_at(solver, d), solver, d)
 _smooth_in_place(::Nothing, solver, d::Int) =
-    !(_smooth_plan(_plan_at(solver.smooth_plans, d), false) isa DevicePlan)
+    !(_smooth_plan(_operator_plan(solver.smooth_plans, d), false) isa DevicePlan)
 _smooth_in_place(fold::FoldSpec, solver, d::Int) =
     fold.pair === nothing && !(_fold_plan(fold, 1, Val(:smooth), 1, false) isa DevicePlan)
 

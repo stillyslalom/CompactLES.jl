@@ -50,11 +50,16 @@ _ghost_remainder(solver) = _ghost_remainder(solver.interface_flux, solver.art)
 #
 # The measured allocation was about 330 B per operator application and 11.9 kB
 # per RHS on a planar (32, 16, 1) run, compared with 336 B per RHS in 3-D.
-# Branching on `d` reduces this to 160 B per application and 3.8 kB per RHS.
+# Branching on `d` (`_plan_at`) reduces this to 160 B per application and
+# 3.8 kB per RHS: the plan the branches merge is a value of the union of its
+# type and `Nothing`, and such a value is boxed. `_operator_plan` removes that
+# box as well: a slot holding `nothing` raises there, so the branches merge
+# only plans, which share one type, and the operator routing below goes
+# through it.
 #
-# A concrete sentinel plan would remove the remaining union, but constructing
-# one requires a `LineSolver` and communicator for a dimension that is never
-# swept. The explicit branch avoids that unused state.
+# A concrete sentinel plan would remove the union at its source, but
+# constructing one requires a `LineSolver` and communicator for a dimension
+# that is never swept. The explicit branch avoids that unused state.
 #
 # The tuple's shape stays in the `Patch` type for the same reason, and this is
 # the one place where taking configuration out of that type does not pay. Two
@@ -69,6 +74,32 @@ _ghost_remainder(solver) = _ghost_remainder(solver.interface_flux, solver.art)
 # construction: converting a tuple to a wider tuple type returns the narrow
 # value, so an all-`nothing` tuple leaves `PL` unconstrained.
 @inline _plan_at(plans::Tuple, d::Int) = d == 1 ? plans[1] : d == 2 ? plans[2] : plans[3]
+
+# The plan of an operator applied along `d`. A slot holding `nothing` raises,
+# as an operator applied along a dimension without a plan would, so that
+# branch yields no value and the result is inferred as the type of the slots
+# holding a plan, not as its union with `Nothing`.
+@inline _operator_plan(plans::Tuple, d::Int) =
+    d == 1 ? _some_plan(plans[1]) : d == 2 ? _some_plan(plans[2]) : _some_plan(plans[3])
+@inline _some_plan(plan) = plan
+_some_plan(::Nothing) = throw(ArgumentError("no operator plan along this dimension"))
+
+# Whether the plan along `d` is a device plan, tested per tuple position for the
+# same reason.
+@inline _device_plan_at(plans::Tuple, d::Int) =
+    d == 1 ? plans[1] isa DevicePlan :
+    d == 2 ? plans[2] isa DevicePlan : plans[3] isa DevicePlan
+
+# The fold on dimension `d`, or `nothing`. A tuple holding a fold beside
+# `nothing` is heterogeneous, and indexing it with a runtime `d` boxes the
+# tuple; at a constant position the fold, a mutable object, is read as the
+# reference it is.
+@inline _fold_at(solver, d::Int) = _plan_at(solver.folds, d)
+
+# The operator routers below are `@noinline`. Each is small enough that Julia
+# would inline it into every caller, which then carries its fold and mask
+# branches; called, a router is compiled once per argument types, and the
+# package image holds the instances its workload reaches.
 
 """
     deriv_along!(out, f, solver, d, σf)
@@ -85,10 +116,10 @@ holding no part of a fold. At a self-paired fold `f` is also written:
 fold leaves `f` untouched, running the even/odd butterfly through
 `solver.pairbuf` instead.
 """
-function deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
-    fold = solver.folds[d]
+@noinline function deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _plan_at(solver.deriv_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
@@ -110,10 +141,10 @@ loop and the discrete-GCL construction `gcl_cotr!` go through here so the two
 apply the identical operator. Same collective, halo, and fold contract as
 [`deriv_along!`](@ref).
 """
-function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
-    fold = solver.folds[d]
+@noinline function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _plan_at(solver.div_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.div_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:div))
     end
@@ -144,11 +175,11 @@ and a parent patch whose derivatives along `d` take the child mask take the
 two-pass route unchanged. Same collective, halo, and fold contract as
 `deriv_along!`.
 """
-function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
-    fold = solver.folds[d]
-    plan = _plan_at(solver.deriv_plans, d)
-    if fold === nothing && !(plan isa DevicePlan)
-        apply_along_scaled!(out, plan, f, solver.decomp, solver.inv_h[d])
+@noinline function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = _fold_at(solver, d)
+    if fold === nothing && !_device_plan_at(solver.deriv_plans, d)
+        apply_along_scaled!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp,
+                            solver.inv_h[d])
         _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     elseif _fused_fold(solver, fold, d)
         # A self-paired fold is the mirror fill and the plain solve through
@@ -178,13 +209,13 @@ mirror fill; a paired fold, a device plan and a parent patch whose
 derivatives along `d` take the child mask take the two-pass route through
 `solver.tmp_a`. Same collective, halo, and fold contract as `div_along!`.
 """
-function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
+@noinline function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                              σf::Int, inv_J)
-    fold = solver.folds[d]
-    plan = _plan_at(solver.div_plans, d)
+    fold = _fold_at(solver, d)
     _reflux_open!(solver, dQ, c, d, inv_J)
-    if fold === nothing && !(plan isa DevicePlan)
-        apply_along_subtract!(dQ, c, plan, f, solver.decomp, inv_J)
+    if fold === nothing && !_device_plan_at(solver.div_plans, d)
+        apply_along_subtract!(dQ, c, _operator_plan(solver.div_plans, d), f, solver.decomp,
+                              inv_J)
     elseif _fused_fold(solver, fold, d)
         fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
         apply_along_subtract!(dQ, c, _fold_plan(fold, σf, Val(:div), 1, false), f,
@@ -301,7 +332,7 @@ end
 # Whether dimension `d` of the patch can take the mask: active, and not a
 # paired fold.
 function _child_mask_dim(solver::SolverLike, d::Int)
-    fold = solver.folds[d]
+    fold = _fold_at(solver, d)
     return solver.decomp.active[d] && (fold === nothing || fold.pair === nothing)
 end
 
@@ -456,12 +487,13 @@ end
 
 # The plan of the derivative being corrected: the divergence or the gradient
 # plans along `d`, or the fold's own with the field's sign.
-_child_mask_plan(solver, d, σf, ::Val{:div}) =
-    solver.folds[d] === nothing ? _plan_at(solver.div_plans, d) :
-                                  _fold_plan(solver.folds[d], σf, Val(:div), 1, false)
-_child_mask_plan(solver, d, σf, ::Val{:deriv}) =
-    solver.folds[d] === nothing ? _plan_at(solver.deriv_plans, d) :
-                                  _fold_plan(solver.folds[d], σf, Val(:deriv), 1, false)
+function _child_mask_plan(solver, d, σf, role::Val)
+    fold = _fold_at(solver, d)
+    return fold === nothing ? _operator_plan(_role_plans(solver, role), d) :
+                              _fold_plan(fold, σf, role, 1, false)
+end
+_role_plans(solver, ::Val{:div}) = solver.div_plans
+_role_plans(solver, ::Val{:deriv}) = solver.deriv_plans
 
 # sgn · A⁻¹ M B f into `child_solve`, which is returned. The mask is the one
 # the right-hand side armed from its primitives (`_child_mask_along!`); `f`
@@ -656,10 +688,10 @@ end
 Every rank in the directional sub-communicator must call this function. Its
 halo and fold contract matches `deriv_along!`.
 """
-function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
-    fold = solver.folds[d]
+@noinline function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _plan_at(solver.filter_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.filter_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:filter))
     end
@@ -690,11 +722,11 @@ takes. A patch of any other kind ignores it.
 Every rank in the directional sub-communicator must call this function, as for
 `deriv_along!`.
 """
-function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int,
+@noinline function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int,
                        ghosts::Bool=false)
-    fold = solver.folds[d]
+    fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _smooth_plan(_plan_at(solver.smooth_plans, d), ghosts), f,
+        apply_along!(out, _smooth_plan(_operator_plan(solver.smooth_plans, d), ghosts), f,
                      solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:smooth), 1, ghosts)
@@ -745,11 +777,11 @@ a reflecting face of the domain.
 Every rank in the directional sub-communicator must call this function. Its
 halo and fold contract matches `deriv_along!`.
 """
-function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1,
+@noinline function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1,
                      ghosts::Bool=false)
-    fold = solver.folds[d]
+    fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _ring_plan(_plan_at(solver.ring_plans, d), σw, ghosts), f,
+        apply_along!(out, _ring_plan(_operator_plan(solver.ring_plans, d), σw, ghosts), f,
                      solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:ring), σw, ghosts)
@@ -835,11 +867,14 @@ end
 
 # Antipodal signs of velocity and conserved components for the fold (if any)
 # on dimension d; scalars, partial densities, and energy are always +1.
-vel_parity(solver::SolverLike, d::Int, j::Int) =
-    solver.folds[d] === nothing ? 1 : solver.folds[d].sigvel[j]
-cons_parity(solver::SolverLike, d::Int, c::Int) =
-    solver.folds[d] === nothing ? 1 :
-    conserved_parity(solver.equations, solver.folds[d].sigvel, c)
+function vel_parity(solver::SolverLike, d::Int, j::Int)
+    fold = _fold_at(solver, d)
+    return fold === nothing ? 1 : fold.sigvel[j]
+end
+function cons_parity(solver::SolverLike, d::Int, c::Int)
+    fold = _fold_at(solver, d)
+    return fold === nothing ? 1 : conserved_parity(solver.equations, fold.sigvel, c)
+end
 
 assemble_fluxes!(solver::SolverLike, Q) =
     (_assemble_fluxes!(patch_fields(solver), solver.eos, solver.transport,
@@ -1053,11 +1088,17 @@ end
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline function _interface_dim(solver::SolverLike, d::Int)
-    fold = solver.folds[d]
-    fold === nothing &&
-        return _plan_at(solver.div_plans, d) !== _plan_at(solver.deriv_plans, d)
+    fold = _fold_at(solver, d)
+    fold === nothing && return _distinct_at(solver.div_plans, solver.deriv_plans, d)
     return fold.div_plans !== nothing
 end
+
+# `a[d] !== b[d]`, compared at each constant tuple position. Through `_plan_at`
+# the two operands are values of a union of the plan type and `Nothing`, which
+# `!==` boxes: two heap-allocated plans per call, and a refined patch asks once
+# per dimension per conserved component.
+@inline _distinct_at(a::Tuple, b::Tuple, d::Int) =
+    d == 1 ? a[1] !== b[1] : d == 2 ? a[2] !== b[2] : a[3] !== b[3]
 
 # Whether the flux along `d` carries a part beyond the ghost-differenced one:
 # the artificial properties, molecular transport not carried by the ghost
@@ -1181,7 +1222,7 @@ function _ghost_split!(rem, out, solver::SolverLike, F, Q, c::Int, d::Int, Ad,
     nl = decomp.n_local
     pad = decomp.n_halo_d
     nf = padded_extent(decomp)
-    whole = solver.folds[d] !== nothing
+    whole = _fold_at(solver, d) !== nothing
     b1, b2, b3 = ntuple(e -> whole || e == d ? nf[e] : nl[e], 3)
     o1, o2, o3 = ntuple(e -> whole || e == d ? 0 : pad[e], 3)
     vel = (solver.u, solver.v, solver.w)
@@ -1513,21 +1554,23 @@ end
 
 # The sign of component `c`'s flux product across the fold on `d`; 1 without
 # one.
-_flux_sign(solver::SolverLike, d::Int, c::Int) =
-    solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
+function _flux_sign(solver::SolverLike, d::Int, c::Int)
+    fold = _fold_at(solver, d)
+    return fold === nothing ? 1 : fold.sigflux[c]
+end
 
 # dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
 # interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit
 # geometry; a device plan or a fold takes the two-pass route through `tmp_a`,
 # the fold with `f`'s sign `σf` across it.
-function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
+@noinline function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
                               σf::Int)
     decomp = solver.decomp
-    plan = _plan_at(solver.deriv_plans, d)
-    fold = solver.folds[d]
+    fold = _fold_at(solver, d)
     _reflux_open!(solver, dQ, c, d, inv_J)
-    if fold !== nothing || plan isa DevicePlan
-        fold === nothing ? apply_along!(solver.tmp_a, plan, f, decomp) :
+    if fold !== nothing || _device_plan_at(solver.deriv_plans, d)
+        fold === nothing ?
+            apply_along!(solver.tmp_a, _operator_plan(solver.deriv_plans, d), f, decomp) :
             fold_apply!(solver.tmp_a, f, solver, fold, σf, Val(:deriv))
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
@@ -1539,7 +1582,8 @@ function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
                        dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
         end
     else
-        apply_along_subtract!(dQ, c, plan, f, decomp, inv_J)
+        apply_along_subtract!(dQ, c, _operator_plan(solver.deriv_plans, d), f, decomp,
+                              inv_J)
     end
     _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:deriv))
     _reflux_close!(solver, dQ, c, f, d, inv_J)
@@ -2218,7 +2262,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
         for d in 1:3
             decomp.active[d] || continue
             Fdc = solver.flux[d, c]
-            σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
+            σ = _flux_sign(solver, d, c)
             # Setup constants of the patch, identical on every rank of its
             # communicator, so each rank takes the same solves.
             if ghost && _interface_dim(solver, d)

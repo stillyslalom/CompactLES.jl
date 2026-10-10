@@ -2361,7 +2361,7 @@ end
 
 _child_mask!(solver::SolverLike, Q, comps, d::Int) = nothing
 function _child_mask!(ps::PatchSolver, Q, comps, d::Int)
-    fold = ps.folds[d]
+    fold = _fold_at(ps, d)
     fold === nothing || fold.pair === nothing || return nothing
     decomp = ps.decomp
     ns = ps.equations.n_species
@@ -2462,9 +2462,9 @@ end
 # the mask drops, through `solver.tmp_b`. A pair fold's pass runs through its
 # butterfly and is left plain.
 function _drop_child_residual!(out, f, solver::SolverLike, d::Int, σ::Int, mask)
-    fold = solver.folds[d]
+    fold = _fold_at(solver, d)
     fold === nothing || fold.pair === nothing || return out
-    plan = fold === nothing ? _plan_at(solver.filter_plans, d) :
+    plan = fold === nothing ? _operator_plan(solver.filter_plans, d) :
                               _fold_plan(fold, σ, Val(:filter), 1, false)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
