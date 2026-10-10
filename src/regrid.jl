@@ -892,12 +892,16 @@ end
 
 # A regridded fine patch begins with blank artificial properties.  Rebuild them
 # before either the next root CFL estimate or a retry bank can read the new
-# layout; this is shared by direct `regrid!` and run!'s cadence hook.
+# layout; this is shared by direct `regrid!` and run!'s cadence hook. A check
+# that kept the layout recomputes the coefficients alone
+# (`_prime_level_coefficients!`): the rest of a right-hand side writes only
+# what the next step's first evaluation overwrites before reading it.
 function _regrid_prime!(solver, states, workspace, save, changed)
     if solver.art.enabled
         solver.tstage = solver.t
         _presync!(solver, states)
-        _prime_rhs!(solver, states, workspace)
+        changed ? _prime_rhs!(solver, states, workspace) :
+                  _prime_level_coefficients!(solver, states)
     end
     changed && _rebank!(solver, states, save)
     return nothing

@@ -1734,6 +1734,85 @@ function _prime_rhs!(solver::Solver, states::Vector{<:ConservedState}, workspace
     return states
 end
 
+# The coefficients `_prime_rhs!` leaves, without the rest of the right-hand
+# sides: per level, the boundary conditions and the opening of `compute_rhs!`
+# up to its artificial-property step, or the level-wide pass with the
+# compression switch after it, as `_level_rhs!` takes them. The fluxes, the
+# divergences, the ghost fluxes and the junction captures they would write are
+# overwritten by the next step's first evaluation before anything reads them,
+# and `max_rate` reads the coefficients, the state and the primitives alone.
+function _prime_level_coefficients!(solver::Solver, states::Vector{<:ConservedState})
+    for lev in getfield(solver, :levels)
+        status = _prepare_level_transport!(solver, lev, states, false, true,
+                                           solver.comm)
+        _check_transport_status(solver, status)
+        domain = transport_has_domain(solver.transport)
+        prepared, enforce = domain, !domain
+        if _level_sensors(solver, lev)
+            _level_coefficient_pass!(_cold(solver), lev, states, prepared, enforce)
+        elseif isempty(lev.stacks)
+            _foreach_tile(_enforced_tile_coefficients!, solver, lev, states, prepared,
+                          enforce)
+        else
+            patches = getfield(solver, :patches)
+            enforce && for pi in lev.patches
+                apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
+            end
+            for st in lev.stacks
+                _coefficient_step!(PatchSolver(solver, st.patch),
+                                   _stack_state(st, states), prepared, false)
+            end
+        end
+    end
+    return states
+end
+
+# The opening of `compute_rhs!` through its artificial-property step, with the
+# derivative mask released as the right-hand side's end releases it.
+function _coefficient_step!(ps, Q, prepared::Bool, current::Bool)
+    _gradient_step!(ps, Q, prepared, current)
+    _validate_transport_state!(ps, Q; current=true)
+    _artificial_step!(ps, Q, current)
+    _release_child_mask!(ps)
+    return nothing
+end
+
+# One tile's part of `_prime_level_coefficients!`, with the ledger hooks of
+# `_enforced_tile_rhs!`.
+function _enforced_tile_coefficients!(solver, pi::Int, states, prepared::Bool,
+                                      enforce::Bool)
+    patches = getfield(solver, :patches)
+    if enforce
+        _ledger_open!(solver, states, pi)
+        _tile_bcs!(solver, _cold(patches[pi]), states, pi)
+        _ledger!(solver, states, :wall_enforce, pi)
+    end
+    _tile_coefficients!(solver, _cold(patches[pi]), states, pi, prepared)
+    return nothing
+end
+_tile_coefficients!(solver, p, states, pi::Int, prepared::Bool) =
+    _coefficient_step!(PatchSolver(solver, p), states[pi], prepared, false)
+
+# The level-wide pass of `_sensor_level_rhs!` and the compression switch each
+# tile's right-hand side applies after it.
+function _level_coefficient_pass!(solver::Solver, lev::Level, states, prepared::Bool,
+                                  enforce::Bool)
+    patches = getfield(solver, :patches)
+    if enforce
+        if isempty(lev.stacks)
+            _foreach_tile(_enforced_tile!, solver, lev, states)
+        else
+            for pi in lev.patches
+                _tile_bcs!(solver, _cold(patches[pi]), states, pi)
+            end
+        end
+    end
+    _level_artificial!(solver, lev, states, prepared)
+    _each_unit(_unit_switch!, solver, lev, states)
+    return nothing
+end
+_unit_switch!(ps, Q, ::Nothing) = _coefficient_step!(ps, Q, true, true)
+
 # Abandon the current trajectory, restore the savepoint and lower the CFL,
 # returning the new attempt count. Raises `failure` instead when there is no
 # savepoint or the retries are spent. Every failure `run!` can recover from
