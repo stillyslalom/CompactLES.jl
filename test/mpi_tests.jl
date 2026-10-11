@@ -4794,6 +4794,48 @@ include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 include("positivity_mpi.jl")
 
+# ---------------------------------------------------------------------------
+# The incompressible solver (src/incompressible.jl) decomposed against the
+# same run on COMM_SELF: a periodic plane split along x, a slip-walled box
+# split along y, and a no-slip channel and a three-dimensional box with slip
+# walls in z on the default process grid. The pressure solves stop at their
+# tolerance after different iteration counts on the two grids, since the
+# multigrid aggregates follow the blocks, so agreement is to that tolerance
+# and not bitwise.
+function test_incompressible()
+    section("incompressible solver: decomposed against undivided")
+    u2(x, y, z) = (sin(x) * cos(y) + 0.1sin(2y), -cos(x) * sin(y) + 0.1cos(3x), 0.0)
+    u3(x, y, z) = (sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0)
+    cases = (("periodic plane, x split", (SPLITN, 16, 1), (true, true, true),
+              (2π, 2π, 1.0), :slip, splitdims(1), u2),
+             ("slip box, y split", (17, SPLITN + 1, 1), (false, false, true),
+              (π, π, 1.0), :slip, splitdims(2), u2),
+             ("no-slip channel", (SPLITN, 17, 1), (true, false, true),
+              (2π, π, 1.0), :noslip, nothing, u2),
+             ("3-D, slip walls in z", (16, 16, 17), (true, true, false),
+              (2π, 2π, π), :slip, nothing, u3))
+    for (label, n, periodic, lengths, walls, dims, u) in cases
+        s, ref = map(((comm, dims), (MPI.COMM_SELF, nothing))) do (c, g)
+            sv = CL.IncompressibleSolver(n; lengths=lengths, periodic=periodic,
+                                         nu=0.01, walls=walls, dims=g, comm=c)
+            CL.set_velocity!(sv, u)
+            for _ in 1:4
+                CL.step!(sv, 0.02)
+            end
+            sv
+        end
+        shift = CartesianIndex(s.decomp.offset) - CartesianIndex(s.decomp.n_halo_d) +
+                CartesianIndex(ref.decomp.n_halo_d)
+        e = 0.0; scale = 0.0
+        for i in s.dims, I in CL.interior(s.decomp)
+            e = max(e, abs(s.U[i][I] - ref.U[i][I+shift]))
+            scale = max(scale, abs(ref.U[i][I+shift]))
+        end
+        check("against undivided, $label", gmax(e) / gmax(scale), 1e-10)
+        check("divergence, $label", CL.max_divergence(s), 1e-10)
+    end
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -4810,6 +4852,7 @@ const SUITE = (
     ("AMR transfer pair", test_transfer_pair),
     ("staggered operators", test_staggered),
     ("implicit conduction", test_imex_pair),
+    ("incompressible", test_incompressible),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
     ("mode truncation", test_mode_truncation),
@@ -4874,12 +4917,15 @@ const SUITE = (
 # (the timestepping runs, the writers, the checkpoint, the sensor comparisons,
 # the phase change of a uniform grid) count ranks or change block sizes only,
 # and they are the step-bound ones.
+# The incompressible phase's pressure multigrid aggregates within the rank
+# blocks, so its hierarchy changes with the count.
 # The wall-flux phases are absent: a collective below an early return
 # deadlocks once a rank lacks a wall, which every rank does at two ranks.
 const RANK_SHAPE_PHASES = (
     "periodic C6", "pentadiagonal C10", "closed C6", "device line solves",
     "tiled refinement", "partitioned coupling", "AMR transfer pair",
-    "staggered operators", "implicit conduction", "halo consistency",
+    "staggered operators", "implicit conduction", "incompressible",
+    "halo consistency",
     "off-rank folds", "mode truncation", "symmetry plane",
     "level at a symmetry plane", "level on the axis", "folded regrid",
     "NSCBC inflow", "NSCBC level face", "composite face", "freestream",

@@ -71,6 +71,8 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/sphereoutflow.jl`, `test/sphere_dipole.jl`)
 34. [The slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)
     (`bench/annuluswall.jl`, `test/convergence.jl`)
+35. [The incompressible prototype](#the-incompressible-prototype)
+    (`bench/incompressible_checks.jl`, `bench/incompressible_tgv.jl`)
 
 ## The shock battery
 
@@ -9615,3 +9617,84 @@ at t = 0.45 against the same case on nested nodes at a third of the spacing,
 in 4(N − 1) equal steps: 2.51e-4, 8.60e-6, 2.91e-7 on the Cartesian line at
 N = 49, 97, 193 (order 4.88) and 2.77e-4, 1.01e-5, 4.60e-7 on the annulus
 (order 4.62).
+
+## The incompressible prototype
+
+```text
+julia --project=. -t 1 bench/incompressible_checks.jl part=order
+julia --project=. -t 1 bench/incompressible_checks.jl part=energy
+julia --project=. -t 1 bench/incompressible_tgv.jl 32 10.0
+mpiexec -n 8 julia --project=. -t 1 bench/incompressible_tgv.jl 64 10.0
+```
+
+`convection=divergence` on either script gives the divergence-form rows.
+
+`src/incompressible.jl` under its defaults: the skew-symmetric convective term, the pressure
+solve to rtol = 1e-12, and the projection that also removes the state's divergence over one
+step. The design is [INCOMPRESSIBLE.md](INCOMPRESSIBLE.md).
+
+**Order.** The two-dimensional Taylor–Green vortex at ν = 0.1 to t = 1 at cfl 0.2, maximum
+errors of the velocity on its staggered points and of the kinematic pressure at the nodes,
+orders against the previous row:
+
+```
+domain                N    velocity            pressure            CG/stage  divergence
+periodic [0, 2π)²     16   2.022e-7            8.900e-5            6.0       1.1e-15
+                      32   3.186e-9   (5.99)   1.498e-6   (5.89)   7.5       2.1e-14
+                      64   4.987e-11  (6.00)   2.385e-8   (5.97)   7.8       9.5e-15
+slip walls [0, π]²    16   3.186e-9            1.498e-6            10.8      3.9e-14
+                      32   4.987e-11  (6.00)   2.385e-8   (5.97)   10.8      9.4e-15
+                      64   7.797e-13  (6.00)   3.745e-10  (5.99)   10.0      1.5e-14
+```
+
+The slip box at N intervals reproduces the periodic run at 2N points to the printed digits,
+as the mirror is an exact symmetry of the vortex. The divergence form gives the same velocity
+errors and a pressure error eight times smaller (1.155e-5, 1.838e-7, 2.885e-9 periodic).
+Without the divergence term in the projection, at the then-default rtol = 1e-10, the
+divergence grew to 5.5e-9 over the 1223 steps of the N = 64 slip box and the velocity error
+stalled at 8.5e-11 (order 0.35); with it the divergence stays at round-off at any tolerance.
+
+**Energy.** The work of the projected inviscid right-hand side on the kinetic energy relative
+to ‖u‖ ‖P N‖ at the initial field, and K/K0 − 1 after 50 steps at cfl 0.5:
+
+```
+case                  skew: work   K/K0 − 1     divergence: work   K/K0 − 1
+periodic 32²          -1.3e-17     +4.1e-9      -3.0e-17           +1.8e-4
+slip box 33²          -7.8e-14     -1.3e-11     +4.2e-7            -1.1e-5
+no-slip box 33²       -2.6e-4      -4.0e-3      -2.3e-4            -5.3e-3
+3-D slip z 16²×17     -5.0e-18     -2.0e-8      -4.2e-18           +9.8e-3
+```
+
+The skew form conserves the energy to the time integration's error on the periodic and
+slip-walled grids. The divergence form's work is at round-off on the two periodic initial
+fields and not on the evolved ones, whose energy it changes by 1e-4 to 1e-2 in 50 steps. The
+no-slip mirror dissipates under both forms: the tangential velocity is not odd about the
+wall, which the first-order wall node turns into a loss rather than a gain.
+
+**Decomposed runs.** `mpi_tests.jl` phase "incompressible", four steps at Δt = 0.02, the
+maximum velocity difference against the run on one rank relative to the maximum velocity:
+5.7e-16 to 1.7e-13 at np = 2, 4 and 8 on every case, the larger values where the walls or
+the finer blocks make the pressure solves stop at different iteration counts on the two
+grids; the divergence 4.0e-14 to 1.4e-12.
+
+**Three-dimensional Taylor–Green, Re = 1600**, to t = 10 at cfl 0.8, no filter and no model,
+against the spectral reference peak of −dK/dt, 1.286e-2 at t = 8.97. `scheme` is −dK/dt less
+the discrete viscous dissipation at the printed samples, the energy the convective term and
+the time integration remove:
+
+```
+grid  form        peak −dK/dt     at t    scheme at the samples      steps  CG/stage  wall
+32³   divergence  1.349e-2        8.73    −9.7e-3 to −2.8e-5         182    12.6      66 s, 1 rank
+32³   skew        1.090e-2        7.85    −7.6e-5 to +3.0e-6         175    12.6      63 s, 1 rank
+64³   divergence  1.586e-2        8.50    −2.2e-3 to −1.7e-6         355    12.4      310 s, 8 ranks
+64³   skew        1.540e-2        8.68    −5.5e-5 to +3.9e-5         354    12.4      279 s, 8 ranks
+```
+
+The divergence form returns energy to the resolved scales, up to two thirds of the viscous
+rate at 32³ near t = 7, and its −dK/dt oscillates between samples; its 32³ peak lies near
+the reference only through that error. Under the skew form −dK/dt follows the viscous
+dissipation at both grids, and the unmodelled peak lies below the reference at 32³ and above
+it at 64³, where the resolved gradients overshoot before the cascade is complete. Both forms
+run to t = 10 without a filter at both grids; the compressible solver at 32³ needs its filter
+(see [Taylor-Green](#taylor-green)). The conjugate-gradient count per stage is flat in the
+grid: 6–8 on the periodic plane, 10–11 between slip walls and 11–14 in three dimensions.

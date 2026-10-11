@@ -529,6 +529,17 @@ function _assemble_coarse!(cs::CoarseSolve{T}, lev::StageLevel{T},
             M[g, q] -= c; M[q, g] -= c
         end
     end
+    # Without a mass the operator of a periodic or wall-bounded domain is
+    # singular, its null space the constants (the pressure Poisson equation
+    # of incompressible.jl). The rank-one term c 1 1ᵀ makes it definite; on
+    # a right-hand side summing to zero, which the restriction of a
+    # consistent residual does, the solution is the one of zero sum, since
+    # 1ᵀ(M + c 1 1ᵀ) x = c n 1ᵀx. A single coarse node of a periodic grid
+    # couples only to itself, which leaves M zero and any c > 0 exact.
+    if all(g -> iszero(v[4g-3]), 1:cs.total)
+        trace = sum(M[g, g] for g in 1:cs.total)
+        M .+= trace > 0 ? trace / cs.total^2 : one(T)
+    end
     cs.factor = cholesky!(Symmetric(M))
     return cs
 end
@@ -559,14 +570,18 @@ end
 # one, and a coarse level that keeps the weak dimension represents it
 # (bench/implicitstage.jl). Near the spherical origin the two angular
 # directions dominate the radial one, which neither order of coarsening
-# covers.
-function _stage_levels(decomp::Decomp{T}, last::NTuple{3,Bool}) where {T}
+# covers. Under `keep_two` no dimension is coarsened below two global nodes:
+# without a mass, a line whose transverse dimensions hold one aggregate
+# couples to nothing beside itself and its relaxation is singular.
+function _stage_levels(decomp::Decomp{T}, last::NTuple{3,Bool};
+                       keep_two::Bool=false) where {T}
     levels = StageLevel{T}[]
     n = decomp.n_local
     while true
         least = ntuple(d -> decomp.active[d] ?
                             MPI.Allreduce(n[d], min, decomp.comm) : 1, 3)
-        coarsen = ntuple(d -> least[d] >= 2, 3)
+        coarsen = ntuple(d -> least[d] >= 2 &&
+                              !(keep_two && decomp.sub_size[d] == 1 && n[d] <= 2), 3)
         any(coarsen .& .!last) && (coarsen = coarsen .& .!last)
         push!(levels, StageLevel{T}(n, coarsen, decomp, any(coarsen)))
         any(coarsen) || break
@@ -630,7 +645,6 @@ function DiffusionStage(solver; parity::Int=1)
     _cpu_storage(solver.inv_J) || throw(ArgumentError(
         "the implicit stage runs on host storage only"))
     decomp = solver.decomp
-    T = eltype(solver.inv_J)
     dims = [d for d in 1:3 if decomp.active[d]]
     # Held untyped: the solve then compiles once per element type rather than
     # once per geometry, and the one dispatch per operator application is
@@ -643,8 +657,36 @@ function DiffusionStage(solver; parity::Int=1)
         (closed && at_lo_edge(decomp, k) && (fold === nothing || !fold.lo),
          closed && at_hi_edge(decomp, k) && (fold === nothing || !fold.hi))
     end
+    last = ntuple(k -> !unit_scalefactor(solver.metric, k), 3)
+    return _diffusion_stage(decomp, dims, ops, parity, symmetric, solver.h, wall,
+                            solver.inv_J, last)
+end
+
+"""
+    DiffusionStage(decomp, h; parity=1, singular=false)
+
+The implicit diffusion stage on a uniform Cartesian grid of spacing `h` (one
+entry per dimension) over `decomp`, every closed dimension bounded by walls
+through its end nodes, with no metric, stretching or fold. `singular`
+prepares the multigrid hierarchy for a zero capacity, the Poisson equation
+whose null space is the constants. The incompressible projection solves its
+pressure equation with this form.
+"""
+function DiffusionStage(decomp::Decomp, h; parity::Int=1, singular::Bool=false)
+    abs(parity) == 1 || throw(ArgumentError("parity must be ±1, not $parity"))
+    dims = [d for d in 1:3 if decomp.active[d]]
+    ops = Any[StaggeredDiffusion(decomp, d, h[d]; parity=parity) for d in dims]
+    wall = ntuple(k -> (at_lo_edge(decomp, k), at_hi_edge(decomp, k)), 3)
+    return _diffusion_stage(decomp, dims, ops, parity, true, h, wall, nothing,
+                            (false, false, false); keep_two=singular)
+end
+
+# The shared construction: `inv_J` is `nothing` on a unit metric, `last` the
+# dimensions coarsened last and `keep_two` the singular rule (`_stage_levels`).
+function _diffusion_stage(decomp::Decomp{T}, dims, ops, parity, symmetric, h, wall,
+                          inv_J, last; keep_two::Bool=false) where {T}
     node_weight = ntuple(3) do k
-        w = fill(T(solver.h[k]), decomp.n_local[k])
+        w = fill(T(h[k]), decomp.n_local[k])
         wall[k][1] && (w[1] /= 2)
         wall[k][2] && (w[end] /= 2)
         w
@@ -653,8 +695,8 @@ function DiffusionStage(solver; parity::Int=1)
     pad = decomp.n_halo_d
     for I in CartesianIndices(decomp.n_local)
         J = I + CartesianIndex(pad)
-        volume[J] = node_weight[1][I[1]] * node_weight[2][I[2]] * node_weight[3][I[3]] /
-                    solver.inv_J[J]
+        w = node_weight[1][I[1]] * node_weight[2][I[2]] * node_weight[3][I[3]]
+        volume[J] = inv_J === nothing ? w : w / inv_J[J]
     end
     dirichlet = falses(decomp.n_local...)
     if parity == -1
@@ -663,12 +705,12 @@ function DiffusionStage(solver; parity::Int=1)
                 (dirichlet[I] = true)
         end
     end
-    levels = _stage_levels(decomp, ntuple(k -> !unit_scalefactor(solver.metric, k), 3))
+    levels = _stage_levels(decomp, last; keep_two=keep_two)
     coarse = CoarseSolve{T}(levels[end], decomp)
     restart = symmetric ? 0 : STAGE_RESTART
     inverse_volume = field(decomp)
     inverse_volume[interior(decomp)] .= inv.(volume[interior(decomp)])
-    DiffusionStage(decomp, dims, ops, parity, symmetric, T.(solver.h), volume,
+    DiffusionStage(decomp, dims, ops, parity, symmetric, ntuple(k -> T(h[k]), 3), volume,
                    inverse_volume, node_weight, wall,
                    Array(dirichlet), field(decomp), field(decomp), field(decomp),
                    field(decomp), field(decomp), field(decomp),

@@ -68,7 +68,7 @@ independent and may proceed together, subject to one heavy run at a time.
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
 laser- or burn-dominated case; H4a, H5a and H5b for cold DT and the ablator;
 M1–M3 for an immiscible interface; S10 for a body that is not a coordinate
-surface; H8 for a magnetized target.
+surface; H8 for a magnetized target; I2–I5 for a low-Mach mixing case.
 
 ## Numerics and calibration
 
@@ -1038,6 +1038,39 @@ under [the refinement track](#refinement-for-the-production-geometry).
   need not wait for HED or multiblock extensions.
   **Gate:** the design's stage-specific accuracy, stability, and force/energy
   budgets, followed by backend/AMR compatibility checks.
+
+## Incompressible flow
+
+The constant-density solver on one patch, decomposed over ranks on host
+storage, is the prototype `src/incompressible.jl`; the design, the stages
+and the production configuration they lead to are in
+[INCOMPRESSIBLE.md](INCOMPRESSIBLE.md).
+
+- [ ] **I2 — Add scalars and the variable-density form.** Passive scalars in
+  divergence form on the projected velocity, then the variable-density
+  equations of miscible mixing, whose pressure equation is the implicit
+  stage's operator at the coefficient 1/ρ and whose divergence is set by the
+  molecular mixing. Specify the density and scalar arrangement on the
+  staggered grid and the time integration of the divergence constraint.
+  **Gate:** a scalar's mean and bounds held to the solve tolerance, the
+  single-mode Rayleigh–Taylor growth rate against linear theory with
+  diffusion, and the decomposed run against the undivided one.
+- [ ] **I3 — Close the no-slip wall at the interior order.** The mirror is
+  first order at the wall node for a tangential velocity. Closure rows on the
+  tangential components only, keeping the mirror for the normal component and
+  the pressure so that the projection stays exact.
+  **Gate:** plane Poiseuille flow and the start-up of Couette flow at the
+  interior order or a stated wall order.
+- [ ] **I4 — Run the incompressible solver on refined levels.** Face-centred
+  coarse–fine transfer of the velocity that conserves face fluxes, and the
+  composite projection over the hierarchy.
+  **Depends on:** I2. **Gate:** the two-level Taylor–Green vortex and
+  single-mode Rayleigh–Taylor against the uniform run at the fine spacing.
+- [ ] **I5 — Run the incompressible solver on device storage.** Device forms
+  of the staggered plans and of the pressure solve's multigrid smoother and
+  coarsest factorization, shared with the implicit stage's device item.
+  **Gate:** the device step against the host step, and timings on the target
+  machine.
 
 ## Deferred scope and non-goals
 

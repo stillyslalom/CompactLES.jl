@@ -2,8 +2,9 @@
 # L = J⁻¹ G C K D_s of reference/IMPLICIT.md: the sixth-order compact
 # derivative from nodes to midpoints D_s (Lele 1992, JCP 103, α = 9/62,
 # a = 63/62, b = 17/62), the matching derivative G from midpoints back to
-# nodes, and the sixth-order explicit interpolation of a coefficient from nodes
-# to midpoints. None of it is reached from the right-hand side.
+# nodes, and the sixth-order explicit interpolations from nodes to midpoints
+# and back. The implicit stage and the incompressible solver
+# (incompressible.jl) use them; the compressible right-hand side does not.
 #
 # Storage. Midpoint data live in an ordinary padded field: the midpoint
 # between local nodes i and i+1 (global position x_i + h/2) is stored at local
@@ -79,20 +80,23 @@ function _staggered_taps(::Type{T}, op::Symbol) where {T}
     op === :to_mid && return -1, T[-b, -a, a, b]
     op === :to_node && return -2, T[-b, -a, a, b]
     op === :interpolate && return -2, T[3, -25, 150, 150, -25, 3] ./ 256
-    throw(ArgumentError("staggered operator must be :to_mid, :to_node or " *
-                        ":interpolate, not :$op"))
+    op === :interpolate_to_node && return -3, T[3, -25, 150, 150, -25, 3] ./ 256
+    throw(ArgumentError("staggered operator must be :to_mid, :to_node, " *
+                        ":interpolate or :interpolate_to_node, not :$op"))
 end
 
-_input_is_mid(op::Symbol) = op === :to_node
-_output_is_mid(op::Symbol) = op !== :to_node
+_input_is_mid(op::Symbol) = op === :to_node || op === :interpolate_to_node
+_output_is_mid(op::Symbol) = op === :to_mid || op === :interpolate
+_is_derivative(op::Symbol) = op === :to_mid || op === :to_node
 
 """
     StaggeredPlan
 
 Directional plan of one staggered operator along one dimension of a
 decomposition: `:to_mid` (the compact derivative from nodes to midpoints),
-`:to_node` (from midpoints to nodes) or `:interpolate` (sixth-order explicit
-interpolation from nodes to midpoints). Built by `plan_staggered` and applied
+`:to_node` (from midpoints to nodes), `:interpolate` (sixth-order explicit
+interpolation from nodes to midpoints) or `:interpolate_to_node` (the same
+interpolation from midpoints to nodes). Built by `plan_staggered` and applied
 by `apply_along!`; the storage convention, the wall mirror and the folded
 ends are described at the top of `src/staggered.jl`.
 """
@@ -149,7 +153,8 @@ end
     plan_staggered(decomp, op, dim, h; parity=1, lo_fold=nothing, hi_fold=nothing)
 
 Build a `StaggeredPlan` for the staggered operator `op` (`:to_mid`,
-`:to_node` or `:interpolate`) along dimension `dim` of `decomp`, with uniform
+`:to_node`, `:interpolate` or `:interpolate_to_node`) along dimension `dim`
+of `decomp`, with uniform
 spacing `h`. `parity` is the parity (±1) of the operator's input at the
 mirror planes of a closed dimension and is ignored on a periodic one.
 `lo_fold` and `hi_fold` declare an end folded half a cell beyond its end node
@@ -159,7 +164,7 @@ is a wall through its node.
 
 A decomposed `dim` makes the factorization of the two derivatives
 collective over the sub-communicator along `dim`, as for `plan_direction`;
-the interpolation has an identity left-hand side and communicates nothing.
+the interpolations have an identity left-hand side and communicate nothing.
 The taps reach three points, within the halo, and on a rank owning an end
 every mirrored tap must land inside the block, which needs a local extent of
 at least 4.
@@ -191,7 +196,7 @@ function plan_staggered(decomp::Decomp{T}, op::Symbol, dim::Int, h::Real;
                     "staggered operators (need ≥ 4); use fewer ranks in this dimension")
     mid_in = _input_is_mid(op)
     mid_out = _output_is_mid(op)
-    derivative = op !== :interpolate
+    derivative = _is_derivative(op)
     σl_out = derivative ? -σl : σl
     σh_out = derivative ? -σh : σh
     w = derivative ? taps ./ T(h) : taps
