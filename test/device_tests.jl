@@ -22,8 +22,7 @@ using CompactLES: compute_rhs!, max_rate, ConservedState, CPUBackend
                bcs=(per, per, per), backend=bk)
     @test s.deriv_plans[1] isa DevicePlan
     @test s.filter_plans[3] isa DevicePlan
-    @test s.smooth_plans === s.filter_plans ||
-          s.smooth_plans[1] isa Union{Nothing,DevicePlan}
+    @test all(p -> p === nothing || p.closed isa DevicePlan, s.smooth_plans)
     Q = allocate_state(s)
     @test Q isa ConservedState
     @test size(Q) == (size(s.rho)..., s.equations.n_cons)
@@ -406,7 +405,7 @@ end
     @test [length(st.members) for st in stacks] == [1, 2]
     @test stacks[2].patch.rho.stride > 1
     @test stacks[1].patch.folds[1].lo && stacks[1].patch.folds[3].lo
-    @test stacks[2].patch.folds[1] === nothing && stacks[2].patch.folds[3].lo
+    @test !CL._fold_active(stacks[2].patch.folds[1]) && stacks[2].patch.folds[3].lo
 end
 
 @testset "device-resident tiled level: regridding Sod reproduces the CPU solver" begin

@@ -4611,7 +4611,8 @@ function test_plane_level()
         # first node, one beyond the coincident lattice, at offset −1.
         check("tile $tile: the tiles fold where they reach the plane",
               gmax(count(p -> p.level == 1 &&
-                              (p.folds[1] !== nothing) != (p.region.offset[1] == -1),
+                              CL._fold_active(p.folds[1]) !=
+                              (p.region.offset[1] == -1),
                          s.patches)), 0.5)
         check("tile $tile: fine state against serial", gmax(e), 1e-11)
         check("tile $tile: root state against serial",
@@ -4679,8 +4680,8 @@ function test_axis_level()
         # the plane, which puts its first node there at offset −1.
         check("tile $tile: the tiles fold where they reach the axis and the plane",
               gmax(count(p -> p.level == 1 &&
-                              any(d -> (p.folds[d] !== nothing) != (p.region.offset[d] == -1),
-                                  (1, 3)),
+                              any(d -> CL._fold_active(p.folds[d]) !=
+                                       (p.region.offset[d] == -1), (1, 3)),
                          s.patches)), 0.5)
         check("tile $tile: fine state against serial", gmax(e), 1e-11)
         check("tile $tile: root state against serial",

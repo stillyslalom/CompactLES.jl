@@ -438,6 +438,20 @@ parameters of their own for a third reason: `nothing` in either holds a whole
 operator path (the fold closures, the `:d8` detector) off the default
 configuration's inference path entirely.
 
+Within one configuration the root and every refined tile share one `Patch`
+type. The root's smoother and detector plans take the refined patches'
+`InterfaceSmoothPlans` and `InterfaceRingPlans` forms with one plan
+set in both slots, a fold carries its divergence plans and the
+`FoldRingPlans` form whether or not its far end is an interface, and a refined
+patch carries an inactive fold (`_idle_fold`) along a dimension the root folds
+where the patch does not reach the plane. A patch of a type new to its rank
+compiles the whole step tree when a regrid first gives the rank one, in the
+middle of a step while the other ranks wait at its collectives. On the 2-D
+Richtmyer–Meshkov case of `bench/rmicost.jl` at np = 8 that cost 1.6 to 2.2 s
+for each kind of tile after a rank's first, and 3.3 to 4.2 s for the first;
+with one type the first tile compiles only the level phases a tile holder
+runs, about 2 s, and later tiles nothing.
+
 The struct is mutable, although no field but the flags `child_masked` and
 `reflux_deferred` is reassigned after construction, because of those dynamic
 calls and the `_cold` barriers: an argument passed

@@ -66,38 +66,48 @@ mutable struct FoldSpec{P,D,F,S,R,V}
     sigflux::Vector{Int}                  # antipodal flux sign per conserved comp
     deriv_plans::D                         # derivative plans, σg = (+1, −1)
     filter_plans::F                        # filter plans,     σg = (+1, −1)
-    smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1);
-                                           # the far end's wall rows are built in.
-                                           # A refined patch holds a
-                                           # `FoldRingPlans` of two such pairs
-    ring_plans::R                          # d8 detector plans, σg = (+1, −1) outer,
+    smooth_plans::S                        # sensor-smoother plans: a
+                                           # `FoldRingPlans` of two pairs,
+                                           # σg = (+1, −1); the far end's wall rows
+                                           # are built in
+    ring_plans::R                          # d8 detector plans: a `FoldRingPlans`
+                                           # of two sets, σg = (+1, −1) outer,
                                            # wall sign σw = (+1, −1) inner (both
                                            # slots one plan where the far end is no
-                                           # wall); nothings throughout unless :d8.
-                                           # A refined patch holds a
-                                           # `FoldRingPlans` of two such sets
-    div_plans::V                           # divergence plans, σg = (+1, −1), where
-                                           # the far end is a refined patch's
-                                           # interface end, whose flux has no
-                                           # ghosts; `nothing` where the divergence
-                                           # is the derivative, which keeps that
-                                           # a property of the type
+                                           # wall); nothings throughout unless :d8
+    div_plans::V                           # divergence plans, σg = (+1, −1): the
+                                           # derivative plans themselves unless
+                                           # `own_div`
+    own_div::Bool                          # whether the far end is a refined
+                                           # patch's interface end, whose flux has
+                                           # no ghosts, so that the divergence
+                                           # takes rows of its own
 end
 
-# Every fold but a refined patch's: the divergence is the derivative.
+# Every fold but a refined patch's: the divergence is the derivative. Its
+# plans are the derivative pair, not `nothing`, and its smoother and detector
+# plans take the `FoldRingPlans` form with one set in both slots, so that a
+# fold has one type on the root and on every refined tile, whichever of its
+# ends fold (the `Patch` docstring gives the reason).
 FoldSpec(dim, lo, hi, pair, sigvel, sigflux, dp, fp, sp, rp) =
-    FoldSpec(dim, lo, hi, pair, sigvel, sigflux, dp, fp, sp, rp, nothing)
+    FoldSpec(dim, lo, hi, pair, sigvel, sigflux, dp, fp, FoldRingPlans(sp, sp),
+             _same_ring(rp), dp, false)
+
+# The detector plans of a fold without the `:d8` detector stay the tuple of
+# nothings, which keeps the detector path off its inference.
+_same_ring(rp) = FoldRingPlans(rp, rp)
+_same_ring(rp::NTuple{2,NTuple{2,Nothing}}) = rp
 
 """
     FoldRingPlans(ghost, closed)
 
-The `:d8` detector plans or the sensor-smoother plans of a refined patch's
-fold, the fold's counterpart of `InterfaceRingPlans` and
-`InterfaceSmoothPlans`: the far end of the folded dimension is an interface
-end, which `ghost` closes with rows reading the ghost layers and `closed`
-with the scheme's own rows. Each is indexed like a root fold's `ring_plans`,
-by ghost parity and then by wall sign, or like its `smooth_plans`, by ghost
-parity alone.
+The `:d8` detector plans or the sensor-smoother plans of a fold, the fold's
+counterpart of `InterfaceRingPlans` and `InterfaceSmoothPlans`. On a refined
+patch the far end of the folded dimension may be an interface end, which
+`ghost` closes with rows reading the ghost layers and `closed` with the
+scheme's own rows; on the root the two are one set. The ring plans are indexed
+by ghost parity and then by wall sign, the smoother plans by ghost parity
+alone.
 """
 struct FoldRingPlans{R}
     ghost::R
@@ -105,12 +115,10 @@ struct FoldRingPlans{R}
 end
 
 @inline _fold_ring(rp, ghosts::Bool) = rp
-@inline _fold_ring(rp::FoldRingPlans, ghosts::Bool) = ghosts ? rp.ghost : rp.closed
+@inline _fold_ring(rp::FoldRingPlans, ghosts::Bool) = ifelse(ghosts, rp.ghost, rp.closed)
 
 fold_dplan(fold::FoldSpec, σg::Int) = fold.deriv_plans[σg > 0 ? 1 : 2]
-fold_vplan(fold::FoldSpec, σg::Int) = _fold_div(fold.div_plans, fold, σg)
-@inline _fold_div(::Nothing, fold::FoldSpec, σg::Int) = fold_dplan(fold, σg)
-@inline _fold_div(plans, fold::FoldSpec, σg::Int) = plans[σg > 0 ? 1 : 2]
+fold_vplan(fold::FoldSpec, σg::Int) = fold.div_plans[σg > 0 ? 1 : 2]
 fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
 fold_splan(fold::FoldSpec, σg::Int, ghosts::Bool=false) =
     _fold_ring(fold.smooth_plans, ghosts)[σg > 0 ? 1 : 2]

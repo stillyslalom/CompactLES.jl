@@ -540,7 +540,10 @@ function PositivityLimiter(solver)
     decomp = solver.decomp
     T = eltype(solver.h)
     n_cons = solver.equations.n_cons
-    plan_scheme(d) = (p = _plan_at(solver.div_plans, d);
+    # A refined patch's inactive fold holds the plans along its dimension.
+    plan_scheme(d) = (fold = _fold_at(solver, d);
+                      p = fold === nothing ? _plan_at(solver.div_plans, d) :
+                          fold_vplan(fold, 1);
                       (p isa DevicePlan ? p.host : p).scheme)
     schemes = solver.schemes
     deriv = schemes.deriv

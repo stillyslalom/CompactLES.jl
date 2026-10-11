@@ -940,10 +940,14 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                          mkd(deriv, d) : nothing, 3)
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(filt, d) : nothing, 3)
-    smooth_plans = art.smoother === :compact ? filter_plans :
+    # The smoother and detector plans take the refined patches' wrapper form
+    # with one plan set in both slots (`_same_smooth`, `_same_ring_pair`), so
+    # that the root and a refined tile reaching the root's folds share one
+    # `Patch` type and one compiled step.
+    smooth_plans = map(_same_smooth, art.smoother === :compact ? filter_plans :
                    ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                           mkd(smoo, d; lo_closures=swrow(d, 1),
-                              hi_closures=swrow(d, 2)) : nothing, 3)
+                              hi_closures=swrow(d, 2)) : nothing, 3))
     # `nothing`, not a tuple of nothings: `detect_sum!` dispatches on this
     # field's type to decide which detector runs, so where no sensor takes
     # `:d8` (`_ring_detector`) the whole d8 path (`ring_sum!`, `ring_along!`,
@@ -962,7 +966,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         (even, mkd(ring, d; lo_closures=rwrow(d, 1, -1),
                    hi_closures=rwrow(d, 2, -1)))
     end
-    ring_plans = ring_det ? ntuple(ringpair, 3) : nothing
+    ring_plans = ring_det ? map(_same_ring_pair, ntuple(ringpair, 3)) : nothing
     paired_fold = any(fold -> fold !== nothing && fold.pair !== nothing, folds)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
@@ -1418,9 +1422,14 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
         end
         rplans_f = ntuple(rplans, 3)
     end
-    any(any, folded) || return (deriv=dplans_f, div=vplans_f, filter=fplans_f,
-                                smooth=splans_f, ring=rplans_f,
-                                folds=(nothing, nothing, nothing))
+    # A dimension the root folds and this patch does not reach takes an
+    # inactive fold (`_idle_fold`), so that the patch has the type of a tile
+    # reaching the plane and of the root.
+    idle(d) = decomp_f.active[d] && !any(folded[d]) && root_folds !== nothing &&
+              root_folds[d] !== nothing && root_folds[d].pair === nothing
+    any(any, folded) || any(idle, 1:3) ||
+        return (deriv=dplans_f, div=vplans_f, filter=fplans_f,
+                smooth=splans_f, ring=rplans_f, folds=(nothing, nothing, nothing))
     # A dimension with a folded face routes every operator through its fold,
     # as the root's does, and holds no plan of its own. The fold's plans fold
     # the folded end onto the diagonal per ghost parity and close the other
@@ -1434,6 +1443,9 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     pairof(sch, d, lo, hi) = (mkf(sch, d; fp(1, d)..., lo_closures=lo, hi_closures=hi),
                               mkf(sch, d; fp(-1, d)..., lo_closures=lo, hi_closures=hi))
     function foldspec(d)
+        idle(d) && return _idle_fold(root_folds[d], dplans_f[d], vplans_f[d],
+                                     fplans_f[d], splans_f[d],
+                                     rplans_f === nothing ? nothing : rplans_f[d])
         (decomp_f.active[d] && any(folded[d])) || return nothing
         rf = root_folds[d]
         dp = pairof(deriv, d, at(d, 1, icd), at(d, 2, icd))
@@ -1461,13 +1473,31 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                                (rpair(1, nothing), rpair(-1, nothing)))
         end
         return FoldSpec(d, folded[d][1], folded[d][2], nothing, rf.sigvel, rf.sigflux,
-                        dp, fq, sp, rp, vp)
+                        dp, fq, sp, rp, something(vp, dp), vp !== nothing)
     end
     folds = ntuple(foldspec, 3)
     keep(plans) = ntuple(d -> folds[d] === nothing ? plans[d] : nothing, 3)
     return (deriv=keep(dplans_f), div=keep(vplans_f), filter=keep(fplans_f),
             smooth=keep(splans_f), ring=rplans_f === nothing ? nothing : keep(rplans_f),
             folds=folds)
+end
+
+# The inactive fold of a refined patch along a dimension the root folds (`rf`,
+# self-paired) and the patch does not reach: neither end folds, so
+# `fold_fill!` writes nothing, and both parity slots of every role hold the
+# patch's own plan along the dimension (`dp`, `vp`, `fp`, the smoother's
+# `InterfaceSmoothPlans` `sp`, the detector's `InterfaceRingPlans` `rp` or
+# `nothing`), so each operator along it is the one the unfolded patch applies.
+# A self-paired fold uses one parity at a time, so the slots may share a plan.
+# The fold gives the patch the type of a tile that reaches the plane and of
+# the root (the `Patch` docstring gives the reason).
+function _idle_fold(rf::FoldSpec, dp, vp, fp, sp, rp)
+    twice(p) = (p, p)
+    ring = rp === nothing ? ((nothing, nothing), (nothing, nothing)) :
+           FoldRingPlans(twice(rp.ghost), twice(rp.closed))
+    return FoldSpec(rf.dim, false, false, nothing, rf.sigvel, rf.sigflux, twice(dp),
+                    twice(fp), FoldRingPlans(twice(sp.ghost), twice(sp.closed)), ring,
+                    twice(vp), vp !== dp)
 end
 
 # The persistent arrays of a patch from an allocator `g()`, by name, in the

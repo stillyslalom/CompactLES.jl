@@ -157,10 +157,17 @@ end
 # along `d`. The fused scatter applies the same product or subtraction to the
 # same solve output as the separate pass, so the interior is bitwise the same,
 # and it saves that pass over the whole array.
+# An inactive fold (`_idle_fold`) fills nothing, so its route is the unfolded
+# one, the mask applied to the scaled solve as there.
 @inline _fused_fold(solver, ::Nothing, d::Int) = false
 @inline _fused_fold(solver, fold::FoldSpec, d::Int) =
     fold.pair === nothing && !(fold_dplan(fold, 1) isa DevicePlan) &&
-    !_child_masked(solver, d)
+    !(_child_masked(solver, d) && _fold_active(fold))
+
+# Whether either end of the fold's dimension folds on this patch: false on the
+# inactive fold of a refined patch that does not reach the root's plane.
+@inline _fold_active(::Nothing) = false
+@inline _fold_active(fold::FoldSpec) = fold.lo | fold.hi
 
 """
     deriv_scaled_along!(out, f, solver, d, σf)
@@ -189,6 +196,7 @@ two-pass route unchanged. Same collective, halo, and fold contract as
         fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
         apply_along_scaled!(out, _fold_plan(fold, σf, Val(:deriv), 1, false), f,
                             solver.decomp, solver.inv_h[d])
+        _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     else
         deriv_along!(out, f, solver, d, σf)
         _scale_grad!(out, solver, d)
@@ -754,7 +762,12 @@ end
 
 @inline _smooth_plan(plan, ghosts::Bool) = plan
 @inline _smooth_plan(plans::InterfaceSmoothPlans, ghosts::Bool) =
-    ghosts ? plans.ghost : plans.closed
+    ifelse(ghosts, plans.ghost, plans.closed)
+
+# The root's form: one plan in both slots, since no face of the root is an
+# interface. It gives the root the type of a refined patch's plans.
+_same_smooth(::Nothing) = nothing
+_same_smooth(plan) = InterfaceSmoothPlans(plan, plan)
 
 """
     ring_along!(out, f, solver, d, σf, σw = 1, ghosts = false)
@@ -818,7 +831,11 @@ end
 
 @inline _ring_plan(pair::Tuple, σw::Int, ghosts::Bool) = _wall_at(pair, σw)
 @inline _ring_plan(plans::InterfaceRingPlans, σw::Int, ghosts::Bool) =
-    _wall_at(ghosts ? plans.ghost : plans.closed, σw)
+    _wall_at(ifelse(ghosts, plans.ghost, plans.closed), σw)
+
+# The root's form, as `_same_smooth`.
+_same_ring_pair(::Nothing) = nothing
+_same_ring_pair(pair::Tuple) = InterfaceRingPlans(pair, pair)
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
 @inline function _scale_grad_point!(g, ih, i, j, k)
@@ -1169,7 +1186,7 @@ end
 @inline function _interface_dim(solver::SolverLike, d::Int)
     fold = _fold_at(solver, d)
     fold === nothing && return _distinct_at(solver.div_plans, solver.deriv_plans, d)
-    return fold.div_plans !== nothing
+    return fold.own_div
 end
 
 # `a[d] !== b[d]`, compared at each constant tuple position. Through `_plan_at`
@@ -1320,13 +1337,13 @@ end
 # The launch box of a field the solves along `d` read, and the offsets that
 # place it in the padded block: the padded extent along `d` and the interior
 # across it, or the whole padded block where a fold lies along `d`
-# (`_ghost_split!`).
+# (`_ghost_split!`), an inactive fold excepted.
 function _line_box(solver::SolverLike, d::Int)
     decomp = solver.decomp
     nl = decomp.n_local
     pad = decomp.n_halo_d
     nf = padded_extent(decomp)
-    whole = _fold_at(solver, d) !== nothing
+    whole = _fold_active(_fold_at(solver, d))
     b1, b2, b3 = ntuple(e -> whole || e == d ? nf[e] : nl[e], 3)
     o1, o2, o3 = ntuple(e -> whole || e == d ? 0 : pad[e], 3)
     return b1, b2, b3, o1, o2, o3
@@ -1659,13 +1676,17 @@ end
 # dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
 # interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit
 # geometry; a device plan or a fold takes the two-pass route through `tmp_a`,
-# the fold with `f`'s sign `σf` across it.
+# the fold with `f`'s sign `σf` across it. An inactive fold (`_idle_fold`)
+# fills nothing and holds the patch's own plan, so it takes the fused route of
+# the unfolded patch.
 @noinline function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J,
                               σf::Int)
     decomp = solver.decomp
     fold = _fold_at(solver, d)
     _reflux_open!(solver, dQ, c, d, inv_J)
-    if fold !== nothing || _device_plan_at(solver.deriv_plans, d)
+    if fold !== nothing && !_fold_active(fold) && !(fold_dplan(fold, 1) isa DevicePlan)
+        apply_along_subtract!(dQ, c, fold_dplan(fold, 1), f, decomp, inv_J)
+    elseif fold !== nothing || _device_plan_at(solver.deriv_plans, d)
         fold === nothing ?
             apply_along!(solver.tmp_a, _operator_plan(solver.deriv_plans, d), f, decomp) :
             fold_apply!(solver.tmp_a, f, solver, fold, σf, Val(:deriv))

@@ -3066,7 +3066,7 @@ end
         CL.exchange_halos!(f, s.decomp)
         # Each dimension's entry is a (wall sign +1, wall sign −1) pair; on a
         # periodic dimension the two slots hold one plan.
-        CL.apply_along!(out, s.ring_plans[1][1], f, s.decomp)
+        CL.apply_along!(out, s.ring_plans[1].closed[1], f, s.decomp)
         i0 = N ÷ 2
         # rtol is 1e-9, not machine epsilon: the detector is a high-pass, so a
         # well-resolved wave is the difference of coefficients of order 1
@@ -3093,7 +3093,7 @@ end
         fw = CL.field(sw.decomp); ow = CL.field(sw.decomp)
         fill!(fw, 1.0)
         CL.exchange_halos!(fw, sw.decomp)
-        CL.apply_along!(ow, sw.ring_plans[1][1], fw, sw.decomp)
+        CL.apply_along!(ow, sw.ring_plans[1].closed[1], fw, sw.decomp)
         @test maximum(abs, ow[(pad+1):(pad+N), 1, 1]) < 1e-14
     end
 
@@ -3185,14 +3185,15 @@ end
     sa = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
                 metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]))
-    rp = sa.folds[1].ring_plans
+    @test sa.folds[1].ring_plans.ghost === sa.folds[1].ring_plans.closed
+    rp = sa.folds[1].ring_plans.closed
     @test length(rp) == 2 && all(p -> length(p) == 2, rp)
     @test rp[1][1] !== rp[1][2] && rp[2][1] !== rp[2][2]
     # An outer end that reflects nothing keeps one plan in both slots.
     sx = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
                 metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
                 bcs=((AxisBC(), ExtrapolationBC()), per3[2], per3[3]))
-    @test sx.folds[1].ring_plans[1][1] === sx.folds[1].ring_plans[1][2]
+    @test sx.folds[1].ring_plans.closed[1][1] === sx.folds[1].ring_plans.closed[1][2]
 end
 
 @testset "pyranda_filter: symbol, Nyquist zero, 9/10 integral, closures" begin

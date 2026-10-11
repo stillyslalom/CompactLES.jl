@@ -3703,7 +3703,8 @@ const FOLD_NEST_TOL = 5e-12
         @test any(r -> r.offset[1] == -1, r2)
         lts = getfield(s, :levels)[3].transfers
         @test all(lt.folded[1] == (lt.region.offset[1] == -1, false) for lt in lts)
-        @test all(p -> p.level != 2 || (p.folds[1] !== nothing) == (p.region.offset[1] == -4),
+        @test all(p -> p.level != 2 ||
+                       CL._fold_active(p.folds[1]) == (p.region.offset[1] == -4),
                   s.patches)
         steps!(s, q, 1, 4)
         dir = mktempdir()
