@@ -810,8 +810,9 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  parent_h=getfield(solver, :h), boundary=bnd, folded,
                                  period)
     coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],
-                                    [patches[1].decomp],
-                                    [newfine === nothing ? nothing : newfine.decomp])
+                                    Union{Nothing,Decomp{T}}[patches[1].decomp],
+                                    Union{Nothing,Decomp{T}}[newfine === nothing ? nothing :
+                                                             newfine.decomp])
     _resize_level_patches!(solver, states, workspace, held ? 2 : 1)
     if held
         Qf_new = _state_like(newfine.rho, n_cons)
@@ -1677,6 +1678,19 @@ function _carry_tiles!(::Type{T}, comm::MPI.Comm, active::NTuple{3,Bool},
     return nothing
 end
 
+# This rank's state and decomposition of each tile it holds, by tile index,
+# from `local_of` (each tile's patch index, 0 where the rank holds none): the
+# new tiles' side of `_carry_tiles!`, typed as the old tiles' side is, so
+# the one-level regrid and the hierarchy's share one specialization of it.
+function _held_tile_data(::Type{T}, states::Vector{S}, patches,
+                         local_of::Vector{Int}) where {T,S}
+    data = Dict{Int,Tuple{S,Decomp{T}}}()
+    for (ti, li) in enumerate(local_of)
+        li == 0 || (data[ti] = (states[li], patches[li].decomp))
+    end
+    return data
+end
+
 # One tile's whole state, replicated on every rank of the parent level's
 # communicator. The box regrid carries its moved region through this (one
 # region, whose old and new decompositions differ in offset as well as in
@@ -2119,7 +2133,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(wanted)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
-                                    [root.decomp], map(fine_decomp, eachindex(wanted)))
+                                    Union{Nothing,Decomp{T}}[root.decomp],
+                                    Union{Nothing,Decomp{T}}[fine_decomp(ti)
+                                                             for ti in eachindex(wanted)])
     _resize_level_patches!(solver, states, workspace, 1 + length(held))
     for (k, p) in enumerate(new_patches)
         patches[k + 1] = p
@@ -2132,7 +2148,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         # not on the lattice cells `wanted` holds, which are the parent's.
         fine_regions = [_fine_region(tr, active, fo) for (tr, fo) in zip(wanted, folds)]
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
-                                 [p.decomp for p in new_patches], n_cons,
+                                 Decomp{T}[p.decomp for p in new_patches], n_cons,
                                  _level_period(solver, 1))
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
                              records; stacks, coupling)
@@ -2183,8 +2199,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # Under a change of lattice a new tile takes the evolved solution of the
     # old tiles it overlaps over its interpolated initialization.
     if rechopped
-        new_data = Dict(ti => (states[local_of[ti]], patches[local_of[ti]].decomp)
-                        for ti in eachindex(wanted) if local_of[ti] != 0)
+        new_data = _held_tile_data(T, states, patches, local_of)
         _carry_tiles!(T, root_lc.comm, active, _level_period(solver, 1),
                       [_fine_region(lt) for lt in lev.transfers],
                       [_erode(_fine_region(lt), lt.imposed, active) for lt in lev.transfers],
@@ -2278,6 +2293,41 @@ function _fill_levels_from_parents!(solver::Solver, states)
     return states
 end
 
+# The old layout a level's new tiles take their solution from under a change
+# of lattice (`_carry_tiles!`): the old tiles' fine regions, their own nodes
+# and their owner ranges.
+struct LatticeCarry
+    fine::Vector{BlockRegion}
+    own::Vector{BlockRegion}
+    owners::Vector{UnitRange{Int}}
+end
+
+# What rank 0 decides for one refined level at a regrid check or a restart,
+# broadcast to every rank: whether the level changes, its lattice edges, the
+# wanted tiles and their owner ranges, the level's new and old rank counts,
+# each tile's old index (0 for a new region) and whether it stays in place,
+# the creation record, and the carry of a change of lattice. Every outcome
+# has this one type, so `_swap_level!`, which is specialized on it, compiles
+# once per run; a decision whose type followed the outcome compiled it again
+# at the first change of lattice.
+struct LevelDecision
+    changed::Bool
+    edges::NTuple{3,Int}
+    wanted::Vector{BlockRegion}
+    owners::Vector{UnitRange{Int}}
+    np_new::Int
+    np_old::Int
+    old_index::Vector{Int}
+    kept::Vector{Bool}
+    created::Dict{BlockRegion,Int}
+    carry::Union{Nothing,LatticeCarry}
+end
+
+# A decision that leaves the level as it is, on the lattice of edges `edges`.
+LevelDecision(edges::NTuple{3,Int}) =
+    LevelDecision(false, edges, BlockRegion[], UnitRange{Int}[], 0, 0, Int[], Bool[],
+                  Dict{BlockRegion,Int}(), nothing)
+
 # The decision of rank 0 for level ℓ from the reduced cell flags of each
 # lattice of `chain`: the lattice, the wanted tiles in lattice order, the
 # owner ranges, and what survives. Under a change of lattice the decision
@@ -2332,7 +2382,7 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     rechopped = pick != current && !isempty(old_regions)
     changed = (wanted != old_regions || parent_changed) &&
               !(isempty(wanted) && isempty(old_regions))
-    changed || return (changed=false, edges=chain[pick])
+    changed || return LevelDecision(chain[pick])
     inherited = Dict(r => _inherited_check(r, old_regions, created, spec.checks, active,
                                            period)
                      for r in wanted if rechopped && !(r in old_regions))
@@ -2353,12 +2403,12 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
             for ti in eachindex(wanted)]
     carry = rechopped ?
-            (fine=[_fine_region(lt) for lt in lev.transfers],
-             own=[_erode(_fine_region(lt), lt.imposed, active) for lt in lev.transfers],
-             owners=copy(old_owners)) : nothing
-    return (changed=true, edges=chain[pick], wanted=wanted, owners=owners,
-            np_new=np_new, np_old=lev.level_comm.size, old_index=old_index, kept=kept,
-            created=created, carry=carry)
+            LatticeCarry([_fine_region(lt) for lt in lev.transfers],
+                         [_erode(_fine_region(lt), lt.imposed, active)
+                          for lt in lev.transfers],
+                         copy(old_owners)) : nothing
+    return LevelDecision(true, chain[pick], wanted, owners, np_new, lev.level_comm.size,
+                         old_index, kept, created, carry)
 end
 
 # Tag level ℓ − 1 and decide level ℓ. The sweep runs on the tiles each rank
@@ -2438,7 +2488,7 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
         decision = _decide_level(solver, ℓ, spec, flagsets, chain, active, N,
                                  parent_changed)
     end
-    decision = MPI.bcast(decision, comm; root=0)
+    decision = MPI.bcast(decision, comm; root=0)::LevelDecision
     _set_level_edges!(spec, ℓ, decision.edges)
     if decision.changed
         created = _created(spec, ℓ)
@@ -2473,9 +2523,10 @@ _shifted_level(lev::Level{T}, delta::Int) where {T} = delta == 0 ? lev :
              lev.plane_pairs, lev.phases, lev.stacks, lev.coupling)
 
 """
-Internal: rebuild refined level `ℓ` of a hierarchy to the tiles of
-`decision` (`wanted`, `owners`, `np_new`, `np_old`, `old_index`, `kept`, the
-same on every rank), after level ℓ − 1 has taken its own new layout.
+Internal: rebuild refined level `ℓ` of a hierarchy to the tiles of the
+`LevelDecision` `decision` (`wanted`, `owners`, `np_new`, `np_old`,
+`old_index`, `kept`, `carry`, the same on every rank), after level ℓ − 1 has
+taken its own new layout.
 
 A kept tile (region and owner range unchanged) keeps its arrays and state
 under a new id, faces and transfer; every other tile is built fresh. With
@@ -2490,8 +2541,8 @@ communicator was split afresh in this pass; the return value says the same
 of level ℓ's. Collective over the run's communicator.
 """
 function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
-                      workspace::Union{Nothing,Workspace}, ℓ::Int, decision,
-                      resplit::Bool, init::Bool) where {T}
+                      workspace::Union{Nothing,Workspace}, ℓ::Int,
+                      decision::LevelDecision, resplit::Bool, init::Bool) where {T}
     spec = getfield(solver, :regrid)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
@@ -2529,8 +2580,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                         if !(t in kept_old)]
     # Under a change of lattice every old tile this rank holds is a source
     # of the carry, by old tile index.
-    carry = get(decision, :carry, nothing)
-    carry_src = Dict{Int,Tuple{eltype(states),Any}}()
+    carry = decision.carry
+    carry_src = Dict{Int,Tuple{eltype(states),Decomp{T}}}()
     if carry !== nothing
         for (li, t) in zip(lev.patches, lev.tiles)
             carry_src[t] = (states[li], patches[li].decomp)
@@ -2620,9 +2671,10 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                 gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
                 parent_h=ph, boundary=boundaries[ti], folded=folds[ti], period))
         end
-        coupling = build_level_coupling(T, parent_lc.comm, transfers, pregions,
-                                        map(pdecomp, plocal),
-                                        map(fdecomp, eachindex(wanted)))
+        pdecomps = Union{Nothing,Decomp{T}}[pdecomp(li) for li in plocal]
+        fdecomps = Union{Nothing,Decomp{T}}[fdecomp(ti) for ti in eachindex(wanted)]
+        coupling = build_level_coupling(T, parent_lc.comm, transfers, pregions, pdecomps,
+                                        fdecomps)
     end
     rng = (base + 1):(base + nold)
     splice!(patches, rng, new_patches)
@@ -2640,8 +2692,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm,
                                  [_fine_region(tr, active, fo)
                                   for (tr, fo) in zip(wanted, folds)], held,
-                                 indices, [p.decomp for p in new_patches], n_cons,
-                                 _level_period(solver, ℓ))
+                                 indices, Decomp{T}[p.decomp for p in new_patches],
+                                 n_cons, _level_period(solver, ℓ))
         levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers,
                                  records; coupling)
     elseif parent_lc.owned
@@ -2682,8 +2734,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     # old tiles it overlaps, over the run's communicator, whose rank numbers
     # the owner ranges of both layouts use.
     if init && carry !== nothing
-        new_data = Dict(ti => (states[local_of[ti]], patches[local_of[ti]].decomp)
-                        for ti in eachindex(wanted) if local_of[ti] != 0)
+        new_data = _held_tile_data(T, states, patches, local_of)
         _carry_tiles!(T, comm, active, _level_period(solver, ℓ), carry.fine, carry.own,
                       carry.owners,
                       [_fine_region(tr, active, fo) for (tr, fo) in zip(wanted, folds)],

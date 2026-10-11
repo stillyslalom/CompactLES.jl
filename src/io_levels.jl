@@ -385,7 +385,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
-                                    [root.decomp], map(fine_decomp, eachindex(regions)))
+                                    Union{Nothing,Decomp{T}}[root.decomp],
+                                    Union{Nothing,Decomp{T}}[fine_decomp(ti)
+                                                             for ti in eachindex(regions)])
     resize!(patches, 1 + length(held))
     resize!(states, 1 + length(held))
     stacked = Set(li for st in stacks for li in st.members)
@@ -399,7 +401,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     if new_lc.owned
         fine_regions = [_fine_region(tr, active, fo) for (tr, fo) in zip(regions, folds)]
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
-                                 [p.decomp for p in new_patches], n_cons,
+                                 Decomp{T}[p.decomp for p in new_patches], n_cons,
                                  _level_period(solver, 1))
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
                              records; stacks, coupling)
@@ -436,7 +438,7 @@ function _restore_levels!(solver::Solver, states::Vector{<:ConservedState},
     rebuilt = false
     resplit = false
     for ℓ in 1:length(levels)-1
-        decision = nothing
+        decision = message = nothing
         if MPI.Comm_rank(comm) == 0
             lev = levels[ℓ + 1]
             want = rec.levels[ℓ]
@@ -457,15 +459,17 @@ function _restore_levels!(solver::Solver, states::Vector{<:ConservedState},
                     np_new > parent_np ?
                     "restart: the recorded ownership of level $ℓ reaches rank " *
                     "$(np_new - 1) of $parent_np" : nothing
-                decision = (changed=true, wanted=want.regions, owners=owners,
-                            np_new=np_new, np_old=lev.level_comm.size,
-                            old_index=zeros(Int, n), kept=falses(n), error=message)
+                # The lattice edges are the regrid's; a restart reads none.
+                decision = LevelDecision(true, (0, 0, 0), want.regions, owners, np_new,
+                                         lev.level_comm.size, zeros(Int, n),
+                                         fill(false, n), Dict{BlockRegion,Int}(), nothing)
             else
-                decision = (changed=false, error=nothing)
+                decision = LevelDecision((0, 0, 0))
             end
         end
-        decision = MPI.bcast(decision, comm; root=0)
-        decision.error === nothing || error(decision.error)
+        decision, message = MPI.bcast((decision, message), comm; root=0)
+        message === nothing || error(message)
+        decision = decision::LevelDecision
         if decision.changed
             resplit = _swap_level!(solver, states, nothing, ℓ, decision, resplit,
                                    false)

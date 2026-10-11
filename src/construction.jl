@@ -1132,14 +1132,16 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             end
             coupling = build_level_coupling(T, parent_lc.comm, transfers,
                                             parent_regions,
-                                            map(decomp_at, parent_local),
-                                            map(decomp_at, local_of))
+                                            Union{Nothing,Decomp{T}}[decomp_at(li)
+                                                                     for li in parent_local],
+                                            Union{Nothing,Decomp{T}}[decomp_at(li)
+                                                                     for li in local_of])
             if lc.owned
                 # A record's partner is a rank number in the communicator the
                 # exchange runs over, here the level's own; that numbering
                 # may differ from a tile's Cartesian communicator's.
                 records = _level_records(T, lc.comm, fine_regions, held, indices,
-                                         [fines[li - 1].decomp for li in indices],
+                                         Decomp{T}[fines[li - 1].decomp for li in indices],
                                          n_cons,
                                          _level_period(n_global, periodic, ℓ))
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,

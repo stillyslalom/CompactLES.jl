@@ -1163,15 +1163,18 @@ This rank's [`LevelCoupling`](@ref) of the level whose tiles `transfers`
 couple to the parent patches `parent_regions` (the parent level's node
 space). `parent_decomps[p]` and `fine_decomps[t]` are this rank's
 decompositions of parent patch `p` and tile `t`, `nothing` where it holds no
-block. Collective over `comm`, the parent level's communicator: two
+block, in a `Vector{Union{Nothing,Decomp{T}}}` whatever the rank holds: a
+vector typed by its values (all `nothing`, all decompositions, or a mix)
+would compile this function once more on each rank meeting another of those
+types. Collective over `comm`, the parent level's communicator: two
 Allgathervs, of the parent's blocks and of the tiles' blocks, from which every
 rank derives the pieces it sends and receives without further communication.
 """
 function build_level_coupling(::Type{T}, comm::MPI.Comm,
                               transfers::Vector{LevelTransfer{T}},
                               parent_regions::Vector{BlockRegion},
-                              parent_decomps::AbstractVector,
-                              fine_decomps::AbstractVector) where {T}
+                              parent_decomps::Vector{Union{Nothing,Decomp{T}}},
+                              fine_decomps::Vector{Union{Nothing,Decomp{T}}}) where {T}
     pmine = Int64[]
     for (p, dc) in enumerate(parent_decomps)
         dc === nothing && continue
@@ -1732,7 +1735,9 @@ end
 # root machinery on tile ids (positions in `regions`, every tile of the
 # level) and shifted onto solver patch indices, one record set per dimension
 # for the phased sync. `tiles` are the tiles this rank holds, `patch_indices`
-# their solver indices and `decomps` their decompositions, all aligned.
+# their solver indices and `decomps` their decompositions, all aligned; the
+# decompositions come typed, since a rank holding none would otherwise pass
+# a `Vector{Any}` and compile this anew when it drops its last tile.
 # Collective over `comm`, the level's own communicator (one Allgatherv per
 # dimension of every rank's blocks of the tiles it holds; a rank outside the
 # subset must not call). Each record's `partner` is therefore a rank number
@@ -1742,8 +1747,9 @@ end
 # (`_level_period`), across whose seam two tiles abut. Returns the tuple the
 # `Level{T}` constructor takes.
 function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
-                        tiles::Vector{Int}, patch_indices::Vector{Int}, decomps,
-                        n_cons::Int, period::NTuple{3,Int}=(0, 0, 0)) where {T}
+                        tiles::Vector{Int}, patch_indices::Vector{Int},
+                        decomps::Vector{Decomp{T}}, n_cons::Int,
+                        period::NTuple{3,Int}=(0, 0, 0)) where {T}
     sends = ntuple(_ -> GhostRecord{T}[], 3)
     recvs = ntuple(_ -> GhostRecord{T}[], 3)
     planes = ntuple(_ -> PlaneRecord{T}[], 3)

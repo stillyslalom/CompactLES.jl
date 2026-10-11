@@ -199,10 +199,14 @@ _tile_rhs!(solver, p, states, dQs, pi::Int, prepared::Bool, current::Bool) =
 # The fields `select(p, solver)` of each tile of `lev` this rank holds, indexed
 # by patch index and unassigned at the indices of other patches. Gathered once
 # per pass, so that the exchanges and fills read each list at its concrete
-# type.
+# type. Every list is a `Vector` of the patch's array type, which the root
+# shares with the tiles, so a rank holding no tile of the level takes the
+# root's: the comprehension's own `Vector{Any}` there compiled the exchanges
+# anew on each rank whose last tile departed.
 function _level_field_lists(solver::Solver, lev::Level, select::F) where {F}
     patches = getfield(solver, :patches)
-    held = [select(patches[pi], solver) for pi in lev.patches]
+    held = isempty(lev.patches) ? typeof(patches[1].sensed_fields)[] :
+           [select(patches[pi], solver) for pi in lev.patches]
     lists = similar(held, length(patches))
     for (k, pi) in enumerate(lev.patches)
         lists[pi] = held[k]
