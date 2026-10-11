@@ -368,18 +368,27 @@ end
     # Per-tile owners: four 9-node tiles (25 fine, two ranks each at most).
     t(k) = BlockRegion((80 + 8k, 0, 0), (9, 1, 1))
     four = [t(0), t(1), t(2), t(3)]
-    # One tile reduces to `_level_ranks`.
-    @test CL._tile_owners([t(0)], act, 8) == ([0:1], 2)
-    # Ranks at least as many as tiles: each tile its own range, by weight,
-    # capped by what it admits; the level takes the union.
-    @test CL._tile_owners(four, act, 4) == ([0:0, 1:1, 2:2, 3:3], 4)
-    @test CL._tile_owners(four, act, 8) == ([0:1, 2:3, 4:5, 6:7], 8)
-    @test CL._tile_owners(four, act, 16) == ([0:1, 2:3, 4:5, 6:7], 8)
+    # The one patch of a box level (`whole = false`) reduces to `_level_ranks`.
+    @test CL._tile_owners([t(0)], act, 8; whole=false) == ([0:1], 2)
+    # Under `whole = false`, ranks at least as many as tiles: each tile its
+    # own range, by weight, capped by what it admits; the level takes the
+    # union.
+    @test CL._tile_owners(four, act, 4; whole=false) == ([0:0, 1:1, 2:2, 3:3], 4)
+    @test CL._tile_owners(four, act, 8; whole=false) == ([0:1, 2:3, 4:5, 6:7], 8)
+    @test CL._tile_owners(four, act, 16; whole=false) == ([0:1, 2:3, 4:5, 6:7], 8)
     # Unequal weights: 25 and 49 fine nodes over six ranks split 2 : 4.
-    @test CL._tile_owners([t(0), BlockRegion((88, 0, 0), (17, 1, 1))], act, 6) ==
-          ([0:1, 2:5], 6)
-    # More tiles than ranks: one rank per tile, the curve cut into runs.
+    @test CL._tile_owners([t(0), BlockRegion((88, 0, 0), (17, 1, 1))], act, 6;
+                          whole=false) == ([0:1, 2:5], 6)
+    # A tiled level holds each tile whole on one rank, the k-th tile on the
+    # curve on rank k − 1, and the ranks past the last tile hold nothing on
+    # the level.
+    @test CL._tile_owners([t(0)], act, 8) == ([0:0], 1)
+    @test CL._tile_owners(four, act, 8) == ([0:0, 1:1, 2:2, 3:3], 4)
+    @test CL._tile_owners(four, act, 16) == ([0:0, 1:1, 2:2, 3:3], 4)
+    # More tiles than ranks: one rank per tile, the curve cut into runs,
+    # either way.
     @test CL._tile_owners(four, act, 2) == ([0:0, 0:0, 1:1, 1:1], 2)
+    @test CL._tile_owners(four, act, 2; whole=false) == ([0:0, 0:0, 1:1, 1:1], 2)
     # The curve is a Morton order, not the lattice raster: a 3 × 2 block of
     # tiles over three ranks pairs the (0,0)/(12,0) and (0,12)/(12,12)
     # tiles, then the x = 24 column, where the raster would pair (24,0) with
@@ -412,59 +421,62 @@ end
 end
 
 @testset "stored ownership across regrids and measured rebalance weights" begin
-    # `_place_tiles` keeps a survivor's range and places fresh tiles among
-    # the ranks left free; `_tile_owners` would shift every range behind a
-    # tile entering ahead on the curve. A synthetic tile-set sequence, no
-    # run: 9-node 1-D tiles (25 fine nodes, two ranks each at most) over
-    # eight ranks.
+    # `_place_tiles` keeps a survivor's rank and places fresh tiles on the
+    # ranks left free; `_tile_owners` would shift every rank behind a tile
+    # entering ahead on the curve. A synthetic tile-set sequence, no run:
+    # 9-node 1-D tiles (25 fine nodes) over eight ranks, each tile whole on
+    # one rank.
     act = (true, false, false)
     t(k) = BlockRegion((80 + 8k, 0, 0), (9, 1, 1))
     four = [t(0), t(1), t(2), t(3)]
     o0, n0 = CL._tile_owners(four, act, 8)
-    @test (o0, n0) == ([0:1, 2:3, 4:5, 6:7], 8)
+    @test (o0, n0) == ([0:0, 1:1, 2:2, 3:3], 4)
     # The shock moves right: t0 leaves, t4 enters. The survivors keep their
-    # ranges and t4 takes the ranks t0 freed, where the fresh partition
-    # would have moved all three survivors down.
+    # ranks and t4 takes the rank t0 freed, where the fresh partition would
+    # have moved all three survivors down.
     oA, nA = CL._place_tiles([t(1), t(2), t(3), t(4)], act, 8, four, o0)
-    @test (oA, nA) == ([2:3, 4:5, 6:7, 0:1], 8)
+    @test (oA, nA) == ([1:1, 2:2, 3:3, 0:0], 4)
     @test CL._tile_owners([t(1), t(2), t(3), t(4)], act, 8)[1] == o0
-    # No rank free: a fresh tile joins the group of the survivor nearest it
-    # on the curve, here t4's.
+    # A fifth tile takes the lowest rank no tile holds, and the level grows.
     oB, nB = CL._place_tiles([t(1), t(2), t(3), t(4), t(5)], act, 8,
                              [t(1), t(2), t(3), t(4)], oA)
-    @test (oB, nB) == ([2:3, 4:5, 6:7, 0:1, 0:1], 8)
-    # Two departures free a run of four ranks; the one fresh tile takes the
-    # two it admits, and the other two hold nothing on the level.
+    @test (oB, nB) == ([1:1, 2:2, 3:3, 0:0, 4:4], 5)
+    # Two departures free ranks 1 and 2; the one fresh tile takes rank 1, and
+    # rank 2 holds nothing on the level.
     oC, nC = CL._place_tiles([t(3), t(4), t(5), t(6)], act, 8,
                              [t(1), t(2), t(3), t(4), t(5)], oB)
-    @test (oC, nC) == ([6:7, 0:1, 0:1, 2:3], 8)
-    # Free ranks with a gap: the ranks dealt to a fresh tile are cut at the
-    # gap, so a group stays contiguous (ranks 0, 2, 3 free; the tile takes
-    # 0 alone). The level's rank count follows the highest rank in use.
+    @test (oC, nC) == ([3:3, 0:0, 4:4, 1:1], 5)
+    # A stored range of several ranks, which a box level's checkpoint or one
+    # written by an earlier version records, survives as it is. The level's
+    # rank count follows the highest rank in use.
     oD, nD = CL._place_tiles([t(1), t(2), t(3)], act, 6, [t(1), t(2)], [1:1, 4:5])
     @test (oD, nD) == ([1:1, 4:5, 0:0], 6)
     # A departure from the top of the level shrinks it.
-    @test CL._place_tiles([t(1)], act, 6, [t(1), t(2)], [1:1, 4:5]) == ([1:1], 2)
+    @test CL._place_tiles([t(1)], act, 6, [t(1), t(2)], [1:1, 4:4]) == ([1:1], 2)
     # With no survivor the level is partitioned afresh.
-    @test CL._place_tiles([t(5), t(6)], act, 8, [t(1)], [3:4]) ==
+    @test CL._place_tiles([t(5), t(6)], act, 8, [t(1)], [3:3]) ==
           CL._tile_owners([t(5), t(6)], act, 8)
-    # Fresh tiles outnumbering the free ranks go one at a time to the group
-    # left least loaded, the nearest on the curve among equals: t5 joins
-    # t4's group as above, and t6 then joins t3's rather than piling onto it.
-    @test CL._place_tiles([t(1), t(2), t(3), t(4), t(5), t(6)], act, 8,
-                          [t(1), t(2), t(3), t(4)], oA) ==
-          ([2:3, 4:5, 6:7, 0:1, 0:1, 6:7], 8)
-    # One rank free for three fresh tiles: the free rank takes the first and,
-    # by proximity among equal loads, the second; the third goes to t3's.
+    # Fresh tiles outnumbering the free ranks go one at a time to the rank
+    # left least loaded, the nearest on the curve among equals. One rank free
+    # for three fresh tiles: the free rank takes the first and, by proximity
+    # among equal loads, the second; the third goes to t3's.
     @test CL._place_tiles([t(1), t(2), t(3), t(4), t(5), t(6)], act, 4,
                           [t(1), t(2), t(3)], [0:0, 1:1, 2:2]) ==
           ([0:0, 1:1, 2:2, 3:3, 3:3, 2:2], 4)
-    # The volume check against a fresh partition. C's two departures left
-    # ranks 4 and 5 idle and t4 and t5 sharing two ranks, twice the peak of
-    # a fresh partition, which is taken; A's placement is kept.
-    @test CL._balanced_owners([t(3), t(4), t(5), t(6)], act, 8, oC, nC) ==
-          CL._tile_owners([t(3), t(4), t(5), t(6)], act, 8)
+    # None free: each fresh tile joins the rank left least loaded.
+    @test CL._place_tiles([t(1), t(2), t(3), t(4), t(5), t(6)], act, 3,
+                          [t(1), t(2), t(3)], [0:0, 1:1, 2:2]) ==
+          ([0:0, 1:1, 2:2, 2:2, 1:1, 0:0], 3)
+    # The volume check against a fresh partition. Every tile on a rank of its
+    # own is the best partition there is, whichever ranks hold them, so C's
+    # placement, with rank 2 idle inside the level, is kept, and so is A's.
+    @test CL._balanced_owners([t(3), t(4), t(5), t(6)], act, 8, oC, nC) == (oC, nC)
     @test CL._balanced_owners([t(1), t(2), t(3), t(4)], act, 8, oA, nA) == (oA, nA)
+    # Two tiles to a rank with ranks to spare is twice the peak of a fresh
+    # partition, which is taken.
+    @test CL._balanced_owners([t(3), t(4), t(5), t(6)], act, 8,
+                              [0:0, 0:0, 1:1, 1:1], 2) ==
+          CL._tile_owners([t(3), t(4), t(5), t(6)], act, 8)
     # Five single-rank tiles on two ranks: three on one rank is the best any
     # partition does and is kept, four is a third worse and is repartitioned,
     # whole tiles largest first onto the least loaded rank, the nearest on
@@ -496,19 +508,24 @@ end
     @test wg == [2.0, 2.0]
     @test CL._measured_weights([t(1), t(3)], act, [t(1)], [0:0], [0.0]) ==
           [25.0, 25.0]
-    # The weighted partition: shares 1.6 : 2.4 : 2.0 of six ranks, at the
-    # two-rank cap each.
+    # The weighted partition of whole tiles: one rank each whatever the
+    # weights, with the ranks at least as many as the tiles.
     @test CL._tile_owners([t(1), t(2), t(3)], act, 6; weights=w) ==
+          ([0:0, 1:1, 2:2], 3)
+    # Under `whole = false`: shares 1.6 : 2.4 : 2.0 of six ranks, at the
+    # two-rank cap each.
+    @test CL._tile_owners([t(1), t(2), t(3)], act, 6; weights=w, whole=false) ==
           ([0:1, 2:3, 4:5], 6)
     # Unequal weights past the cap: the heavy tile stops at two ranks.
-    @test CL._tile_owners([t(1), t(2)], act, 4; weights=[1.0, 9.0]) == ([0:1, 2:3], 4)
+    @test CL._tile_owners([t(1), t(2)], act, 4; weights=[1.0, 9.0], whole=false) ==
+          ([0:1, 2:3], 4)
     @test CL._rank_counts([1.0, 9.0], [2, 2], 4) == [2, 2]
     @test CL._rank_counts([1.0, 9.0], [4, 4], 4) == [1, 3]
     # Admission is not monotone in the rank count: three 25 × 25 fine tiles
     # over eight ranks admit two ranks each or four, never three, so the
     # shares of 8/3 round to 4 : 2 : 2 rather than 3 : 3 : 2.
     lattice = [BlockRegion((8k, 0, 0), (9, 1, 9)) for k in 0:2]
-    @test CL._tile_owners(lattice, (true, false, true), 8) ==
+    @test CL._tile_owners(lattice, (true, false, true), 8; whole=false) ==
           ([0:3, 4:5, 6:7], 8)
     # Configuration guards.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)

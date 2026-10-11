@@ -305,7 +305,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                   "root nodes inside the domain")
     end
     if stored_owners === nothing
-        owners, np_new = _tile_owners(regions, active, root_lc.size)
+        owners, np_new = _tile_owners(regions, active, root_lc.size;
+                                      whole=spec.tile > 0)
     else
         length(stored_owners) == length(regions) ||
             error("restart: $(length(stored_owners)) owner ranges for " *

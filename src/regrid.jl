@@ -775,7 +775,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     # together.
     lt.fine_index == 0 || free_communicators!(patches[lt.fine_index].decomp)
     free_tile_group!(levels[2].group)
-    owners, np_new = _tile_owners([newregion], active_g, root_lc.size)
+    owners, np_new = _tile_owners([newregion], active_g, root_lc.size; whole=false)
     resized = np_new != old_lc.size
     resized && free_level_comm!(old_lc)
     new_lc = resized ? split_level_comm(root_lc, np_new) : old_lc

@@ -80,12 +80,13 @@
 #
 # Distribution: each level is owned by a rank subset of its parent's, a
 # contiguous prefix of the parent level's communicator (`LevelComm`), and
-# within it every tile is decomposed over its own contiguous rank range
-# (`_tile_owners`, `TileGroup`): the tiles are ordered along a Morton curve
-# and the ranks dealt out along it by tile volume, at least one and at most
-# the count the tile admits under the 9-point scheme minimum per tile when
-# the ranks outnumber the tiles, one rank per tile with the curve cut into
-# runs of about equal weight otherwise. A rank belongs to one group, the
+# within it every tile is owned by its own contiguous rank range
+# (`_tile_owners`, `TileGroup`): the tiles are ordered along a Morton curve,
+# and each tile of a tiled level is held whole by one rank, the k-th tile on
+# the curve by rank k − 1 when the ranks outnumber the tiles and the curve
+# cut into runs of about equal weight otherwise. The one patch of a box level
+# (`tile = 0`) is instead decomposed over as many ranks as it admits under
+# the 9-point scheme minimum. A rank belongs to one group, the
 # ranks sharing its range, and holds exactly the tiles of that group, so
 # `Solver.patches` is the root followed by this rank's tiles of each level;
 # `Level.tiles` records which tile each of those is. When every tile spans
@@ -292,30 +293,46 @@ function _rank_counts(weights::AbstractVector{<:Real}, caps::Vector{Int}, np::In
 end
 
 """
-    _tile_owners(regions, active, np; weights) -> (owners, np_level)
+    _tile_owners(regions, active, np; weights, whole=true) -> (owners, np_level)
 
 The owner rank range of every tile of a level, as 0-based ranges in the
 level's communicator, and the level's rank count, from the tile geometry
 alone (parent-level node space), so every rank computes the same answer.
-With at least as many ranks as tiles each tile takes its own contiguous range
-(`_rank_counts`), the ranges laid out along the space-filling curve so
-that neighboring tiles sit on neighboring ranks; with more tiles than ranks
-each tile takes one rank, the curve cut into `np` runs of about equal weight.
-Ranges never straddle: a rank belongs to one group, the tiles sharing its
-range, and one communicator per group serves all of them. The weight is the
-tile's fine volume unless `weights` supplies one per tile, as a rebalance
-does from the per-rank step wall it measured (`_measured_weights`); a caller
-passing weights must pass the same on every rank. A level of one tile
-reduces to `_level_ranks`.
+Each tile of a tiled level is held whole by one rank: with at least as many
+ranks as tiles, tile `k` along the space-filling curve takes rank `k − 1` and
+the ranks past the last tile hold nothing on the level; with more tiles than
+ranks the curve is cut into `np` runs of about equal weight. Under
+`whole = false`, the one patch of a box level (`tile = 0`), each tile
+instead takes its own contiguous range when the ranks are at least as many
+(`_rank_counts`), laid out along the curve. Ranges never straddle: a rank
+belongs to one group, the tiles sharing its range, and one communicator per
+group serves all of them. The weight is the tile's fine volume unless
+`weights` supplies one per tile, as a rebalance does from the per-rank step
+wall it measured (`_measured_weights`); a caller passing weights must pass
+the same on every rank. A box level reduces to `_level_ranks`.
 """
 function _tile_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
                       np::Int;
                       weights::AbstractVector{<:Real}=
-                          [prod(fine_extent(r, active)) for r in regions])
+                          [prod(fine_extent(r, active)) for r in regions],
+                      whole::Bool=true)
     n = length(regions)
     length(weights) == n || error("one weight per tile: $(length(weights)) for $n")
     order = _sfc_order(regions)
     owners = Vector{UnitRange{Int}}(undef, n)
+    if np >= n && whole
+        # A tile split over several ranks pays a reduced-system exchange in
+        # every line solve along a split dimension and an exchange per shell
+        # fill, latency that a tile of a few tens of thousands of nodes does
+        # not amortize: on a refined Richtmyer–Meshkov level of four tiles
+        # over eight ranks every phase, the right-hand side included, spent
+        # about half its time in MPI. A rank holding no tile idles on the
+        # level instead.
+        for (k, t) in enumerate(order)
+            owners[t] = (k - 1):(k - 1)
+        end
+        return owners, n
+    end
     if np >= n
         # A lattice level's tiles share a handful of extents, and the cap
         # depends on the extent alone.

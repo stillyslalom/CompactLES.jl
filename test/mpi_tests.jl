@@ -3004,12 +3004,11 @@ function test_refined_decomposed()
 end
 
 # ---------------------------------------------------------------------------
-# Tiled level, decomposed: each tile is decomposed over its own rank range
-# within the level (`_tile_owners`), the ranges dealt out along a Morton
-# curve. Four 37-node tiles admit up to sixteen ranks each, so at np = 2 the
-# curve is cut into two runs of two tiles, at np = 4 each tile takes one
-# rank, and at np = 8 each takes two, through _amr_dims (2x1); the CI job
-# runs this phase at np = 8 for that last shape.
+# Tiled level, decomposed: each tile is held whole by one rank of the level
+# (`_tile_owners`), the tiles dealt out along a Morton curve. Four 37-node
+# tiles at np = 2 cut the curve into two runs of two tiles; at np = 4 and 8
+# each tile takes one rank, and at np = 8 four ranks hold none, which the CI
+# job's np = 8 run of this phase exercises.
 # ---------------------------------------------------------------------------
 function test_partitioned_coupling()
     section("partitioned coupling: each rank moves its own tiles' data")
@@ -3123,21 +3122,18 @@ function test_tiled_level()
     end
     et, nt, s4 = tiled_error(subcycle=false)
     lev = s4.levels[2]
-    per_tile = max(1, np ÷ 4)
     blocks = MPI.Allreduce(length(lev.patches), +, comm)
     check("tiled 2-D level: four tiles", abs(length(lev.transfers) - 4), 0.5)
-    check("tiled 2-D level: each tile over its own rank range",
-          all(length(o) == per_tile for o in lev.owners) ? 0.0 : 1.0, 0.5)
-    check("tiled 2-D level: tile blocks held over the ranks",
-          abs(blocks - 4 * per_tile), 0.5)
+    check("tiled 2-D level: each tile whole on one rank",
+          all(length(o) == 1 for o in lev.owners) ? 0.0 : 1.0, 0.5)
+    check("tiled 2-D level: one block per tile over the ranks", abs(blocks - 4), 0.5)
     check("tiled 2-D level: a rank holds its group's tiles only",
           all(lev.owners[t] == lev.group.ranks for t in lev.tiles) ? 0.0 : 1.0, 0.5)
     check("tiled 2-D wave error matches serial",
           abs(et - 1.1764478280440471e-11), 1e-14)
     check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
     # Subcycled, the ghost fluxes cross the tile faces and the coarse-fine
-    # faces in both dimensions, the tiles decomposed at np >= 8. Measured
-    # agreement 4e-16 at np = 2 and 0 at np = 4 and 8.
+    # faces in both dimensions, between tiles on different ranks.
     ets, nts, _ = tiled_error(subcycle=true)
     check("subcycled tiled 2-D wave error matches serial",
           abs(ets - 3.3744118610457008e-11), 1e-14)
@@ -4670,10 +4666,10 @@ const SUITE = (
 # of SPLITN = 72 points via `splitdims`, and at np = 8 that is 9 points per
 # rank, the C8 filter's minimum block and the smallest the reduced-interface
 # solves, the transfer operators, the fold butterfly, the positivity repair
-# and the wall closures of "closed C6" ever see: those phases run. Two grids
-# change shape outright: the corner-halo check's default Dims_create grid
-# (2x2x2 at np = 8, 2x1x1 at np = 2) and the tiled fine level's _amr_dims grid
-# (4x2 against 2x1). A composite face's member mask splits across more ranks,
+# and the wall closures of "closed C6" ever see: those phases run. The
+# corner-halo check's default Dims_create grid changes shape outright (2x2x2
+# at np = 8, 2x1x1 at np = 2), and a tiled level of four tiles leaves four
+# of eight ranks without one. A composite face's member mask splits across more ranks,
 # and the deep-regrid levels fall onto rank subsets and move a tile only at
 # np = 8. The level coupling's point-to-point messages pair different ranks at
 # each count, and so do the owner ranges a hierarchy's phase change carries.

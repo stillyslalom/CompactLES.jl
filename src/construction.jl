@@ -1081,7 +1081,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             # depend only on the tile geometry, which every rank holds, so
             # all ranks pass the same inputs with no communication beyond
             # the splits themselves.
-            owners, np_level = _tile_owners(tregions, active_g, parent_lc.size)
+            owners, np_level = _tile_owners(tregions, active_g, parent_lc.size;
+                                            whole=tile > 0)
             lc = split_level_comm(parent_lc, np_level)
             group = lc.owned ? split_tile_comm(lc, owners) : absent_tile_group()
             held = [ti for ti in eachindex(tregions) if owners[ti] == group.ranks]
