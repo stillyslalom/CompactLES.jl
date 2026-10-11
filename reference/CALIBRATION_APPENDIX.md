@@ -7016,6 +7016,70 @@ Open: a rough count puts the RHS work of 40 tiles of 37² on a 96² root near
 annular reading at a different configuration matches expectation. Remeasure
 warm at the original configuration.
 
+### bench/rmicost.jl: whole tiles, the subdivided lattice and per-dimension edges
+
+`mpiexec -n 8 julia --project=. -t 1 bench/rmicost.jl config=amr2 dim=3
+affinity=0x5555` and the other legs below, on `98031e2` (base: tiles split
+over rank ranges) against the same tree with whole-tile ownership and the
+lattice subdivision; P-cores, the two trees alternated in one session. ms per
+root step over the steady steps (mean, median), steady wall per simulated
+µs, busy max/mean, the waiting share of the summed steady wall, refined
+node-steps per level, and the mix width W (fine2 6.239 mm and fine3
+6.075 mm in 2-D, fine2 5.608 mm in 3-D). The 3-D amr3 rows are the first 17
+root steps, 7 of them steady.
+
+| leg | tree | lattice at the end | ms/step | median | s/µs | busy | wait | node-steps L1 / L2 | W mm |
+|---|---|---|---|---|---|---|---|---|---|
+| 2-D amr2 | base | 12 | 16.6, 19.2 | 14.3, 15.1 | 0.0090, 0.0104 | 1.09 | 18–20% | 3.54e6 | 6.2597 |
+| 2-D amr2 | new | (6, 6) | 16.0, 19.7 | 8.9, 9.5 | 0.0088, 0.0108 | 1.03 | 21–26% | 3.06e6 | 6.2720 |
+| 2-D amr2 | `tile=4,12` | (4, 6) | 16.0, 26.5 | 10.0, 10.6 | 0.0088, 0.0145 | 1.03–1.09 | 26–36% | 2.89e6 | 6.2856 |
+| 2-D amr3 | base | 12 / 12 | 145.9, 149.9 | 109.6, 114.1 | 0.092, 0.095 | 1.10 | 33–35% | 5.41e6 / 7.67e7 | 6.0893 |
+| 2-D amr3 | new | (6, 6) / 12 | 148.1, 142.2 | 113.1, 107.4 | 0.094, 0.090 | 1.06 | 37–39% | 5.36e6 / 7.52e7 | 6.0835 |
+| 2-D amr3 | `tile=4,12` | (4, 6) / (4, 12) | 119.6 | 92.5 | 0.075 | 1.07 | 41% | 4.86e6 / 3.48e7 | 6.0681 |
+| 3-D amr2 | base | 12 | 472.6 | 458.4 | 0.351 | 1.11 | 18% | 1.77e8 | 5.6358 |
+| 3-D amr2 | new | (6, 6, 12) | 401.5 | 414.9 | 0.301 | 1.05 | 21% | 1.53e8 | 5.6454 |
+| 3-D amr2 | `tile=4,12,12` | (4, 6, 12) | 410.9 | 433.0 | 0.305 | 1.06 | 28% | 1.40e8 | 5.6599 |
+| 3-D amr3, 17 steps | base | 12 / 12 | 15970 | 15310 | 10.9 | 1.06 | 21% | 9.2e6 / 2.94e8 | |
+| 3-D amr3, 17 steps | new | (6, 6, 12) / 12 | 18580 | 18160 | 12.2 | 1.04 | 23% | 9.4e6 / 3.33e8 | |
+
+Settled: in 3-D amr2, where four or five level-1 tiles of 37 × 36 × 36 fine
+nodes were each split over two ranks, whole tiles on the subdivided lattice
+(12 to 28 tiles) take 15% off the step, and the busy max/mean falls from
+1.11 to 1.05. Thin tiles along the shock normal (`tile = (4, 12, 12)`) cover
+the planar fronts with 21% fewer refined node-steps than cubes of 12, and in
+2-D amr3 halve the level-2 node-steps and take 18% off the step; in 3-D
+amr2 the saving in nodes is spent on the extra tile faces and the step is
+the subdivided cube lattice's. In 2-D amr2 the median step falls by a
+third, and the mean does not move: the regrid checks rebuild 14 to 16 small
+tiles where the base rebuilt 2 to 5, and the checks rise from 8% to 45% of
+the steady wall. The 2-D amr3 level 2 already holds 12 to 30 tiles on the
+configured lattice and is not subdivided; there the mean moves inside the
+spread.
+
+A sampling profile of the first 200 root steps of 3-D amr2 (`profile=true
+nmax=200`), ms per root step and the share inside MPI.jl calls, base
+against new: the level artificial coefficients 153.6 (39%) and 101.9 (22%),
+the right-hand side 107.0 (31%) and 74.1 (14%), the same-level sync 41.4
+(60%) and 33.1 (78%), the ghost-flux divergence 50.4 (47%) and 98.0 (15%);
+the step 422.1 (39%) and 374.1 (23%). The ghost-flux passes, which run per
+tile face, double with the tile count, and are the cost the subdivision
+pays for whole tiles.
+
+W moves at the third or fourth figure with the layout: the subdivided and the
+thin lattices cover the features more tightly, so less of the flow sees the
+fine spacing, and W lies further from the uniform fine run's (3-D amr2: 0.5%,
+0.7% and 0.9% above fine2 for base, subdivided and thin). The serial runs,
+the convergence rows and the MPI suite's serial comparisons are unchanged,
+since one rank never subdivides and a whole tile computes as the serial tile
+does.
+
+Open: the 3-D amr3 window is early (7 steady steps) and runs 16% slower,
+with 13% more level-2 node-steps on the same level-2 lattice: level 1's
+subdivision does not pay where level 2 dominates the work, and its own
+tile faces may tag more level-2 cells. The full window (about 300 root
+steps) decides it; a lattice choice weighted by each level's share of the
+step would subdivide only the levels that bind.
+
 ### bench/amr_cost.jl: the mixing cost case
 
 `mpiexec -n 8 julia --project=. -t 1 bench/amr_cost.jl 48 1.0` (`6382d8e`;
