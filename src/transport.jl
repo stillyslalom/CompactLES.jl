@@ -1,4 +1,5 @@
-const CEA_TRANSPORT_PATH = normpath(joinpath(@__DIR__, "..", "data", "trans.inp"))
+# Resolved at call time, as `_nasa9_thermo_path` is.
+_cea_transport_path() = pkgdir(@__MODULE__, "data", "trans.inp")
 
 struct CeaTransportInterval{T}
     Tmin::T
@@ -44,7 +45,7 @@ Read the pure-species and binary-interaction fits in a NASA CEA `trans.inp`
 file. The returned records preserve both names for binary entries. Binary
 entries are viscosity interaction fits; they are not binary diffusion data.
 """
-function read_cea_transport(path::AbstractString=CEA_TRANSPORT_PATH)
+function read_cea_transport(path::AbstractString=_cea_transport_path())
     isfile(path) || throw(ArgumentError("NASA CEA transport database not found: $path"))
     lines = readlines(path)
     records = CeaTransportRecord{Float64}[]
@@ -288,7 +289,7 @@ end
 
 """
     CeaTransport(eos; diffusion=:unity_lewis, Lewis=1,
-                 binary_diffusion=nothing, path=CEA_TRANSPORT_PATH)
+                 binary_diffusion=nothing, path)
 
 Temperature-dependent molecular transport using NASA CEA pure-species
 viscosity and conductivity fits. `:unity_lewis` obtains every species
@@ -304,7 +305,8 @@ density and heat capacity and finite, nonnegative mass fractions with a
 positive sum. The hot pointwise path assumes that setup and state validation
 enforce this contract.
 
-Returned `mu`, `kappa`, and `D` use SI units Pa s, W/(m K), and m^2/s.
+Returned `mu`, `kappa`, and `D` use SI units Pa s, W/(m K), and m^2/s. `path`
+names the `trans.inp` file to read and defaults to the bundled copy.
 """
 struct CeaTransport{T,N,D,Names} <: AbstractTransport{T}
     species::NTuple{N,CeaSpeciesTransport{T}}
@@ -386,7 +388,7 @@ function _convert_binary_diffusion(model::BinaryDiffusionPolynomial{S,N,M,Names}
 end
 
 function CeaTransport(eos; diffusion::Symbol=:unity_lewis, Lewis=1.0,
-                      binary_diffusion=nothing, path::AbstractString=CEA_TRANSPORT_PATH)
+                      binary_diffusion=nothing, path::AbstractString=_cea_transport_path())
     eos = _as_eos(eos)
     names = species_names(eos)
     N = length(names)

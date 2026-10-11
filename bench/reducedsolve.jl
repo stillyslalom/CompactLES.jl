@@ -240,7 +240,14 @@ function environment(comm, opt)
     rank == 0 || return nothing
     per_host = [count(==(h), hosts) for h in unique(hosts)]
     models = unique(strip(c.model) for c in Sys.cpu_info())
-    cores = try string(CL.ThreadPinning.ncores()) catch; "?" end
+    # Physical cores: the distinct SMT sibling sets in sysfs ("?" off Linux).
+    sibling_lists = String[]
+    for name in (isdir("/sys/devices/system/cpu") ? readdir("/sys/devices/system/cpu") :
+                 String[])
+        f = "/sys/devices/system/cpu/$name/topology/thread_siblings_list"
+        occursin(r"^cpu\d+$", name) && isfile(f) && push!(sibling_lists, read(f, String))
+    end
+    cores = isempty(sibling_lists) ? "?" : string(length(unique(sibling_lists)))
     binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
     println("=== distributed line solve, stage by stage (ROADMAP S12)")
     println("    CPU             : ", join(models, " | "), "  (",

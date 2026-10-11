@@ -15,7 +15,10 @@
 # Exponents are written `D` instead of `E`, so the float parser substitutes
 # before parsing.
 
-const NASA9_THERMO_PATH = normpath(joinpath(@__DIR__, "..", "data", "thermo.inp"))
+# Resolved at call time: `@__DIR__` in a constant stores the precompiling
+# machine's absolute path in the package image, which then names a missing file
+# once the depot is copied or moved (a node-local depot on a cluster).
+_nasa9_thermo_path() = pkgdir(@__MODULE__, "data", "thermo.inp")
 const UNIVERSAL_GAS_CONSTANT = 8.31446261815324 # J/(mol K)
 
 function _nasa9_field(line, first, last, context)
@@ -95,8 +98,7 @@ end
 _nasa9_record_lines(n_intervals) = n_intervals == 0 ? 3 : 2 + 3 * n_intervals
 
 """
-    read_nasa9(names; path=NASA9_THERMO_PATH, reference=:sensible,
-               T_ref=298.15)
+    read_nasa9(names; path, reference=:sensible, T_ref=298.15)
 
 Read gas species from the fixed-column NASA CEA `thermo.inp` database. The
 specific gas constant is derived from each record's molar mass using
@@ -125,7 +127,7 @@ throws an `ArgumentError` for missing species, malformed records, non-gaseous
 records, or invalid keyword values.
 """
 function read_nasa9(names::AbstractVector{<:AbstractString};
-                    path::AbstractString=NASA9_THERMO_PATH,
+                    path::AbstractString=_nasa9_thermo_path(),
                     reference=:sensible, T_ref=298.15)
     reference in (:sensible, :formation) ||
         throw(ArgumentError("reference must be :sensible or :formation"))

@@ -417,9 +417,10 @@ doubling (93% at four nodes), so off-node communication costs little here.
   configuration with a theoretical opening (one rank per NUMA domain with pinned
   threads under Julia ≥ 1.13), which depends on the pinning item below and on
   masks the scheduler will not produce unaided.
-- `ThreadPinning`'s querying API drives `clusterprobe.jl`; its *pinning* API is
-  unused. Whether it helps is open; on the machines measured the scheduler's own
-  binding was near-optimal, and the launch-line rules had a greater effect.
+- Thread pinning is untested: `clusterprobe.jl` reads the topology from sysfs,
+  and `ThreadPinning` is not a dependency. Whether pinning helps is open; on the
+  machines measured the scheduler's own binding was near-optimal, and the
+  launch-line rules had a greater effect.
 - The ~4300x SMT-sibling collapse is unexplained after four hypotheses were
   tested and rejected (cgroup memory starvation, collectives paying an OS
   timeslice, a sick node, NUMA placement). The reproducible signature should be

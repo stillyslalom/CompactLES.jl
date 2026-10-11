@@ -207,7 +207,7 @@ end
 function _ideal_species_from_nasa9(::Type{T}, name::AbstractString;
                                    T_ref=298.15, path=nothing) where
                                    {T<:AbstractFloat}
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     species = read_nasa9(name; path=database_path, reference=:formation,
                          T_ref=T_ref)
     return _ideal_species_from_nasa9_record(T, species; T_ref=T_ref)
@@ -279,7 +279,7 @@ IdealMixture(::Type{T}, species::Tuple{Vararg{IdealSpecies}}) where
 
 function IdealMixture(names::AbstractVector{<:AbstractString}; T_ref=298.15,
                       path=nothing)
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     nasa_species = read_nasa9(names; path=database_path, reference=:formation,
                               T_ref=T_ref)
     return IdealMixture([_ideal_species_from_nasa9_record(Float64, sp;
@@ -293,7 +293,7 @@ IdealMixture(::Type{T}, names::Tuple{Vararg{AbstractString}}; kwargs...) where
     {T<:AbstractFloat} = IdealMixture(T, collect(names); kwargs...)
 function IdealMixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       T_ref=298.15, path=nothing) where {T<:AbstractFloat}
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     nasa_species = read_nasa9(names; path=database_path, reference=:formation,
                               T_ref=T_ref)
     species = [_ideal_species_from_nasa9_record(T, sp; T_ref=T_ref)
@@ -714,7 +714,7 @@ end
 
 function Nasa9Species(::Type{T}, name::AbstractString; path=nothing,
                       reference=:sensible, T_ref=298.15) where {T<:AbstractFloat}
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     return _convert_nasa9_species(T, read_nasa9(name; path=database_path,
                                                  reference=reference,
                                                  T_ref=T_ref))
@@ -848,7 +848,7 @@ Nasa9Mixture(::Type{T}, species::Tuple{Vararg{Nasa9Species}}; kwargs...) where
 function Nasa9Mixture(names::AbstractVector{<:AbstractString}; path=nothing,
                       reference=:sensible, T_ref=298.15, T_guess=300.0,
                       extrapolate::Symbol=:linear)
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)
     return _nasa9_mixture(Float64, species; T_guess=T_guess,
@@ -863,7 +863,7 @@ function Nasa9Mixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       path=nothing, reference=:sensible, T_ref=298.15,
                       T_guess=300.0,
                       extrapolate::Symbol=:linear) where {T<:AbstractFloat}
-    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    database_path = path === nothing ? _nasa9_thermo_path() : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)
     return _nasa9_mixture(T, species; T_guess=T_guess, extrapolate=extrapolate)

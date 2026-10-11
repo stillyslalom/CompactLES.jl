@@ -37,7 +37,6 @@ MPI.Init(threadlevel=:funneled)
 const t_mpi = time()
 
 using CompactLES
-using CompactLES.ThreadPinning
 const t_load = time()
 
 using LinearAlgebra: BLAS
@@ -59,53 +58,75 @@ function cpus_allowed()
     try
         for line in eachline("/proc/self/status")
             startswith(line, "Cpus_allowed_list:") || continue
-            spec = strip(split(line, ':')[2])
-            out = Int[]
-            for part in split(spec, ',')
-                lo_hi = split(part, '-')
-                if length(lo_hi) == 1
-                    push!(out, parse(Int, lo_hi[1]))
-                else
-                    append!(out, parse(Int, lo_hi[1]):parse(Int, lo_hi[2]))
-                end
-            end
-            return out
+            return cpu_list(split(line, ':')[2])
         end
     catch
     end
     return Int[]
 end
 
-# ThreadPinning's getcpuid()/getnumanode() need sched_getcpu, which restricts
-# them to Linux and to the calling thread. The mask above already names the
-# rank's CPUs portably, so use ThreadPinning only for the static topology —
-# socket(i) / numa(i) return cpuid lists and work anywhere.
-const TOPO = try
-    (sockets = [Set(socket(i)) for i in 1:nsockets()],
-     numas   = [Set(numa(i))   for i in 1:nnuma()])
-catch
-    (sockets = Set{Int}[], numas = Set{Int}[])
+# A sysfs CPU list ("0-3,8,10-11") as a vector of logical CPU ids.
+function cpu_list(spec)
+    out = Int[]
+    for part in split(strip(spec), ',')
+        isempty(part) && continue
+        lo_hi = split(part, '-')
+        length(lo_hi) == 1 ? push!(out, parse(Int, lo_hi[1])) :
+            append!(out, parse(Int, lo_hi[1]):parse(Int, lo_hi[2]))
+    end
+    return out
 end
 
+read_cpu_list(path) = try cpu_list(read(path, String)) catch; Int[] end
+
+# The SMT siblings of a logical CPU, itself included; the lowest id names the core.
+cpu_siblings(c) =
+    read_cpu_list("/sys/devices/system/cpu/cpu$c/topology/thread_siblings_list")
+
+# The static node topology, from sysfs. A CPU is a hyperthread when it is not the
+# lowest-numbered sibling of its core. The masks come from /proc in any case, so
+# off Linux every field is empty and the topology line says so.
+function node_topology()
+    online = read_cpu_list("/sys/devices/system/cpu/online")
+    package = Dict{Int,Vector{Int}}()
+    core = Dict{Int,Int}()
+    smt = 0
+    for c in online
+        siblings = cpu_siblings(c)
+        isempty(siblings) && continue
+        core[c] = minimum(siblings)
+        smt = max(smt, length(siblings))
+        id = try
+            parse(Int, strip(read(
+                "/sys/devices/system/cpu/cpu$c/topology/physical_package_id", String)))
+        catch
+            continue
+        end
+        push!(get!(package, id, Int[]), c)
+    end
+    sockets = [Set(package[id]) for id in sort!(collect(keys(package)))]
+    numas = Set{Int}[]
+    nodes = filter(n -> occursin(r"^node\d+$", n),
+                   try readdir("/sys/devices/system/node") catch; String[] end)
+    for n in sort!(nodes; by = n -> parse(Int, n[5:end]))
+        cpus = read_cpu_list("/sys/devices/system/node/$n/cpulist")
+        isempty(cpus) || push!(numas, Set(cpus))
+    end
+    return (sockets = sockets, numas = numas, core = core,
+            ncores = length(unique(values(core))), smt = smt)
+end
+
+const TOPO = node_topology()
+
 domain_of(groups, cpu) = something(findfirst(g -> cpu in g, groups), 0)
+
+ishyperthread(cpu) = get(TOPO.core, cpu, cpu) != cpu
 
 function physical_cores(mask)
     cores = Set{Int}()
     for c in mask
-        rep = c
-        try
-            s = strip(read("/sys/devices/system/cpu/cpu$c/topology/thread_siblings_list",
-                           String))
-            siblings = Int[]
-            for part in split(s, ',')
-                lo_hi = split(part, '-')
-                length(lo_hi) == 1 ? push!(siblings, parse(Int, lo_hi[1])) :
-                    append!(siblings, parse(Int, lo_hi[1]):parse(Int, lo_hi[2]))
-            end
-            isempty(siblings) || (rep = minimum(siblings))
-        catch
-        end
-        push!(cores, rep)
+        siblings = cpu_siblings(c)
+        push!(cores, isempty(siblings) ? c : minimum(siblings))
     end
     return cores
 end
@@ -214,8 +235,10 @@ if rank == 0
     println("BLAS threads    : ", BLAS.get_num_threads(),
             BLAS.get_num_threads() > 1 ?
             "   <-- set OPENBLAS_NUM_THREADS=1" : "")
-    println("node topology   : ", nsockets(), " sockets, ", nnuma(), " NUMA domains, ",
-            ncores(), " cores, ", nsmt(), " threads/core")
+    println("node topology   : ", isempty(TOPO.core) ? "unavailable (no sysfs)" :
+            string(length(TOPO.sockets), " sockets, ", length(TOPO.numas),
+                   " NUMA domains, ", TOPO.ncores, " cores, ", TOPO.smt,
+                   " threads/core"))
     println()
 
     println("per rank (min..max over ranks):")

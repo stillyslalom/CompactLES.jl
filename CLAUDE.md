@@ -46,9 +46,9 @@ julia --project=. -e 'using MPI; MPI.mpiexec(c -> println(c))'
 Before interpreting any scaling or timing number, identify the hardware.
 `Threads.nthreads()`, the physical core count, and whether the cores are
 uniform all change the interpretation; a hybrid performance/efficiency-core
-desktop will spread threads across both and understate scaling. `ThreadPinning`
-supplies the topology queries `clusterprobe.jl` uses. Nothing pins threads yet;
-only the querying half has been validated. The JLL `mpiexec` on Windows sets
+desktop will spread threads across both and understate scaling.
+`clusterprobe.jl` reads the topology from Linux sysfs, and nothing pins
+threads; `ThreadPinning` is not a dependency. The JLL `mpiexec` on Windows sets
 no affinity mask either (`-affinity_layout` has no effect without the `smpd`
 service), so ranks migrate across the performance and efficiency cores and a
 timing at eight ranks carries a 3–4% process-to-process spread at 64³ per

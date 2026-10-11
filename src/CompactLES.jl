@@ -21,12 +21,6 @@ using MPI
 using LinearAlgebra
 using Printf
 
-# `clusterprobe.jl` accesses `ThreadPinning` through CompactLES because its
-# driver environment lists only this package. The solver itself does not use
-# thread-pinning queries. `import` keeps exported names such as `ncores` and
-# `nsockets` out of this namespace.
-import ThreadPinning
-
 include("threading.jl")
 include("decomposition.jl")
 include("pointwise.jl")
