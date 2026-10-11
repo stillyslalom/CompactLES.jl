@@ -628,6 +628,154 @@ end
     @test all(fit([1.0, 2.0, 3.0], [6.0, 5.0, 4.0]) .≈ (0.0, 5.0))
 end
 
+@testset "lattice decision over nodes and at large tile counts" begin
+    act = (true, true, true)
+    # Tiles of a lattice of edges (4, 6, 8) over a 41 × 31 × 33 node space,
+    # every other cell, clipped at the ends.
+    lattice = [BlockRegion((4k1, 6k2, 8k3),
+                           (min(5, 41 - 4k1), min(7, 31 - 6k2), min(9, 33 - 8k3)))
+               for k3 in 0:3, k2 in 0:4, k1 in 0:9 if isodd(k1 + k2 + k3) || k1 < 3]
+    lattice = [r for r in lattice if all(>=(2), r.extent)]
+    # The face table by table lookup against the pairwise comparison it
+    # replaces, the seam of a period included.
+    function faces_pairwise(regions, period)
+        same_node(a, b, d) = period[d] == 0 ? a == b : mod(a - b, period[d]) == 0
+        map(eachindex(regions)) do p
+            rp = regions[p]
+            ntuple(3) do d
+                lo = hi = 0
+                for q in eachindex(regions)
+                    q == p && continue
+                    rq = regions[q]
+                    all(e -> e == d || (same_node(rq.offset[e], rp.offset[e], e) &&
+                                        rq.extent[e] == rp.extent[e]), 1:3) || continue
+                    same_node(rq.offset[d] + rq.extent[d] - 1, rp.offset[d], d) && (lo = q)
+                    same_node(rp.offset[d] + rp.extent[d] - 1, rq.offset[d], d) && (hi = q)
+                end
+                (lo, hi)
+            end
+        end
+    end
+    @test CL._tile_faces(lattice) == faces_pairwise(lattice, (0, 0, 0))
+    @test CL._tile_faces(lattice, (40, 0, 0)) == faces_pairwise(lattice, (40, 0, 0))
+    @test any(f -> f[1][1] != 0, CL._tile_faces(lattice, (40, 0, 0)))
+    # The wanted tiles through the old tiles' index against the test of every
+    # cell against every old tile it replaces, on the current lattice and on
+    # a finer one, with cells at the hold level and young old tiles.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    spec = getfield(Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
+                           refine=BlockRegion((16, 0, 0), (17, 1, 1)), tile=8,
+                           regrid_interval=5), :regrid)
+    N, lo, hi = (49, 37, 25), (5, 5, 5), (45, 33, 21)
+    a0, a1 = (8, 8, 8), (4, 8, 8)
+    tiles(a) = [t for k3 in 0:3, k2 in 0:4, k1 in 0:6
+                for t in (CL._lattice_tile((k1, k2, k3), act, a, lo, hi),)
+                if t !== nothing]
+    old = [t for (i, t) in enumerate(tiles(a0)) if i % 3 != 0]
+    spec.checks, spec.lifetime = 5, 3
+    empty!(spec.created)
+    foreach(((i, r),) -> spec.created[r] = isodd(i) ? 4 : 0, enumerate(old))
+    function wanted_pairwise(flags, K, a, current)
+        out = BlockRegion[]
+        young(r) = spec.checks - get(spec.created, r, 0) < spec.lifetime
+        for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
+            t = CL._lattice_tile((k1, k2, k3), act, a, lo, hi)
+            t === nothing && continue
+            f = flags[k1 + 1, k2 + 1, k3 + 1]
+            ok = f == CL.TAG_MARK || (current ? t in old && (f == CL.TAG_HOLD || young(t)) :
+                 (over = [o for o in old if CL._overlaps(t, o, act, (0, 0, 0))];
+                  !isempty(over) && (f == CL.TAG_HOLD || any(young, over))))
+            ok && push!(out, t)
+        end
+        return out
+    end
+    for (a, current) in ((a0, true), (a1, false))
+        K = ntuple(d -> (N[d] - 1) ÷ a[d] + 1, 3)
+        flags = Int8[(i * 7 + j * 3 + k) % 4 == 0 ? CL.TAG_MARK :
+                     (i + j * k) % 3 == 0 ? CL.TAG_HOLD : 0
+                     for i in 1:K[1], j in 1:K[2], k in 1:K[3]]
+        got = CL._lattice_wanted(flags, K, a, act, lo, hi, spec, old, current, (0, 0, 0))
+        @test got == wanted_pairwise(flags, K, a, current)
+        @test !isempty(got)
+    end
+    # The region index finds every region a query overlaps.
+    bins = CL._RegionIndex(old, (0, 0, 0))
+    for t in tiles(a1)
+        @test [i for (i, o) in enumerate(old) if CL._overlaps(t, o, act, (0, 0, 0))] ⊆
+              CL._candidates(bins, t)
+    end
+    # The chain stops at the cell budget, the configured lattice always kept.
+    none = CL._NO_BOUNDARY
+    full = CL._edge_chain((16, 16, 16), act, (97, 97, 97), none, none, 4, 8, 4, 8)
+    @test length(full) == 7
+    @test CL._edge_chain((16, 16, 16), act, (97, 97, 97), none, none, 4, 8, 4, 8,
+                         7 * 7 * 13) == full[1:2]
+    @test CL._edge_chain((16, 16, 16), act, (97, 97, 97), none, none, 4, 8, 4, 8, 1) ==
+          full[1:1]
+    @test CL._lattice_budget(8) == 1 << 20 && CL._lattice_budget(11200) == 256 * 11200
+    # Placement across nodes: one node is the single-node placement; two
+    # nodes of four ranks each take a run of the curve, balanced over their
+    # ranks, and every tile of a run on its own node's ranks.
+    act2 = (true, true, false)
+    sq = [BlockRegion((4k1, 4k2, 0), (5, 5, 1)) for k2 in 0:3 for k1 in 0:5]
+    @test CL._knapsack_owners(sq, act2, 8; nodes=zeros(Int, 8)) ==
+          CL._knapsack_owners(sq, act2, 8)
+    nodes = [r ÷ 4 for r in 0:7]
+    owners, np = CL._knapsack_owners(sq, act2, 8; nodes)
+    @test np == 8 && all(o -> length(o) == 1, owners)
+    curve = CL._sfc_order(sq)
+    on = [nodes[first(owners[t]) + 1] for t in curve]
+    @test on == sort(on) && count(==(0), on) == 12
+    @test maximum(count(o -> o == r:r, owners) for r in 0:7) == 3
+    # A renumbering to keep survivors stays within each node.
+    kept = CL._keep_survivors(owners, sq, act2, 8, [5:5 for _ in sq], trues(length(sq));
+                              nodes)
+    @test all(nodes[first(kept[t]) + 1] == nodes[first(owners[t]) + 1] for t in eachindex(sq))
+    @test CL._keep_survivors(owners, sq, act2, 8, [5:5 for _ in sq], trues(length(sq))) ==
+          CL._keep_survivors(owners, sq, act2, 8, [5:5 for _ in sq], trues(length(sq));
+                             nodes=zeros(Int, 8))
+    # Messages split by node: a pair of abutting tiles on two ranks of one
+    # node exchange within it, on two nodes across, and each coupling with
+    # the parent counts as leaving the node once the run spans two.
+    pair = [BlockRegion((0, 0, 0), (5, 5, 1)), BlockRegion((4, 0, 0), (5, 5, 1))]
+    pf = CL._tile_faces(pair)
+    @test CL._rank_messages(pair, [0:0, 1:1], pf, 2, [0, 0]) == ([2, 2], [0, 0])
+    @test CL._rank_messages(pair, [0:0, 1:1], pf, 2, [0, 1]) == ([0, 0], [2, 2])
+    @test CL._rank_messages(pair, [0:0, 1:1], pf, 4, [0, 0, 1, 1]) == ([1, 1, 0, 0],
+                                                                       [1, 1, 0, 0])
+    costs = CL.LatticeCosts()
+    costs.a, costs.m, costs.m_x = 0.0, 1.0, 10.0
+    bnd = [none, none]
+    @test CL._layout_cost(costs, pair, bnd, bnd, [0:0, 1:1], act2, (0, 0, 0), 1.0, 2,
+                          [0, 1]) == 20.0
+    @test CL._layout_cost(costs, pair, bnd, bnd, [0:0, 1:1], act2, (0, 0, 0), 1.0, 2,
+                          [0, 0]) == 2.0
+    # The message coefficients: on one node the seconds over the messages;
+    # both apart from exact observations that vary apart; one for every
+    # message where the two counts keep one proportion.
+    sums(obs) = foldl((s, (x1, x2, y)) -> CL._message_sums!(s, x1, x2, y), obs;
+                      init=zeros(13))
+    fitm(obs) = (s = sums(obs); CL._message_fit(s[9], s[10], s[11], s[12], s[13],
+                                                CL.LATTICE_SPREAD))
+    @test all(fitm([(2.0, 0.0, 3.0), (4.0, 0.0, 5.0)]) .≈ (8 / 6, 8 / 6))
+    @test all(fitm([(2.0, 1.0, 7.0), (1.0, 3.0, 16.0), (3.0, 0.0, 3.0)]) .≈ (1.0, 5.0))
+    @test all(fitm([(2.0, 1.0, 4.0), (4.0, 2.0, 8.0)]) .≈ (4 / 3, 4 / 3))
+    @test fitm(Tuple{Float64,Float64,Float64}[]) == (0.0, 0.0)
+    # A fit on its boundary at a = 0 takes the tiles' seconds per node alone:
+    # y = 6, 5, 4 at x = 1, 2, 3 falls with x, and a = Σxy / Σx² = 2.
+    fitted = CL.LatticeCosts()
+    fitted.stats = [14.0, 6.0, 3.0, 28.0, 15.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    @test CL._fit_lattice_costs(fitted)[1:4] == [1.0, 2.0, 0.0, 0.0]
+    @test CL._fit_lattice_costs(CL.LatticeCosts())[1] == 0.0
+    # A check rebuilds on the busiest rank the tiles it holds.
+    @test CL._most_held([0:0, 1:1, 0:0, 2:3]) == 2 && CL._most_held(UnitRange{Int}[]) == 0
+    # One process is one node; the toggle groups consecutive ranks.
+    @test CL._node_map(MPI.COMM_WORLD) == [0]
+    CL.NODE_SIZE[] = 2
+    @test CL._node_map(MPI.COMM_WORLD) == [0]
+    CL.NODE_SIZE[] = 0
+end
+
 @testset "tile migration: interior rule and the rank's own copy" begin
     # `_migrate_tile!` moves a tile's solution between two decompositions
     # of it from their block tables alone. On one rank both blocks are the

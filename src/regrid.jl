@@ -1026,12 +1026,15 @@ const MIN_TILE_EDGE = 4
 # The chain of lattices a level of `np` ranks may take, coarsest first, over
 # a parent node space of `N` nodes: `tile`, then each lattice halving the
 # largest active edge that halves to at least `least` parent nodes without
-# changing the faces `_lattice_reach` gives along that dimension.
+# changing the faces `_lattice_reach` gives along that dimension, while the
+# lattice holds at most `budget` cells (`_lattice_budget`).
 function _edge_chain(tile::NTuple{3,Int}, active::NTuple{3,Bool}, N::NTuple{3,Int},
-                     faces, bare, margin::Int, order::Int, least::Int, np::Int)
+                     faces, bare, margin::Int, order::Int, least::Int, np::Int,
+                     budget::Int=typemax(Int))
     chain = [tile]
     np > 1 || return chain
     reach = _lattice_reach(faces, N, active, tile, margin, order, bare)
+    cells(e) = prod(active[d] ? (N[d] - 1) ÷ e[d] + 1 : 1 for d in 1:3)
     e = tile
     while true
         best = 0
@@ -1044,9 +1047,23 @@ function _edge_chain(tile::NTuple{3,Int}, active::NTuple{3,Bool}, N::NTuple{3,In
         end
         best == 0 && return chain
         e = Base.setindex(e, e[best] ÷ 2, best)
+        cells(e) <= budget || return chain
         push!(chain, e)
     end
 end
+
+# The most cells a lattice of the chain holds over a run of `np` ranks.
+# Every lattice of the chain is tagged at every check, its cell flags reduced
+# over the run (level 1) or gathered (deeper levels), and its wanted tiles
+# priced, so the finest lattices set the cost of the decision; at a
+# cluster's rank count the halvings down to `MIN_TILE_EDGE` reach tens of
+# millions of cells. A lattice past 256 cells per rank is left out: the one
+# before it holds at least 128 per rank, so a level covering a thirtieth of
+# the node space already has four tiles per rank there, and whole tiles over
+# a level with several per rank leave it within a fraction of a tile of
+# balance. The floor keeps the chain of a run on a few nodes, and of every
+# run on a workstation, whole.
+_lattice_budget(np::Int) = max(1 << 20, 256 * np)
 
 # Test and bench toggle: off, every level keeps the configured lattice, so
 # a decomposed run tiles its levels as a serial one does and the two can be
@@ -1062,7 +1079,8 @@ function _level_chain(solver, spec::RegridSpec, N::NTuple{3,Int},
     faces = _placement_faces(solver, spec)
     least = max(MIN_TILE_EDGE, _limiter_least_extent(solver) - 1)
     return _edge_chain(spec.tile, active, N, faces, _unbuffered_faces(solver, faces),
-                       spec.margin, spec.interpolation_order, least, np)
+                       spec.margin, spec.interpolation_order, least, np,
+                       _lattice_budget(np))
 end
 
 # Whether two regions share more than a plane, over the periodic images of
@@ -1070,22 +1088,91 @@ end
 # dimension.
 function _overlaps(a::BlockRegion, b::BlockRegion, active::NTuple{3,Bool},
                    period::NTuple{3,Int})
-    any(_images(period)) do σ
-        c = _shifted(b, σ)
-        all(d -> !active[d] ||
-                 min(a.offset[d] + a.extent[d], c.offset[d] + c.extent[d]) -
-                 max(a.offset[d], c.offset[d]) >= 2, 1:3)
+    meets(c) = all(d -> !active[d] ||
+                        min(a.offset[d] + a.extent[d], c.offset[d] + c.extent[d]) -
+                        max(a.offset[d], c.offset[d]) >= 2, 1:3)
+    # Without a period the one image is `b`, and the image list is not built.
+    period == (0, 0, 0) && return meets(b)
+    return any(σ -> meets(_shifted(b, σ)), _images(period))
+end
+
+# Regions binned by node: bucket `b` along each dimension holds the regions
+# with a node in `b grain + 0 .. b grain + grain − 1`, `grain` the largest
+# extent among them, so a region lies in at most two buckets per dimension.
+# Two regions sharing a node share a bucket, so the regions of the buckets a
+# query meets, over its periodic images, hold every region it overlaps or
+# covers a node of. A level of a cluster run holds tens of thousands of tiles,
+# and the tests of the regrid against the old tiles (`_tile_wanted`,
+# `_inherited_check`, `_covered_by`) would otherwise compare every tile with
+# every old one.
+struct _RegionIndex
+    grain::NTuple{3,Int}
+    period::NTuple{3,Int}
+    buckets::Dict{NTuple{3,Int},Vector{Int}}
+end
+
+_bucket_span(r::BlockRegion, grain::NTuple{3,Int}, d::Int) =
+    fld(r.offset[d] + 1, grain[d]):fld(r.offset[d] + r.extent[d], grain[d])
+
+function _RegionIndex(regions::AbstractVector{BlockRegion}, period::NTuple{3,Int})
+    grain = ntuple(d -> maximum((r.extent[d] for r in regions); init=1), 3)
+    buckets = Dict{NTuple{3,Int},Vector{Int}}()
+    for (i, r) in enumerate(regions)
+        s = ntuple(d -> _bucket_span(r, grain, d), 3)
+        for b3 in s[3], b2 in s[2], b1 in s[1]
+            push!(get!(Vector{Int}, buckets, (b1, b2, b3)), i)
+        end
     end
+    return _RegionIndex(grain, period, buckets)
+end
+
+# The indices of the indexed regions that may meet `t` or an image of it,
+# ascending.
+function _candidates(index::_RegionIndex, t::BlockRegion)
+    out = Int[]
+    for σ in _images(index.period)
+        r = _shifted(t, σ)
+        s = ntuple(d -> _bucket_span(r, index.grain, d), 3)
+        for b3 in s[3], b2 in s[2], b1 in s[1]
+            v = get(index.buckets, (b1, b2, b3), nothing)
+            v === nothing || append!(out, v)
+        end
+    end
+    return sort!(unique!(out))
 end
 
 # The creation check a tile of a new lattice inherits: the latest among the
 # old tiles it overlaps, so a subdivided tile keeps its lifetime, or
-# `checks` where it overlaps none.
-function _inherited_check(r::BlockRegion, old_regions::Vector{BlockRegion},
+# `checks` where it overlaps none. `old_regions` may be any subset of the
+# old tiles holding every one `r` overlaps (`_candidates`).
+function _inherited_check(r::BlockRegion, old_regions::AbstractVector{BlockRegion},
                           created::Dict{BlockRegion,Int}, checks::Int,
                           active::NTuple{3,Bool}, period::NTuple{3,Int})
     over = [get(created, o, 0) for o in old_regions if _overlaps(r, o, active, period)]
     return isempty(over) ? checks : maximum(over)
+end
+
+# The old tiles of a level as the wanted test reads them: the tiles, the
+# position of each, their index and which of them are younger than the
+# lifetime, and whether the lattice under test is the current one.
+struct _OldTiles
+    regions::Vector{BlockRegion}
+    position::Dict{BlockRegion,Int}
+    index::_RegionIndex
+    young::Vector{Bool}
+    any_young::Bool
+    current::Bool
+    active::NTuple{3,Bool}
+    period::NTuple{3,Int}
+end
+
+function _OldTiles(old_regions::Vector{BlockRegion}, created::Dict{BlockRegion,Int},
+                   spec::RegridSpec, current::Bool, active::NTuple{3,Bool},
+                   period::NTuple{3,Int})
+    young = [spec.checks - get(created, r, 0) < spec.lifetime for r in old_regions]
+    position = Dict(r => i for (i, r) in enumerate(old_regions))
+    return _OldTiles(old_regions, position, _RegionIndex(old_regions, period),
+                     young, any(young), current, active, period)
 end
 
 # Whether tile `t` of a lattice is wanted at cell level `f`: at the tag
@@ -1093,42 +1180,90 @@ end
 # current layout already refines it. On the current lattice that is the
 # tile itself; on another, an old tile overlapping it, which is how the
 # hysteresis carries across a change of lattice.
-function _tile_wanted(t::BlockRegion, f::Int8, spec::RegridSpec,
-                      old_regions::Vector{BlockRegion}, created::Dict{BlockRegion,Int},
-                      current::Bool, active::NTuple{3,Bool}, period::NTuple{3,Int})
+function _tile_wanted(t::BlockRegion, f::Int8, old::_OldTiles)
     f == TAG_MARK && return true
-    young(r) = spec.checks - get(created, r, 0) < spec.lifetime
-    if current
-        t in old_regions || return false
-        return f == TAG_HOLD || young(t)
+    if old.current
+        i = get(old.position, t, 0)
+        i == 0 && return false
+        return f == TAG_HOLD || old.young[i]
     end
-    over = [o for o in old_regions if _overlaps(t, o, active, period)]
-    isempty(over) && return false
-    return f == TAG_HOLD || any(young, over)
+    f == TAG_HOLD || old.any_young || return false
+    for i in _candidates(old.index, t)
+        _overlaps(t, old.regions[i], old.active, old.period) || continue
+        (f == TAG_HOLD || old.young[i]) && return true
+    end
+    return false
 end
 
 # The wanted tiles of level 1 on lattice `edges`, from its reduced cell
-# flags, in lattice order.
+# flags, in lattice order. A cell below the tag level is examined only where
+# an old tile can make it wanted: on the current lattice its own cell, on
+# another a cell within one cell of an old tile.
 function _lattice_wanted(flags, K::NTuple{3,Int}, edges::NTuple{3,Int},
                          active::NTuple{3,Bool}, lo::NTuple{3,Int}, hi::NTuple{3,Int},
                          spec::RegridSpec, old_regions::Vector{BlockRegion},
                          current::Bool, period::NTuple{3,Int})
     wanted = BlockRegion[]
+    old = _OldTiles(old_regions, spec.created, spec, current, active, period)
+    near = falses(K)
+    for o in old_regions, σ in _images(period)
+        r = _shifted(o, σ)
+        s = ntuple(d -> active[d] ?
+                        (max(fld(r.offset[d] - 1, edges[d]) - 1, 0):
+                         min(fld(r.offset[d] + r.extent[d] - 1, edges[d]) + 1, K[d] - 1)) :
+                        (0:0), 3)
+        for k3 in s[3], k2 in s[2], k1 in s[1]
+            near[k1 + 1, k2 + 1, k3 + 1] = true
+        end
+    end
     for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
+        f = flags[k1 + 1, k2 + 1, k3 + 1]
+        (f == TAG_MARK || near[k1 + 1, k2 + 1, k3 + 1]) || continue
         t = _lattice_tile((k1, k2, k3), active, edges, lo, hi)
         t === nothing && continue
-        _tile_wanted(t, flags[k1 + 1, k2 + 1, k3 + 1], spec, old_regions, spec.created,
-                     current, active, period) && push!(wanted, t)
+        _tile_wanted(t, f, old) && push!(wanted, t)
     end
     return wanted
 end
 
-# Test and bench toggle: `(a, b, k, m, c)` fixes the coefficients of the
-# lattice cost model (`LatticeCosts`) and turns its timers off, so the
-# lattice a level takes depends on the layout alone and a run repeats its
-# layout; `nothing`, the default, measures them. `(1, 0, 0, 0, 0)` prices a
-# lattice by the fine nodes of its most loaded rank.
-const FIXED_LATTICE_COSTS = Ref{Union{Nothing,NTuple{5,Float64}}}(nothing)
+# Test and bench toggle: `(a, b, k, m, c)` or `(a, b, k, m, c, m_x)` fixes
+# the coefficients of the lattice cost model (`LatticeCosts`) and turns its
+# timers off, so the lattice a level takes depends on the layout alone and a
+# run repeats its layout; `nothing`, the default, measures them. Without
+# `m_x` a message leaving the node costs `m` as one within it does.
+# `(1, 0, 0, 0, 0)` prices a lattice by the fine nodes of its most loaded
+# rank.
+const FIXED_LATTICE_COSTS =
+    Ref{Union{Nothing,NTuple{5,Float64},NTuple{6,Float64}}}(nothing)
+
+# Test and bench toggle: a positive count groups the ranks into nodes of that
+# many consecutive ranks in place of the nodes MPI reports (`_node_map`), so
+# a run on one machine takes the paths of a run across nodes.
+const NODE_SIZE = Ref(0)
+
+"""
+    _node_map(comm) -> Vector{Int}
+
+The node of each rank of `comm`, numbered from 0 in the order of each
+node's lowest rank: the ranks sharing memory with it
+(`MPI.COMM_TYPE_SHARED`), or the groups of `NODE_SIZE` consecutive ranks
+when that toggle is set. Collective over `comm` (a split and an Allgather of
+one integer per rank), and the same on every rank.
+"""
+function _node_map(comm::MPI.Comm)
+    np = MPI.Comm_size(comm)
+    NODE_SIZE[] > 0 && return [r ÷ NODE_SIZE[] for r in 0:(np - 1)]
+    np == 1 && return [0]
+    me = MPI.Comm_rank(comm)
+    shared = MPI.Comm_split_type(comm, MPI.COMM_TYPE_SHARED, me)
+    # The lowest rank of this rank's node: the shared communicator's first,
+    # since the split keeps the order of `comm`.
+    lead = MPI.Allreduce(me, min, shared)
+    MPI.free(shared)
+    leads = MPI.Allgather(lead, comm)
+    order = sort!(unique(leads))
+    return [searchsortedfirst(order, l) - 1 for l in leads]
+end
 
 # The coefficients a device level takes. A device phase returns as soon as
 # its kernels are launched, so the tile timers would read the launch and not
@@ -1182,48 +1317,73 @@ function _reset_lattice_timers!(solver, spec::RegridSpec)
 end
 
 # The close of a regrid check: its wall, the seconds it spent compiling and
-# the refined tiles it leaves, which the next check's harvest fits the
-# rebuild cost from, and the timers reset.
+# the most refined tiles a rank holds after it, which the next check's
+# harvest fits the rebuild cost from, and the timers reset.
 function _close_lattice_check!(solver, spec::RegridSpec, wall::Float64,
                                compiled::Float64=0.0)
     costs = spec.costs
     costs.check_wall = wall
     costs.check_compile = compiled
     levels = getfield(solver, :levels)
-    costs.check_tiles = sum((length(levels[ℓ].transfers) for ℓ in 2:length(levels));
-                            init=0)
+    costs.check_tiles = _most_held(reduce(vcat, (lev.owners for lev in levels[2:end]);
+                                          init=UnitRange{Int}[]))
     _reset_lattice_timers!(solver, spec)
     return costs
+end
+
+# The most tiles any rank holds under `owners`, a rank of each tile's range
+# counting the tile: the tiles a regrid check rebuilds on its busiest rank,
+# which sets the check's wall, since every rank builds its own tiles at once.
+function _most_held(owners::Vector{UnitRange{Int}})
+    held = Dict{Int,Int}()
+    for o in owners, r in o
+        held[r] = get(held, r, 0) + 1
+    end
+    return maximum(values(held); init=0)
 end
 
 # Per rank of `np`, the messages a layout's tiles send in the level's
 # exchanges: one coupling with the parent per tile, and one per face a tile
 # shares with a tile held by another rank. `owners` are whole-tile ranges.
+_rank_messages(regions::Vector{BlockRegion}, owners::Vector{UnitRange{Int}}, faces,
+               np::Int) = first(_rank_messages(regions, owners, faces, np, Int[]))
+
+# The same split by `nodes`, the node of each rank (`_node_map`): per rank,
+# the messages to a rank of its own node and those leaving it. A tile's
+# coupling with its parent counts as leaving the node whenever the run spans
+# more than one: the parent's blocks lie wherever its decomposition put them,
+# which for the root is anywhere in the run.
 function _rank_messages(regions::Vector{BlockRegion}, owners::Vector{UnitRange{Int}},
-                        faces, np::Int)
-    msgs = zeros(Int, np)
+                        faces, np::Int, nodes::AbstractVector{Int})
+    within = zeros(Int, np)
+    across = zeros(Int, np)
+    spread = !_one_node(nodes, length(nodes))
+    node(r) = spread ? nodes[r + 1] : 0
     for t in eachindex(regions)
         r = first(owners[t])
-        msgs[r + 1] += 1
+        spread ? (across[r + 1] += 1) : (within[r + 1] += 1)
         for d in 1:3, side in 1:2
             q = faces[t][d][side]
-            q != 0 && first(owners[q]) != r && (msgs[r + 1] += 1)
+            (q != 0 && first(owners[q]) != r) || continue
+            node(first(owners[q])) == node(r) ? (within[r + 1] += 1) : (across[r + 1] += 1)
         end
     end
-    return msgs
+    return within, across
 end
 
 # The predicted seconds per root step of a level whose tiles `regions` are
 # held as `owners` by `np` ranks, at the most loaded rank, `s` steps per root
 # step. `boundaries` and `folds` are the tiles' domain faces and folded faces,
-# `period` the parent node space's.
+# `period` the parent node space's, and `nodes` the node of each rank.
 function _layout_cost(costs::LatticeCosts, regions::Vector{BlockRegion},
                       boundaries, folds, owners::Vector{UnitRange{Int}},
-                      active::NTuple{3,Bool}, period::NTuple{3,Int}, s::Float64, np::Int)
+                      active::NTuple{3,Bool}, period::NTuple{3,Int}, s::Float64, np::Int,
+                      nodes::AbstractVector{Int}=costs.nodes)
     isempty(regions) && return 0.0
     faces = _tile_faces(regions, period)
-    msgs = _rank_messages(regions, owners, faces, np)
-    load = costs.m * s .* msgs
+    within, across = _rank_messages(regions, owners, faces, np, nodes)
+    load = costs.m * s .* within
+    any(>(0), across) && (load .+= costs.m_x * s .* across)
     for t in eachindex(regions)
         V = Float64(prod(fine_extent(regions[t], active, folds[t])))
         g = count(_interface_dims(active, boundaries[t]))
@@ -1233,24 +1393,28 @@ function _layout_cost(costs::LatticeCosts, regions::Vector{BlockRegion},
 end
 
 # The placement the regrid would give a level of `regions` over `np` ranks
-# from scratch: whole tiles by volume (`_fresh_partition`).
-_predicted_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int) =
-    first(length(regions) > np ? _knapsack_owners(regions, active, np) :
+# from scratch: whole tiles by volume (`_fresh_partition`), a node's tiles
+# kept together under `nodes`.
+_predicted_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int,
+                  nodes::AbstractVector{Int}=Int[]) =
+    first(length(regions) > np ? _knapsack_owners(regions, active, np; nodes) :
                                  _tile_owners(regions, active, np))
 
 # The predicted seconds per root step of refined level ℓ tiled as `regions`
-# over `np` ranks, its rebuilds at the regrid checks included.
+# over `np` ranks, its rebuilds at the regrid checks included, and the most
+# tiles a rank holds under that placement.
 function _lattice_level_cost(solver, spec::RegridSpec, ℓ::Int,
                              regions::Vector{BlockRegion}, np::Int)
-    isempty(regions) && return 0.0
+    isempty(regions) && return 0.0, 0
     active = ntuple(d -> solver.n_global[d] > 1, 3)
     boundaries = _region_boundaries(solver, regions, ℓ)
     folds = _region_folds(solver, boundaries)
     costs = spec.costs
-    return _layout_cost(costs, regions, boundaries, folds,
-                        _predicted_owners(regions, active, np), active,
+    owners = _predicted_owners(regions, active, np, costs.nodes)
+    held = _most_held(owners)
+    return _layout_cost(costs, regions, boundaries, folds, owners, active,
                         _level_period(solver, ℓ - 1), _level_substeps(solver, ℓ), np) +
-           costs.c * length(regions) / spec.interval
+           costs.c * held / spec.interval, held
 end
 
 # The ranks a level of `n` whole tiles spans within a parent of `np`: one per
@@ -1272,7 +1436,7 @@ function _current_level_cost(solver, spec::RegridSpec, lev::Level)
                         [lt.folded for lt in lev.transfers], lev.owners, active,
                         _level_period(solver, lev.index - 1),
                         _level_substeps(solver, lev.index), np) +
-           costs.c * length(regions) / spec.interval
+           costs.c * _most_held(lev.owners) / spec.interval
 end
 
 """
@@ -1328,15 +1492,20 @@ function _choose_lattice(solver, spec::RegridSpec, ℓ::Int, chain::Vector{NTupl
     deeper = [[lt.region for lt in lev.transfers] for lev in levels[2:end]
               if lev.index > ℓ]
     level = zeros(length(chain))
+    # A deeper level's price depends on its rank count alone, which most
+    # lattices of a cluster run share (a tile per rank or more).
+    priced = Dict{Tuple{Int,Int},Float64}()
     for (i, w) in enumerate(wanted_sets)
-        level[i] = _lattice_level_cost(solver, spec, ℓ, w, np)
+        level[i], held = _lattice_level_cost(solver, spec, ℓ, w, np)
         ranks = _level_rank_count(length(w), np)
         for (j, regions) in enumerate(deeper)
-            level[i] += _lattice_level_cost(solver, spec, ℓ + j, regions, ranks)
+            level[i] += get!(() -> first(_lattice_level_cost(solver, spec, ℓ + j, regions,
+                                                             ranks)),
+                             priced, (j, ranks))
             ranks = _level_rank_count(length(regions), ranks)
         end
         i == current ||
-            (level[i] += costs.c * length(w) / (spec.interval * LATTICE_HORIZON))
+            (level[i] += costs.c * held / (spec.interval * LATTICE_HORIZON))
     end
     pick = _cheapest_lattice(level, rest, current, fresh)
     LATTICE_TRACE[] && MPI.Comm_rank(getfield(solver, :comm)) == 0 &&
@@ -1352,7 +1521,8 @@ const LATTICE_TRACE = Ref(false)
                                   current, pick)
     c = spec.costs
     println("lattice: step ", solver.step, " level ", ℓ, " model a=", c.a, " b=", c.b,
-            " k=", c.k, " m=", c.m, " c=", c.c, " root=", c.root, " rest=", rest)
+            " k=", c.k, " m=", c.m, " m_x=", c.m_x, " c=", c.c, " root=", c.root,
+            " rest=", rest)
     for (i, e) in enumerate(chain)
         println("  ", e, i == current ? " current" : "", i == pick ? " pick" : "",
                 " tiles ", length(wanted_sets[i]), " level s/step ", level[i])
@@ -1364,11 +1534,13 @@ end
 # with the root priced as the model prices a tile: its largest block's nodes.
 function _fix_lattice_costs!(solver, spec::RegridSpec)
     costs = spec.costs
-    a, b, k, m, c = something(FIXED_LATTICE_COSTS[], DEVICE_LATTICE_COSTS)
+    fixed = something(FIXED_LATTICE_COSTS[], DEVICE_LATTICE_COSTS)
+    a, b, k, m, c = fixed
     root = getfield(solver, :patches)[1].decomp
     n_global = solver.n_global
     block = prod(cld(n_global[d], root.dims[d]) for d in 1:3)
     costs.a, costs.b, costs.k, costs.m, costs.c = a, b, k, m, c
+    costs.m_x = length(fixed) == 6 ? fixed[6] : m
     costs.root = a * block
     costs.ready = true
     return costs
@@ -1382,8 +1554,12 @@ const LATTICE_WINDOW = 9
 # (Julia's cumulative compile time: the first steps, a tile of a new face
 # combination, the first change of lattice) gives no observation for it, and
 # the root's and the exchanges' seconds, which every rank's compilation
-# delays, are not taken from that interval at all. A check's wall is taken
-# less the compilation inside it.
+# delays, are not taken from an interval in which the longest compilation of
+# any rank passed this share of the work of the most loaded rank. The second
+# test is against the step rather than each rank's own work, since a rank
+# holding little of the work compiling for a moment delays the others by that
+# moment alone, and over thousands of ranks some rank compiles in nearly every
+# interval. A check's wall is taken less the compilation inside it.
 const LATTICE_COMPILE = 0.05
 
 # A tile whose seconds per node exceed the median of its harvest by this
@@ -1422,21 +1598,25 @@ gathers them and fits `y = s (a V + k)` to each tile's seconds less its
 ghost-flux solves by non-negative least squares over exponentially weighted
 sums (`LATTICE_MEMORY`; `k = 0` where the tile volumes do not spread,
 `LATTICE_SPREAD`), `b` as the ratio of the ghost-flux seconds to `s V g`,
-and `m` as the exchange seconds of each level's most loaded rank, which
-waits least, per message it sends. The root's seconds are the median of its
+and `m` and `m_x` from the exchange seconds of each level's most loaded
+rank, which waits least, against the messages it sends within its node and
+out of it (`_message_fit`). The root's seconds are the median of its
 most loaded rank's over the last `LATTICE_WINDOW` checks, and `c` the summed
 wall of those checks, less the longest compilation of any rank in each,
-over the tiles they left. A rank that compiled during the interval gives no
-observation (`LATTICE_COMPILE`), and a tile far above
-its harvest's median per node is left out (`LATTICE_OUTLIER`). The
+over the most tiles a rank held after each (`_most_held`). A rank that
+compiled during the interval gives no observation (`LATTICE_COMPILE`), and
+a tile far above its harvest's median per node is left out
+(`LATTICE_OUTLIER`). The
 coefficients are broadcast, so every rank holds the same model. Collective
-over the run's communicator when the model measures; with fixed
-coefficients it sets them and communicates nothing.
+over the run's communicator: at the first check every rank reads the node
+map (`_node_map`); after that, with fixed coefficients it sets them and
+communicates nothing.
 """
 function _harvest_lattice_costs!(solver, spec::RegridSpec)
-    _lattice_measured(solver, spec) || return _fix_lattice_costs!(solver, spec)
     costs = spec.costs
     comm = getfield(solver, :comm)
+    isempty(costs.nodes) && (costs.nodes = _node_map(comm))
+    _lattice_measured(solver, spec) || return _fix_lattice_costs!(solver, spec)
     levels = getfield(solver, :levels)
     nlev = length(levels)
     steps = solver.step - costs.step_mark
@@ -1461,28 +1641,45 @@ function _harvest_lattice_costs!(solver, spec::RegridSpec)
             i <= length(costs.exchange) && (record[2i] = costs.exchange[i] / 1e9 / steps)
         end
     end
-    gathered = MPI.gather(record, comm; root=0)
-    model = zeros(7)
+    gathered = _gather_records(record, comm)
+    model = zeros(8)
     if MPI.Comm_rank(comm) == 0
         steps > 0 && _fold_lattice_costs!(solver, spec, gathered, nlev)
         model .= _fit_lattice_costs(costs)
         LATTICE_TRACE[] && println("lattice harvest: step ", solver.step, " steps ", steps,
                                    " last check wall ",
                                    maximum(r[2nlev + 1] for r in gathered), " tiles ",
-                                   costs.check_tiles, " compiled ",
-                                   [r[2nlev + 2] for r in gathered], " model ", model)
+                                   costs.check_tiles, " compiled at most ",
+                                   maximum(r[2nlev + 2] for r in gathered), " model ",
+                                   model)
     end
     MPI.Bcast!(model, comm; root=0)
     costs.ready = model[1] > 0
-    costs.a, costs.b, costs.k, costs.m, costs.c, costs.root = model[2:7]
+    costs.a, costs.b, costs.k, costs.m, costs.c, costs.root, costs.m_x = model[2:8]
     return costs
+end
+
+# Every rank's record on rank 0, in rank order, and nothing elsewhere: the
+# lengths gathered, then the values in one Gatherv. An object gather would
+# serialize every record and deserialize them one by one on rank 0, a cost
+# in the rank count that a cluster run pays at every check.
+function _gather_records(record::Vector{T}, comm::MPI.Comm) where {T}
+    counts = MPI.Gather(Cint(length(record)), comm; root=0)
+    if MPI.Comm_rank(comm) == 0
+        flat = Vector{T}(undef, sum(counts))
+        MPI.Gatherv!(record, MPI.VBuffer(flat, counts), comm; root=0)
+        ends = cumsum(counts)
+        return [flat[(e - c + 1):e] for (e, c) in zip(ends, counts)]
+    end
+    MPI.Gatherv!(record, nothing, comm; root=0)
+    return Vector{T}[]
 end
 
 # The weighted sums, on rank 0: the tile fit's five (Σx₁², Σx₁x₂, Σx₂²,
 # Σx₁y, Σx₂y for x = (s V, s)), the ghost-flux seconds and their Σ s V g,
-# the tiles counted, and the exchange seconds and messages of the most
-# loaded ranks.
-const _STAT_SIZE = 10
+# the tiles counted, and the exchange fit's five over the most loaded ranks
+# (`_message_sums!`).
+const _STAT_SIZE = 13
 
 function _fold_lattice_costs!(solver, spec::RegridSpec, records, nlev::Int)
     costs = spec.costs
@@ -1490,6 +1687,8 @@ function _fold_lattice_costs!(solver, spec::RegridSpec, records, nlev::Int)
     np = length(records)
     work(rec) = sum(@view rec[1:2nlev])
     clean = [rec[2nlev + 2] <= LATTICE_COMPILE * work(rec) for rec in records]
+    steady = maximum(rec[2nlev + 2] for rec in records) <=
+             LATTICE_COMPILE * maximum(work(rec) for rec in records)
     # Every tile's observation from a rank that did not compile, with its
     # seconds per node and step.
     tiles = NTuple{5,Float64}[]
@@ -1510,18 +1709,19 @@ function _fold_lattice_costs!(solver, spec::RegridSpec, records, nlev::Int)
             new[8] += 1
         end
     end
-    if all(clean)
+    if steady
         for i in 2:nlev
             lev = levels[i]
             isempty(lev.transfers) && continue
             busiest = argmax([rec[2i - 1] for rec in records])
             regions, owners = _measured_layout(lev)
             faces = _tile_faces(regions, _level_period(solver, lev.index - 1))
-            msgs = _rank_messages(regions, owners, faces,
-                                  max(np, maximum(last, owners) + 1))
-            msgs[busiest] > 0 || continue
-            new[9] += records[busiest][2i]
-            new[10] += _level_substeps(solver, lev.index) * msgs[busiest]
+            within, across = _rank_messages(regions, owners, faces,
+                                            max(np, maximum(last, owners) + 1),
+                                            costs.nodes)
+            s = _level_substeps(solver, lev.index)
+            _message_sums!(new, s * within[busiest], s * across[busiest],
+                           records[busiest][2i])
         end
         _window!(costs.roots, maximum(rec[1] for rec in records))
     end
@@ -1557,28 +1757,88 @@ end
 # The layout of each refined level as rank 0 holds it: regions and owners.
 _measured_layout(lev::Level) = ([lt.region for lt in lev.transfers], lev.owners)
 
-# The wall of a check per tile it leaves, over the recent checks (`walls`
-# holds the pairs of wall and tiles): their summed wall over their summed
-# tiles, since the rebuilds that cost a check most come at some checks only.
-# The part of a check no lattice changes (the tag sweep, the coefficient
-# priming) is counted per tile too, which prices a finer lattice's rebuilds
-# high.
+# The wall of a check per tile its busiest rank holds after it, over the
+# recent checks (`walls` holds the pairs of wall and tiles): their summed
+# wall over their summed tiles, since the rebuilds that cost a check most
+# come at some checks only. The ranks rebuild their own tiles at once, so a
+# check's wall follows the tiles of one rank rather than the level's count,
+# and a lattice that spreads a level over more ranks rebuilds no more tiles
+# per rank. The part of a check no lattice changes (the tag sweep, the
+# coefficient priming) is counted per tile too, which prices a finer
+# lattice's rebuilds high.
 function _rebuild_cost(walls::Vector{Float64})
     tiles = sum(@view walls[2:2:end]; init=0.0)
     return tiles > 0 ? sum(@view walls[1:2:end]) / tiles : 0.0
 end
 
-# The model `[ready, a, b, k, m, c, root]` from the weighted sums and the
+# The exchange observation of one level's most loaded rank folded into the
+# sums `new[9:13]`: `y` seconds against `x₁` messages within its node and
+# `x₂` out of it, each per root step, weighted by 1/(x₁ + x₂) since the
+# seconds of many messages vary as their count does. The sums are Σx₁y/x,
+# Σx₁²/x, Σx₁x₂/x, Σx₂²/x and Σx₂y/x, x = x₁ + x₂; with every message on one
+# node they are the seconds and the messages summed.
+function _message_sums!(new::Vector{Float64}, x1::Float64, x2::Float64, y::Float64)
+    x1 + x2 > 0 || return new
+    if x2 == 0
+        new[9] += y
+        new[10] += x1
+    elseif x1 == 0
+        new[12] += x2
+        new[13] += y
+    else
+        x = x1 + x2
+        new[9] += x1 * y / x
+        new[10] += x1 * x1 / x
+        new[11] += x1 * x2 / x
+        new[12] += x2 * x2 / x
+        new[13] += x2 * y / x
+    end
+    return new
+end
+
+"""
+    _message_fit(t1, s11, s12, s22, t2, spread) -> (m, m_x)
+
+The seconds per message within a node and out of it from the weighted sums
+of `_message_sums!`: the weighted least squares of both where the two
+counts vary apart (the relative determinant above `spread`) and both come
+out non-negative, and otherwise one coefficient for every message, which is
+what the observations identify when the messages never leave the node or
+leave it in a fixed proportion. On one node it is the exchange seconds over
+the messages, summed.
+"""
+function _message_fit(t1::Float64, s11::Float64, s12::Float64, s22::Float64,
+                      t2::Float64, spread::Float64)
+    s22 > 0 || (m = s11 > 0 ? t1 / s11 : 0.0; return (m, m))
+    s11 > 0 || (m = t2 / s22; return (m, m))
+    det = s11 * s22 - s12 * s12
+    if det > spread * s11 * s22
+        m = (s22 * t1 - s12 * t2) / det
+        m_x = (s11 * t2 - s12 * t1) / det
+        m >= 0 && m_x >= 0 && return (m, m_x)
+    end
+    m = max((t1 + t2) / (s11 + 2s12 + s22), 0.0)
+    return (m, m)
+end
+
+# The model `[ready, a, b, k, m, c, root, m_x]` from the weighted sums and the
 # windows (rank 0).
 function _fit_lattice_costs(costs::LatticeCosts)
     st = costs.stats
-    (isempty(st) || st[8] <= 0) && return [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    (isempty(st) || st[8] <= 0) && return [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     a, k = _nonnegative_fit(st[1], st[2], st[3], st[4], st[5], LATTICE_SPREAD, costs.k)
+    # A noisy interval can put the fit on its boundary at a = 0, every tile's
+    # seconds a constant whatever its nodes, and a model without a cost per
+    # node prices a lattice by its faces and messages alone. A tile's seconds
+    # always carry its nodes, so the fit then takes them alone, through the
+    # origin. Without a positive one (no tile measured any time) the model
+    # is not ready and every level keeps its lattice.
+    a > 0 || st[1] <= 0 || ((a, k) = (max(st[4] / st[1], 0.0), 0.0))
     b = st[7] > 0 ? st[6] / st[7] : 0.0
-    m = st[10] > 0 ? st[9] / st[10] : 0.0
+    m, m_x = _message_fit(st[9], st[10], st[11], st[12], st[13], LATTICE_SPREAD)
     c = _rebuild_cost(costs.walls)
     root = isempty(costs.roots) ? 0.0 : _median(costs.roots)
-    return [1.0, a, b, k, m, c, root]
+    return [a > 0 ? 1.0 : 0.0, a, b, k, m, c, root, m_x]
 end
 
 """
@@ -1934,11 +2194,13 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # An empty wanted set removes every tile: the level stays in the
     # hierarchy with no tiles, and the next tag builds its first again.
     wanted != old_regions || busy !== nothing || return false
-    inherited = Dict(r => _inherited_check(r, old_regions, spec.created, spec.checks,
-                                           active, period)
-                     for r in wanted if rechopped && !(r in old_regions))
+    old_set, wanted_set = Set(old_regions), Set(wanted)
+    old_bins = _RegionIndex(old_regions, period)
+    inherited = Dict(r => _inherited_check(r, view(old_regions, _candidates(old_bins, r)),
+                                           spec.created, spec.checks, active, period)
+                     for r in wanted if rechopped && !(r in old_set))
     for r in old_regions
-        r in wanted || delete!(spec.created, r)
+        r in wanted_set || delete!(spec.created, r)
     end
     for r in wanted
         haskey(spec.created, r) || (spec.created[r] = get(inherited, r, spec.checks))
@@ -1970,7 +2232,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         spec.rebalance > 0 ||
             ((owners, np_new) = _balanced_owners(wanted, active, root_lc.size,
                                                  owners, np_new,
-                                                 [haskey(old_of, r) for r in wanted]))
+                                                 [haskey(old_of, r) for r in wanted];
+                                                 nodes=spec.costs.nodes))
     else
         weights = _measured_weights(wanted, active, old_regions, lev.owners, busy)
         owners, np_new = _tile_owners(wanted, active, root_lc.size; weights)
@@ -2356,10 +2619,12 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     lo, hi = _wrap_feasible(_feasible_nodes(N, active, margin, reach, span)..., wrap)
     current = findfirst(==(_level_edges(spec, ℓ)), chain)
     wanted_sets = Vector{BlockRegion}[]
+    parent_bins = _RegionIndex(parent_valid, period)
     for (i, a) in enumerate(chain)
         wanted = BlockRegion[]
         push!(wanted_sets, wanted)
         isempty(parent_valid) && continue
+        old = _OldTiles(old_regions, created, spec, i == current, active, period)
         flags = flagsets[i]
         cells = Set(keys(flags))
         foreach(r -> push!(cells, _cell_of(r, a, active)), old_regions)
@@ -2369,10 +2634,9 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
             t = _lattice_tile(k, active, a, lo, hi,
                               ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : N[d], 3))
             t === nothing && continue
-            _tile_wanted(t, get(flags, k, zero(Int8)), spec, old_regions, created,
-                         i == current, active, period) || continue
-            _covered_by(_buffered(t, active, margin, _boundary_faces(t, span, reach)),
-                        parent_valid, period) || continue
+            _tile_wanted(t, get(flags, k, zero(Int8)), old) || continue
+            box = _buffered(t, active, margin, _boundary_faces(t, span, reach))
+            _covered_by(box, parent_valid[_candidates(parent_bins, box)], period) || continue
             push!(wanted, t)
         end
     end
@@ -2383,11 +2647,13 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     changed = (wanted != old_regions || parent_changed) &&
               !(isempty(wanted) && isempty(old_regions))
     changed || return LevelDecision(chain[pick])
-    inherited = Dict(r => _inherited_check(r, old_regions, created, spec.checks, active,
-                                           period)
-                     for r in wanted if rechopped && !(r in old_regions))
+    old_set, wanted_set = Set(old_regions), Set(wanted)
+    old_bins = _RegionIndex(old_regions, period)
+    inherited = Dict(r => _inherited_check(r, view(old_regions, _candidates(old_bins, r)),
+                                           created, spec.checks, active, period)
+                     for r in wanted if rechopped && !(r in old_set))
     for r in old_regions
-        r in wanted || delete!(created, r)
+        r in wanted_set || delete!(created, r)
     end
     for r in wanted
         haskey(created, r) || (created[r] = get(inherited, r, spec.checks))
@@ -2398,8 +2664,10 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
                                   old_owners[fit])
     survived = Set(old_regions[fit])
     owners, np_new = _balanced_owners(wanted, active, parent_np, owners, np_new,
-                                      [r in survived for r in wanted])
-    old_index = [something(findfirst(==(r), old_regions), 0) for r in wanted]
+                                      [r in survived for r in wanted];
+                                      nodes=spec.costs.nodes)
+    old_position = Dict(r => i for (i, r) in enumerate(old_regions))
+    old_index = [get(old_position, r, 0) for r in wanted]
     kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
             for ti in eachindex(wanted)]
     carry = rechopped ?
@@ -2473,7 +2741,7 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
         append!(packed, (i, k[1], k[2], k[3], v))
     end
     banded[] && append!(packed, (0, 0, 0, 0, 1))
-    gathered = MPI.gather(packed, comm; root=0)
+    gathered = _gather_records(packed, comm)
     decision = nothing
     if MPI.Comm_rank(comm) == 0
         flagsets = [Dict{NTuple{3,Int},Int8}() for _ in chain]

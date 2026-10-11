@@ -2093,7 +2093,7 @@ end
 # The three-level shock with the model's coefficients measured on the run:
 # the model is fitted from the run's timers, every rank holds the same model
 # and takes the same lattices, and every tile stays whole on one rank.
-function subdivision_measured()
+function subdivision_measured(label="lattice subdivision, measured")
     ic = (x, y, z) -> x < 0.25 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                       x < 0.5  ? Prim(u=(0, 0, 0), p=0.1, rho=0.125) :
                                  Prim(u=(0, 0, 0), p=0.1, rho=0.5)
@@ -2108,19 +2108,26 @@ function subdivision_measured()
     run!(solver, states; tfinal=0.1, nmax=10000)
     spec = getfield(solver, :regrid)
     costs = spec.costs
-    model = [costs.a, costs.b, costs.k, costs.m, costs.c, costs.root]
+    model = [costs.a, costs.b, costs.k, costs.m, costs.c, costs.root, costs.m_x]
     edges = [CL._level_edges(spec, l) for l in 1:2]
-    rank == 0 && println("    measured model (a, b, k, m, c, root) ", model,
+    # Level 1's placement, which every rank holds (its parent is the root).
+    owners = solver.levels[2].owners
+    rank == 0 && println("    measured model (a, b, k, m, c, root, m_x) ", model,
                          ", lattices ", edges)
-    check("lattice subdivision, measured: the model fitted",
-          costs.ready && costs.a > 0 && costs.root > 0 ? 0.0 : 1.0, 0.5)
-    check("lattice subdivision, measured: every rank holds the same model",
+    # A fit is made once a tile is timed, and it always carries a cost per
+    # node (`_fit_lattice_costs`); the other coefficients depend on the run's
+    # timings and may come out zero.
+    check("$label: the model fitted",
+          costs.ready && costs.a > 0 ? 0.0 : 1.0, 0.5)
+    check("$label: every rank holds the same model",
           gmax(model != MPI.bcast(model, comm; root=0)), 0.5)
-    check("lattice subdivision, measured: every rank takes the same lattices",
+    check("$label: every rank takes the same lattices",
           gmax(edges != MPI.bcast(edges, comm; root=0)), 0.5)
+    check("$label: every rank places level 1 alike",
+          gmax(owners != MPI.bcast(owners, comm; root=0)), 0.5)
     whole = all(all(length(o) == 1 for o in lev.owners) for lev in solver.levels[2:end])
-    check("lattice subdivision, measured: each tile whole on one rank", gmax(!whole), 0.5)
-    check("lattice subdivision, measured: finite composite state",
+    check("$label: each tile whole on one rank", gmax(!whole), 0.5)
+    check("$label: finite composite state",
           gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
 end
 
@@ -2134,6 +2141,78 @@ function test_lattice_subdivision()
         CL.SUBDIVIDE_LATTICE[] = true
         subdivision_measured()
     finally
+        CL.SUBDIVIDE_LATTICE[] = false
+        CL.FIXED_LATTICE_COSTS[] = nothing
+    end
+end
+
+# Lattice and placement over nodes (`_node_map`): the ranks grouped into
+# nodes of two at np >= 4 and of one rank below (`NODE_SIZE`), so the paths
+# of a run across nodes run on one machine. The node map MPI reports agrees
+# on every rank. With the coefficients fixed to the fine nodes of the most
+# loaded rank and a message leaving the node priced at 2000 of them, about
+# the nodes of the level's one 16-node tile, while one within it is free,
+# the level subdivides only where the new tiles' shared faces stay within a
+# node: at nodes of one rank it keeps the one tile, and at nodes of two it
+# takes two tiles on the two ranks of the first node.
+# Placing a level of more tiles than ranks keeps each node's tiles a run of
+# the space-filling curve, alike on every rank. The measured three-level
+# shock then fits the per-message coefficients within and across nodes,
+# alike on every rank.
+function test_lattice_nodes()
+    section("lattice over nodes: node map, off-node prices, placement by node")
+    group = np >= 4 ? 2 : 1
+    shared = CL._node_map(comm)
+    check("lattice over nodes: the shared-memory map alike on every rank",
+          gmax(shared != MPI.bcast(shared, comm; root=0)), 0.5)
+    check("lattice over nodes: the shared-memory map numbered from 0",
+          shared[1] == 0 && all(diff(shared) .>= 0) && length(shared) == np ? 0.0 : 1.0,
+          0.5)
+    try
+        CL.NODE_SIZE[] = group
+        check("lattice over nodes: the grouped map",
+              CL._node_map(comm) == [r ÷ group for r in 0:(np - 1)] ? 0.0 : 1.0, 0.5)
+        CL.SUBDIVIDE_LATTICE[] = true
+        CL.FIXED_LATTICE_COSTS[] = (1.0, 0.0, 0.0, 0.0, 0.0, 2000.0)
+        inside(p, I) = begin
+            i, j, _ = CL.interior_index(p, I)
+            gi, gj = i + p.decomp.offset[1], j + p.decomp.offset[2]
+            18 <= gi <= 32 && 18 <= gj <= 32
+        end
+        solver = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                        tile=16, regrid_interval=1, tag_buffer=0, tag_threshold=Inf,
+                        tag_predicate=inside, refine=BlockRegion((16, 16, 0), (17, 17, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(0.3, 0.2, 0), p=1.0, rho=1.0 + 0.1 * sin(2π * x) * sin(2π * y)))
+        run!(solver, states; tfinal=1.0, nmax=3)
+        lev = solver.levels[2]
+        spec = getfield(solver, :regrid)
+        want = group == 1 ? (16, 16, 16) : (8, 16, 16)
+        check("lattice over nodes: subdivided within a node only",
+              CL._level_edges(spec, 1) == want ? 0.0 : 1.0, 0.5)
+        check("lattice over nodes: the tiles on the first node",
+              all(o -> last(o) < group, lev.owners) ? 0.0 : 1.0, 0.5)
+        check("lattice over nodes: finite state",
+              gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+        # A level of four tiles per rank placed afresh: each node's tiles a
+        # run of the curve, the ranks of every run on its node.
+        act = (true, true, false)
+        tiles = [BlockRegion((4k1, 4k2, 0), (5, 5, 1)) for k2 in 0:(2np - 1) for k1 in 0:1]
+        nodes = spec.costs.nodes
+        owners, _ = CL._balanced_owners(tiles, act, np, fill(0:0, length(tiles)), 1;
+                                        nodes)
+        on = [nodes[first(owners[t]) + 1] for t in CL._sfc_order(tiles)]
+        check("lattice over nodes: each node's tiles a run of the curve",
+              on == sort(on) ? 0.0 : 1.0, 0.5)
+        check("lattice over nodes: every rank places them alike",
+              gmax(owners != MPI.bcast(owners, comm; root=0)), 0.5)
+        check("lattice over nodes: four tiles a rank",
+              all(r -> count(o -> o == r:r, owners) == 4, 0:(np - 1)) ? 0.0 : 1.0, 0.5)
+        CL.FIXED_LATTICE_COSTS[] = nothing
+        subdivision_measured("lattice over nodes, measured")
+    finally
+        CL.NODE_SIZE[] = 0
         CL.SUBDIVIDE_LATTICE[] = false
         CL.FIXED_LATTICE_COSTS[] = nothing
     end
@@ -4890,6 +4969,7 @@ const SUITE = (
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),
     ("lattice subdivision", test_lattice_subdivision),
+    ("lattice over nodes", test_lattice_nodes),
     ("placed levels", test_placed_levels),
     ("seam levels", test_seam_levels),
     ("two-patch layout", test_two_patch_layout),
@@ -4907,7 +4987,8 @@ const SUITE = (
 # corner-halo check's default Dims_create grid changes shape outright (2x2x2
 # at np = 8, 2x1x1 at np = 2), a tiled level of four tiles leaves four of
 # eight ranks without one, and the lattice subdivision takes a different
-# lattice at each count. A composite face's member mask splits across more ranks,
+# lattice at each count, over nodes of a different size. A composite face's
+# member mask splits across more ranks,
 # and the deep-regrid levels fall onto rank subsets and move a tile only at
 # np = 8. The level coupling's point-to-point messages pair different ranks at
 # each count, and so do the owner ranges a hierarchy's phase change carries.
@@ -4931,7 +5012,7 @@ const RANK_SHAPE_PHASES = (
     "NSCBC inflow", "NSCBC level face", "composite face", "freestream",
     "composite budgets", "positivity floor", "positivity limiter", "slicing",
     "shared piece planes", "hierarchy phase change", "deep regrid subsets",
-    "lattice subdivision", "placed levels", "seam levels",
+    "lattice subdivision", "lattice over nodes", "placed levels", "seam levels",
 )
 
 # `phases=` selects phases by name from SUITE, comma-separated and in SUITE's

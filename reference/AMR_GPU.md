@@ -1285,8 +1285,10 @@ the configured lattice reaches) with the shortest step a cost model
 predicts (`_choose_lattice`, `LatticeCosts`). A tile of V fine nodes with
 interface ends along g dimensions costs s(aV + bVg + k) per root step at s
 steps per root step, each message of the level's exchanges (an off-rank
-shared face, or a tile's coupling with its parent) m s, and each tile c per
-regrid check; a level's price is that of its most loaded rank under the
+shared face, or a tile's coupling with its parent) m s, and each tile of
+the busiest rank c per regrid check, since the ranks rebuild their own
+tiles at once (`_most_held`); a level's price is that of its most loaded
+rank under the
 placement the regrid would make (`_knapsack_owners`). The levels below are
 priced with it on the ranks the lattice gives the level, which spans one
 rank per tile and confines its children to those ranks (`_level_rank_count`):
@@ -1339,6 +1341,30 @@ its whole tile, shared and imposed planes included (`_EVERY_FACE`), and
 seeds its shared planes as a survivor, so it continues bit for bit; the
 conservative coupling continues at round-off, its junction registers summed
 by an `Allreduce` whose order follows the ranks contributing.
+
+The decision is sized for runs of 112 ranks per node on 1 to 100 nodes,
+where a level holds tens of thousands of tiles and every rank decides at
+every check. The tests of a lattice's cells against the old tiles, the
+inherited creation checks and the nesting test of a deeper level go through
+an index of the regions binned by node (`_RegionIndex`), the face table
+through a lookup (`_tile_faces`), the knapsack scans only the least loaded
+ranks, and the chain stops at `_lattice_budget` cells (256 per rank, at
+least 2^20), which bounds the flag reduction and the pricing; the timings
+gather by `Gatherv` rather than object serialization. Over several nodes a
+level of more tiles than ranks is placed by node first: the space-filling
+curve is cut into one run per node, of weight in proportion to its ranks,
+and the knapsack places each run on its own node's ranks
+(`_knapsack_owners`, with `_keep_survivors` renumbering within a node), and
+the model prices a message leaving the node at `m_x`, fitted apart from `m`
+where the busiest ranks' message mixes vary apart (`_message_fit`), one
+coefficient for both otherwise. The nodes come from
+`MPI.COMM_TYPE_SHARED` (`_node_map`), or from `NODE_SIZE`, the toggle the
+MPI suite's "lattice over nodes" phase uses to group a workstation's ranks.
+A level of fewer tiles than ranks takes a prefix of the ranks, which under
+block rank numbering lies on the fewest nodes. bench/latticescale.jl times
+the decision and prices the rules at 112 to 11,200 ranks
+(`reference/CALIBRATION_APPENDIX.md`), and
+`bench/slurm/rmicost_lattice.sbatch` is the A/B on rzhound.
 
 Each regrid frees the tile groups and splits them afresh; a surviving
 tile's Cartesian communicator is independent of the group it was split from

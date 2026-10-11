@@ -242,8 +242,7 @@ end
 # `eachindex(regions)` by the Morton key of each region's offset, so that a
 # contiguous run of it is a compact set of tiles. The tiles keep their lattice
 # (raster) order for everything else, whose contiguous runs are strips.
-_sfc_order(regions::Vector{BlockRegion}) =
-    sortperm(regions; by=r -> _morton(r.offset))
+_sfc_order(regions::Vector{BlockRegion}) = sortperm([_morton(r.offset) for r in regions])
 
 """
     _rank_counts(weights, caps, np; admits) -> Vector{Int}
@@ -460,12 +459,24 @@ function _join_groups!(owners::Vector{UnitRange{Int}}, regions::Vector{BlockRegi
     seen = Dict{Tuple{NTuple{3,Int},Int},Bool}()
     admits(r, g) = get!(() -> _admits(r, active, g), seen, (r.extent, g))
     order = sort(fresh; by=t -> (-_tile_volume(regions[t], active), keys[t]))
+    # The groups' rank counts, a handful of distinct ones, and each group's.
+    counts = unique(length.(groups))
+    count_of = [findfirst(==(length(g)), counts) for g in groups]
     for t in order
         vol = _tile_volume(regions[t], active)
         best = 0
         bestkey = (Inf, typemax(Int))
+        fits = [admits(regions[t], c) for c in counts]
+        # Only a group at the least resulting load can take the tile, so the
+        # distance along the curve, a scan of the group's tiles, is taken for
+        # those.
+        least = Inf
         for (i, g) in enumerate(groups)
-            admits(regions[t], length(g)) || continue
+            fits[count_of[i]] && (least = min(least, load[i] + vol / length(g)))
+        end
+        for (i, g) in enumerate(groups)
+            load[i] + vol / length(g) == least || continue
+            fits[count_of[i]] || continue
             near = isempty(members[i]) ? typemax(Int) :
                    minimum(abs(keys[t] - keys[m]) for m in members[i])
             key = (load[i] + vol / length(g), near)
@@ -500,8 +511,65 @@ end
 # the curve's order pairs large tiles with small ones. The cost is locality:
 # tiles adjacent in space land on different ranks, and their shared planes
 # are exchanged between ranks rather than within one.
+#
+# Across nodes (`nodes`, the node of each rank, `_node_map`) that cost is an
+# off-node message for every shared plane, so a run spanning several nodes
+# first cuts the curve into one run per node, of weight in proportion to the
+# node's ranks, and places each run on its own node's ranks by the
+# assignment above: the planes the scattering exposes stay within a node,
+# and only the planes between runs leave it. A node's run is balanced to
+# within a tile over its ranks, so the cut costs the balance half a tile over
+# the node's ranks at most. With every rank on one node, or `nodes` empty,
+# the level is placed as a whole.
 function _knapsack_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
-                          np::Int)
+                          np::Int; nodes::AbstractVector{Int}=Int[])
+    _one_node(nodes, np) && return _flat_knapsack(regions, active, np)
+    order, ranks = _node_ranks(nodes, np)
+    vol = [_tile_volume(r, active) for r in regions]
+    total = sum(vol)
+    # The cumulative weight at the end of each node's run.
+    ends = cumsum([length(ranks[g]) for g in order]) .* (total / np)
+    runs = [Int[] for _ in order]
+    before = 0.0
+    j = 1
+    for t in _sfc_order(regions)
+        mid = before + vol[t] / 2
+        while j < length(order) && mid > ends[j]
+            j += 1
+        end
+        push!(runs[j], t)
+        before += vol[t]
+    end
+    owners = Vector{UnitRange{Int}}(undef, length(regions))
+    for (j, g) in enumerate(order)
+        isempty(runs[j]) && continue
+        local_owners, _ = _flat_knapsack(regions[runs[j]], active, length(ranks[g]))
+        for (i, t) in enumerate(runs[j])
+            r = ranks[g][first(local_owners[i]) + 1]
+            owners[t] = r:r
+        end
+    end
+    return owners, np
+end
+
+# Whether the first `np` ranks share one node under `nodes` (empty: one node).
+_one_node(nodes::AbstractVector{Int}, np::Int) =
+    isempty(nodes) || length(nodes) < np || all(==(nodes[1]), view(nodes, 1:np))
+
+# The nodes of the first `np` ranks in the order of their lowest rank, and
+# the ranks (0-based) of each.
+function _node_ranks(nodes::AbstractVector{Int}, np::Int)
+    order = Int[]
+    ranks = Dict{Int,Vector{Int}}()
+    for r in 0:(np - 1)
+        g = nodes[r + 1]
+        haskey(ranks, g) || push!(order, g)
+        push!(get!(Vector{Int}, ranks, g), r)
+    end
+    return order, ranks
+end
+
+function _flat_knapsack(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int)
     n = length(regions)
     keys = [_morton(r.offset) for r in regions]
     vol = [_tile_volume(r, active) for r in regions]
@@ -510,7 +578,11 @@ function _knapsack_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
     for t in sort(collect(1:n); by=t -> (-vol[t], keys[t]))
         best = 0
         bestkey = (Inf, typemax(Int), 0)
+        # Only a rank at the least load can take the tile, so the distance
+        # along the curve, a scan of the rank's tiles, is taken for those.
+        least = minimum(load)
         for r in 1:np
+            load[r] == least || continue
             near = isempty(held[r]) ? typemax(Int) :
                    minimum(abs(keys[t] - keys[m]) for m in held[r])
             key = (load[r], near, r)
@@ -556,20 +628,30 @@ end
 # its rank sets goes to the rank already holding the largest volume of its
 # surviving tiles under `owners` (`survived` marks them), greedily from the
 # largest such volume, and the sets holding no survivor take the ranks left
-# in order. Every rank's load is unchanged, and fewer tiles move.
+# in order. Every rank's load is unchanged, and fewer tiles move. Across
+# nodes (`nodes`) a rank set is renumbered within its node only, since the
+# placement of the runs on the nodes is not interchangeable. The pairs of
+# rank sets and ranks are held sparsely: at a cluster's rank count a table of
+# every pair would be the size of the rank count squared.
 function _keep_survivors(fresh::Vector{UnitRange{Int}}, regions::Vector{BlockRegion},
                          active::NTuple{3,Bool}, np::Int,
-                         owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool})
-    held = zeros(np, np)     # [fresh rank, current rank] surviving volume
+                         owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool};
+                         nodes::AbstractVector{Int}=Int[])
+    one = _one_node(nodes, np)
+    node(r) = one ? 0 : nodes[r]
+    held = Dict{Tuple{Int,Int},Float64}()   # (fresh rank, current rank) => volume
     for t in eachindex(regions)
         survived[t] || continue
         for r in owners[t]
-            held[first(fresh[t]) + 1, r + 1] +=
-                _tile_volume(regions[t], active) / length(owners[t])
+            a, b = first(fresh[t]) + 1, r + 1
+            # A current rank past the level, or on another node, keeps nothing.
+            (b <= np && node(a) == node(b)) || continue
+            held[(a, b)] = get(held, (a, b), 0.0) +
+                           _tile_volume(regions[t], active) / length(owners[t])
         end
     end
-    pairs = [(a, b) for a in 1:np, b in 1:np if held[a, b] > 0]
-    sort!(pairs; by=((a, b),) -> (-held[a, b], a, b))
+    pairs = [k for (k, v) in held if v > 0]
+    sort!(pairs; by=((a, b),) -> (-held[(a, b)], a, b))
     to = zeros(Int, np)
     taken = falses(np)
     for (a, b) in pairs
@@ -577,9 +659,12 @@ function _keep_survivors(fresh::Vector{UnitRange{Int}}, regions::Vector{BlockReg
         to[a] = b
         taken[b] = true
     end
-    rest = [b for b in 1:np if !taken[b]]
+    rest = Dict{Int,Vector{Int}}()
+    for b in 1:np
+        taken[b] || push!(get!(Vector{Int}, rest, node(b)), b)
+    end
     for a in 1:np
-        to[a] == 0 && (to[a] = popfirst!(rest))
+        to[a] == 0 && (to[a] = popfirst!(rest[node(a)]))
     end
     return [(to[first(rg) + 1] - 1):(to[first(rg) + 1] - 1) for rg in fresh]
 end
@@ -589,10 +674,12 @@ end
 # to keep the survivors of `owners` in place, and each tile on a rank range
 # of its own by `_tile_owners` otherwise.
 function _fresh_partition(regions::Vector{BlockRegion}, active::NTuple{3,Bool}, np::Int,
-                          owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool})
+                          owners::Vector{UnitRange{Int}}, survived::AbstractVector{Bool};
+                          nodes::AbstractVector{Int}=Int[])
     length(regions) > np || return _tile_owners(regions, active, np)
-    fresh, np_fresh = _knapsack_owners(regions, active, np)
-    return _keep_survivors(fresh, regions, active, np, owners, survived), np_fresh
+    fresh, np_fresh = _knapsack_owners(regions, active, np; nodes)
+    return _keep_survivors(fresh, regions, active, np, owners, survived; nodes),
+           np_fresh
 end
 
 # The gain in the most loaded rank's fine volume, stored placement over a
@@ -621,13 +708,15 @@ every regrid for an imbalance no partition removes. Depends on the reduced
 tile set and the stored owners alone, so every rank takes the same decision
 without a measurement. `survived` marks the tiles whose region and owners
 survive from the last layout, which a whole-tile partition keeps in place
-where its loads allow.
+where its loads allow. `nodes` is the node of each rank (`_node_map`), which
+the fresh partition keeps a node's tiles together by.
 """
 function _balanced_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
                           np::Int, owners::Vector{UnitRange{Int}}, np_level::Int,
-                          survived::AbstractVector{Bool}=falses(length(regions)))
+                          survived::AbstractVector{Bool}=falses(length(regions));
+                          nodes::AbstractVector{Int}=Int[])
     isempty(regions) && return owners, np_level
-    fresh, np_fresh = _fresh_partition(regions, active, np, owners, survived)
+    fresh, np_fresh = _fresh_partition(regions, active, np, owners, survived; nodes)
     _peak_load(regions, active, owners, np) >
         PLACEMENT_GAIN * _peak_load(regions, active, fresh, np) &&
         return fresh, np_fresh
@@ -1687,25 +1776,40 @@ end
 # the other's low plane and their transverse extents coincide, which the
 # lattice guarantees whenever they touch at all. Along a periodic dimension
 # of `period` the planes are compared modulo the period, so the tiles on
-# either side of the seam abut there.
+# either side of the seam abut there. Where several tiles qualify the one
+# last in `regions` is taken. The tiles are found through a table keyed on
+# the plane and the transverse offsets and extents, so the cost is linear in
+# the tile count: a level of a cluster run holds tens of thousands of tiles,
+# and the model of the regrid prices several lattices of them per check.
 function _tile_faces(regions::Vector{BlockRegion}, period::NTuple{3,Int}=(0, 0, 0))
     n = length(regions)
-    same_node(a, b, d) = period[d] == 0 ? a == b : mod(a - b, period[d]) == 0
+    node(a, d) = period[d] == 0 ? a : mod(a, period[d])
+    # The key of a tile's face along `d` on the plane `plane`: the plane and
+    # the transverse offsets and extents, the dimension along `d` zeroed.
+    key(r, d, plane) = (d, ntuple(e -> e == d ? node(plane, d) : node(r.offset[e], e), 3),
+                        ntuple(e -> e == d ? 0 : r.extent[e], 3))
+    # Per key, the last two tiles with a face there, latest first: a tile
+    # holds one face per key, so the latest other than a given tile is one of
+    # the two.
+    low = Dict{Tuple{Int,NTuple{3,Int},NTuple{3,Int}},NTuple{2,Int}}()
+    high = Dict{Tuple{Int,NTuple{3,Int},NTuple{3,Int}},NTuple{2,Int}}()
+    sizehint!(low, 3n)
+    sizehint!(high, 3n)
+    for q in 1:n, d in 1:3
+        r = regions[q]
+        for (table, plane) in ((low, r.offset[d]), (high, r.offset[d] + r.extent[d] - 1))
+            k = key(r, d, plane)
+            table[k] = (q, first(get(table, k, (0, 0))))
+        end
+    end
+    # The latest tile of a key's pair other than `p`, 0 where none.
+    other(pair, p) = pair[1] == p ? pair[2] : pair[1]
     faces = Vector{NTuple{3,NTuple{2,Int}}}(undef, n)
     for p in 1:n
         rp = regions[p]
         faces[p] = ntuple(3) do d
-            lo = 0
-            hi = 0
-            for q in 1:n
-                q == p && continue
-                rq = regions[q]
-                same = all(e -> e == d || (same_node(rq.offset[e], rp.offset[e], e) &&
-                                           rq.extent[e] == rp.extent[e]), 1:3)
-                same || continue
-                same_node(rq.offset[d] + rq.extent[d] - 1, rp.offset[d], d) && (lo = q)
-                same_node(rp.offset[d] + rp.extent[d] - 1, rq.offset[d], d) && (hi = q)
-            end
+            lo = other(get(high, key(rp, d, rp.offset[d]), (0, 0)), p)
+            hi = other(get(low, key(rp, d, rp.offset[d] + rp.extent[d] - 1), (0, 0)), p)
             (lo, hi)
         end
     end
@@ -2729,15 +2833,32 @@ _tile_fine_extent(solver, region::BlockRegion, ℓ::Int) =
                 only(_region_folds(solver, _region_boundaries(solver, [region], ℓ))))
 
 # Whether every node of `region` lies in some member of `regions` (a union
-# of boxes, not one box: the test is by node, and regions are small), or in
-# a periodic image of one under `period`.
+# of boxes, not one box), or in a periodic image of one under `period`.
 function _covered_by(region::BlockRegion, regions::Vector{BlockRegion},
                      period::NTuple{3,Int}=(0, 0, 0))
-    images = [_shifted(r, σ) for r in regions for σ in _images(period)]
     inside(g, r) = all(d -> r.offset[d] < g[d] <= r.offset[d] + r.extent[d], 1:3)
-    for k in 1:region.extent[3], j in 1:region.extent[2], i in 1:region.extent[1]
-        g = region.offset .+ (i, j, k)
-        any(r -> inside(g, r), images) || return false
+    # Only the images meeting the region can cover a node of it, and one
+    # holding the whole region settles the test without the node scan.
+    meets(r) = all(d -> r.offset[d] < region.offset[d] + region.extent[d] &&
+                        region.offset[d] < r.offset[d] + r.extent[d], 1:3)
+    images = period == (0, 0, 0) ? filter(meets, regions) :
+             [s for r in regions for σ in _images(period) for s in (_shifted(r, σ),)
+              if meets(s)]
+    any(r -> inside(region.offset .+ 1, r) &&
+             inside(region.offset .+ region.extent, r), images) && return true
+    # Along each dimension the region's nodes split into runs between the
+    # planes where an image starts or ends; every node of a cell of runs lies
+    # in the same images, so the first node of each cell stands for it.
+    cuts = ntuple(3) do d
+        lo, hi = region.offset[d] + 1, region.offset[d] + region.extent[d]
+        c = [lo]
+        for r in images, e in (r.offset[d] + 1, r.offset[d] + r.extent[d] + 1)
+            lo < e <= hi && push!(c, e)
+        end
+        sort!(unique!(c))
+    end
+    for k in cuts[3], j in cuts[2], i in cuts[1]
+        any(r -> inside((i, j, k), r), images) || return false
     end
     return true
 end
@@ -4037,10 +4158,13 @@ A tile of `V` fine nodes with interface ends along `g` dimensions costs
 `s (a V + b V g + k)` seconds per root step, where `s` is its level's steps
 per root step, `a` the cost per node, `b` the ghost-flux pass per node and
 interface dimension, and `k` the cost per tile; each off-rank tile face and
-each tile's coupling to its parent costs `m` in the level's exchanges; and
-a regrid check costs `c` per tile it holds. `ready` says whether the
-coefficients are set: measured ones after an interval the model has folded
-in, fixed ones from the start.
+each tile's coupling to its parent costs `m` in the level's exchanges, or
+`m_x` where the message leaves the node; and a regrid check costs `c` per
+tile its busiest rank holds. `ready` says whether the coefficients are set: measured ones
+after an interval the model has folded in, fixed ones from the start.
+`nodes` holds the node of each rank of the run's communicator, numbered from
+0 in the order of their lowest ranks (`_node_map`), empty until the first
+regrid check reads it.
 
 The timers are rank-local and run only while `timing` is set (a decomposed
 run on host storage whose lattice is measured): `tile_time` and
@@ -4048,13 +4172,12 @@ run on host storage whose lattice is measured): `tile_time` and
 since the last check and of its ghost-flux solves among them, `exchange`
 per level (index + 1) the nanoseconds in its exchange windows, `step_mark`
 the step of the last check, `check_wall` the wall of the last check,
-`check_compile` its compilation and `check_tiles` the tiles it left, and
-`compile_mark`
-Julia's compile-time counter at the last check, which the run turns on
-once it measures (`compile_counted`). `stats` holds the exponentially
-weighted sums the coefficients are fitted from and `roots` and `walls` the
-recent root seconds and the wall and tiles of the recent checks, on rank 0,
-which fits and broadcasts.
+`check_compile` its compilation and `check_tiles` the most tiles a rank
+held after it, and `compile_mark` Julia's compile-time counter at the last
+check, which the run turns on once it measures (`compile_counted`).
+`stats` holds the exponentially weighted sums the coefficients are fitted
+from and `roots` and `walls` the recent root seconds and the wall and tiles
+of the recent checks, on rank 0, which fits and broadcasts.
 """
 mutable struct LatticeCosts
     timing::Bool
@@ -4077,11 +4200,13 @@ mutable struct LatticeCosts
     m::Float64
     c::Float64
     root::Float64                    # the root's measured seconds per root step
+    m_x::Float64                     # per message leaving the node
+    nodes::Vector{Int}               # node of each rank of the run
 end
 
 LatticeCosts() = LatticeCosts(false, UInt64[], UInt64[], UInt64[], 0, 0.0, 0.0, 0, false,
                               zero(UInt64), Float64[], Float64[], Float64[], false, 1.0,
-                              0.0, 0.0, 0.0, 0.0, 0.0)
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Int[])
 
 """
     RegridSpec

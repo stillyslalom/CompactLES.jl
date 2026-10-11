@@ -7126,6 +7126,75 @@ check's wall less the longest compilation in it, and leaves out the
 observations of a rank that compiled in an interval; before that it swung
 between (12, 12) and (6, 12) on compile spikes.
 
+### bench/latticescale.jl: the lattice decision at a cluster's rank count
+
+`julia --project=. -t 1 bench/latticescale.jl affinity=0x5555`, serial on
+one P-core, on synthetic 3-D Richtmyer–Meshkov fronts at 48³ root nodes per
+rank and a configured edge of 16: seconds of each step of one regrid check's
+decision, which every rank (or rank 0, for a deeper level) runs. Base is
+593f673 (`_lattice_wanted` and `_tile_faces` pairwise, the knapsack's
+proximity over every rank); new is the tree that indexes the old tiles and
+bounds the chain at `_lattice_budget`. "Price" is the face table, the
+placement and the layout cost of every lattice of the chain, "inherit" the
+creation checks of a re-chopped level, "nest" level 2's nesting test (rank
+0), "place" the stored-ownership placement and the balance check.
+
+| P | tree | lattices | tiles, finest | wanted | price | inherit | place | nest |
+|---|---|---|---|---|---|---|---|---|
+| 112 | base | 7 | 25728 | 20.2 | 6.6 | 3.7 | 0.000 | |
+| 112 | new | 7 | 25728 | 0.013 | 0.17 | 0.012 | 0.001 | 0.011 |
+| 1120 | base | 5 of 6 | 43321 | > 300 | 20.3 | 33.2 | | |
+| 1120 | new | 6 | 82956 | 0.057 | 0.51 | 0.071 | 0.009 | 0.043 |
+| 11200 | new | 4 | 153035 | 0.093 | 0.64 | 0.17 | 0.25 | 0.38 |
+
+Settled: the base decision was quadratic in the tiles (each cell of every
+lattice tested against every old tile, every pair of tiles in the face
+table) and took 30 s a check at one node; it never finished a check at ten.
+The new one is linear in the tiles, about 1 s a check at 11,200 ranks on
+150,000 tiles of the finest lattice, against a predicted root step of 13
+to 160 s on these fronts and a check every four steps. The budget stops
+the chain at 4.6 MB of cell flags at 11,200 ranks, where halving to four
+parent nodes would reach tens of megabytes on every rank. The fold of the gathered timings takes
+milliseconds.
+
+Part 2 prices four rules for two refined levels under the model with the
+coefficients fitted on the workstation (3-D amr2 at eight ranks, below:
+a 2.15e-6, b 3.2e-7, k 0.028, m 5.4e-3, c 0.044) and nodes of 112 ranks;
+the cost of a message leaving the node (m_x = ratio m) has not been
+measured and is swept. Every entry is the model's prediction, s per root
+step, with the best rule's step in the last column:
+
+| scene | P | ratio | configured | count rule | model, one node | model, nodes | best |
+|---|---|---|---|---|---|---|---|
+| thin | 11200 | 1 | 20.9 | 12.9 | 12.9 | 13.5 | 12.9 |
+| thin | 11200 | 10 | 31.1 | 20.9 | 20.9 | 18.3 | 18.3 |
+| thin | 1120 | 1 | 29.0 | 29.0 | 28.2 | 29.5 | 28.2 |
+| thin | 1120 | 10 | 41.8 | 41.8 | 41.4 | 36.5 | 36.5 |
+| front | 1120 | 10 | 185.3 | 185.3 | 187.0 | 143.3 | 143.3 |
+| front | 11200 | 10 | 159.3 | 159.3 | 159.3 | 127.8 | 127.8 |
+
+Modeled, not measured: early in a run (thin), at 11,200 ranks the
+configured lattice gives level 1 0.64 tiles per rank and confines level 2
+to those ranks, and the subdivided lattice the count rule and the model
+take is predicted 1.6 times faster. Where the off-node message costs ten
+times one within a node, placing a level's tiles by node takes 12 to 23%
+off the predicted step; where it costs the same, placement by node is
+predicted 4 to 5% slower than the single-node knapsack (the runs cut per
+node balance a little worse), so the gain rests on the ratio rzhound
+measures (bench/slurm/rmicost_lattice.sbatch, not yet run).
+
+The workstation smoke at np = 8 (bench/rmicost.jl, P-cores, two runs a
+tree alternated, base 593f673): 3-D amr2 holds (6, 12, 12) at 342.5 and
+340.7 ms per root step (base) and 342.6 and 342.1 (new), W 5.6452 mm in
+all four; 2-D amr2 ends on (6, 12, 12) with medians of 8.70 and 8.04 ms
+(base) and 7.35 and 7.33 (new) and a steady wall of 15.2 and 10.6 s against
+5.9 and 5.9, the difference in the regrid checks (12.5 and 8.5 s against
+3.9 s each), not resolved further. The fitted c, per tile of the busiest
+rank, is 0.036 to 0.051 s in 3-D and 0.0012 to 0.0125 s in 2-D. In the MPI
+suite's measured three-level shock on fake nodes of two ranks, one run in
+four told m_x (3.9e-5 s) apart from m (9.4e-5 s); the others fitted one
+coefficient.
+
 ### bench/amr_cost.jl: the mixing cost case
 
 `mpiexec -n 8 julia --project=. -t 1 bench/amr_cost.jl 48 1.0` (`6382d8e`;

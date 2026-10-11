@@ -76,7 +76,11 @@ more tiles to rebuild at each regrid. At each regrid check every level is
 tiled on the lattice with the shortest predicted step, from a cost model
 fitted to the run's own timings of its tiles, its exchanges and its regrids,
 with each level weighted by its share of the step; a level changes lattice
-only for a step predicted at least a tenth shorter. The tile layout of a
+only for a step predicted at least a tenth shorter. On a run over several
+nodes, a level with more tiles than ranks keeps neighboring tiles on one
+node where it can, and the model prices an exchange leaving a node apart
+from one within it; a lattice of the chain holding more than a million
+cells and more than 256 per rank is left out. The tile layout of a
 decomposed run, and with it the solution at the level of the truncation
 error, therefore depends on the rank count and on the measured timings, and
 two runs of one configuration can differ. A run over many ranks should give

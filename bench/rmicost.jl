@@ -125,7 +125,13 @@
 #
 # `trace=true` prints, from rank 0, each regrid check's harvest of the
 # lattice cost model and each level's lattice choice with the predicted
-# seconds per root step of every lattice of its chain.
+# seconds per root step of every lattice of its chain. `lattice=configured`
+# keeps every level on the `tile=` lattice (the subdivision off), the
+# reference an A/B of the model's choice compares against. `nodesize=n`
+# groups the ranks into nodes of n consecutive ranks for the placement and
+# the message prices in place of the nodes MPI reports, and a count at least
+# the rank count puts every rank on one node, which on a cluster gives the
+# placement and the prices that ignore the nodes.
 #
 # `affinity=0x5555` restricts every rank to one logical CPU per performance
 # core of the 12900K workstation; 0 leaves the affinity alone.
@@ -142,7 +148,7 @@ const opt = CompactLES.script_args(ARGS, (
     config = "amr2", dim = 2, nres = 24, tfinal = 4.5e-4, nmax = typemax(Int),
     Lx = 0.0, tile = "12", subcycle = true, regrid = 0, warm = 10, progress = 50,
     profile = false, delay = 0.005, dims = "", affinity = 0, rebalance = 0.0,
-    trace = false))
+    trace = false, lattice = "model", nodesize = 0))
 
 const CONFIGS = ("coarse", "fine2", "fine3", "amr2", "amr3")
 opt.config in CONFIGS || error("config must be one of $(join(CONFIGS, ", "))")
@@ -442,6 +448,9 @@ function main()
     opt.profile && Profile.init(n = 10_000_000, delay = opt.delay)
     # The same script runs against trees without the lattice cost model.
     isdefined(CompactLES, :LATTICE_TRACE) && (CompactLES.LATTICE_TRACE[] = opt.trace)
+    opt.lattice in ("model", "configured") || error("lattice must be model or configured")
+    opt.lattice == "configured" && (CompactLES.SUBDIVIDE_LATTICE[] = false)
+    isdefined(CompactLES, :NODE_SIZE) && (CompactLES.NODE_SIZE[] = opt.nodesize)
     Base.cumulative_compile_timing(true)
     MPI.Barrier(comm)
     prob = problem(opt.dim, Lx)
@@ -485,14 +494,18 @@ end
 
 # The lattice cost model at the end of the run: seconds per node, per node
 # and interface dimension, per tile, per message and per tile rebuilt at a
-# check, and the root's seconds per root step (`CompactLES.LatticeCosts`).
+# check, the root's seconds per root step, and per message leaving the node
+# (`CompactLES.LatticeCosts`), with the number of nodes the run spans.
 function lattice_model(solver)
     spec = getfield(solver, :regrid)
     hasfield(typeof(spec), :costs) || return "none"
     costs = spec.costs
     costs.ready || return "unset"
+    across = hasfield(typeof(costs), :m_x) ? (costs.m_x,) : ()
+    nodes = hasfield(typeof(costs), :nodes) && !isempty(costs.nodes) ?
+            " over $(maximum(costs.nodes) + 1) node(s)" : ""
     return join((@sprintf("%.3g", x) for x in (costs.a, costs.b, costs.k, costs.m, costs.c,
-                                                costs.root)), "/")
+                                                costs.root, across...)), "/") * nodes
 end
 
 function report(solver, Q, r::StepRecorder, comm, run)
@@ -557,7 +570,8 @@ function report(solver, Q, r::StepRecorder, comm, run)
         "config" => opt.config, "dim" => opt.dim, "nres" => opt.nres,
         "n_global" => join(run.n_global, "x"), "np" => np,
         "dims" => join(run.dims, "x"), "subcycle" => sub,
-        "tile" => replace(opt.tile, ',' => 'x'),
+        "tile" => replace(opt.tile, ',' => 'x'), "lattice" => opt.lattice,
+        "nodesize" => opt.nodesize,
         "edges" => run.refined ?
                    join([join(CompactLES._level_edges(getfield(solver, :regrid), l), "x")
                          for l in 1:nlev-1], "/") : "",
@@ -628,7 +642,7 @@ function report(solver, Q, r::StepRecorder, comm, run)
                                                 maximum(sizes), median(sizes)))
     end
     if run.refined
-        say("  lattice cost model (a, b, k, m, c, root): %s\n", lattice_model(solver))
+        say("  lattice cost model (a, b, k, m, c, root, m_x): %s\n", lattice_model(solver))
         say("  regrid checks %d (tile set changed at %d); steady checks %d cost " *
                 "%.3f s over the median step (%.1f%% of the steady wall)\n",
                 length(check_steps), length(changed_steps), nchecks_steady,
