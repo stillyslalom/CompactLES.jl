@@ -194,7 +194,10 @@ grid, not a patch. Every rank returns the same value for the same `(d, g)`.
 Use this form when assembling a global coordinate vector and [`xcoord`](@ref)
 for a local interior index.
 """
-function global_xcoord(solver::SolverLike, d::Int, g::Int)
+global_xcoord(solver::SolverLike, d::Int, g::Int) = _global_xcoord(solver, d, g)
+
+# The body of `global_xcoord`, for a solver or a `CallbackGeometry`.
+function _global_xcoord(solver, d::Int, g::Int)
     ξ = solver.origin[d] + solver.coord_shift[d] + (g - 1) * solver.h[d]
     st = solver.stretch[d]
     return st === nothing ? ξ : st.x(ξ)

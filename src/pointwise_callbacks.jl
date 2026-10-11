@@ -8,7 +8,10 @@ reports its 3:1 smaller spacing. At a coordinate singularity an active
 direction is clamped to the solver's positive floating-point floor, matching
 the geometry arrays; `0` is returned only when every direction is collapsed.
 """
-@inline function point_spacing(solver::SolverLike, I::CartesianIndex{3})
+@inline point_spacing(solver::SolverLike, I::CartesianIndex{3}) = _point_spacing(solver, I)
+
+# The body of `point_spacing`, for a solver or a `CallbackGeometry`.
+@inline function _point_spacing(solver, I::CartesianIndex{3})
     active = solver.decomp.active
     any(active) || return zero(eltype(solver.h))
     x1, m1 = _phys_and_jac(solver, 1, I[1])
@@ -24,6 +27,34 @@ the geometry arrays; `0` is returned only when every direction is collapsed.
         h = min(h, T(solver.h[d]) * max(abs(T(scales[d])), floor))
     end
     return h
+end
+
+# What a callback of position reads from a solver or a refined patch: the
+# coordinates and the spacing at a padded index (`_domain_coordinate`,
+# `_point_spacing`), apart from the solver type. A loop that evaluates a user
+# function over a face is then keyed on the function and this, and is not
+# compiled again for every tile type that comes to hold the face. `period` is
+# the patch level's (`_level_period`), zero on the root, whose coordinates are
+# never wrapped.
+struct CallbackGeometry{T,St,M}
+    origin::NTuple{3,T}
+    coord_shift::NTuple{3,T}
+    h::NTuple{3,T}
+    stretch::St
+    metric::M
+    decomp::Decomp{T}
+    region::BlockRegion
+    period::NTuple{3,Int}
+end
+
+callback_geometry(s::Solver) =
+    CallbackGeometry(s.origin, s.coord_shift, s.h, s.stretch, s.metric, s.decomp,
+                     s.region, (0, 0, 0))
+function callback_geometry(ps::PatchSolver)
+    level = ps.patch.level
+    period = level == 0 ? (0, 0, 0) : _level_period(ps.solver, level)
+    return CallbackGeometry(ps.origin, ps.coord_shift, ps.h, ps.stretch, ps.metric,
+                            ps.decomp, ps.region, period)
 end
 
 # The arity decision is made once before a point loop. `applicable` examines

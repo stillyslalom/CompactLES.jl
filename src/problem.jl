@@ -230,6 +230,11 @@ function _domain_coordinate(ps::PatchSolver, d::Int, i::Int)
     return P > 0 && g > P ? global_xcoord(ps, d, g - P) :
            P > 0 && g < 1 ? global_xcoord(ps, d, g + P) : xcoord(ps, d, i)
 end
+function _domain_coordinate(geom::CallbackGeometry, d::Int, i::Int)
+    P = geom.period[d]
+    g = geom.region.offset[d] + geom.decomp.offset[d] + i
+    return _global_xcoord(geom, d, P > 0 && g > P ? g - P : P > 0 && g < 1 ? g + P : g)
+end
 
 function _initialize_interior!(solver::SolverLike, Q, ic)
     decomp = solver.decomp

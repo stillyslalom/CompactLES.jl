@@ -468,8 +468,10 @@ end
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 # As for the outflow, the hook forwards to bodies keyed on the field storage.
-# A pointwise `target` evaluates a host closure at each face point's
-# coordinates, which the solver supplies, so that path stays keyed on it.
+# The body of a pointwise `target` takes the face coordinates from a
+# `CallbackGeometry` and is keyed on the target function, not on the solver,
+# so a refined tile placed on the face by a later regrid compiles none of it
+# again.
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     s, patch = _ops_parts(solver)
     f = patch_fields(solver)
@@ -480,7 +482,9 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         _nscbc_inflow!(bc, f, solver.eos, solver.L_domain[d], eq, skipped, Q, dQ,
                        d, side, s, patch)
     else
-        _nscbc_inflow_target!(bc, solver, f, eq, skipped, Q, dQ, d, side, s, patch)
+        _nscbc_inflow_target!(bc, callback_geometry(solver), f, solver.eos,
+                              solver.tstage, solver.L_domain[d], eq, skipped, Q, dQ,
+                              d, side, s, patch)
     end
     return nothing
 end
@@ -570,13 +574,15 @@ function _nscbc_inflow!(bc::NSCBCInflowBC, f::PatchFields, eos, L_d, eq,
     return nothing
 end
 
-function _nscbc_inflow_target!(bc::NSCBCInflowBC, solver, f::PatchFields, eq,
-                               skipped::Bool, Q, dQ, d::Int, side::Int, s, patch)
+function _nscbc_inflow_target!(bc::NSCBCInflowBC, geom::CallbackGeometry,
+                               f::PatchFields, eos, tnow, L_d, eq, skipped::Bool,
+                               Q, dQ, d::Int, side::Int, @nospecialize(s),
+                               @nospecialize(patch))
     (t1, t2), acts = _nscbc_inflow_derivatives!(bc, f, d, skipped, s, patch)
     plane = wallplane(f.decomp, d, side)
     plane === nothing && return nothing
     T = eltype(Q)
-    coef, flags = _nscbc_inflow_setup(bc, T, solver.L_domain[d], side, acts)
+    coef, flags = _nscbc_inflow_setup(bc, T, L_d, side, acts)
     dts = (d, t1, t2)
     dp_t1, dr_t1 = f.sensor_sp, f.grad_T_ion[1]
     dp_t2, dr_t2 = f.grad_T_ion[2], f.grad_T_ion[3]
@@ -587,32 +593,44 @@ function _nscbc_inflow_target!(bc::NSCBCInflowBC, solver, f::PatchFields, eq,
     _cpu_storage(Q) ||
         error("NSCBCInflowBC with a pointwise target is host-only; use " *
               "constant targets on a DeviceBackend")
-    tnow = solver.tstage
+    pad = f.decomp.n_halo_d
     I0 = first(plane)
-    i0, j0, k0 = interior_index(solver, I0)
     # A tile across a periodic seam evaluates the target a period back past
     # the domain's face, where it is given (`_domain_coordinate`).
-    cb = boundary_callback(bc.target, _domain_coordinate(solver, 1, i0),
-                           _domain_coordinate(solver, 2, j0),
-                           _domain_coordinate(solver, 3, k0), tnow,
-                           point_spacing(solver, I0))
+    cb = boundary_callback(bc.target, _domain_coordinate(geom, 1, I0[1] - pad[1]),
+                           _domain_coordinate(geom, 2, I0[2] - pad[2]),
+                           _domain_coordinate(geom, 3, I0[3] - pad[3]), tnow,
+                           _point_spacing(geom, I0))
+    ft = f.ft
     @inbounds for I in plane
-        i1, i2, i3 = interior_index(solver, I)
-        x1, x2, x3 = _domain_coordinate(solver, 1, i1),
-                     _domain_coordinate(solver, 2, i2),
-                     _domain_coordinate(solver, 3, i3)
-        pr = pointwise_boundary(cb, x1, x2, x3, tnow, point_spacing(solver, I))
+        x1, x2, x3 = _domain_coordinate(geom, 1, I[1] - pad[1]),
+                     _domain_coordinate(geom, 2, I[2] - pad[2]),
+                     _domain_coordinate(geom, 3, I[3] - pad[3])
+        pr = pointwise_boundary(cb, x1, x2, x3, tnow, _point_spacing(geom, I))
         isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
         targets = (map(T, pr.u), T(pr.T_ion))
         YT = map(T, pr.Y)
-        _nscbc_inflow_apply!(dQ, solver.eos, solver.rho, solver.u, solver.v,
-                             solver.w, solver.p, solver.c, solver.T_ion,
-                             solver.cp_mix, solver.Y, solver.grad_u,
-                             solver.grad_Y, solver.tmp_a, solver.tmp_b,
-                             dp_t1, dr_t1, dp_t2, dr_t2, solver.inv_h[d],
-                             solver.inv_h[t1], solver.inv_h[t2], targets, YT,
-                             coef, flags, dts, eq, I)
+        _nscbc_inflow_apply_host!(dQ, eos, f.rho, f.u, f.v, f.w, f.p, f.c,
+                                  f.T_ion, f.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
+                                  f.tmp_a, f.tmp_b, dp_t1, dr_t1, dp_t2, dr_t2,
+                                  f.inv_h[d], f.inv_h[t1], f.inv_h[t2], targets,
+                                  YT, coef, flags, dts, eq, I)
     end
+    return nothing
+end
+
+# The point algebra of the pointwise-target loop as a call of its own, so that
+# the code compiled for each target function holds the coordinates, the call
+# of the function and this call, and the algebra is compiled once per
+# precision and EOS. It costs a call per face point.
+@noinline function _nscbc_inflow_apply_host!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
+                                             cp_a, Y, grad_u, grad_Y, dp_n, dr_n,
+                                             dp_t1, dr_t1, dp_t2, dr_t2, ih_d,
+                                             ih_t1, ih_t2, targets, YT, coef, flags,
+                                             dts, eq, I)
+    _nscbc_inflow_apply!(dQ, eos, rho, u, v, w, p_a, c_a, T_a, cp_a, Y, grad_u,
+                         grad_Y, dp_n, dr_n, dp_t1, dr_t1, dp_t2, dr_t2, ih_d,
+                         ih_t1, ih_t2, targets, YT, coef, flags, dts, eq, I)
     return nothing
 end
 
