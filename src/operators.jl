@@ -125,16 +125,28 @@ spanning patch takes (`StackedArray`, `device_plan`) covers the lines of that
 many equal tiles at once, so its line solver's interface stage is sized for
 all of them. The default 1 is every host plan.
 """
-function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
-                        h::Real; lo_fold::Union{Nothing,Int}=nothing,
-                        hi_fold::Union{Nothing,Int}=nothing,
-                        lo_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
-                        hi_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
-                        lines_factor::Int=1) where {T}
+plan_direction(::Decomp, ::CompactScheme, ::Int, ::Real)
+
+# The docstring is attached to the signature above because the documentation
+# system does not see through `@nospecializeinfer`. The fold and closure
+# keywords are neither specialized nor inferred on. Each end takes `nothing`
+# or a value, and a body keyed on the combination compiled 6.5k instructions
+# for each one first met mid-run, when a regrid places a refined tile on a
+# domain face. The closure sets are declared without `T`, since a declared
+# type holding a static parameter is not widened, and the assertions below
+# restore their concrete type.
+Base.@nospecializeinfer function plan_direction(decomp::Decomp, scheme::CompactScheme{T},
+        dim::Int, h::Real; @nospecialize(lo_fold::Union{Nothing,Int}=nothing),
+        @nospecialize(hi_fold::Union{Nothing,Int}=nothing),
+        @nospecialize(lo_closures::Union{Nothing,Vector}=nothing),
+        @nospecialize(hi_closures::Union{Nothing,Vector}=nothing),
+        lines_factor::Int=1) where {T}
+    lo_set = lo_closures === nothing ? nothing : lo_closures::Vector{ClosureRow{T}}
+    hi_set = hi_closures === nothing ? nothing : hi_closures::Vector{ClosureRow{T}}
     n = decomp.n_local[dim]
     M = halfwidth(scheme)
     M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo)")
-    for rows in (lo_closures, hi_closures)
+    for rows in (lo_set, hi_set)
         rows === nothing && continue
         for row in rows
             reach = 1 - row.first
@@ -153,8 +165,8 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     hi_closed = at_hi_edge(decomp, dim) && hi_fold === nothing
     fold_lo = lo_fold !== nothing && at_lo_edge(decomp, dim)
     fold_hi = hi_fold !== nothing && at_hi_edge(decomp, dim)
-    lo_rows = lo_closures === nothing ? scheme.closures : lo_closures
-    hi_rows = hi_closures === nothing ? scheme.closures : hi_closures
+    lo_rows = lo_set === nothing ? scheme.closures : lo_set
+    hi_rows = hi_set === nothing ? scheme.closures : hi_set
     # Closure rows exist only at a closed end, so the extent a block needs
     # depends on which of its ends are closed: a periodic or interior block
     # needs the interior stencil alone. Counting both ends everywhere forced

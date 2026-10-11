@@ -47,18 +47,25 @@ this rank's closed ends, because the reduced interface system couples the
 last `q` unknowns of one rank to the first `q` of the next, and a closed end
 carries at least `q` closure rows.
 """
-function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
-                        h::Real; lo_fold::Union{Nothing,Int}=nothing,
-                        hi_fold::Union{Nothing,Int}=nothing,
-                        lo_closures::Union{Nothing,Vector{BandedClosureRow{T}}}=nothing,
-                        hi_closures::Union{Nothing,Vector{BandedClosureRow{T}}}=nothing,
-                        lines_factor::Int=1) where {T}
+plan_direction(::Decomp, ::BandedCompactScheme, ::Int, ::Real)
+
+# The fold and closure keywords are compiled and inferred unspecialized, as in
+# the tridiagonal method, so a new combination of them compiles nothing.
+Base.@nospecializeinfer function plan_direction(decomp::Decomp,
+        scheme::BandedCompactScheme{T}, dim::Int, h::Real;
+        @nospecialize(lo_fold::Union{Nothing,Int}=nothing),
+        @nospecialize(hi_fold::Union{Nothing,Int}=nothing),
+        @nospecialize(lo_closures::Union{Nothing,Vector}=nothing),
+        @nospecialize(hi_closures::Union{Nothing,Vector}=nothing),
+        lines_factor::Int=1) where {T}
+    lo_set = lo_closures === nothing ? nothing : lo_closures::Vector{BandedClosureRow{T}}
+    hi_set = hi_closures === nothing ? nothing : hi_closures::Vector{BandedClosureRow{T}}
     n = decomp.n_local[dim]
     q = scheme.q
     M = halfwidth(scheme)
     M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo); " *
                         "construct the Solver with n_halo ≥ $M")
-    for rows in (lo_closures, hi_closures)
+    for rows in (lo_set, hi_set)
         rows === nothing && continue
         for row in rows
             reach = 1 - row.first
@@ -76,8 +83,8 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
     hi_closed = at_hi_edge(decomp, dim) && hi_fold === nothing
     fold_lo = lo_fold !== nothing && at_lo_edge(decomp, dim)
     fold_hi = hi_fold !== nothing && at_hi_edge(decomp, dim)
-    lo_rows = lo_closures === nothing ? scheme.closures : lo_closures
-    hi_rows = hi_closures === nothing ? scheme.closures : hi_closures
+    lo_rows = lo_set === nothing ? scheme.closures : lo_set
+    hi_rows = hi_set === nothing ? scheme.closures : hi_set
     nlo = lo_closed ? length(lo_rows) : 0
     nhi = hi_closed ? length(hi_rows) : 0
     nmin = _block_need(scheme, nlo, nhi)

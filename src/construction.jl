@@ -34,9 +34,13 @@
 
 # Which physical faces the sensor operators close on the node-centred mirror,
 # per dimension and side: those whose condition answers the detector's
-# `sensor_mirror` hook (boundary.jl) with `true`.
-_sensor_wall_faces(bcs) = ntuple(d -> (sensor_mirror(bcs[d][1]) === true,
-                                       sensor_mirror(bcs[d][2]) === true), 3)
+# `sensor_mirror` hook (boundary.jl) with `true`. Not specialized on the
+# conditions, as the `Patch` constructor is not; a closure over them would be.
+Base.@nospecializeinfer _sensor_wall_faces(@nospecialize(bcs)) =
+    (_sensor_wall_pair(getfield(bcs, 1)), _sensor_wall_pair(getfield(bcs, 2)),
+     _sensor_wall_pair(getfield(bcs, 3)))
+Base.@nospecializeinfer _sensor_wall_pair(@nospecialize(pair)) =
+    (sensor_mirror(getfield(pair, 1)) === true, sensor_mirror(getfield(pair, 2)) === true)
 
 # The wall rows one sensor operator takes at one face, or `nothing` where it
 # keeps the scheme's own. `use` gates the hook to the two operators whose rows
@@ -1476,8 +1480,8 @@ end
 # The refined `Patch` from its parts, with no pair buffers (`empty` stands in
 # for both): a refined patch's folds, those of a symmetry plane or the r-z
 # axis, are self-paired.
-_assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
-                empty, a, ws, covered, scratch, gflux) =
+Base.@nospecializeinfer _assemble_patch(id::Int, level::Int, region, comm, decomp, hf,
+                faces, @nospecialize(bcs), plans, empty, a, ws, covered, scratch, gflux) =
     Patch(id, level, region, comm, decomp, hf, faces, bcs,
           plans.folds, plans.deriv, plans.div, plans.filter,
           plans.smooth, plans.ring, empty, empty,

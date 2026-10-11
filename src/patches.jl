@@ -554,7 +554,14 @@ end
 # The positional argument list every construction site uses; `field_tuples`
 # is derived here, not at the sites, so the sites never fall out of
 # step with the wrapper set.
-function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
+#
+# The conditions are kept out of this method's specialization as they are
+# kept out of the type: the struct is built with `_UNSET_FACES` and the
+# conditions are stored after. Construction keyed on them compiled again for
+# each new combination, which a regrid meets mid-run when it first places a
+# tile on a domain face whose condition holds a user function.
+Base.@nospecializeinfer function Patch(id, level, region, comm, decomp, h, faces,
+               @nospecialize(bcs), folds,
                deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
@@ -568,16 +575,20 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
                     flux=FieldMatrix(rhs_workspace.flux))
-    return Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
-                 deriv_plans, div_plans, filter_plans, smooth_plans,
-                 ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
-                 cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
-                 inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-                 rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-                 sensed_fields, child_deep, child_masked, field_tuples,
-                 RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
-                               typeof(similar(rho, 0))}[], false)
+    patch = Patch(id, level, region, comm, decomp, h, faces, _UNSET_FACES, folds,
+                  deriv_plans, div_plans, filter_plans, smooth_plans,
+                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
+                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
+                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
+                  rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
+                  sensed_fields, child_deep, child_masked, field_tuples,
+                  RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
+                                typeof(similar(rho, 0))}[], false)
+    setfield!(patch, :bcs, bcs::FaceConditions)
+    return patch
 end
+
+const _UNSET_FACES = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 # --- Covered masks ----------------------------------------------------------
 #
