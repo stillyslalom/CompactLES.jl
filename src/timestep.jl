@@ -308,7 +308,9 @@ function _foreach_tile(f::F, solver::Solver, lev::Level,
     groups = _tile_groups(solver, lev)
     if groups === nothing || _new_tile_phase!(f, solver, lev, args)
         for pi in lev.patches
+            t0 = time_ns()
             f(solver, pi, args...)
+            _charge_tile!(solver, _tile_account(f), pi, t0)
         end
         return nothing
     end
@@ -351,8 +353,49 @@ end
 function _tile_group!(f::F, solver::Solver, group::Vector{Int},
                       args::Vararg{Any,N}) where {F,N}
     for pi in group
+        t0 = time_ns()
         f(solver, pi, args...)
+        _charge_tile!(solver, _tile_account(f), pi, t0)
     end
+    return nothing
+end
+
+# The tile timers of the lattice cost model (`LatticeCosts`): the seconds of
+# each tile's phases since the last regrid check, accumulated per patch index
+# while the model measures, and those of its ghost-flux solves apart, which
+# the model charges per interface dimension. Each task of `_foreach_tile`
+# writes the slots of its own tiles. On device storage a phase returns
+# once its kernels are launched, so its time is not the tile's cost, and the
+# timers stay off there (`_lattice_measured`).
+@noinline _charge_tile!(solver::Solver, account::Int, pi::Int, t0::UInt64) =
+    _charge_tile!(getfield(solver, :regrid), account, pi, t0)
+_charge_tile!(::Nothing, account::Int, pi::Int, t0::UInt64) = nothing
+function _charge_tile!(spec::RegridSpec, account::Int, pi::Int, t0::UInt64)
+    costs = spec.costs
+    costs.timing || return nothing
+    dt = time_ns() - t0
+    times = costs.tile_time
+    pi <= length(times) || return nothing
+    @inbounds times[pi] += dt
+    account == 2 && (@inbounds costs.ghost_time[pi] += dt)
+    return nothing
+end
+
+# Which timer a tile phase also charges: 2 for the ghost-flux solves.
+_tile_account(f) = 1
+
+# The level exchange timer of the same model: the seconds `lev`'s exchange
+# windows took since the last check, charged with the waiting account
+# (`_wait!`) from the same start.
+@noinline _charge_exchange!(solver::Solver, lev::Level, t0::UInt64) =
+    _charge_exchange!(getfield(solver, :regrid), lev.index, t0)
+_charge_exchange!(::Nothing, index::Int, t0::UInt64) = nothing
+function _charge_exchange!(spec::RegridSpec, index::Int, t0::UInt64)
+    costs = spec.costs
+    costs.timing || return nothing
+    times = costs.exchange
+    index + 1 <= length(times) || return nothing
+    @inbounds times[index + 1] += time_ns() - t0
     return nothing
 end
 
@@ -756,6 +799,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         child === nothing && return nothing
         wall_gather = time_ns()
         save_level_boxes!(solver, child, states, dQs, at_end)
+        _charge_exchange!(solver, child, wall_gather)
         _wait!(solver, wall_gather)
         return nothing
     end

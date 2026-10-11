@@ -68,17 +68,23 @@ costs more than the cells it saves. `tile` takes one edge for every dimension
 or a tuple of one per dimension, x first: `tile = (4, 12, 12)` covers a planar
 front normal to x with tiles four parent nodes thick and twelve across, a
 tighter cover than cubes of twelve at the same tile count per front. Each
-tile is held whole by one rank, so its line solves exchange nothing. A
-regridded level with fewer tiles than its parent has ranks takes a finer
-lattice, its largest edge halved in turn down to four parent nodes, until it
-has a tile per rank, and returns to a coarser lattice once that gives two
-tiles per rank. The tile layout of a decomposed run, and with it the
-solution at the level of the truncation error, therefore depends on the rank
-count. A run over many ranks should give an edge: the interpolation over a
-single box does not divide beyond one rank per conserved variable.
-[`BlockRegion`](@ref)s remain available for an exact layout; a single region
-may move when regridding is enabled, and a multi-level vector moves only with
-a positive `tile`. A vector of shapes stays fixed.
+tile is held whole by one rank, so its line solves exchange nothing. In a
+decomposed run a regridded level may be tiled on a finer lattice, its
+largest edge halved in turn down to four parent nodes, which spreads the
+level over more ranks at the price of more tile faces, more exchanges and
+more tiles to rebuild at each regrid. At each regrid check every level is
+tiled on the lattice with the shortest predicted step, from a cost model
+fitted to the run's own timings of its tiles, its exchanges and its regrids,
+with each level weighted by its share of the step; a level changes lattice
+only for a step predicted at least a tenth shorter. The tile layout of a
+decomposed run, and with it the solution at the level of the truncation
+error, therefore depends on the rank count and on the measured timings, and
+two runs of one configuration can differ. A run over many ranks should give
+an edge: the interpolation over a single box does not divide beyond one
+rank per conserved variable. [`BlockRegion`](@ref)s remain available for an
+exact layout; a single region may move when regridding is enabled, and a
+multi-level vector moves only with a positive `tile`. A vector of shapes
+stays fixed.
 
 | Keyword | Default | Meaning |
 |:--|:--|:--|

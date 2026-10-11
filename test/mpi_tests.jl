@@ -1955,14 +1955,17 @@ function test_deep_regrid_subsets()
     end
 end
 
-# Lattice subdivision: a level with fewer tiles than ranks takes a finer
-# lattice at the regrid (`_select_lattice`), every tile whole on one rank,
-# and its new tiles take the old tiles' solution (`_carry_tiles!`). A 2-D
-# level of one 16-node tile, built with the subdivision off, is regridded
-# with it on: at np = 2, 4 and 8 the level takes 2, 4 and 8 tiles, one per
-# rank, and every node the old tile held as its own solution reads the old
-# value bit for bit, all components. A three-level shock then runs with
-# the subdivision on.
+# Lattice subdivision: a level with fewer tiles than ranks takes the finer
+# lattice the cost model prices cheapest (`_choose_lattice`), every tile
+# whole on one rank, and its new tiles take the old tiles' solution
+# (`_carry_tiles!`). The model's coefficients are fixed to the fine nodes of
+# the most loaded rank (`FIXED_LATTICE_COSTS`), so the layout is the same at
+# every run. A 2-D level of one 16-node tile, built with the subdivision
+# off, is regridded with it on: at np = 2, 4 and 8 the level takes 2, 4 and
+# 8 tiles, one per rank, and every node the old tile held as its own
+# solution reads the old value bit for bit, all components. A three-level
+# shock then runs with the subdivision on, and again with the coefficients
+# measured.
 function subdivision_carry()
     inside(p, I) = begin
         i, j, _ = CL.interior_index(p, I)
@@ -2087,13 +2090,52 @@ function subdivision_deep()
     MPI.Barrier(comm)
 end
 
+# The three-level shock with the model's coefficients measured on the run:
+# the model is fitted from the run's timers, every rank holds the same model
+# and takes the same lattices, and every tile stays whole on one rank.
+function subdivision_measured()
+    ic = (x, y, z) -> x < 0.25 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                      x < 0.5  ? Prim(u=(0, 0, 0), p=0.1, rho=0.125) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.5)
+    wall2 = (SlipWallBC(), SlipWallBC())
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per3[2], per3[3]), ic=ic)
+    amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
+              max_levels=3)
+    num = Numerics(n_global=(81, 1, 1), cfl=0.2, amr=amr)
+    solver, states = setup(prob, num)
+    run!(solver, states; tfinal=0.1, nmax=10000)
+    spec = getfield(solver, :regrid)
+    costs = spec.costs
+    model = [costs.a, costs.b, costs.k, costs.m, costs.c, costs.root]
+    edges = [CL._level_edges(spec, l) for l in 1:2]
+    rank == 0 && println("    measured model (a, b, k, m, c, root) ", model,
+                         ", lattices ", edges)
+    check("lattice subdivision, measured: the model fitted",
+          costs.ready && costs.a > 0 && costs.root > 0 ? 0.0 : 1.0, 0.5)
+    check("lattice subdivision, measured: every rank holds the same model",
+          gmax(model != MPI.bcast(model, comm; root=0)), 0.5)
+    check("lattice subdivision, measured: every rank takes the same lattices",
+          gmax(edges != MPI.bcast(edges, comm; root=0)), 0.5)
+    whole = all(all(length(o) == 1 for o in lev.owners) for lev in solver.levels[2:end])
+    check("lattice subdivision, measured: each tile whole on one rank", gmax(!whole), 0.5)
+    check("lattice subdivision, measured: finite composite state",
+          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+end
+
 function test_lattice_subdivision()
     section("lattice subdivision: a tile per rank, the solution carried")
     try
+        CL.FIXED_LATTICE_COSTS[] = (1.0, 0.0, 0.0, 0.0, 0.0)
         subdivision_carry()
         subdivision_deep()
+        CL.FIXED_LATTICE_COSTS[] = nothing
+        CL.SUBDIVIDE_LATTICE[] = true
+        subdivision_measured()
     finally
         CL.SUBDIVIDE_LATTICE[] = false
+        CL.FIXED_LATTICE_COSTS[] = nothing
     end
 end
 

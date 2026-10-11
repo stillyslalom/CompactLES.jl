@@ -587,19 +587,45 @@ end
                          4, 8, 4, 1) == [(12, 12, 12)]
     @test CL._edge_chain((4, 12, 12), (true, true, false), (101, 12, 1), faces, bare,
                          4, 8, 4, 8) == [(4, 12, 12), (4, 6, 12)]
-    # The choice among them, from the wanted tiles each gives: the coarsest
-    # giving a tile per rank, held until a coarser one gives two per rank or
-    # as many as the current one.
-    @test CL._select_lattice([1, 2, 4, 8], nothing, 4, true) == 3
-    @test CL._select_lattice([1, 2, 4, 8], 1, 4, false) == 3
-    @test CL._select_lattice([5, 9, 16, 30], 3, 4, false) == 2
-    @test CL._select_lattice([5, 9, 16, 30], 2, 4, false) == 2
-    @test CL._select_lattice([3, 6, 12, 24], 2, 4, false) == 2
-    # No lattice gives a tile per rank: the coarsest giving the most.
-    @test CL._select_lattice([1, 1, 2, 2], 1, 8, false) == 3
-    @test CL._select_lattice([1, 1, 2, 2], 4, 8, false) == 3
-    # Nothing wanted: the configured lattice.
-    @test CL._select_lattice([0, 0, 0], 2, 8, false) == 1
+    # The choice among them, from the predicted seconds of the level on
+    # each and of the rest of the step: the shortest step, the coarsest among
+    # equals, unless the current lattice's step is within a tenth of it.
+    @test CL._cheapest_lattice([10.0, 6.0, 7.0], 2.0, 1, false) == 2
+    @test CL._cheapest_lattice([10.0, 9.5, 12.0], 2.0, 1, false) == 1
+    @test CL._cheapest_lattice([10.0, 9.5, 12.0], 2.0, 1, true) == 2
+    @test CL._cheapest_lattice([10.0, 9.5, 12.0], 2.0, nothing, false) == 2
+    @test CL._cheapest_lattice([5.0, 5.0], 0.0, nothing, true) == 1
+    # A level taking a small share of the step keeps its lattice although
+    # another would halve its own time.
+    @test CL._cheapest_lattice([1.0, 0.5], 20.0, 1, false) == 1
+    # The level's price: per rank, s (a V + b V g + k) over its tiles and
+    # m s per message (one coupling per tile, one per face shared with
+    # another rank's tile), at the most loaded rank. Two abutting 13 × 13
+    # tiles with interface ends along both dimensions.
+    pair = [BlockRegion((0, 0, 0), (5, 5, 1)), BlockRegion((4, 0, 0), (5, 5, 1))]
+    act = (true, true, false)
+    bnd = [none, none]
+    one_rank = [0:0, 0:0]
+    two_ranks = [0:0, 1:1]
+    costs = CL.LatticeCosts()
+    price(owners, np; s=1.0) = CL._layout_cost(costs, pair, bnd, bnd, owners, act,
+                                              (0, 0, 0), s, np)
+    @test price(one_rank, 1) == 338
+    @test price(two_ranks, 2) == 169
+    @test price(two_ranks, 2; s=3.0) == 507
+    costs.b, costs.k, costs.m = 1.0, 5.0, 10.0
+    @test CL._rank_messages(pair, two_ranks, CL._tile_faces(pair), 2) == [2, 2]
+    @test CL._rank_messages(pair, one_rank, CL._tile_faces(pair), 1) == [2]
+    @test price(one_rank, 1) == 2 * (169 + 2 * 169 + 5) + 10 * 2
+    @test price(two_ranks, 2) == 169 + 2 * 169 + 5 + 10 * 2
+    # The fit behind the coefficients: y = α x + β, both non-negative, from
+    # the sums; through the origin where x does not spread.
+    fit(x, y) = CL._nonnegative_fit(sum(x .^ 2), sum(x), Float64(length(x)),
+                                    sum(x .* y), sum(y), CL.LATTICE_SPREAD)
+    @test all(fit([1.0, 2.0, 3.0], [5.0, 7.0, 9.0]) .≈ (2.0, 3.0))
+    @test all(fit([2.0, 2.0, 2.0], [7.0, 7.0, 7.0]) .≈ (3.5, 0.0))
+    @test all(fit([1.0, 2.0, 3.0], [1.0, 3.0, 5.0]) .≈ (22 / 14, 0.0))
+    @test all(fit([1.0, 2.0, 3.0], [6.0, 5.0, 4.0]) .≈ (0.0, 5.0))
 end
 
 @testset "tile migration: interior rule and the rank's own copy" begin

@@ -499,6 +499,7 @@ function _sync_sensor_fields!(solver, lev::Level, lists, replicate::Bool, dims)
             _exchange_fields_along!(lists[pi], _cold(patches[pi]), d)
         end
     end
+    _charge_exchange!(solver, lev, t0)
     _wait!(solver, t0)
     for pi in lev.patches
         _fill_coarse_fine!(lists[pi], patches[pi], replicate, first(dims), last(dims))

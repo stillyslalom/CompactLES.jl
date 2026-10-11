@@ -1605,7 +1605,7 @@ level_regions(solver, level::Int) =
 # domain edge are clipped to the nesting margin and dropped when clipping
 # leaves them below the four-node minimum. The lattice is global so that a
 # regrid moves tiles in and out of the set without ever changing a surviving
-# tile's region; a regrid that subdivides the lattice (`_select_lattice`,
+# tile's region; a regrid that changes the lattice (`_choose_lattice`,
 # regrid.jl) replaces every tile at once.
 
 # The lattice edge per dimension of a `tile` keyword: one integer for every
@@ -1828,6 +1828,7 @@ function _sync_level_records!(solver, states, lev::Level)
             _exchange_patch_state!(states, pi, _cold(patches[pi]))
         end
     end
+    _charge_exchange!(solver, lev, t0)
     _wait!(solver, t0)
     return states
 end
@@ -3797,6 +3798,7 @@ function prolong_level_ghosts!(solver, states)
         lev = levels[ℓ]
         t0 = time_ns()
         _exchange_boxes!(solver, states, lev, lt -> lt.box_gather, false)
+        _charge_exchange!(solver, lev, t0)
         _wait!(solver, t0)
         # The imposition is collective over the tile's own communicator,
         # which its holders alone enter, and reads and writes nothing of
@@ -3906,6 +3908,7 @@ function _restrict_tiles!(solver, states, lev::Level, tiles=nothing)
     end
     t0 = time_ns()
     _exchange_restriction!(solver, states, lev, tiles)
+    _charge_exchange!(solver, lev, t0)
     _wait!(solver, t0)
     return states
 end
@@ -4020,6 +4023,61 @@ function _hermite_box!(dst, lt::LevelTransfer, c::Int, θ, dt)
 end
 
 """
+    LatticeCosts
+
+The cost model a regrid chooses each tiled level's lattice by
+(`_choose_lattice`, `src/regrid.jl`), and the timers of the run that feed it.
+A tile of `V` fine nodes with interface ends along `g` dimensions costs
+`s (a V + b V g + k)` seconds per root step, where `s` is its level's steps
+per root step, `a` the cost per node, `b` the ghost-flux pass per node and
+interface dimension, and `k` the cost per tile; each off-rank tile face and
+each tile's coupling to its parent costs `m` in the level's exchanges; and
+a regrid check costs `c` per tile it holds. `ready` says whether the
+coefficients are set: measured ones after an interval the model has folded
+in, fixed ones from the start.
+
+The timers are rank-local and run only while `timing` is set (a decomposed
+run on host storage whose lattice is measured): `tile_time` and
+`ghost_time` hold, per patch index, the nanoseconds of each tile's phases
+since the last check and of its ghost-flux solves among them, `exchange`
+per level (index + 1) the nanoseconds in its exchange windows, `step_mark`
+the step of the last check, `check_wall` the wall of the last check,
+`check_compile` its compilation and `check_tiles` the tiles it left, and
+`compile_mark`
+Julia's compile-time counter at the last check, which the run turns on
+once it measures (`compile_counted`). `stats` holds the exponentially
+weighted sums the coefficients are fitted from and `roots` and `walls` the
+recent root seconds and the wall and tiles of the recent checks, on rank 0,
+which fits and broadcasts.
+"""
+mutable struct LatticeCosts
+    timing::Bool
+    tile_time::Vector{UInt64}
+    ghost_time::Vector{UInt64}
+    exchange::Vector{UInt64}
+    step_mark::Int
+    check_wall::Float64
+    check_compile::Float64
+    check_tiles::Int
+    compile_counted::Bool            # Julia's compile-time counter turned on
+    compile_mark::UInt64             # its reading at the last check
+    stats::Vector{Float64}
+    roots::Vector{Float64}           # the root's seconds, recent checks
+    walls::Vector{Float64}           # wall and tiles of recent checks, pairs
+    ready::Bool
+    a::Float64
+    b::Float64
+    k::Float64
+    m::Float64
+    c::Float64
+    root::Float64                    # the root's measured seconds per root step
+end
+
+LatticeCosts() = LatticeCosts(false, UInt64[], UInt64[], UInt64[], 0, 0.0, 0.0, 0, false,
+                              zero(UInt64), Float64[], Float64[], Float64[], false, 1.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0)
+
+"""
     RegridSpec
 
 Configuration and rebuild inputs for tagging-driven regridding
@@ -4106,6 +4164,7 @@ mutable struct RegridSpec{T}
     deep_created::Vector{Dict{BlockRegion,Int}} # `created` of levels 2, 3, ...
     boundaries::Bool                 # tags may place a level on a domain face
     edges::Vector{NTuple{3,Int}}     # per refined level, its lattice's edges
+    costs::LatticeCosts              # the lattice cost model and its timers
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -4116,13 +4175,13 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[])
+                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts())
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]
 
 # The lattice edges refined level `ℓ` is tiled on: the configured `tile`
-# until the regrid subdivides it (`_select_lattice`).
+# until the regrid subdivides it (`_choose_lattice`).
 _level_edges(spec::RegridSpec, ℓ::Int) =
     ℓ <= length(spec.edges) ? spec.edges[ℓ] : spec.tile
 

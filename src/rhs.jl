@@ -1830,6 +1830,7 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
                               [lev.ghost_sends[d] for d in phased],
                               [lev.ghost_recvs[d] for d in phased])
     end
+    _charge_exchange!(solver, lev, t0)
     _wait!(solver, t0)
     lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, lev,
                                     states)
@@ -1865,6 +1866,8 @@ end
 _tile_ghost_flux_solves!(solver, pi::Int, states, dQs, n_cons::Int) =
     _ghost_flux_solves_at!(solver, _cold(getfield(solver, :patches)[pi]), states, dQs,
                            pi, n_cons)
+# Timed apart by the lattice cost model (`_charge_tile!`).
+_tile_account(::typeof(_tile_ghost_flux_solves!)) = 2
 _ghost_flux_solves_at!(solver, p, states, dQs, pi::Int, n_cons::Int) =
     (_ghost_flux_solves!(PatchSolver(solver, p), states[pi], dQs[pi], n_cons); nothing)
 

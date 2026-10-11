@@ -1274,16 +1274,46 @@ post. A recomputed partition at every
 regrid would move a survivor whenever a tile entered ahead of it on the
 curve; stored ownership moves state only when the partition has drifted.
 
-A regridded level with fewer tiles than its parent has ranks would leave
-ranks idle, so the regrid tiles each level on the coarsest lattice of a
-chain that gives it a tile per rank (`_edge_chain`, `_select_lattice`), as
-AMReX chops its boxes until there are as many as ranks: the configured
-edges first, then each lattice halving the largest edge that stays at least
-`MIN_TILE_EDGE` = 4 parent nodes and keeps the domain faces the configured
-lattice reaches. Every lattice is tagged in one sweep and one reduction. A
-level keeps its lattice until a coarser one gives two tiles per rank, or as
-many as its own, so a tile count near the rank count does not switch
-lattices at every check. A change of lattice replaces every tile: the new
+A regridded level with fewer tiles than its parent has ranks leaves ranks
+idle, and a finer lattice spreads it wider at the price of more tile faces
+(each interface dimension adds a ghost-flux pass over the tile), more
+exchange messages and more tiles to rebuild at every check. The regrid
+therefore tiles each level on the lattice of a chain (`_edge_chain`: the
+configured edges first, then each lattice halving the largest edge that
+stays at least `MIN_TILE_EDGE` = 4 parent nodes and keeps the domain faces
+the configured lattice reaches) with the shortest step a cost model
+predicts (`_choose_lattice`, `LatticeCosts`). A tile of V fine nodes with
+interface ends along g dimensions costs s(aV + bVg + k) per root step at s
+steps per root step, each message of the level's exchanges (an off-rank
+shared face, or a tile's coupling with its parent) m s, and each tile c per
+regrid check; a level's price is that of its most loaded rank under the
+placement the regrid would make (`_knapsack_owners`). The levels below are
+priced with it on the ranks the lattice gives the level, which spans one
+rank per tile and confines its children to those ranks (`_level_rank_count`):
+on 3-D amr3 the configured level-1 lattice holds 4 tiles and would leave
+level 2, nine tenths of the work, on 4 of 8 ranks. The root and the levels
+above enter as laid out, so a level taking a small share of the step never
+gains enough to change. A level changes lattice only for a step
+`PLACEMENT_GAIN` times shorter, its own rebuild of every tile amortized over
+`LATTICE_HORIZON` checks. The coefficients are measured on the
+run itself: per-tile timers around the tile phases (`_charge_tile!`, the
+ghost-flux solves apart), timers on the level exchange windows
+(`_charge_exchange!`) and the wall of each check, gathered on rank 0 at the
+check, folded into exponentially weighted sums (`LATTICE_MEMORY`), fitted
+(`_nonnegative_fit`; the per-tile constant only where tile volumes spread)
+and broadcast, so every rank takes the same lattice
+(`_harvest_lattice_costs!`). Julia's compile-time counter, on while the
+model measures, keeps compilation out of the fit: a rank that compiled in
+an interval (the first steps, a tile of a new face combination, the first
+change of lattice) gives no observation for it, and a check's wall is taken
+less its compilation; compilation landing in the steady steps had made the
+rebuild cost and the per-tile constant jump and the lattice flip. Until a
+measured interval exists the configured lattice holds. A device level cannot read a tile's
+time without synchronizing per tile, so it prices lattices by the fine
+nodes of the most loaded rank (`DEVICE_LATTICE_COSTS`), and
+`FIXED_LATTICE_COSTS` fixes the coefficients for a reproducible layout, as
+the MPI suite does. Every lattice is tagged in one sweep and one reduction.
+A change of lattice replaces every tile: the new
 tiles are filled from the parent, then take the old tiles' solution at
 every node an old tile held as its own, its parent-fed planes excluded, one
 point-to-point message per overlapping pair of whole tiles

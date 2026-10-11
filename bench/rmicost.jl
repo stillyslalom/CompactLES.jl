@@ -45,8 +45,9 @@
 #   `tile=` sets it, one edge or one per dimension, x first (`tile=4,12,12`:
 #   tiles thin along the shock normal and spanning the channel across), and
 #   `regrid=` the regrid interval. Each tile is held whole by one rank, and
-#   a level with fewer tiles than ranks is tiled on a subdivided lattice;
-#   the report gives each level's lattice at the end.
+#   each level is tiled on the lattice of its subdivision chain that the
+#   cost model, measured on the run, prices cheapest; the report gives each
+#   level's lattice and the model's coefficients at the end.
 # - `subcycle = true`, the Berger–Oliger step a production run takes, against
 #   the AMR default of false; `subcycle=false` runs the global step.
 # - Rebalancing off, the AMR default: a surviving tile keeps its owner ranks
@@ -93,7 +94,10 @@
 # rank per level, regrid checks and the excess wall of the steps that held
 # one, busy and waiting time per rank (`solver.wall_wait`, the time inside
 # the run-wide collectives and the level record exchange), allocation and GC
-# time per step, peak resident memory, and the physics check: the integral
+# time per step, the compilation after the warm-up (the most of any rank,
+# inside the steps or between them: a tile of a face combination new to its
+# rank compiles the step's tile phases mid-run while the other ranks wait for
+# it), peak resident memory, and the physics check: the integral
 # mix width W = ∫ 4 X̄(1 − X̄) dx and the equivalent sharp-interface position
 # x_c = ∫ (1 − X̄) dx of the plane-averaged SF6 mole fraction X̄, composite
 # (each root station averaged over the finest data covering it) on a refined
@@ -119,6 +123,10 @@
 #   mpiexec -n 8 julia --project=. -t 1 bench/rmicost.jl config=fine3 dim=3 nmax=200
 #   mpiexec -n 8 julia --project=. -t 1 bench/rmicost.jl config=amr3 profile=true
 #
+# `trace=true` prints, from rank 0, each regrid check's harvest of the
+# lattice cost model and each level's lattice choice with the predicted
+# seconds per root step of every lattice of its chain.
+#
 # `affinity=0x5555` restricts every rank to one logical CPU per performance
 # core of the 12900K workstation; 0 leaves the affinity alone.
 
@@ -133,7 +141,8 @@ using Statistics
 const opt = CompactLES.script_args(ARGS, (
     config = "amr2", dim = 2, nres = 24, tfinal = 4.5e-4, nmax = typemax(Int),
     Lx = 0.0, tile = "12", subcycle = true, regrid = 0, warm = 10, progress = 50,
-    profile = false, delay = 0.005, dims = "", affinity = 0, rebalance = 0.0))
+    profile = false, delay = 0.005, dims = "", affinity = 0, rebalance = 0.0,
+    trace = false))
 
 const CONFIGS = ("coarse", "fine2", "fine3", "amr2", "amr3")
 opt.config in CONFIGS || error("config must be one of $(join(CONFIGS, ", "))")
@@ -251,12 +260,17 @@ mutable struct StepRecorder <: CompactLES.Trigger
     t_warm::Float64
     gc_warm::Tuple{Int64,UInt64}
     wait_warm::Float64
+    compile_warm::UInt64
 end
 
 StepRecorder(warm, profile, nlev) =
     StepRecorder(warm, profile, nlev, Float64[], Float64[], Float64[], Int[], Bool[],
                  Vector{Int}[], zeros(nlev), zeros(nlev),
-                 [BlockRegion[] for _ in 1:nlev], 0.0, (0, 0), 0.0)
+                 [BlockRegion[] for _ in 1:nlev], 0.0, (0, 0), 0.0, UInt64(0))
+
+# Nanoseconds this process has spent compiling (the counter is turned on at
+# the start of `main`).
+compile_ns() = Base.cumulative_compile_time_ns()[1]
 
 gc_counters() = (Base.gc_bytes(), Base.gc_num().total_time)
 
@@ -295,6 +309,7 @@ function CompactLES.fired!(r::StepRecorder, solver, Q)
         r.t_warm = solver.t
         r.gc_warm = gc_counters()
         r.wait_warm = solver.wait_total
+        r.compile_warm = compile_ns()
         if r.profile
             Profile.clear()
             Profile.start_timer()
@@ -425,6 +440,9 @@ function main()
         flush(stdout)
     end
     opt.profile && Profile.init(n = 10_000_000, delay = opt.delay)
+    # The same script runs against trees without the lattice cost model.
+    isdefined(CompactLES, :LATTICE_TRACE) && (CompactLES.LATTICE_TRACE[] = opt.trace)
+    Base.cumulative_compile_timing(true)
     MPI.Barrier(comm)
     prob = problem(opt.dim, Lx)
     t_setup = @elapsed solver, Q, dims = setup_on_some_grid(prob, num, np)
@@ -465,6 +483,18 @@ function physics(solver, Q)
     return (W = sum(4 .* X .* (1 .- X) .* dx), xc = sum((1 .- X) .* dx))
 end
 
+# The lattice cost model at the end of the run: seconds per node, per node
+# and interface dimension, per tile, per message and per tile rebuilt at a
+# check, and the root's seconds per root step (`CompactLES.LatticeCosts`).
+function lattice_model(solver)
+    spec = getfield(solver, :regrid)
+    hasfield(typeof(spec), :costs) || return "none"
+    costs = spec.costs
+    costs.ready || return "unset"
+    return join((@sprintf("%.3g", x) for x in (costs.a, costs.b, costs.k, costs.m, costs.c,
+                                                costs.root)), "/")
+end
+
 function report(solver, Q, r::StepRecorder, comm, run)
     rank, np = MPI.Comm_rank(comm), MPI.Comm_size(comm)
     root = rank == 0
@@ -488,6 +518,10 @@ function report(solver, Q, r::StepRecorder, comm, run)
     gathered = MPI.Gather(mine, comm; root = 0)
     points_dt = MPI.Reduce(r.points_dt, +, comm; root = 0)
     point_steps = MPI.Reduce(r.point_steps, +, comm; root = 0)
+    # Compilation after the warm-up, the most of any rank: a rank compiling
+    # inside a step holds the others at the next collective.
+    compiled = MPI.Reduce(nsteady > 0 ? (compile_ns() - r.compile_warm) / 1e9 : 0.0, max,
+                          comm; root = 0)
     footprint = MPI.Reduce(Base.summarysize(solver) + Base.summarysize(Q), +, comm;
                            root = 0)
     prof = opt.profile ? MPI.Gather(phase_counts(), comm; root = 0) : Int[]
@@ -527,6 +561,7 @@ function report(solver, Q, r::StepRecorder, comm, run)
         "edges" => run.refined ?
                    join([join(CompactLES._level_edges(getfield(solver, :regrid), l), "x")
                          for l in 1:nlev-1], "/") : "",
+        "lattice_model" => run.refined ? lattice_model(solver) : "",
         "t_end_us" => round(1e6 * solver.t; digits = 2), "finished" => finished,
         "steps" => nsteps, "level_steps" => join(level_steps, "/"),
         "setup_s" => round(run.t_setup; digits = 2),
@@ -535,6 +570,7 @@ function report(solver, Q, r::StepRecorder, comm, run)
         "steady_steps" => nsteady, "steady_s" => round(wall_steady; digits = 3),
         "ms_per_step" => round(ms_step; sigdigits = 4),
         "ms_per_step_median" => round(ms_median; sigdigits = 4),
+        "compile_steady_s" => round(compiled; sigdigits = 3),
         "s_per_us" => round(per_us; sigdigits = 4),
         "projected_s" => round(projected; sigdigits = 4),
         "projected_steps" => round(projected_steps; digits = 0),
@@ -567,6 +603,8 @@ function report(solver, Q, r::StepRecorder, comm, run)
             run.t_setup, run.t_run, warm, wall_startup, nsteady, wall_steady)
     say("    outside the steps %.2f s (compilation and priming before the first, " *
         "callbacks)\n", run.t_run - wall_startup - wall_steady)
+    say("  compilation after the first %d steps %.2f s (the most of any rank)\n", warm,
+        compiled)
     @printf("  steady %.2f ms per root step (median %.2f; slowest %.2f at step %d)\n",
             ms_step, ms_median, 1e3 * (peak > 0 ? r.wall[peak] : NaN), peak)
     @printf("  steady %.4f s per µs simulated; full window %.1f s over %d steps%s\n",
@@ -590,6 +628,7 @@ function report(solver, Q, r::StepRecorder, comm, run)
                                                 maximum(sizes), median(sizes)))
     end
     if run.refined
+        say("  lattice cost model (a, b, k, m, c, root): %s\n", lattice_model(solver))
         say("  regrid checks %d (tile set changed at %d); steady checks %d cost " *
                 "%.3f s over the median step (%.1f%% of the steady wall)\n",
                 length(check_steps), length(changed_steps), nchecks_steady,

@@ -1195,7 +1195,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                            level_interpolation_order, level_restriction,
                            [Dict(r => 0 for r in regions)
                             for regions in level_tiles[2:end]], level_boundaries,
-                           NTuple{3,Int}[])
+                           NTuple{3,Int}[], LatticeCosts())
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
