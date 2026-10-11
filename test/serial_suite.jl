@@ -79,11 +79,9 @@ end
     @test_throws ArgumentError Numerics(n_global=(16, 1, 1), filter=1.0)
     @test_throws ArgumentError StateFilter(StateFilter(); nonexistent=1)
 
-    # The flat keywords of earlier versions fold into their groups.
-    flat = @test_logs (:warn, r"flat keywords are deprecated") Numerics(
-        n_global=(16, 1, 1), filter_interval=0, dims=(1, 1, 1), interface_flux=:closure)
-    @test flat.filter.interval == 0 && flat.execution.dims == (1, 1, 1)
-    @test flat.patch_interfaces.flux === :closure
+    # A group's field is not a keyword of `Numerics`.
+    @test_throws ArgumentError Numerics(n_global=(16, 1, 1), filter_interval=0)
+    @test_throws ArgumentError Numerics(n_global=(16, 1, 1), refine=nothing)
 
     # A copy keeps the element type of a parametric group and still validates.
     art = ArtificialProperties(ArtificialProperties{Float32}(); C_D=3.0)
@@ -91,6 +89,23 @@ end
     @test StepControl(StepControl(retries=4); validity=:permissive).retries == 4
     @test_throws ArgumentError StepControl(StepControl(); retries=-1)
     @test AMR(AMR(tile=12); subcycle=true).tile == 12
+
+    # `storage` names the backend and precision by an element or array type.
+    for (storage, precision) in ((Float32, Float32), (Array, nothing),
+                                 (Array{Float32}, Float32), (Array{Float64}, Float64))
+        ex = Execution(; storage)
+        @test ex.backend isa CompactLES.CPUBackend && ex.precision === precision
+    end
+    @test Execution(Execution(dims=(1, 1, 1)); storage=Float32).precision === Float32
+    @test Execution(Execution(dims=(1, 1, 1)); storage=Float32).dims == (1, 1, 1)
+    device = DeviceBackend(CompactLES.KernelAbstractions.CPU())
+    @test Execution(storage=device).backend === device
+    @test Execution(storage=device => Float32).precision === Float32
+    @test_throws ArgumentError Execution(storage=device => Int)
+    @test_throws ArgumentError Execution(Execution(); precision=Float32)
+    @test_throws ArgumentError Execution(storage=Array{Int})
+    @test_throws ArgumentError Execution(storage=AbstractArray)
+    @test_throws ArgumentError Execution(storage=:gpu)
 
     # The groups reach the solver under its flat names.
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
@@ -5397,14 +5412,12 @@ end
               origin=(0.5, 0.0, 0.0), metric=CylindricalMetric()),
            "metric mismatch")
 
-    # A file in the original unversioned format. The layout is fixed, so the
-    # fields added since would be read from the wrong offsets; the magic
-    # identifies it instead.
+    # A file without the checkpoint magic is refused by it.
     open("test_ckpt_header_old.r0000.ckpt", "w") do io
-        write(io, UInt64(CL.CKPT_MAGIC_V1))
+        write(io, UInt64(0x434c4553_434b5054))
     end
-    @test_throws "unversioned format" load_checkpoint!(base, Qb,
-                                                       "test_ckpt_header_old")
+    @test_throws "not a CompactLES checkpoint" load_checkpoint!(
+        base, Qb, "test_ckpt_header_old")
 
     # A stretched dimension against the uniform grid it was written on. The two
     # agree on extent, origin, species and metric and differ only point by

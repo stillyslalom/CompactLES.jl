@@ -242,44 +242,19 @@ using HDF5
     end
     MPI.Barrier(comm)
 
-    # A file of the previous format has no record and loads with a warning,
-    # nothing compared: this format's file without `config`, format word 5.
-    legacy_stem = joinpath(dir, "legacy")
+    # A file of any other format is refused by its format word.
+    other_stem = joinpath(dir, "other")
     if rank == 0
-        cp(stem * ".h5", legacy_stem * ".h5")
-        h5open(legacy_stem * ".h5", "r+") do file
-            delete_object(file, "config")
-            delete_object(file, "meta/format")
-            file["meta/format"] = 5
-        end
-    end
-    MPI.Barrier(comm)
-    old = mkrec(eos=lean)
-    Qold = allocate_state(old)
-    if rank == 0
-        @test_logs (:warn, r"no configuration record") match_mode=:any begin
-            load_checkpoint_hdf5!(old, Qold, legacy_stem)
-        end
-    else
-        load_checkpoint_hdf5!(old, Qold, legacy_stem)
-    end
-    @test old.step == 17
-
-    # Format 6 carried a per-face switch record under `meta/switched`, which
-    # the reader passes over.
-    six_stem = joinpath(dir, "six")
-    if rank == 0
-        cp(stem * ".h5", six_stem * ".h5")
-        h5open(six_stem * ".h5", "r+") do file
+        cp(stem * ".h5", other_stem * ".h5")
+        h5open(other_stem * ".h5", "r+") do file
             delete_object(file, "meta/format")
             file["meta/format"] = 6
-            file["meta/switched"] = fill(Int64(-1), 6)
         end
     end
     MPI.Barrier(comm)
-    six = mkrec(eos=eos)
-    load_checkpoint_hdf5!(six, allocate_state(six), six_stem)
-    @test six.step == 17
+    other = mkrec(eos=eos)
+    @test_throws "format mismatch" load_checkpoint_hdf5!(other, allocate_state(other),
+                                                         other_stem)
 
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)

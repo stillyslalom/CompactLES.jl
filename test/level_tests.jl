@@ -305,14 +305,13 @@ end
     getfield(s, :regrid).checks += 1     # the run! cadence hook's count
     @test CL.regrid!(s, states, Workspace(states), nothing)
     @test chain_order(s) == 8
-    # Both configuration fronts carry the keyword, and the sensor-selected
-    # initial layout (built by the regrid machinery) keeps it.
+    # `AMR` carries the keyword for an explicit region, and the
+    # predicate-selected initial layout (built by the regrid machinery) keeps it.
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l,
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0, u=(0.0, 0.0, 0.0)))
-    flat = @test_logs (:warn, r"refinement keywords") Numerics(n_global=(96, 1, 1),
-        filter=nothing, refine=BlockRegion((40, 0, 0), (17, 1, 1)),
-        level_interpolation_order=4)
-    s4, _ = setup(prob, flat)
+    s4, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter=nothing,
+                                 amr=AMR(initial=BlockRegion((40, 0, 0), (17, 1, 1)),
+                                         level_interpolation_order=4)))
     @test chain_order(s4) == 4
     s8, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter=nothing,
                                  art=ArtificialProperties(enabled=false),
@@ -1595,18 +1594,17 @@ end
     @test_throws ErrorException mk(tag_vorticity_threshold=1.0)
     @test_throws ErrorException mk(tag_predicate=(p, I) -> true)
     @test_throws ErrorException mk(regrid_interval=5, tag_predicate=1)
-    # Numerics carries the four settings to the solver.
-    pred0 = (p, I) -> false
-    num = @test_logs (:warn, r"refinement keywords") Numerics(n_global=(N, 1, 1),
-        refine=r0, regrid_interval=5, tag_gradient_threshold=0.05,
-        tag_sensor_threshold=0.1, tag_vorticity_threshold=2.0, tag_predicate=pred0)
+    # `AMR` carries the three thresholds to the solver.
+    num = Numerics(n_global=(N, 1, 1),
+                   amr=AMR(initial=r0, regrid_interval=5, tag_gradient_threshold=0.05,
+                           tag_sensor_threshold=0.1, tag_vorticity_threshold=2.0))
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=(wall2, per, per), eos=two,
                    ic=(x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0, u=(0, 0, 0)))
     sn, _ = setup(prob, num)
     specn = getfield(sn, :regrid)
     @test specn.gradient_threshold == 0.05 && specn.sensor_threshold == 0.1
-    @test specn.vorticity_threshold == 2.0 && specn.predicate === pred0
+    @test specn.vorticity_threshold == 2.0
     @test size(specn.tags) == size(sn.patches[1].rho)
 
     # Gradient: a mass-fraction interface at x = 0.75 in a uniform-density,

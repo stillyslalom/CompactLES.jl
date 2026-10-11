@@ -69,22 +69,12 @@ end
     load_checkpoint!(sp, allocate_state(sp), stem; allow=(:boundaries,))
     @test sp.dt_prev == 1.5e-4
 
-    # A file of the previous version carries six boundary-face codes after the
-    # run state, the switch record of a boundary wrapper since removed, which
-    # the reader passes over. Such a file is this version's file with the codes
-    # inserted and the version word set back.
-    bytes = read(stem * ".r0000.ckpt")
-    header = take!(CL._write_ckpt_header(IOBuffer(), s, s, Q))
-    six = vcat(header, reinterpret(UInt8, fill(Int64(-1), 6)),
-               bytes[length(header)+1:end])
-    six[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION_FACE_CODES)])
-    write(joinpath(dir, "six.r0000.ckpt"), six)
-    s6 = io_solver(ExtrapolationBC(), SlipWallBC())
-    Q6 = allocate_state(s6)
-    load_checkpoint!(s6, Q6, joinpath(dir, "six"))
-    @test (s6.t, s6.step, s6.filter_rate_prev) == (s.t, s.step, s.filter_rate_prev)
-    @test all(Q6[padded_index(s6, i, j, k), c] == Q[padded_index(s, i, j, k), c]
-              for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
+    # A file of any other version is refused by its version word.
+    other = read(stem * ".r0000.ckpt")
+    other[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION - 1)])
+    write(joinpath(dir, "other.r0000.ckpt"), other)
+    @test_throws "version mismatch" load_checkpoint!(s, allocate_state(s),
+                                                     joinpath(dir, "other"))
 
     rm(dir; recursive=true)
 end
@@ -447,24 +437,9 @@ end
     save_checkpoint(off, allocate_state(off), cyl_stem)
     load_checkpoint!(cyl(0.0), allocate_state(off), cyl_stem)
 
-    # A file of version 5 carries no record: it loads with a warning and
-    # nothing compared. Such a file is this version's file with the record
-    # removed, the six boundary-face codes of versions 5 and 6 inserted after
-    # the run state (64 bytes past the record's end), and the version word set
-    # back.
     bytes = read(stem * ".r0000.ckpt")
     image = take!(CL._write_configuration(IOBuffer(), rec(s)))
     at = findfirst(image, bytes)
-    state_end = last(at) + 8 * 8
-    legacy = vcat(bytes[1:first(at)-1], bytes[last(at)+1:state_end],
-                  reinterpret(UInt8, fill(Int64(-1), 6)), bytes[state_end+1:end])
-    legacy[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION_UNRECORDED)])
-    write(joinpath(dir, "legacy.r0000.ckpt"), legacy)
-    old = mk(eos=pair(1.4, 1.5))
-    @test_logs (:warn, r"no configuration record") match_mode=:any begin
-        load_checkpoint!(old, allocate_state(old), joinpath(dir, "legacy"))
-    end
-    @test old.step == 3
 
     # A record of another version cannot be compared entry by entry.
     newer = copy(bytes)

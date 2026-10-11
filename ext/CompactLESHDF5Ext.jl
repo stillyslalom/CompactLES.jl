@@ -18,21 +18,9 @@ using HDF5
 
 has_parallel() = HDF5.has_parallel()
 
-# Format 2 added the species set, the metric and the grid coordinates to the
-# checkpoint header, which format 1 has no record of. Format 3 added the element
-# type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
-# and the `switched` flag of each boundary face); format 4 the level count and
-# the artificial coefficient arrays; format 5 the per-direction rates
-# `filter_weight` reads; format 6 the configuration record under `config`;
-# format 7 dropped the `switched` flags with the boundary wrapper they
-# recorded. The reasoning is at the top of `src/io.jl`. The reader accepts
-# format 6, whose `meta/switched` it does not read, and format 5, which is
-# format 6 without the record and loads unchecked with a warning; an older
-# file is refused, since a restart those fields do not cover cannot be
-# validated at all.
+# The checkpoint format, written under `meta/format`. The reader accepts only
+# its own format; the reasoning is at the top of `src/io.jl`.
 const CKPT_FORMAT = 7
-const CKPT_FORMAT_RECORDED = 6
-const CKPT_FORMAT_UNRECORDED = 5
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -502,13 +490,9 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, a
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     fmt = Int(read(file["meta/format"]))
-    CKPT_FORMAT_UNRECORDED <= fmt <= CKPT_FORMAT ||
+    fmt == CKPT_FORMAT ||
         error("checkpoint format mismatch in $path: file is format $fmt, " *
-              "this version writes format $CKPT_FORMAT and reads formats " *
-              "$CKPT_FORMAT_UNRECORDED through $CKPT_FORMAT. A file written " *
-              "before format $CKPT_FORMAT_UNRECORDED lacks header fields a " *
-              "restart depends on and cannot be validated; rerun to " *
-              "regenerate it.")
+              "and this build reads and writes format $CKPT_FORMAT")
     ng = read(file["meta/n_global"])
     Tuple(Int.(ng)) == Tuple(decomp.n_global) ||
         error("global grid mismatch: file has $(Tuple(Int.(ng))), " *
@@ -550,8 +534,7 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, a
                   "the checkpoint was written on")
     end
     # The comparison precedes every write to the solver.
-    stored = fmt >= CKPT_FORMAT_RECORDED ? _read_configuration(file) : nothing
-    _verify_configuration(stored, solver, allow, path)
+    _verify_configuration(_read_configuration(file), solver, allow, path)
     solver.t = read(file["meta/t"])
     solver.step = Int(read(file["meta/step"]))
     solver.cfl = read(file["meta/cfl"])

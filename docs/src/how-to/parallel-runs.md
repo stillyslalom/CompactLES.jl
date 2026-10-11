@@ -143,8 +143,7 @@ an initial refined region from physical coordinates:
 ```julia
 numerics = Numerics(
     n_global = (96, 48, 48),
-    amr = AMR(initial = (x, y, z, t) -> abs(x - 0.5) < 0.1,
-              tag_threshold = Inf, subcycle = true),
+    amr = AMR(initial = (x, y, z, t) -> abs(x - 0.5) < 0.1, subcycle = true),
 )
 ```
 
@@ -166,18 +165,22 @@ fall with the spacing. Device runs and runs under the positivity limiter take
 no such correction, so treat their composite budgets as diagnostics to check.
 A refined device configuration supports
 subcycling, tiling, and regridding, but not `level_restriction=:filter`.
-Load the GPU package first and wrap its backend:
+Load the GPU package first and give its array type as the storage:
 
 ```julia
 using CUDA
 numerics = Numerics(n_global = (64, 64, 64),
-                    execution = Execution(backend = DeviceBackend(CUDABackend())))
+                    execution = Execution(storage = CuArray))
 ```
+
+`ROCArray` selects an AMD GPU, and `CuArray{Float32}` or `ROCArray{Float32}`
+also sets the precision.
 
 Keep the first device run small, use Float32 only after comparing a CPU result,
 and verify the actual GPU path on the target hardware. The CPU
 `DeviceBackend` test backend checks code paths but does not measure GPU memory
-or throughput.
+or throughput; it is selected with
+`Execution(storage = DeviceBackend(KernelAbstractions.CPU()))`.
 
 ## Record enough information to interpret timing
 

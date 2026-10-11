@@ -131,7 +131,7 @@ function _check_phase(prob0::Problem, num0::Numerics, prob::Problem, num::Numeri
             phase_error("numerics.$name is $b and the previous phase's is $a; " *
                         "a phase change keeps the grid and the fields it carries")
     end
-    refined(n) = n.amr !== nothing || n.legacy_amr.refine !== nothing
+    refined(n) = n.amr !== nothing
     refined(num0) == refined(num) ||
         phase_error("the " * (refined(num0) ? "previous" : "next") * " phase has " *
                     "a refinement hierarchy and the other has none; a phase " *

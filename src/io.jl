@@ -67,19 +67,12 @@
 # --- The format word ---------------------------------------------------------
 #
 # The header is a fixed binary layout, so a field added to it shifts every field
-# after it and a file written by an earlier version is misread, not rejected.
-# The magic was therefore changed when the fields above were added, causing a
-# file in the original format to be rejected by name; with the version word that
-# follows the magic, no later addition needs a second change to it.
+# after it, and a file of another layout would be misread rather than rejected.
+# The version word after the magic names the layout, and the reader accepts
+# only its own.
 
-const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
 const CKPT_VERSION = 7
-# Version 6 is version 7 with six boundary-face codes after the run state, the
-# switch record of a boundary wrapper since removed; the reader passes over
-# them. Version 5 is version 6 without the configuration record (see below).
-const CKPT_VERSION_FACE_CODES = 6
-const CKPT_VERSION_UNRECORDED = 5
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
@@ -553,18 +546,18 @@ end
 # Compare the record `stored` (`nothing` for a file written before records
 # existed) with `solver`'s, accept the groups `allow` names, and raise on
 # every rank when any rank refuses. Collective over the solver's communicator.
-function _verify_configuration(stored::Union{Nothing,ConfigurationRecord},
+function _verify_configuration(stored::ConfigurationRecord,
                                solver::Solver, allow, source::AbstractString,
                                report::Bool=true)
     allowed = _allowed_groups(allow)
     comm = getfield(solver, :comm)
     message = nothing
     accepted = Pair{String,Vector{String}}[]
-    if stored !== nothing && stored.version != CONFIG_RECORD_VERSION
+    if stored.version != CONFIG_RECORD_VERSION
         message = "configuration record version mismatch: $source carries " *
                   "version $(stored.version) and this build reads version " *
                   "$CONFIG_RECORD_VERSION"
-    elseif stored !== nothing
+    else
         diffs = configuration_differences(stored, configuration_record(solver))
         refused = filter(d -> !(first(d) in allowed), diffs)
         accepted = filter(d -> first(d) in allowed, diffs)
@@ -587,10 +580,6 @@ function _verify_configuration(stored::Union{Nothing,ConfigurationRecord},
         error(something(message, "configuration mismatch on another rank of " *
                                  "this run while reading $source"))
     if MPI.Comm_rank(comm) == 0
-        stored === nothing &&
-            @warn "$source carries no configuration record (an earlier format); " *
-                  "the thermodynamics, numerics, transport, boundary conditions " *
-                  "and sources it was written under are not checked"
         isempty(accepted) || !report ||
             @info "Checkpoint $source: continuing under an allowed configuration " *
                   "change" * _describe_differences(accepted)
@@ -801,9 +790,7 @@ artificial-property parameters, refinement options), `:transport`,
 `allow = (:numerics,)`; the load then proceeds and rank 0 logs the
 difference. Functions, such as a boundary target or a stretch mapping, are
 recorded as `function` and not compared. The CFL number, the
-[`StepControl`](@ref), the backend and the process grid are not compared. A
-file written by an earlier version without a record loads with a warning and
-without this comparison.
+[`StepControl`](@ref), the backend and the process grid are not compared.
 
 The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
 `filter_rate_prev`, and the artificial coefficient arrays when the artificial
@@ -921,16 +908,11 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     magic = read(io, UInt64)
-    magic == CKPT_MAGIC_V1 &&
-        error("$path is a checkpoint in the original unversioned format, " *
-              "which carries no record of the species set, the metric or " *
-              "the grid and cannot be validated; rerun to regenerate it")
     magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
     version = Int(read(io, Int64))
-    CKPT_VERSION_UNRECORDED <= version <= CKPT_VERSION ||
+    version == CKPT_VERSION ||
         error("checkpoint version mismatch in $path: the file is version " *
-              "$version; this build writes version $CKPT_VERSION and reads " *
-              "versions $CKPT_VERSION_UNRECORDED through $CKPT_VERSION")
+              "$version, and this build reads and writes version $CKPT_VERSION")
     file_n_cons = Int(read(io, Int64))
     file_n_cons == n_cons ||
         error("conserved layout mismatch: file has $file_n_cons, solver " *
@@ -980,10 +962,8 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
                   "extent, the origin or a Stretch mapping is not the one " *
                   "the checkpoint was written on")
     end
-    # Version 5 has no record; it loads unchecked, with a warning. The
-    # comparison precedes every write to the solver.
-    stored = version >= CKPT_VERSION_FACE_CODES ? _read_configuration(io) : nothing
-    _verify_configuration(stored, solver, allow, path, !phase)
+    # The comparison precedes every write to the solver.
+    _verify_configuration(_read_configuration(io), solver, allow, path, !phase)
     solver.t = read(io, Float64)
     solver.step = Int(read(io, Int64))
     solver.cfl = read(io, Float64)
@@ -991,7 +971,6 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     solver.rate_prev = read(io, Float64)
     solver.filter_rate_prev =
         ntuple(_ -> oftype(solver.dt_prev, read(io, Float64)), 3)
-    version <= CKPT_VERSION_FACE_CODES && skip(io, 6 * sizeof(Int64))
     return io
 end
 

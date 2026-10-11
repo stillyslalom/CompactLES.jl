@@ -106,9 +106,7 @@ vorticity threshold uses the run's units of inverse time. The fourth
 difference detects unresolved density changes, while the gradient criterion
 can target a mixing layer with little density contrast. Thresholds determine
 *where* to spend grid points, not a new physical transport model.
-The predicate must return `Bool` at every sampled node. The flat refinement
-keywords that `Numerics` accepted before `AMR` are deprecated and cannot be
-combined with `amr`.
+The predicate must return `Bool` at every sampled node.
 
 After selecting the layout, setup evaluates the initial-condition function
 directly at each fine node. During a run, a newly refined region is filled

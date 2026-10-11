@@ -861,14 +861,14 @@ _patch_interfaces(x) =
                         "Symbol, got $(typeof(x))"))
 
 """
-    Execution(; dims = nothing, comm = MPI.COMM_WORLD, backend = CPUBackend(),
-              precision = nothing, patch_grid = (1, 1, 1))
+    Execution(; dims = nothing, comm = MPI.COMM_WORLD, storage = Array,
+              patch_grid = (1, 1, 1))
     Execution(base::Execution; keywords...)
 
 Where and in what arithmetic a [`Numerics`](@ref) discretization runs: the
-process grid, the communicator, the storage backend, the floating-point type
-and the same-level patch layout. The second form copies `base` with the given
-fields replaced.
+process grid, the communicator, the array type and floating-point type of
+the solver's storage, and the same-level patch layout. The second form
+copies `base` with the given fields replaced.
 
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks
   over resolved directions. An explicit tuple must have product equal to the
@@ -876,18 +876,33 @@ fields replaced.
 - `comm`: the communicator the solver spans. Every rank of it must call
   [`setup`](@ref) with the same `Problem` and `Numerics`; a split
   communicator lets two independent solvers share one job.
-- `backend`: storage and execution backend. `CompactLES.CPUBackend()` is the
-  default; wrap a `CUDABackend()` or `ROCBackend()` in `DeviceBackend` after
-  loading the matching GPU package.
-- `precision`: `Float32` or `Float64`, or `nothing` (the default). When set,
-  the EOS, the transport model, `art`, `deriv`, the filter scheme and the
-  interface divergence scheme are converted to this type, and the solver
-  stores and computes in it. Left at `nothing`, those components must all
-  carry one type, which the solver adopts; components of different types
-  raise an `ArgumentError` at setup that names the type of each.
+- `storage`: where the solver's arrays live and in what floating-point type,
+  as an element type, an array type, or an array type with its element
+  type; see the table below.
 - `patch_grid`: same-level slab patches per direction, at most one
   direction above one. It excludes an explicit `dims` and refinement; see
   [Supported combinations](@ref) for the rest of its scope.
+
+| `storage` | Arrays | Element type |
+|---|---|---|
+| `Array` (default) | host | the components' own |
+| `Float64`, `Float32` | host | as given |
+| `Array{Float32}` | host | `Float32` |
+| `CuArray`, `ROCArray` | GPU, after `using CUDA` or `using AMDGPU` | the components' own |
+| `CuArray{Float32}`, `ROCArray{Float32}` | GPU | `Float32` |
+
+Any other array type with a KernelAbstractions backend is accepted the same
+way. When an element type is given, the EOS, the transport model, `art`,
+`deriv`, the filter scheme and the interface divergence scheme are converted
+to it, and the solver stores and computes in it. Without one, those
+components must all carry one type, which the solver adopts; components of
+different types raise an `ArgumentError` at setup that names the type of
+each.
+
+A backend object is also accepted, for a KernelAbstractions backend with no
+array type of its own: `storage = DeviceBackend(KernelAbstractions.CPU())`
+runs the device code path on the host, and `backend => Float32` adds an
+element type.
 """
 struct Execution
     dims::Union{Nothing,NTuple{3,Int}}
@@ -897,11 +912,54 @@ struct Execution
     patch_grid::NTuple{3,Int}
 end
 
-Execution(; dims=nothing, comm::MPI.Comm=MPI.COMM_WORLD,
-          backend::AbstractBackend=CPUBackend(), precision=nothing,
-          patch_grid=(1, 1, 1)) =
-    Execution(dims, comm, backend, precision, patch_grid)
-Execution(base::Execution; kw...) = _with(base, kw)
+function Execution(; dims=nothing, comm::MPI.Comm=MPI.COMM_WORLD, storage=Array,
+                   patch_grid=(1, 1, 1))
+    backend, precision = _storage(storage)
+    return Execution(dims, comm, backend, precision, patch_grid)
+end
+
+# `backend` and `precision` are fields, which `_with` would accept, but only
+# `storage` sets them.
+function Execution(base::Execution; storage=nothing, kw...)
+    for k in (:backend, :precision)
+        haskey(kw, k) && throw(ArgumentError(
+            "Execution has no keyword `$k`; give `storage` instead"))
+    end
+    storage === nothing && return _with(base, kw)
+    backend, precision = _storage(storage)
+    return _with(base, (; kw..., backend, precision))
+end
+
+# The backend and precision a `storage` value names. An array type is mapped to
+# its KernelAbstractions backend through an empty instance, so any array type
+# with one is accepted without an extension per GPU package; the instance is
+# Float32 when no element type is given, which every backend can allocate.
+_storage(::Type{T}) where {T<:AbstractFloat} = (CPUBackend(), T)
+function _storage(A::Type{<:AbstractArray})
+    E = eltype(A)
+    E === Any || E <: AbstractFloat || throw(ArgumentError(
+        "Execution: the element type of storage = $A must be a floating-point type"))
+    probe = try
+        (E === Any ? A{Float32} : A)(undef, 0)
+    catch
+        throw(ArgumentError("Execution: cannot allocate an empty $A to find its " *
+                            "backend; give storage as Array, CuArray, ROCArray " *
+                            "or one of these with an element type"))
+    end
+    ka = get_backend(probe)
+    backend = ka isa KernelAbstractions.CPU ? CPUBackend() : DeviceBackend(ka)
+    return backend, E === Any ? nothing : E
+end
+_storage(backend::AbstractBackend) = (backend, nothing)
+function _storage(pair::Pair{<:AbstractBackend,<:Type})
+    pair.second <: AbstractFloat || throw(ArgumentError(
+        "Execution: the element type in storage = $pair must be a floating-point type"))
+    return pair.first, pair.second
+end
+_storage(x) = throw(ArgumentError(
+    "Execution: storage must be a floating-point type such as Float32, an array " *
+    "type such as Array, CuArray or ROCArray{Float32}, or a backend object; got " *
+    "$(repr(x))"))
 
 """
     Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
@@ -944,7 +1002,7 @@ keywords the ones given after it override.
   interface, a [`PatchInterfaces`](@ref); a `Symbol` is shorthand for
   `PatchInterfaces(flux = symbol)`. Without such an interface it has no
   effect.
-- `execution`: the process grid, communicator, backend, precision and
+- `execution`: the process grid, communicator, storage and
   same-level patch layout, an [`Execution`](@ref).
 - `amr`: `nothing`, or an [`AMR`](@ref) selecting adaptive refinement.
 - `polar_truncation`: azimuthal mode truncation near a cylindrical axis with
@@ -1032,19 +1090,6 @@ decomposition in that direction or increase `n_global`.
 `cfl` must be finite and positive, the filter's `interval` nonnegative, and
 its `cfl` finite and nonnegative. These and the parameter ranges of `art`, the
 transport model and the EOS are checked when the solver is built.
-
-# Deprecated keywords
-
-The flat keywords of earlier versions are accepted with a deprecation warning
-and folded into their groups: `filt`, `filter_interval`, `filter_cfl` and
-`filter_weighting` into `filter` (as `scheme`, `interval`, `cfl` and
-`weighting`); `interface_flux`, `interface_rhs` and `interface_divergence`
-into `patch_interfaces` (as `flux`, `rhs` and `divergence`); and `dims`,
-`comm`, `backend`, `precision` and `patch_grid` into `execution`. The flat
-refinement keywords (`refine`, `subcycle`, `tile`, `regrid_interval`, the tag
-thresholds and the rest) still select refinement, cannot be combined with
-`amr`, and are written in `AMR(...)` instead; the
-[AMR reference](@ref "Adaptive mesh refinement") lists them.
 """
 struct Numerics
     n_global::NTuple{3,Int}
@@ -1061,12 +1106,10 @@ struct Numerics
     implicit::Union{Nothing,ImplicitConduction}
     positivity_limiter::Bool
     n_halo::Int
-    legacy_amr::NamedTuple
 end
 
-# The flat refinement keywords `Numerics` accepted before `AMR`, with their
-# defaults. They still reach the solver unchanged when `amr` is not given.
-const _AMR_LEGACY_DEFAULTS = (
+# The solver's refinement keywords for a run without `amr`: no refined level.
+const _UNREFINED = (
     refine=nothing, level_restriction=:inject, level_interpolation_order=nothing,
     subcycle=false, regrid_interval=0, tag_threshold=0.02, tag_buffer=4,
     tag_sensor_threshold=0.0, tag_gradient_threshold=0.0,
@@ -1074,22 +1117,7 @@ const _AMR_LEGACY_DEFAULTS = (
     tile_lifetime=1, tile=0, rebalance=0.0, rebalance_persist=2, max_levels=nothing,
 )
 
-# The flat keywords folded into a group: keyword => (group, field).
-const _NUMERICS_FLAT = (
-    filt=(:filter, :scheme), filter_interval=(:filter, :interval),
-    filter_cfl=(:filter, :cfl), filter_weighting=(:filter, :weighting),
-    interface_flux=(:patch_interfaces, :flux),
-    interface_rhs=(:patch_interfaces, :rhs),
-    interface_divergence=(:patch_interfaces, :divergence),
-    dims=(:execution, :dims), comm=(:execution, :comm),
-    backend=(:execution, :backend), precision=(:execution, :precision),
-    patch_grid=(:execution, :patch_grid),
-)
-
-const _NUMERICS_GROUP_TYPES = (filter=:StateFilter, patch_interfaces=:PatchInterfaces,
-                               execution=:Execution)
-
-Numerics(; kw...) = _numerics(_AMR_LEGACY_DEFAULTS; kw...)
+Numerics(; kw...) = _numerics(; kw...)
 
 # A preset from `Presets` is a NamedTuple of keywords, overridden by those
 # given after it.
@@ -1100,50 +1128,24 @@ function Numerics(base::Numerics; kw...)
               :execution, :amr, :polar_truncation, :stretch, :implicit,
               :positivity_limiter, :n_halo)
     inherited = NamedTuple{fields}(map(f -> getfield(base, f), fields))
-    return _numerics(base.legacy_amr; merge(inherited, values(kw))...)
+    return _numerics(; merge(inherited, values(kw))...)
 end
 
-function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
+function _numerics(; n_global, deriv=lele_d1_6(),
                    filter=StateFilter(), art=ArtificialProperties(), cfl=0.5,
                    control=nothing, patch_interfaces=PatchInterfaces(),
                    execution=Execution(), amr=nothing, polar_truncation=0.0,
                    stretch=(nothing, nothing, nothing), implicit=nothing,
-                   positivity_limiter::Bool=false, n_halo=4, flat...)
+                   positivity_limiter::Bool=false, n_halo=4, unknown...)
+    isempty(unknown) ||
+        throw(ArgumentError("Numerics has no keyword `$(first(keys(unknown)))`"))
     execution isa Execution ||
         throw(ArgumentError("Numerics: execution must be an Execution, got " *
                             "$(typeof(execution))"))
-    groups = Dict{Symbol,Any}(:filter => _state_filter(filter),
-                              :patch_interfaces => _patch_interfaces(patch_interfaces),
-                              :execution => execution)
-    folded = String[]
-    refinement = Symbol[]
-    for (k, v) in pairs(flat)
-        if haskey(_NUMERICS_FLAT, k)
-            group, field = _NUMERICS_FLAT[k]
-            groups[group] = _with(groups[group], NamedTuple{(field,)}((v,)))
-            type = _NUMERICS_GROUP_TYPES[group]
-            push!(folded, "`$k` is the `$field` of `$group = $type(...)`")
-        elseif haskey(_AMR_LEGACY_DEFAULTS, k)
-            legacy_amr = merge(legacy_amr, NamedTuple{(k,)}((v,)))
-            push!(refinement, k)
-        else
-            throw(ArgumentError("Numerics has no keyword `$k`"))
-        end
-    end
-    isempty(folded) ||
-        Base.depwarn("Numerics: flat keywords are deprecated; " * join(folded, ", ") *
-                     ".", :Numerics; force=true)
-    isempty(refinement) ||
-        Base.depwarn("Numerics: the flat refinement keywords " *
-                     join(("`$k`" for k in refinement), ", ") * " are deprecated; " *
-                     "write them in `amr = AMR(...)`.", :Numerics; force=true)
-    return Numerics(n_global, deriv, groups[:filter], art, cfl, control,
-                    groups[:patch_interfaces], groups[:execution], amr,
-                    polar_truncation, stretch, implicit, positivity_limiter, n_halo,
-                    legacy_amr)
+    return Numerics(n_global, deriv, _state_filter(filter), art, cfl, control,
+                    _patch_interfaces(patch_interfaces), execution, amr,
+                    polar_truncation, stretch, implicit, positivity_limiter, n_halo)
 end
-
-_legacy_amr_keywords(num::Numerics) = num.legacy_amr
 
 # The step policy of a problem whose deck gives none. A strong shock at a
 # spherical origin is limited to a lower CFL than at a wall or an axis, a
@@ -1197,17 +1199,13 @@ end
 function _setup(prob::Problem, num::Numerics)
     @nospecialize prob
     num.control === nothing && (num = Numerics(num; control=_default_control(prob)))
-    legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing
         num.implicit === nothing ||
             throw(ArgumentError("implicit conduction runs on a single patch without " *
                                 "refinement; remove amr or implicit"))
-        legacy == _AMR_LEGACY_DEFAULTS ||
-            throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
-                                "not both"))
         return _setup_amr(prob, num, num.amr)
     end
-    return _setup_with_amr_keywords(prob, num, legacy)
+    return _setup_with_amr_keywords(prob, num, _UNREFINED)
 end
 
 function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;

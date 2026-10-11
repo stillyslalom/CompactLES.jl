@@ -599,7 +599,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                                                  mu_sensor=mu_sensor,
                                                  beta_sensor=beta_sensor,
                                                  reduction=reduction),
-                     execution=Execution(backend=backend),
+                     execution=Execution(storage=backend),
                      amr=region === nothing ? nothing :
                          AMR(initial=region, tile=tile, subcycle=subcycle)))
     end

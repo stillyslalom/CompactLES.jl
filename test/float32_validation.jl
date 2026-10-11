@@ -314,8 +314,8 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     @test_throws ArgumentError small(precision=Int)
     @test_throws ArgumentError small(precision=T, transport=_Float64OnlyTransport())
 
-    # `precision` through `setup`, and conversion upward.
-    solver, Q = setup(prob, Numerics(n_global=(16, 1, 1), execution=Execution(precision=T)))
+    # An element type as `storage` through `setup`, and conversion upward.
+    solver, Q = setup(prob, Numerics(n_global=(16, 1, 1), execution=Execution(storage=T)))
     @test parent(Q) isa Array{T,4} && solver.art isa ArtificialProperties{T}
     s = small(precision=Float64, eos=StiffenedGas{T}(),
               transport=ConstantTransport{T}(mu0=T(0.1)),

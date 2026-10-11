@@ -25,7 +25,7 @@ include("capability_cases.jl")
             precision in (Float64, Float32)
             ok = C.advances(C.problem(; eos, ic),
                             Numerics(; n_global=(32, 1, 1),
-                                     execution=Execution(; backend, precision)))
+                                     execution=Execution(; storage=backend => precision)))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -62,7 +62,7 @@ include("capability_cases.jl")
              (; n_global=(16, 1, 16))),
         ]
         for (name, prob, kw) in geometries, (backend, precision) in C.PAIRS
-            ok = C.advances(prob, Numerics(; execution=Execution(; backend, precision),
+            ok = C.advances(prob, Numerics(; execution=Execution(; storage=backend => precision),
                                            kw...))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
@@ -131,7 +131,7 @@ include("capability_cases.jl")
         end
         # On a device backend: one patch, two patches, the spherical radial
         # line, the r-z plane with a plane at z = 0, and a subcycled box.
-        dev = Execution(backend=C.device())
+        dev = Execution(storage=C.device())
         for (prob, num) in
             ((C.problem(bcs=(C.wall, C.per, C.per)),
               Numerics(n_global=(48, 16, 1), positivity_limiter=true, execution=dev)),
@@ -168,7 +168,7 @@ include("capability_cases.jl")
              (; amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)), subcycle=true))),
         ]
         for (name, kw) in layouts, (backend, precision) in C.PAIRS
-            execution = Execution(; backend, precision,
+            execution = Execution(; storage=backend => precision,
                                   patch_grid=get(kw, :patch_grid, (1, 1, 1)))
             ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), execution,
                                                   amr=get(kw, :amr, nothing)))
@@ -191,7 +191,7 @@ include("capability_cases.jl")
         plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
         for precision in (Float64, Float32)
             @test C.advances(plane, Numerics(n_global=(48, 1, 1),
-                                             execution=Execution(; precision),
+                                             execution=Execution(storage=precision),
                                              amr=AMR(initial=BlockRegion((0, 0, 0),
                                                                          (12, 1, 1)))))
         end
@@ -203,7 +203,7 @@ include("capability_cases.jl")
         at_wall = (x, y, z, t) -> x > 0.85
         for tile in (0, 8), (backend, precision) in C.PAIRS
             ok = C.advances(walled, Numerics(n_global=(49, 1, 1),
-                                             execution=Execution(; backend, precision),
+                                             execution=Execution(; storage=backend => precision),
                                              amr=AMR(initial=at_wall, regrid_interval=1,
                                                      tile=tile, level_boundaries=true)))
             ok || @warn "capability matrix: placed level (tile $tile) on $backend at " *
@@ -223,11 +223,11 @@ include("capability_cases.jl")
         for (backend, precision) in C.PAIRS
             backend isa DeviceBackend || continue
             @test C.advances(plane, Numerics(n_global=(49, 1, 1),
-                                             execution=Execution(; backend, precision),
+                                             execution=Execution(; storage=backend => precision),
                                              amr=AMR(initial=near_plane,
                                                      regrid_interval=1)))
             @test C.advances(plane, Numerics(n_global=(49, 1, 1),
-                                             execution=Execution(; backend, precision),
+                                             execution=Execution(; storage=backend => precision),
                                              amr=AMR(initial=near_plane, regrid_interval=1,
                                                      tile=8)))
         end
@@ -259,7 +259,7 @@ include("capability_cases.jl")
         # box and tiles there, on either backend.
         near_seam = (x, y, z, t) -> x < 0.06 || x > 0.94
         for (backend, precision) in C.PAIRS
-            execution = Execution(; backend, precision)
+            execution = Execution(; storage=backend => precision)
             ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), execution,
                                                   amr=AMR(initial=BlockRegion((44, 0, 0),
                                                                               (9, 1, 1)))))
@@ -289,7 +289,7 @@ include("capability_cases.jl")
             @test C.advances(annulus, Numerics(n_global=(48, 1, 1),
                                                patch_interfaces=:closure,
                                                execution=Execution(patch_grid=(2, 1, 1),
-                                                                   backend=backend)))
+                                                                   storage=backend)))
         end
         @test C.advances(C.problem(bcs=(wall, per, per)),
                          Numerics(n_global=(16, 48, 1), patch_interfaces=:closure,
@@ -304,7 +304,7 @@ include("capability_cases.jl")
                                            execution=Execution(patch_grid=(2, 1, 1))))
         axis_rz = C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial)
         for (backend, precision) in C.PAIRS
-            execution = Execution(; backend, precision)
+            execution = Execution(; storage=backend => precision)
             @test C.advances(annulus, Numerics(; n_global=(48, 1, 1), execution,
                                                amr=AMR(initial=Box((0.9, 0, 0),
                                                                    (1.1, 1, 1)))))
@@ -327,7 +327,7 @@ include("capability_cases.jl")
         # plane at z = 0, the capsule's layout.
         for precision in (Float64, Float32)
             @test C.advances(axis_rz, Numerics(n_global=(48, 1, 1),
-                                               execution=Execution(; precision),
+                                               execution=Execution(storage=precision),
                                                amr=AMR(initial=BlockRegion((0, 0, 0),
                                                                            (12, 1, 1)))))
         end
@@ -357,13 +357,13 @@ include("capability_cases.jl")
         end
         n = (48, 1, 1)
         @test restarts(C.problem(), Numerics(n_global=n,
-                                             execution=Execution(backend=C.device())))
+                                             execution=Execution(storage=C.device())))
         @test restarts(C.problem(eos=C.EOSES[4][2], ic=C.ic_air), Numerics(n_global=n))
         @test restarts(C.problem(), Numerics(n_global=n,
             amr=AMR(initial=(x, y, z, t) -> abs(x - 0.5) < 0.1, regrid_interval=1,
                     tile=4)))
         @test restarts(C.problem(), Numerics(n_global=n,
-                                             execution=Execution(backend=C.device()),
+                                             execution=Execution(storage=C.device()),
                                              amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
     end
     println("capability matrix, accepted rows: $(round(time() - t0; digits=1)) s")

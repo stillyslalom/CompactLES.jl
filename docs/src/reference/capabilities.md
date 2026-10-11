@@ -26,7 +26,8 @@ caveats.
 | [`Nasa9Mixture`](@ref), any species count | yes | yes | yes | yes |
 | a user subtype of [`EOS`](@ref) | yes | see below | constructed at the run's type | yes; a refined level with molecular transport takes `patch_interfaces = :closure` |
 
-`Execution(precision = Float32)` in [`Numerics`](@ref) converts the built-in equations of
+`Execution(storage = Float32)` in [`Numerics`](@ref), or an array type with a
+`Float32` element type, converts the built-in equations of
 state, [`ConstantTransport`](@ref), [`CeaTransport`](@ref), the artificial
 properties and the compact schemes. Any other component that carries a
 floating-point type must be constructed at the run's type; one that is not

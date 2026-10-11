@@ -106,12 +106,8 @@ end
         Prim(p=1.0, rho=1.0 + 0.1sin(2pi * x), u=(0.0, 0.0, 0.0)))
     common = (n_global=(96, 1, 1), filter=nothing,
               art=ArtificialProperties(enabled=false))
-    flat = @test_logs (:warn, r"refinement keywords `refine` are deprecated") Numerics(;
-        common..., refine=region)
-    legacy, Qlegacy = setup(prob, flat)
-    grouped, Qgrouped = setup(prob, Numerics(; common..., amr=AMR(initial=region)))
-    @test refined_region(grouped) == refined_region(legacy)
-    @test all(parent(Qgrouped[i]) == parent(Qlegacy[i]) for i in eachindex(Qlegacy))
+    grouped, _ = setup(prob, Numerics(; common..., amr=AMR(initial=region)))
+    @test refined_region(grouped) == region
 
     moving = (x, y, z, t) -> abs(x - (0.45 + 0.2t)) < 0.035
     solver, states = setup(prob, Numerics(; common...,
@@ -181,10 +177,9 @@ end
     prob = amr_test_problem()
     region = BlockRegion((40, 0, 0), (16, 1, 1))
     base = (n_global=(64, 1, 1), filter=nothing)
+    # A refinement setting is a field of `AMR`, not a keyword of `Numerics`.
     for flat in ((; refine=region), (; tag_buffer=5))
-        num = @test_logs (:warn, r"refinement keywords") Numerics(; base...,
-            amr=AMR(initial=region), flat...)
-        @test_throws ArgumentError setup(prob, num)
+        @test_throws ArgumentError Numerics(; base..., amr=AMR(initial=region), flat...)
     end
     @test_throws ArgumentError setup(prob,
         Numerics(; base..., amr=AMR(initial=:unknown)))

@@ -837,7 +837,7 @@ end
                              art=ArtificialProperties(enabled=true),
                              filter=StateFilter(compact_filter(); cfl=0.35),
                              control=StepControl(validity=:permissive),
-                             execution=Execution(backend=backend,
+                             execution=Execution(storage=backend,
                                                  patch_grid=(patches, 1, 1)),
                              patch_interfaces=:closure, amr=amr,
                              positivity_limiter=true))
@@ -850,7 +850,7 @@ end
                                      p=1e-3 + exp(-((x - 0.3)^2 + (y - 0.5)^2) / 0.004))),
         Numerics(n_global=(32, 32, 1), cfl=0.4, art=ArtificialProperties(enabled=true),
                  control=StepControl(validity=:permissive),
-                 execution=Execution(backend=backend), positivity_limiter=true))
+                 execution=Execution(storage=backend), positivity_limiter=true))
     sedov(backend) = setup(
         Problem(eos=gas, transport=ConstantTransport(mu0=0.0), metric=SphericalMetric(),
                 domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
@@ -859,7 +859,7 @@ end
                                      p=1e-4 + exp(-(r / 0.08)^2))),
         Numerics(n_global=(64, 1, 1), cfl=0.3, art=ArtificialProperties(enabled=true),
                  control=StepControl(validity=:permissive),
-                 execution=Execution(backend=backend), positivity_limiter=true))
+                 execution=Execution(storage=backend), positivity_limiter=true))
     corner(backend) = setup(
         Problem(eos=gas, transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
                 domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
@@ -868,7 +868,7 @@ end
                                      p=1e-4 + exp(-(r^2 + z^2) / 0.08^2))),
         Numerics(n_global=(32, 1, 32), cfl=0.3, art=ArtificialProperties(enabled=true),
                  control=StepControl(validity=:permissive),
-                 execution=Execution(backend=backend), positivity_limiter=true))
+                 execution=Execution(storage=backend), positivity_limiter=true))
     # Over the discontinuity at x = 0.9, clear of the wall.
     box = BlockRegion((96, 0, 0), (20, 1, 1))
     # A pressure jump beside the interface of two patches, whose shock limits
@@ -883,7 +883,7 @@ end
         Numerics(n_global=(96, 1, 1), cfl=0.3, art=ArtificialProperties(enabled=true),
                  filter=StateFilter(compact_filter(); cfl=0.35),
                  control=StepControl(validity=:permissive),
-                 execution=Execution(backend=backend, patch_grid=(2, 1, 1)),
+                 execution=Execution(storage=backend, patch_grid=(2, 1, 1)),
                  patch_interfaces=:closure, positivity_limiter=true))
     cases = (("one patch", b -> shock(b), 40), ("planar blast", blast, 8),
              ("spherical line", sedov, 60), ("r-z corner", corner, 12),

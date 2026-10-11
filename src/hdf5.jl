@@ -165,11 +165,7 @@ rebuilt identical grid from any different one.
 
 The configuration record is then compared, and `allow` accepts a
 `:numerics`, `:transport`, `:boundaries` or `:sources` difference, as
-[`load_checkpoint!`](@ref) describes. A file of the previous format, which
-records a per-face switch flag of a boundary wrapper since removed, loads with
-the flags passed over; a file of the format before that, which has no record,
-loads with a warning and without that comparison; a file in an older format
-is rejected outright.
+[`load_checkpoint!`](@ref) describes.
 
     load_checkpoint_hdf5!(solver, states::Vector, prefix; allow = ())
 

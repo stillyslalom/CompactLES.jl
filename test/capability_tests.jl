@@ -28,7 +28,7 @@ include("capability_cases.jl")
         for (backend, precision) in C.PAIRS
             ok = C.advances(C.problem(; eos, ic),
                             Numerics(; n_global=(32, 1, 1),
-                                     execution=Execution(; backend, precision)))
+                                     execution=Execution(; storage=backend => precision)))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -72,7 +72,7 @@ include("capability_cases.jl")
         rejects("SphericalMetric: θ node 16 lies on a pole",
                 C.problem(bcs=(wall, wall, per), domain=((0.5, 1.0), (0.1, π), (0.0, 1.0)),
                           metric=SphericalMetric(), ic=C.ic_shell),
-                Numerics(n_global=(16, 16, 1), execution=Execution(precision=Float32)))
+                Numerics(n_global=(16, 16, 1), execution=Execution(storage=Float32)))
         rejects("SphericalMetric: the collapsed θ node lies on a pole",
                 C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
                           domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)),
@@ -143,11 +143,11 @@ include("capability_cases.jl")
         rejects("requires tile > 0 and regridding", gas,
                 Numerics(n_global=n1, amr=AMR(initial=feature, max_levels=3)))
         rejects("regridding more than one refined level runs on the host backend only",
-                gas, Numerics(n_global=n1, execution=Execution(backend=C.device()),
+                gas, Numerics(n_global=n1, execution=Execution(storage=C.device()),
                               amr=AMR(initial=feature, regrid_interval=1, tile=4,
                                       max_levels=3)))
         rejects("level_restriction = :filter is host-only", gas,
-                Numerics(n_global=n1, execution=Execution(backend=C.device()),
+                Numerics(n_global=n1, execution=Execution(storage=C.device()),
                          amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)),
                                  level_restriction=:filter)))
         rejects("rebalance repartitions a tiled level at the regrid cadence", gas,
@@ -186,7 +186,7 @@ include("capability_cases.jl")
                          polar_truncation=2.0))
         rejects("polar_truncation runs on the host backend only", cyl,
                 Numerics(n_global=(16, 32, 1), polar_truncation=2.0,
-                         execution=Execution(backend=C.device())))
+                         execution=Execution(storage=C.device())))
         closed = C.problem(bcs=(wall, per, per))
         limited(; kw...) = Numerics(; n_global=(64, 1, 1), positivity_limiter=true, kw...)
         rejects("positivity_limiter: supports the CartesianMetric, the r-z plane",
@@ -217,7 +217,7 @@ include("capability_cases.jl")
         rejects("positivity_limiter: on a DeviceBackend supports a refined level as one box",
                 C.problem(bcs=(wall, wall, per)),
                 Numerics(n_global=(48, 48, 1), positivity_limiter=true,
-                         execution=Execution(backend=C.device()), patch_interfaces=:closure,
+                         execution=Execution(storage=C.device()), patch_interfaces=:closure,
                          amr=AMR(initial=Box((0.3, 0.3, 0), (0.7, 0.7, 1)), tile=8)))
         rejects("positivity_limiter: supports the ideal-gas EOS",
                 C.problem(bcs=(wall, per, per), eos=C.EOSES[3][2]), limited())
@@ -243,7 +243,7 @@ include("capability_cases.jl")
         @test_throws "a same-level patch layout (patch_grid) has no checkpoint" save_checkpoint(
             slabs, states, joinpath(dir, "slabs"))
         solver, Q = setup(gas, Numerics(n_global=(32, 1, 1),
-                                        execution=Execution(precision=Float32)))
+                                        execution=Execution(storage=Float32)))
         save_checkpoint(solver, Q, joinpath(dir, "single"))
         solver64, Q64 = setup(gas, Numerics(n_global=(32, 1, 1)))
         @test_throws "element type mismatch" load_checkpoint!(solver64, Q64,
