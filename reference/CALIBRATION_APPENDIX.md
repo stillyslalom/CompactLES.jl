@@ -7073,12 +7073,56 @@ the convergence rows and the MPI suite's serial comparisons are unchanged,
 since one rank never subdivides and a whole tile computes as the serial tile
 does.
 
-Open: the 3-D amr3 window is early (7 steady steps) and runs 16% slower,
-with 13% more level-2 node-steps on the same level-2 lattice: level 1's
-subdivision does not pay where level 2 dominates the work, and its own
-tile faces may tag more level-2 cells. The full window (about 300 root
-steps) decides it; a lattice choice weighted by each level's share of the
-step would subdivide only the levels that bind.
+#### The lattice chosen by the measured cost model
+
+The same legs on `a02b946` (base: the coarsest lattice giving a tile per
+rank) against the lattice of the shortest predicted step (`_choose_lattice`),
+the model's coefficients measured on the run; the new tree's script against
+both projects, which adds the compilation after the warm-up, the most of
+any rank. The coefficients at the end, in seconds per node (a), per node
+and interface dimension (b), per tile (k) and per message (m), each per
+step of the level, and per tile at a check (c): 2-D amr2 1.2e-6, 2.1e-7,
+3.3e-4, 1–3e-4, 7.3e-4; 3-D amr2 2.3e-6, 3.2e-7, 0.024, 4.0e-3, 5.1e-3;
+3-D amr3 3.4e-6, 3.4e-7, 6.9e-4, 5.1e-3, 0.026.
+
+| leg | tree | lattice at the end | ms/step | median | compiling s | s/µs | busy | node-steps L1 / L2 | W mm |
+|---|---|---|---|---|---|---|---|---|---|
+| 2-D amr2 | base | (6, 6) | 16.5, 15.8 | 8.88, 8.89 | 3.5, 3.5 | 0.0090, 0.0086 | 1.04 | 3.06e6 | 6.2720 |
+| 2-D amr2 | model | (6, 12) | 84.1, 83.9 | 7.26, 7.30 | 9.1, 9.0 | 0.046, 0.046 | 1.45 | 3.06e6 | 6.2700 |
+| 2-D amr3 | base | (6, 6) / 12 | 138.7 | 104.3 | 5.5 | 0.088 | 1.07 | 5.36e6 / 7.52e7 | 6.0835 |
+| 2-D amr3 | model | (6, 12) / 12 | 188.9 | 108.4 | 12.2 | 0.120 | 1.27 | 5.18e6 / 7.66e7 | 6.0898 |
+| 3-D amr2 | base | (6, 6, 12) | 399.6 | 398.7 | 5.8 | 0.299 | 1.05 | 1.53e8 | 5.6454 |
+| 3-D amr2 | model | (6, 12, 12) | 347.0 | 318.0 | 5.5 | 0.261 | 1.07 | 1.48e8 | 5.6452 |
+| 3-D amr3, 17 steps | base | (6, 6, 12) / 12 | 15540 | 15200 | 5.7 | 10.18 | 1.04 | 9.41e6 / 3.33e8 | |
+| 3-D amr3, 17 steps | model | (6, 6, 12) / 12 | 14230 | 14230 | 5.9 | 9.72 | 1.04 | 8.81e6 / 3.00e8 | |
+
+Settled: in 3-D the model's lattice is the faster. 3-D amr2 takes the
+half-subdivided (6, 12, 12), 8 tiles of 24624 nodes, a tile per rank, over
+the (6, 6, 12) the count rule reaches, and the step falls 13% (median 20%).
+In 3-D amr3 level 1 ends on the same (6, 6, 12) as the count rule, chosen
+because a level of whole tiles spans as many ranks as it has tiles and its
+children are placed within them: on the configured lattice level 1 holds
+4 tiles, which would leave level 2, nine tenths of the work, on 4 ranks.
+The 17-step window runs 8% faster with 10% fewer level-2 node-steps, the
+98031e2 count of the table above. The level's share of the step alone
+would have kept level 1 coarse.
+
+Open: in 2-D the median step falls (amr2 18%) or holds (amr3 +4%), and the
+mean rises five- and 1.4-fold, all of it in the regrid checks (amr2: 17.9 s
+over the median step against 1.6–1.8 s). A traced run (`trace=true`) shows
+the checks that place a tile of a face combination new to its rank at 1.3
+to 3.2 s of wall, nearly all of it one rank compiling the step's tile phases
+while the others wait at the check's collectives; less that compilation
+the checks cost about 1 ms per tile. The count rule subdivided at the first
+check and met its combinations in the first ten steps on every rank at
+once; the model starts on the configured lattice, changes it once an
+interval is measured, and the tile set then grows rank by rank, so the
+compilations come one at a time inside the steady window. The column gives
+the compilation of the most compiling rank after the warm-up, inside the
+steps or between them (Julia's process-wide counter). The model takes a
+check's wall less the longest compilation in it, and leaves out the
+observations of a rank that compiled in an interval; before that it swung
+between (12, 12) and (6, 12) on compile spikes.
 
 ### bench/amr_cost.jl: the mixing cost case
 
