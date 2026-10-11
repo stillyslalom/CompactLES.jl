@@ -42,7 +42,11 @@
 #   third of λ/2 and a planar feature costs 3 level-2 tiles per row in 2-D and
 #   9 in 3-D. A smaller edge follows the features more tightly at a per-tile
 #   cost (plan construction, coupling records) that grows quickly in 3-D.
-#   `tile=` sets it, `regrid=` the regrid interval.
+#   `tile=` sets it, one edge or one per dimension, x first (`tile=4,12,12`:
+#   tiles thin along the shock normal and spanning the channel across), and
+#   `regrid=` the regrid interval. Each tile is held whole by one rank, and
+#   a level with fewer tiles than ranks is tiled on a subdivided lattice;
+#   the report gives each level's lattice at the end.
 # - `subcycle = true`, the Berger–Oliger step a production run takes, against
 #   the AMR default of false; `subcycle=false` runs the global step.
 # - Rebalancing off, the AMR default: a surviving tile keeps its owner ranks
@@ -128,12 +132,14 @@ using Statistics
 
 const opt = CompactLES.script_args(ARGS, (
     config = "amr2", dim = 2, nres = 24, tfinal = 4.5e-4, nmax = typemax(Int),
-    Lx = 0.0, tile = 12, subcycle = true, regrid = 0, warm = 10, progress = 50,
+    Lx = 0.0, tile = "12", subcycle = true, regrid = 0, warm = 10, progress = 50,
     profile = false, delay = 0.005, dims = "", affinity = 0, rebalance = 0.0))
 
 const CONFIGS = ("coarse", "fine2", "fine3", "amr2", "amr3")
 opt.config in CONFIGS || error("config must be one of $(join(CONFIGS, ", "))")
 opt.dim in (2, 3) || error("dim must be 2 or 3")
+# One edge, or one per dimension, x first.
+const tile_edges = (e = parse.(Int, split(opt.tile, ',')); length(e) == 1 ? e[1] : Tuple(e))
 iseven(opt.nres) || error("nres must be even (nres/2 nodes across λ/2)")
 
 if opt.affinity != 0 && Sys.iswindows()
@@ -308,6 +314,7 @@ const PHASES = [
     ("regrid: placement", (:_place_tiles, :_rebalance_due!)),
     ("regrid: fill/migrate", (:_fill_tiles_from_parent!, :_fill_levels_from_parents!,
                               :_fill_tile_from_box!, :_carry_over!, :_migrate_tile!,
+                              :_carry_tiles!,
                               :_copy_tile!, :_gather_tile)),
     ("regrid: rebuild", (:_replace_level!, :_build_level_patches, :build_level_coupling,
                          :_fill_covered!, :_build_reflux!)),
@@ -403,7 +410,7 @@ function main()
     Lx = opt.Lx > 0 ? opt.Lx : opt.dim == 2 ? 0.25 : 0.18
     n_global = grid(opt.dim, opt.nres, Lx, level)
     amr = refined ?
-          AMR(initial = :sensor, tile = opt.tile, max_levels = nlev,
+          AMR(initial = :sensor, tile = tile_edges, max_levels = nlev,
               subcycle = opt.subcycle,
               regrid_interval = opt.regrid > 0 ? opt.regrid : nothing,
               rebalance = opt.rebalance) : nothing
@@ -515,7 +522,11 @@ function report(solver, Q, r::StepRecorder, comm, run)
     fields = Pair{String,Any}[
         "config" => opt.config, "dim" => opt.dim, "nres" => opt.nres,
         "n_global" => join(run.n_global, "x"), "np" => np,
-        "dims" => join(run.dims, "x"), "subcycle" => sub, "tile" => opt.tile,
+        "dims" => join(run.dims, "x"), "subcycle" => sub,
+        "tile" => replace(opt.tile, ',' => 'x'),
+        "edges" => run.refined ?
+                   join([join(CompactLES._level_edges(getfield(solver, :regrid), l), "x")
+                         for l in 1:nlev-1], "/") : "",
         "t_end_us" => round(1e6 * solver.t; digits = 2), "finished" => finished,
         "steps" => nsteps, "level_steps" => join(level_steps, "/"),
         "setup_s" => round(run.t_setup; digits = 2),
@@ -571,9 +582,10 @@ function report(solver, Q, r::StepRecorder, comm, run)
         sizes = [prod(CompactLES.fine_extent(lt.region, active, lt.folded))
                  for lt in lev.transfers]
         counts = [length(t) >= l ? t[l] : 0 for t in r.tiles]
-        say("  level %d tiles: %d now (min %d, max %d over the run); nodes per tile " *
-                "%s\n", l, length(sizes), isempty(counts) ? 0 : minimum(counts),
-                maximum(counts; init = 0),
+        say("  level %d tiles: %d now (min %d, max %d over the run) on the lattice " *
+                "%s; nodes per tile %s\n", l, length(sizes),
+                isempty(counts) ? 0 : minimum(counts), maximum(counts; init = 0),
+                CompactLES._level_edges(getfield(solver, :regrid), l),
                 isempty(sizes) ? "-" : @sprintf("%d–%d, median %d", minimum(sizes),
                                                 maximum(sizes), median(sizes)))
     end

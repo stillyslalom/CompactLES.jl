@@ -406,7 +406,12 @@ function _write_record!(file, rec::HierarchyRecord, rank::Int)
         write_meta!(lg, "owners", owners, rank)
     end
     rg = create_group(g, "regrid")
-    write_meta!(rg, "tile", Int64(rec.tile), rank)
+    write_meta!(rg, "tile", Int64(rec.tile[1]), rank)
+    write_meta!(rg, "tile_edges", Int64[rec.tile...], rank)
+    isempty(rec.edges) ||
+        write_meta!(rg, "level_edges",
+                    reshape(Int64[v for e in rec.edges for v in e], 3, length(rec.edges)),
+                    rank)
     write_meta!(rg, "interval", Int64(rec.interval), rank)
     write_meta!(rg, "threshold", Float64(rec.threshold), rank)
     write_meta!(rg, "buffer", Int64(rec.buffer), rank)
@@ -435,11 +440,18 @@ function _read_record(file)
     end
     rg = g["regrid"]
     created = haskey(rg, "created") ? Int.(read(rg["created"])) : Int[]
-    return HierarchyRecord(Int(read(g["np"])), levels, Int(read(rg["tile"])),
+    # A file written before the per-dimension edges holds one edge, taken
+    # along every dimension, and its levels lie on that lattice.
+    t = Int(read(rg["tile"]))
+    tile = haskey(rg, "tile_edges") ? Tuple(Int.(read(rg["tile_edges"]))) : (t, t, t)
+    E = haskey(rg, "level_edges") ? read(rg["level_edges"]) : nothing
+    edges = E === nothing ? fill(tile, length(levels)) :
+            [(Int(E[1, k]), Int(E[2, k]), Int(E[3, k])) for k in axes(E, 2)]
+    return HierarchyRecord(Int(read(g["np"])), levels, tile,
                            Int(read(rg["interval"])), Float64(read(rg["threshold"])),
                            Int(read(rg["buffer"])), Int(read(rg["last_step"])),
                            Int(read(rg["checks"])), created, Int(read(rg["streak"])),
-                           Float64(read(rg["imbalance"])))
+                           Float64(read(rg["imbalance"])), edges)
 end
 
 function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractString;

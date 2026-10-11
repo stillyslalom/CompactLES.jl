@@ -60,13 +60,22 @@ predicate of position alone. For `:sensor` and a time-dependent predicate it
 defaults to `tag_buffer / (2 cfl)` steps, the time a feature moving at the
 CFL limit takes to cross half the buffer, so the feature cannot leave its
 region between checks. `tile = 0`, the default, covers the tags with one box,
-the cheaper cover of a single compact feature. A positive edge covers them with
-lattice tiles so that separated features refine separately rather than as one
-bounding box; each tile carries its own halo and transfer, so a small edge in
-three dimensions costs more than the cells it saves. A run over many ranks
-should give an edge: each tile's coupling to its parent runs on the few
-ranks that hold the tile, while the interpolation over a single box does not
-divide beyond one rank per conserved variable.
+the cheaper cover of a single compact feature, decomposed over as many ranks
+as its extent admits. A positive edge covers them with lattice tiles so that
+separated features refine separately rather than as one bounding box; each
+tile carries its own halo and transfer, so a small edge in three dimensions
+costs more than the cells it saves. `tile` takes one edge for every dimension
+or a tuple of one per dimension, x first: `tile = (4, 12, 12)` covers a planar
+front normal to x with tiles four parent nodes thick and twelve across, a
+tighter cover than cubes of twelve at the same tile count per front. Each
+tile is held whole by one rank, so its line solves exchange nothing. A
+regridded level with fewer tiles than its parent has ranks takes a finer
+lattice, its largest edge halved in turn down to four parent nodes, until it
+has a tile per rank, and returns to a coarser lattice once that gives two
+tiles per rank. The tile layout of a decomposed run, and with it the
+solution at the level of the truncation error, therefore depends on the rank
+count. A run over many ranks should give an edge: the interpolation over a
+single box does not divide beyond one rank per conserved variable.
 [`BlockRegion`](@ref)s remain available for an exact layout; a single region
 may move when regridding is enabled, and a multi-level vector moves only with
 a positive `tile`. A vector of shapes stays fixed.
@@ -82,7 +91,7 @@ a positive `tile`. A vector of shapes stays fixed.
 | `tag_buffer` | `4` | Coarse nodes grown around marked nodes before boxing or tiling |
 | `untag_ratio` | `2` | Hold threshold denominator for an existing tile; one removes hysteresis |
 | `tile_lifetime` | `1` | Minimum number of regrid checks before a tile may be removed |
-| `tile` | `0` | Zero makes one refined box; positive values at least three give a lattice tile edge in parent nodes |
+| `tile` | `0` | Zero makes one refined box; an edge of at least three parent nodes, or a tuple of one per dimension, x first, gives the lattice tile edges |
 | `level_boundaries` | `true` | Shapes and tags place a level on a wall or NSCBC face and across a periodic seam, and on a symmetry plane or the r-z axis; at `false` every level keeps the margin at every face |
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
@@ -153,13 +162,14 @@ crosses a seam as well, and is clamped to the margin at every face under
 `level_boundaries = false`.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags
 move. A positive `regrid_interval` allows tiled regions to enter and leave.
-A surviving tile keeps its ranks and a new one goes to the least loaded
-ranks; each level is repartitioned by fine-node count when that lowers its
+A surviving tile keeps its rank and a new one goes to the least loaded
+rank; each level is repartitioned by fine-node count when that lowers its
 most loaded rank's share by more than a tenth, and `rebalance` may instead
 move ownership after persistent measured imbalance in a two-level hierarchy.
-A moved tile continues bit for bit when it is held by one rank before and
-after; one decomposed over several ranks continues at round-off. A
-multi-level nested vector regrids only with a positive `tile`.
+A moved tile continues bit for bit. A change of lattice replaces every tile
+of the level: each new tile takes the old tiles' solution wherever they held
+it and the parent's interpolation elsewhere. A multi-level nested vector
+regrids only with a positive `tile`.
 
 Refinement uses interpolation to fill new fine nodes and restriction to
 update covered parent nodes. Where a feature the parent spacing does not

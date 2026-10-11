@@ -64,12 +64,12 @@ n_species − 1 species, three per species (`_sharpen_gradient`). Zero on a
 level of one patch (`tile = 0`), which never takes the pass, and with the
 artificial properties off.
 """
-function _sensed_field_count(art::ArtificialProperties, tile::Int, n_species::Int)
-    (tile > 0 && art.enabled) || return 0
+function _sensed_field_count(art::ArtificialProperties, tile, n_species::Int)
+    (_tiled(tile) && art.enabled) || return 0
     sharpened = _sharpening(art, n_species) ? 3 * (n_species - 1) : 0
     return _sensor_field_count(art) + sharpened
 end
-_sensed_field_count(solver, tile::Int) =
+_sensed_field_count(solver, tile) =
     _sensed_field_count(solver.art, tile, solver.equations.n_species)
 
 # The sensed fields the sensors are detected from, which lead the list.

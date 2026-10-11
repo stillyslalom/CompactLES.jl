@@ -15,7 +15,8 @@
 # hold band read), and the rebalance streak. The tag thresholds, the buffer and
 # the interval are configuration the solver constructor supplies, recorded for
 # provenance and not restored; the tile edge is recorded and checked, since a
-# layout on one lattice cannot be placed on another.
+# layout on one lattice cannot be placed on another, and so is the lattice
+# each level's regrid has subdivided it to, which is restored.
 #
 # --- Restart on any rank count ------------------------------------------------
 #
@@ -55,17 +56,18 @@ end
 
 What a checkpoint carries of the refinement hierarchy beyond the root's
 state: the rank count of the writing run, one [`LevelRecord`](@ref) per
-refined level, and the regrid state (`tile`, `interval`, `threshold` and
-`buffer` for provenance and the tile check; `last_step`, `checks`, the
-per-tile `created` record aligned with the levels' regions in level order,
-`streak` and `imbalance` restored onto the `RegridSpec`). `tile` is −1 when the writing
-run had no `RegridSpec`. Built by [`hierarchy_record`](@ref) and consumed by
-[`restore_hierarchy!`](@ref).
+refined level, and the regrid state (`tile`, the lattice edge per
+dimension, `interval`, `threshold` and `buffer` for provenance and the tile
+check; `last_step`, `checks`, the per-tile `created` record aligned with the
+levels' regions in level order, `streak`, `imbalance` and `edges`, each
+refined level's lattice edges, restored onto the `RegridSpec`). `tile` is −1
+along every dimension when the writing run had no `RegridSpec`. Built by
+[`hierarchy_record`](@ref) and consumed by [`restore_hierarchy!`](@ref).
 """
 struct HierarchyRecord
     np::Int
     levels::Vector{LevelRecord}
-    tile::Int
+    tile::NTuple{3,Int}
     interval::Int
     threshold::Float64
     buffer::Int
@@ -74,6 +76,7 @@ struct HierarchyRecord
     created::Vector{Int}
     streak::Int
     imbalance::Float64
+    edges::Vector{NTuple{3,Int}}
 end
 
 """
@@ -96,19 +99,24 @@ function hierarchy_record(solver::Solver)
                   [get(_created(spec, ℓ), r, 0) for ℓ in eachindex(recs)
                    for r in recs[ℓ].regions]
         rec = spec === nothing ?
-              HierarchyRecord(MPI.Comm_size(comm), recs, -1, 0, 0.0, 0, 0, 0,
-                              created, 0, 1.0) :
+              HierarchyRecord(MPI.Comm_size(comm), recs, (-1, -1, -1), 0, 0.0, 0, 0, 0,
+                              created, 0, 1.0, NTuple{3,Int}[]) :
               HierarchyRecord(MPI.Comm_size(comm), recs, spec.tile, spec.interval,
                               Float64(spec.threshold), spec.buffer, spec.last_step,
-                              spec.checks, created, spec.streak, spec.imbalance)
+                              spec.checks, created, spec.streak, spec.imbalance,
+                              [_level_edges(spec, ℓ) for ℓ in eachindex(recs)])
     end
     return MPI.bcast(rec, comm; root=0)
 end
 
 # Flat integer and float images of a record, the form the per-rank checkpoint
-# stores; the HDF5 checkpoint stores the same fields as named datasets.
+# stores; the HDF5 checkpoint stores the same fields as named datasets. The
+# edge along the first dimension sits where a record of one edge kept it,
+# and the other two edges and the levels' lattices follow the levels, so a
+# file written before either existed still reads, its edge taken along
+# every dimension and its levels on that lattice.
 function _record_image(rec::HierarchyRecord)
-    ints = Int64[rec.np, length(rec.levels), rec.tile, rec.interval, rec.buffer,
+    ints = Int64[rec.np, length(rec.levels), rec.tile[1], rec.interval, rec.buffer,
                  rec.last_step, rec.checks, rec.streak, length(rec.created)]
     append!(ints, rec.created)
     for lev in rec.levels
@@ -120,6 +128,10 @@ function _record_image(rec::HierarchyRecord)
         for o in lev.owners
             push!(ints, first(o), last(o))
         end
+    end
+    push!(ints, rec.tile[2], rec.tile[3], length(rec.edges))
+    for e in rec.edges
+        append!(ints, e)
     end
     return ints, Float64[rec.threshold, rec.imbalance]
 end
@@ -145,12 +157,18 @@ function _record_from_image(ints::AbstractVector{<:Integer},
         owners = [(lo = next!(); hi = next!(); lo:hi) for _ in 1:n]
         push!(levels, LevelRecord(regions, owners))
     end
+    edges3 = (tile, tile, tile)
+    edges = fill(edges3, nlev)
+    if pos[] < length(ints)
+        edges3 = (tile, next!(), next!())
+        edges = [(next!(), next!(), next!()) for _ in 1:next!()]
+    end
     pos[] == length(ints) ||
         error("hierarchy record: $(length(ints)) words where $(pos[]) were read")
     length(floats) == 2 ||
         error("hierarchy record: $(length(floats)) real values where 2 were expected")
-    return HierarchyRecord(np, levels, tile, interval, Float64(floats[1]), buffer,
-                           last_step, checks, created, streak, Float64(floats[2]))
+    return HierarchyRecord(np, levels, edges3, interval, Float64(floats[1]), buffer,
+                           last_step, checks, created, streak, Float64(floats[2]), edges)
 end
 
 # A checkpoint of a patch layout is written and read through the state vector
@@ -242,6 +260,10 @@ function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
         spec.checks = rec.checks
         spec.streak = rec.streak
         spec.imbalance = rec.imbalance
+        # The lattice each level's regrid had subdivided to, which the next
+        # check's choice of lattice starts from.
+        empty!(spec.edges)
+        append!(spec.edges, rec.edges)
         # The busy-time marks are wall-clock readings of the writing process;
         # the interval measured at the next check starts here.
         spec.wall_mark = solver.wall_total
@@ -293,7 +315,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     root_lc = levels[1].level_comm
     old_lc = lev.level_comm
     n_cons = solver.equations.n_cons
-    spec.tile == 0 && length(regions) != 1 &&
+    !_tiled(spec.tile) && length(regions) != 1 &&
         error("restart: the checkpoint records $(length(regions)) tiles on level " *
               "1 and this solver refines one box (tile = 0)")
     boundaries = _region_boundaries(solver, regions, 1)
@@ -306,7 +328,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     if stored_owners === nothing
         owners, np_new = _tile_owners(regions, active, root_lc.size;
-                                      whole=spec.tile > 0)
+                                      whole=_tiled(spec.tile))
     else
         length(stored_owners) == length(regions) ||
             error("restart: $(length(stored_owners)) owner ranges for " *

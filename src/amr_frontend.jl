@@ -112,12 +112,19 @@ copies `base` with the given keywords replaced.
   not flicker as the feature crosses the threshold; `1` disables the hold
   band. A tile is not dropped before `tile_lifetime` regrid checks have
   passed since its creation.
-- `tile`: `0` (default) covers each refined region with one patch; a
-  positive edge (in parent nodes, at least 3) covers it with the tiles of a
-  global lattice of that edge instead, abutting tiles sharing their
-  interface plane and coupled as root slabs are. Regridding then moves
-  tiles in and out of the set, a surviving tile never changing its region,
-  and the set may become empty.
+- `tile`: `0` (default) covers each refined region with one patch,
+  decomposed over as many ranks as its extent admits; a positive edge (in
+  parent nodes, at least 3) covers it with the tiles of a global lattice of
+  that edge instead, abutting tiles sharing their interface plane and
+  coupled as root slabs are. A tuple gives one edge per dimension, x first:
+  `tile = (4, 12, 12)` covers a planar front normal to x more tightly than
+  cubes of twelve, at more tiles per front. Each tile is held whole by one
+  rank. Regridding then moves tiles in and out of the set, a surviving tile
+  never changing its region, and the set may become empty. A regridded
+  level with fewer tiles than its parent has ranks takes a finer lattice,
+  its largest edge halved in turn down to four parent nodes, until it holds
+  a tile per rank, so the layout of a decomposed run, and its solution to
+  within the truncation error, depend on the rank count.
 - `level_boundaries` (default `true`): shapes and tags may place a level on
   a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or
   `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the `AxisBC` of an r-z
@@ -152,7 +159,7 @@ Base.@kwdef struct AMR
     tag_vorticity_threshold::Float64 = 0.0
     untag_ratio::Float64 = 2.0
     tile_lifetime::Int = 1
-    tile::Int = 0
+    tile::Union{Int,Tuple{Vararg{Int}}} = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
     max_levels::Union{Nothing,Int} = nothing
@@ -303,8 +310,9 @@ function _shape_regions(shapes, prob, num, amr::AMR)
             throw(ArgumentError("AMR: nested initial regions are all shapes or all " *
                                 "BlockRegions"))
         bare = ntuple(d -> ntuple(side -> reach[d][side] && !fold[d][side], 2), 3)
-        amr.tile > 0 && (reach = _lattice_reach(reach, top .+ 1, active, amr.tile,
-                                                margin, order, bare))
+        _tiled(amr.tile) && (reach = _lattice_reach(reach, top .+ 1, active,
+                                                    _tile_edges(amr.tile),
+                                                    margin, order, bare))
         reach_lo = ntuple(d -> active[d] && reach[d][1], 3)
         reach_hi = ntuple(d -> active[d] && reach[d][2], 3)
         span = sqrt(sum(h[d]^2 for d in 1:3 if active[d]))
@@ -452,7 +460,7 @@ function _setup_amr(prob, num, amr::AMR)
                             "(x, y, z, t) -> Bool or (x, y, z) -> Bool, a " *
                             "BlockRegion, or a Vector{BlockRegion}"))
     amr.max_levels === nothing || amr.max_levels <= 2 ||
-        amr.tile > 0 && amr.regrid_interval > 0 ||
+        _tiled(amr.tile) && amr.regrid_interval > 0 ||
         throw(ArgumentError("AMR: max_levels = $(amr.max_levels) regrids " *
                             "$(amr.max_levels - 1) refined levels, which requires " *
                             "tile > 0 and regridding"))
@@ -498,11 +506,11 @@ function _setup_amr(prob, num, amr::AMR)
     # A regridded tiled level may hold no tiles, so a start with nothing tagged
     # begins unrefined and the first regrid check that tags creates its tiles.
     # The box has no empty form.
-    candidate === nothing && !(amr.tile > 0 && amr.regrid_interval > 0) &&
+    candidate === nothing && !(_tiled(amr.tile) && amr.regrid_interval > 0) &&
         throw(ArgumentError("AMR initial selection tagged no root nodes; " *
                             "supply a BlockRegion, lower the tag threshold, or " *
                             "give tile > 0 with regridding to start unrefined"))
-    if candidate != seed || amr.tile > 0
+    if candidate != seed || _tiled(amr.tile)
         # The temporary seed is not a user-selected tile. Bypass its normal
         # minimum lifetime while preserving the requested lifetime for the
         # actual initial layout created by this check.

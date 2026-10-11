@@ -546,14 +546,14 @@ _placement_extent(order::Int, lo::Bool, hi::Bool) =
 # face. A face the lattice cannot reach keeps the margin. `bare` marks the
 # faces among `reach` whose box takes no buffer (all of them by default; a
 # fold keeps its buffer, `_unbuffered_faces`).
-function _lattice_reach(reach, N::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
-                        margin::Int, order::Int, bare=reach)
+function _lattice_reach(reach, N::NTuple{3,Int}, active::NTuple{3,Bool},
+                        tile::NTuple{3,Int}, margin::Int, order::Int, bare=reach)
     return ntuple(3) do d
         active[d] || return (false, false)
-        r = (N[d] - 1) % tile
-        edge(s) = tile >= margin &&
-                  tile + 1 >= _placement_extent(order, s == 1 && bare[d][1],
-                                                s == 2 && bare[d][2])
+        r = (N[d] - 1) % tile[d]
+        edge(s) = tile[d] >= margin &&
+                  tile[d] + 1 >= _placement_extent(order, s == 1 && bare[d][1],
+                                                   s == 2 && bare[d][2])
         last = r == 0 ? edge(2) :
                r >= margin && r + 1 >= _placement_extent(order, false, bare[d][2])
         (reach[d][1] && edge(1), reach[d][2] && last)
@@ -728,9 +728,9 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                        workspace::Workspace, save; bootstrap::Bool=false) where {T}
     spec = getfield(solver, :regrid)
     levels = getfield(solver, :levels)
-    spec.tile > 0 && length(levels) > 2 &&
+    _tiled(spec.tile) && length(levels) > 2 &&
         return _regrid_hierarchy!(solver, states, workspace, save; bootstrap)
-    spec.tile > 0 && return _regrid_tiles!(solver, states, workspace, save)
+    _tiled(spec.tile) && return _regrid_tiles!(solver, states, workspace, save)
     # A two-level hierarchy, enforced at setup: the root and one refined
     # patch, the sole transfer of level 1.
     lt = levels[2].transfers[1]
@@ -937,35 +937,265 @@ end
 # one tile at a time at the regrid cadence, with no replica of the tile on
 # any rank.
 
-# Levels over the lattice cells (the maximum over the buffered nodes meeting
-# each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so every rank derives the
-# same set, and whether a node at the tag level lies outside the feasible
-# interval `[lo, hi]`, reduced with them. Along a dimension of nonzero `wrap`
-# the lattice runs over [1, P + 1], its last cell ending on the seam, and a
-# buffered node near the seam meets the cells on both sides of it
-# (`_wrapped_parts`); the same number of cells covers it, (N − 1) ÷ tile + 1.
+# Levels over the cells of each lattice of `chain` (the maximum over the
+# buffered nodes meeting each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so
+# every rank derives the same sets, and whether a node at the tag level lies
+# outside the feasible interval `[lo, hi]`, reduced with them. Along a
+# dimension of nonzero `wrap` the lattice runs over [1, P + 1], its last
+# cell ending on the seam, and a buffered node near the seam meets the cells
+# on both sides of it (`_wrapped_parts`); the same number of cells covers
+# it, (N − 1) ÷ tile + 1. Returns the flags and the cell counts per lattice.
 function _tag_tiles(solver::Solver, Qc, spec::RegridSpec, lo::NTuple{3,Int},
-                    hi::NTuple{3,Int}, wrap::NTuple{3,Int}=(0, 0, 0))
+                    hi::NTuple{3,Int}, wrap::NTuple{3,Int}=(0, 0, 0),
+                    chain::Vector{NTuple{3,Int}}=[spec.tile])
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    a = spec.tile
-    K = ntuple(d -> active[d] ? (n_global[d] - 1) ÷ a + 1 : 1, 3)
-    # The flags and the band flag share one buffer and one reduction.
-    buf = zeros(Int8, prod(K) + 1)
-    flags = reshape(view(buf, 1:prod(K)), K)
+    Ks = [ntuple(d -> active[d] ? (n_global[d] - 1) ÷ a[d] + 1 : 1, 3) for a in chain]
+    sizes = [prod(K) for K in Ks]
+    starts = cumsum([0; sizes[1:end-1]])
+    # Every lattice's flags and the band flag share one buffer and one
+    # reduction.
+    buf = zeros(Int8, sum(sizes) + 1)
+    flagsets = [reshape(view(buf, s .+ (1:n)), K) for (s, n, K) in zip(starts, sizes, Ks)]
     b = spec.buffer
     _tag_sweep!(solver, Qc) do g1, g2, g3, level
         g = (g1, g2, g3)
         level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
             (buf[end] = one(Int8))
-        spans = ntuple(d -> active[d] ? _wrapped_cells(g[d] - b, g[d] + b, a, K[d], wrap[d]) :
-                       (0:0), 3)
-        for k3 in spans[3], k2 in spans[2], k1 in spans[1]
-            flags[k1 + 1, k2 + 1, k3 + 1] = max(flags[k1 + 1, k2 + 1, k3 + 1], level)
+        for (a, K, flags) in zip(chain, Ks, flagsets)
+            spans = ntuple(d -> active[d] ?
+                                _wrapped_cells(g[d] - b, g[d] + b, a[d], K[d], wrap[d]) :
+                                (0:0), 3)
+            for k3 in spans[3], k2 in spans[2], k1 in spans[1]
+                flags[k1 + 1, k2 + 1, k3 + 1] = max(flags[k1 + 1, k2 + 1, k3 + 1], level)
+            end
         end
     end
     red = MPI.Allreduce(buf, max, getfield(solver, :comm))
-    return reshape(red[1:end-1], K), K, red[end] > 0
+    return [reshape(red[s .+ (1:n)], K) for (s, n, K) in zip(starts, sizes, Ks)], Ks,
+           red[end] > 0
+end
+
+# --- Subdividing the lattice ------------------------------------------------
+#
+# A tiled level's tile is held whole by one rank (`_tile_owners`), so a level
+# with fewer tiles than its parent has ranks leaves ranks idle on it. The
+# regrid therefore tiles each level on the coarsest lattice of a chain that
+# gives it at least that many tiles, as AMReX chops its boxes until there
+# are as many boxes as ranks: the configured edges first, then each lattice
+# halving the largest edge of the one before that stays at least
+# `MIN_TILE_EDGE` parent nodes and keeps every domain face the configured
+# lattice reaches (`_edge_chain`). Every lattice of the chain is tagged in
+# the same sweep and reduced together, and the wanted tiles of each are
+# counted by the one rule (`_lattice_wanted`). A level whose lattice
+# already gives it the ranks' worth of tiles keeps it until a coarser
+# lattice gives twice that (`_select_lattice`), so a tile set hovering at
+# the rank count does not switch lattices at every check. A change of
+# lattice replaces every tile: each new tile is filled from its parent as a
+# fresh tile is, then takes the evolved solution of the old tiles it
+# overlaps (`_carry_tiles!`), every node an old tile held as its own
+# solution. On one rank the configured lattice already gives every tile a
+# rank, and the chain is that lattice alone.
+
+# The least lattice edge, in parent nodes, the subdivision reaches: the
+# edge at which a lattice still reaches a domain face (`_lattice_reach`
+# needs an edge of at least the nesting margin, four nodes) and a tile
+# carries 13 fine nodes, past the filter's nine-node minimum.
+const MIN_TILE_EDGE = 4
+
+# The chain of lattices a level of `np` ranks may take, coarsest first, over
+# a parent node space of `N` nodes: `tile`, then each lattice halving the
+# largest active edge that halves to at least `least` parent nodes without
+# changing the faces `_lattice_reach` gives along that dimension.
+function _edge_chain(tile::NTuple{3,Int}, active::NTuple{3,Bool}, N::NTuple{3,Int},
+                     faces, bare, margin::Int, order::Int, least::Int, np::Int)
+    chain = [tile]
+    np > 1 || return chain
+    reach = _lattice_reach(faces, N, active, tile, margin, order, bare)
+    e = tile
+    while true
+        best = 0
+        for d in 1:3
+            active[d] && e[d] ÷ 2 >= least || continue
+            cand = Base.setindex(e, e[d] ÷ 2, d)
+            _lattice_reach(faces, N, active, cand, margin, order, bare)[d] == reach[d] ||
+                continue
+            (best == 0 || e[d] > e[best]) && (best = d)
+        end
+        best == 0 && return chain
+        e = Base.setindex(e, e[best] ÷ 2, best)
+        push!(chain, e)
+    end
+end
+
+# Test and bench toggle: off, every level keeps the configured lattice, so
+# a decomposed run tiles its levels as a serial one does and the two can be
+# compared to round-off.
+const SUBDIVIDE_LATTICE = Ref(true)
+
+# The chain of level ℓ's lattices under the solver's placement rules, over
+# its parent's node space of `N` nodes (the lattice coincident with the
+# root's), for a level of `np` ranks.
+function _level_chain(solver, spec::RegridSpec, N::NTuple{3,Int},
+                      active::NTuple{3,Bool}, np::Int)
+    SUBDIVIDE_LATTICE[] || return [spec.tile]
+    faces = _placement_faces(solver, spec)
+    least = max(MIN_TILE_EDGE, _limiter_least_extent(solver) - 1)
+    return _edge_chain(spec.tile, active, N, faces, _unbuffered_faces(solver, faces),
+                       spec.margin, spec.interpolation_order, least, np)
+end
+
+# Whether two regions share more than a plane, over the periodic images of
+# `b` under `period`: at least two nodes in common along every active
+# dimension.
+function _overlaps(a::BlockRegion, b::BlockRegion, active::NTuple{3,Bool},
+                   period::NTuple{3,Int})
+    any(_images(period)) do σ
+        c = _shifted(b, σ)
+        all(d -> !active[d] ||
+                 min(a.offset[d] + a.extent[d], c.offset[d] + c.extent[d]) -
+                 max(a.offset[d], c.offset[d]) >= 2, 1:3)
+    end
+end
+
+# The creation check a tile of a new lattice inherits: the latest among the
+# old tiles it overlaps, so a subdivided tile keeps its lifetime, or
+# `checks` where it overlaps none.
+function _inherited_check(r::BlockRegion, old_regions::Vector{BlockRegion},
+                          created::Dict{BlockRegion,Int}, checks::Int,
+                          active::NTuple{3,Bool}, period::NTuple{3,Int})
+    over = [get(created, o, 0) for o in old_regions if _overlaps(r, o, active, period)]
+    return isempty(over) ? checks : maximum(over)
+end
+
+# Whether tile `t` of a lattice is wanted at cell level `f`: at the tag
+# level, or at the hold level or younger than the lifetime where the
+# current layout already refines it. On the current lattice that is the
+# tile itself; on another, an old tile overlapping it, which is how the
+# hysteresis carries across a change of lattice.
+function _tile_wanted(t::BlockRegion, f::Int8, spec::RegridSpec,
+                      old_regions::Vector{BlockRegion}, created::Dict{BlockRegion,Int},
+                      current::Bool, active::NTuple{3,Bool}, period::NTuple{3,Int})
+    f == TAG_MARK && return true
+    young(r) = spec.checks - get(created, r, 0) < spec.lifetime
+    if current
+        t in old_regions || return false
+        return f == TAG_HOLD || young(t)
+    end
+    over = [o for o in old_regions if _overlaps(t, o, active, period)]
+    isempty(over) && return false
+    return f == TAG_HOLD || any(young, over)
+end
+
+# The wanted tiles of level 1 on lattice `edges`, from its reduced cell
+# flags, in lattice order.
+function _lattice_wanted(flags, K::NTuple{3,Int}, edges::NTuple{3,Int},
+                         active::NTuple{3,Bool}, lo::NTuple{3,Int}, hi::NTuple{3,Int},
+                         spec::RegridSpec, old_regions::Vector{BlockRegion},
+                         current::Bool, period::NTuple{3,Int})
+    wanted = BlockRegion[]
+    for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
+        t = _lattice_tile((k1, k2, k3), active, edges, lo, hi)
+        t === nothing && continue
+        _tile_wanted(t, flags[k1 + 1, k2 + 1, k3 + 1], spec, old_regions, spec.created,
+                     current, active, period) && push!(wanted, t)
+    end
+    return wanted
+end
+
+"""
+    _select_lattice(counts, current, np, fresh) -> Int
+
+The lattice of a chain a level takes, from the count of wanted tiles on each
+(`counts`, coarsest first): the coarsest giving at least `np` tiles, the
+ranks the level may use, or as many as any lattice gives when none reaches
+`np`. A level holding tiles on lattice `current` keeps it while it gives
+that many, unless a coarser lattice gives at least `2 np` tiles, or as many
+as `current` does when that is fewer; `current` is `nothing` when the
+level's lattice is not in the chain, and `fresh` marks a level holding no
+tile, either of which takes the coarsest outright. Pure and deterministic,
+so every rank deciding from the same counts agrees.
+"""
+function _select_lattice(counts::Vector{Int}, current::Union{Nothing,Int}, np::Int,
+                         fresh::Bool)
+    need = min(np, maximum(counts))
+    target = need == 0 ? something(current, 1) : findfirst(>=(need), counts)
+    (fresh || current === nothing) && return target
+    counts[current] < need && return target
+    ample = findfirst(>=(min(2np, counts[current])), counts)
+    return min(ample, current)
+end
+
+const _CARRY_TAG = 1550
+
+"""
+    _carry_tiles!(T, comm, active, period, old_fine, old_own, old_owners,
+                  new_fine, new_owners, targets, old_data, new_data)
+
+After a change of lattice, the evolved solution of a level's old tiles onto
+the new tiles `targets` marks: every node of a new tile that an old tile
+holds as its own solution (`old_own`, its fine region less its parent-fed
+planes) takes the old tile's value, over the periodic images of the old
+tile under the level's fine node-space `period`. The regions are fine
+regions in the level's own node space, and every tile is held whole by the
+first rank of its owner range. One message per overlapping pair, old owner
+to new owner on `comm`, whose rank numbers the owner ranges use; every rank
+derives the same message list from the layouts, which every rank passes
+alike, and posts only its own. `old_data[i]` and `new_data[j]` are this
+rank's state and decomposition of old tile `i` and new tile `j`, absent
+where it holds none. The sends complete before this returns.
+"""
+function _carry_tiles!(::Type{T}, comm::MPI.Comm, active::NTuple{3,Bool},
+                       period::NTuple{3,Int}, old_fine::Vector{BlockRegion},
+                       old_own::Vector{BlockRegion}, old_owners::Vector{UnitRange{Int}},
+                       new_fine::Vector{BlockRegion}, new_owners::Vector{UnitRange{Int}},
+                       targets::AbstractVector{Bool}, old_data::AbstractDict,
+                       new_data::AbstractDict) where {T}
+    me = MPI.Comm_rank(comm)
+    reqs = MPI.Request[]
+    recvs = Tuple{Int,NTuple{3,UnitRange{Int}},Vector{T}}[]
+    sends = Vector{T}[]
+    for j in eachindex(new_fine), i in eachindex(old_fine)
+        targets[j] || continue
+        src, dst = first(old_owners[i]), first(new_owners[j])
+        (me == src || me == dst) || continue
+        nf = new_fine[j]
+        for σ in _images(period)
+            o = _shifted(old_own[i], σ)
+            g = ntuple(d -> (max(o.offset[d], nf.offset[d]) + 1):
+                            min(o.offset[d] + o.extent[d], nf.offset[d] + nf.extent[d]), 3)
+            any(isempty, g) && continue
+            rnew = ntuple(d -> g[d] .- nf.offset[d], 3)
+            rold = ntuple(d -> g[d] .- (old_fine[i].offset[d] + σ[d]), 3)
+            if me == src && me == dst
+                Q_old, d_old = old_data[i]
+                Q_new, d_new = new_data[j]
+                lo, ln = _padded3(rold, d_old), _padded3(rnew, d_new)
+                if _cpu_storage(Q_new) && _cpu_storage(Q_old)
+                    _copy_block!(Q_new, ln, Q_old, lo)
+                else
+                    view(parent(Q_new), ln[1], ln[2], ln[3], :) .=
+                        view(parent(Q_old), lo[1], lo[2], lo[3], :)
+                end
+            elseif me == dst
+                Q_new, _ = new_data[j]
+                buf = Vector{T}(undef, size(Q_new, 4) * prod(length.(rnew)))
+                push!(reqs, MPI.Irecv!(buf, comm; source=src, tag=_CARRY_TAG))
+                push!(recvs, (j, rnew, buf))
+            else
+                Q_old, d_old = old_data[i]
+                buf = _pack_message(T, Q_old, _padded3(rold, d_old))
+                push!(sends, buf)
+                push!(reqs, MPI.Isend(buf, comm; dest=dst, tag=_CARRY_TAG))
+            end
+        end
+    end
+    MPI.Waitall(reqs)
+    for (j, rnew, buf) in recvs
+        Q_new, d_new = new_data[j]
+        _unpack_message!(Q_new, buf, _padded3(rnew, d_new))
+    end
+    return nothing
 end
 
 # One tile's whole state, replicated on every rank of the parent level's
@@ -1183,37 +1413,43 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     reach = _placed_reach(solver, spec, n_global, active)
     wrap = _placement_period(solver, spec, 0)
     lo, hi = _wrap_feasible(_feasible_nodes(n_global, active, spec.margin, reach)..., wrap)
-    flags, K, banded = _tag_tiles(solver, states[1], spec, lo, hi, wrap)
+    root_lc = levels[1].level_comm
+    chain = _level_chain(solver, spec, n_global, active, root_lc.size)
+    current = findfirst(==(_level_edges(spec, 1)), chain)
+    flagsets, Ks, banded = _tag_tiles(solver, states[1], spec, lo, hi, wrap, chain)
     banded && _warn_margin_band(solver, spec.margin, 1)
     busy = _rebalance_due!(solver, spec)
     old_regions = [lt.region for lt in lev.transfers]
     # With no tile and no tag there is nothing to build or move; the flags
     # are reduced and the tile set is held by every rank, so this return is
     # uniform.
-    isempty(old_regions) && all(==(0), flags) && return false
+    isempty(old_regions) && all(f -> all(==(0), f), flagsets) && return false
     # A cell at the tag level is wanted; one at the hold level, or younger
     # than the lifetime, is wanted where its tile exists (the hysteresis).
-    # `created` is derived from the reduced flags, so every rank holds it.
-    wanted = BlockRegion[]
-    for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
-        f = flags[k1 + 1, k2 + 1, k3 + 1]
-        t = _lattice_tile((k1, k2, k3), active, spec.tile, lo, hi)
-        t === nothing && continue
-        exists = t in old_regions
-        young = exists && spec.checks - get(spec.created, t, 0) < spec.lifetime
-        (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) && push!(wanted, t)
-    end
+    # `created` is derived from the reduced flags, so every rank holds it,
+    # and so is the choice of lattice.
+    period = _level_period(solver, 0)
+    wanted_sets = [_lattice_wanted(flagsets[i], Ks[i], chain[i], active, lo, hi, spec,
+                                   old_regions, i == current, period)
+                   for i in eachindex(chain)]
+    pick = _select_lattice(length.(wanted_sets), current, root_lc.size,
+                           isempty(old_regions))
+    wanted = wanted_sets[pick]
+    rechopped = pick != current && !isempty(old_regions)
+    _set_level_edges!(spec, 1, chain[pick])
     # An empty wanted set removes every tile: the level stays in the
     # hierarchy with no tiles, and the next tag builds its first again.
     wanted != old_regions || busy !== nothing || return false
+    inherited = Dict(r => _inherited_check(r, old_regions, spec.created, spec.checks,
+                                           active, period)
+                     for r in wanted if rechopped && !(r in old_regions))
     for r in old_regions
         r in wanted || delete!(spec.created, r)
     end
     for r in wanted
-        haskey(spec.created, r) || (spec.created[r] = spec.checks)
+        haskey(spec.created, r) || (spec.created[r] = get(inherited, r, spec.checks))
     end
     old_lc = lev.level_comm
-    root_lc = levels[1].level_comm
     # Old and new tile of a region: the transfers are held by every rank of
     # the parent's subset, the patches only by a tile's owners.
     old_of = Dict(r => i for (i, r) in enumerate(old_regions))
@@ -1278,7 +1514,11 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     stacked = _stacked_level(spec.backend, spec.tile)
     dropped_decomps = Decomp{T}[]
     old_piece = Dict{Int,Tuple{eltype(states),Decomp{T}}}()
+    # Under a change of lattice every old tile this rank holds is a source
+    # of the carry, by old tile index.
+    carry_src = Dict{Int,Tuple{eltype(states),Decomp{T}}}()
     for (li, ti_old) in zip(lev.patches, lev.tiles)
+        rechopped && (carry_src[ti_old] = (states[li], patches[li].decomp))
         r = old_regions[ti_old]
         keeps = haskey(new_of, r) && kept[new_of[r]]
         keeps && !stacked && continue
@@ -1460,6 +1700,18 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                         mismatches=res.mismatches + differ)
         end
     end
+    # Under a change of lattice a new tile takes the evolved solution of the
+    # old tiles it overlaps over its interpolated initialization.
+    if rechopped
+        new_data = Dict(ti => (states[local_of[ti]], patches[local_of[ti]].decomp)
+                        for ti in eachindex(wanted) if local_of[ti] != 0)
+        _carry_tiles!(T, root_lc.comm, active, _level_period(solver, 1),
+                      [_fine_region(lt) for lt in lev.transfers],
+                      [_erode(_fine_region(lt), lt.imposed, active) for lt in lev.transfers],
+                      lev.owners,
+                      [_fine_region(tr, active, fo) for (tr, fo) in zip(wanted, folds)],
+                      owners, is_new, carry_src, new_data)
+    end
     # A new tile's plane shared with a survivor takes the survivor's
     # evolved values rather than averaging its interpolation into them.
     any(is_new) && new_lc.owned && _seed_planes!(solver, states, levels[2], is_new)
@@ -1510,19 +1762,29 @@ end
 # offered here (the constructor refuses it): one busy time per rank cannot
 # separate the levels' shares of it.
 
-# The tag buffer of a level that may have children: a child cell reaches
-# `buffer + tile` of its own parent's nodes past a tagged node and needs
-# `margin` more of them, plus one eroded plane, inside that parent's own
-# nodes, which is a third as many nodes of this level. With the tag at the
-# same place on both levels, this buffer lets the child nest.
-_nest_buffer(buffer::Int, tile::Int, margin::Int) =
-    max(buffer, cld(buffer + tile + margin + 1, 3) + 1)
+# The tag buffer of a level that may have children, per dimension: a child
+# cell reaches `buffer + tile` of its own parent's nodes past a tagged node
+# and needs `margin` more of them, plus one eroded plane, inside that
+# parent's own nodes, which is a third as many nodes of this level. With the
+# tag at the same place on both levels, this buffer lets the child nest. The
+# configured edge bounds every lattice the child may take.
+_nest_buffer(buffer::Int, tile::NTuple{3,Int}, margin::Int) =
+    ntuple(d -> max(buffer, cld(buffer + tile[d] + margin + 1, 3) + 1), 3)
 
 # The lattice cell of a tile region: its offset over the edge, which also
 # holds for a tile clipped at the domain's margin and for the first cell
 # extended to a fold (`_lattice_tile`).
-_cell_of(r::BlockRegion, tile::Int, active::NTuple{3,Bool}) =
-    ntuple(d -> active[d] ? max(r.offset[d], 0) ÷ tile : 0, 3)
+_cell_of(r::BlockRegion, tile::NTuple{3,Int}, active::NTuple{3,Bool}) =
+    ntuple(d -> active[d] ? max(r.offset[d], 0) ÷ tile[d] : 0, 3)
+
+# The cells of a lattice of edges `tile` meeting a region: those of
+# `_tile_span` over its node interval along each active dimension.
+function _cells_of(r::BlockRegion, tile::NTuple{3,Int}, active::NTuple{3,Bool})
+    spans = ntuple(d -> active[d] ?
+                        _tile_span(r.offset[d] + 1, r.offset[d] + r.extent[d], tile[d]) :
+                        (0:0), 3)
+    return [(k1, k2, k3) for k3 in spans[3] for k2 in spans[2] for k1 in spans[1]]
+end
 
 # Fill every refined tile by interpolation of its parent, top-down: the
 # initial layout of the AMR frontend, whose seed tile holds no state yet.
@@ -1536,15 +1798,19 @@ function _fill_levels_from_parents!(solver::Solver, states)
     return states
 end
 
-# The decision of rank 0 for level ℓ from the reduced cell flags: the wanted
-# tiles in lattice order, the owner ranges, and what survives.
+# The decision of rank 0 for level ℓ from the reduced cell flags of each
+# lattice of `chain`: the lattice, the wanted tiles in lattice order, the
+# owner ranges, and what survives. Under a change of lattice the decision
+# also carries the old tiles' fine regions, own nodes and owners, which
+# every rank needs for the carry and a rank outside the parent's old subset
+# does not hold.
 function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
-                       flags::Dict{NTuple{3,Int},Int8}, active::NTuple{3,Bool},
+                       flagsets::Vector{Dict{NTuple{3,Int},Int8}},
+                       chain::Vector{NTuple{3,Int}}, active::NTuple{3,Bool},
                        N::NTuple{3,Int}, parent_changed::Bool)
     levels = getfield(solver, :levels)
     lev = levels[ℓ + 1]
     parent = levels[ℓ]
-    a = spec.tile
     margin = spec.margin
     old_regions = [lt.region for lt in lev.transfers]
     old_owners = lev.owners
@@ -1558,32 +1824,42 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     wrap = _placement_period(solver, spec, ℓ - 1)
     period = _level_period(solver, ℓ - 1)
     lo, hi = _wrap_feasible(_feasible_nodes(N, active, margin, reach, span)..., wrap)
-    wanted = BlockRegion[]
-    if !isempty(parent_valid)
+    current = findfirst(==(_level_edges(spec, ℓ)), chain)
+    wanted_sets = Vector{BlockRegion}[]
+    for (i, a) in enumerate(chain)
+        wanted = BlockRegion[]
+        push!(wanted_sets, wanted)
+        isempty(parent_valid) && continue
+        flags = flagsets[i]
         cells = Set(keys(flags))
         foreach(r -> push!(cells, _cell_of(r, a, active)), old_regions)
+        i == current || foreach(r -> union!(cells, _cells_of(r, a, active)), old_regions)
         for k in sort!(collect(cells); by=k -> (k[3], k[2], k[1]))
             # The lattice's last node: across a seam the period's P + 1.
             t = _lattice_tile(k, active, a, lo, hi,
                               ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : N[d], 3))
             t === nothing && continue
-            f = get(flags, k, zero(Int8))
-            exists = t in old_regions
-            young = exists && spec.checks - get(created, t, 0) < spec.lifetime
-            (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) || continue
+            _tile_wanted(t, get(flags, k, zero(Int8)), spec, old_regions, created,
+                         i == current, active, period) || continue
             _covered_by(_buffered(t, active, margin, _boundary_faces(t, span, reach)),
                         parent_valid, period) || continue
             push!(wanted, t)
         end
     end
+    pick = _select_lattice(length.(wanted_sets), current, parent_np, isempty(old_regions))
+    wanted = wanted_sets[pick]
+    rechopped = pick != current && !isempty(old_regions)
     changed = (wanted != old_regions || parent_changed) &&
               !(isempty(wanted) && isempty(old_regions))
-    changed || return (changed=false,)
+    changed || return (changed=false, edges=chain[pick])
+    inherited = Dict(r => _inherited_check(r, old_regions, created, spec.checks, active,
+                                           period)
+                     for r in wanted if rechopped && !(r in old_regions))
     for r in old_regions
         r in wanted || delete!(created, r)
     end
     for r in wanted
-        haskey(created, r) || (created[r] = spec.checks)
+        haskey(created, r) || (created[r] = get(inherited, r, spec.checks))
     end
     # A survivor keeps its range where the parent's subset still holds it.
     fit = [last(o) < parent_np for o in old_owners]
@@ -1595,9 +1871,13 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
     old_index = [something(findfirst(==(r), old_regions), 0) for r in wanted]
     kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
             for ti in eachindex(wanted)]
-    return (changed=true, wanted=wanted, owners=owners, np_new=np_new,
-            np_old=lev.level_comm.size, old_index=old_index, kept=kept,
-            created=created)
+    carry = rechopped ?
+            (fine=[_fine_region(lt) for lt in lev.transfers],
+             own=[_erode(_fine_region(lt), lt.imposed, active) for lt in lev.transfers],
+             owners=copy(old_owners)) : nothing
+    return (changed=true, edges=chain[pick], wanted=wanted, owners=owners,
+            np_new=np_new, np_old=lev.level_comm.size, old_index=old_index, kept=kept,
+            created=created, carry=carry)
 end
 
 # Tag level ℓ − 1 and decide level ℓ. The sweep runs on the tiles each rank
@@ -1611,14 +1891,19 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
     comm = getfield(solver, :comm)
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    a = spec.tile
-    b = ℓ < length(levels) - 1 ? _nest_buffer(spec.buffer, a, spec.margin) :
-        spec.buffer
+    b = ℓ < length(levels) - 1 ? _nest_buffer(spec.buffer, spec.tile, spec.margin) :
+        ntuple(_ -> spec.buffer, 3)
     N = ntuple(d -> active[d] ? 3^(ℓ - 1) * (n_global[d] - 1) + 1 : 1, 3)
+    # The lattices the level may take. The chain reads the rank count only
+    # for whether it exceeds one, so the run's count gives every rank the
+    # same chain; the parent subset's count, which the choice among them
+    # reads, is rank 0's to apply.
+    chain = _level_chain(solver, spec, N, active, MPI.Comm_size(comm))
     # Across a periodic seam the lattice runs over the period's P + 1 nodes.
     wrap = _placement_period(solver, spec, ℓ - 1)
-    K = ntuple(d -> active[d] ? ((wrap[d] > 0 ? wrap[d] + 1 : N[d]) - 1) ÷ a + 1 : 1, 3)
-    cells = Dict{NTuple{3,Int},Int8}()
+    Ks = [ntuple(d -> active[d] ? ((wrap[d] > 0 ? wrap[d] + 1 : N[d]) - 1) ÷ a[d] + 1 : 1,
+                 3) for a in chain]
+    cellsets = [Dict{NTuple{3,Int},Int8}() for _ in chain]
     # A node at the tag level outside the feasible interval of the lattice
     # clip `_decide_level` applies: the margin band of a face no level reaches.
     reach = _placed_reach(solver, spec, N, active)
@@ -1630,11 +1915,14 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
         g = (g1, g2, g3)
         level == TAG_MARK && any(d -> active[d] && !(lo[d] <= g[d] <= hi[d]), 1:3) &&
             (banded[] = true)
-        spans = ntuple(d -> active[d] ? _wrapped_cells(g[d] - b, g[d] + b, a, K[d], wrap[d]) :
-                       (0:0), 3)
-        for k3 in spans[3], k2 in spans[2], k1 in spans[1]
-            k = (k1, k2, k3)
-            cells[k] = max(get(cells, k, zero(Int8)), level)
+        for (a, K, cells) in zip(chain, Ks, cellsets)
+            spans = ntuple(d -> active[d] ?
+                                _wrapped_cells(g[d] - b[d], g[d] + b[d], a[d], K[d],
+                                               wrap[d]) : (0:0), 3)
+            for k3 in spans[3], k2 in spans[2], k1 in spans[1]
+                k = (k1, k2, k3)
+                cells[k] = max(get(cells, k, zero(Int8)), level)
+            end
         end
         return nothing
     end
@@ -1647,26 +1935,30 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
                         false)
         end
     end
-    # The band flag travels as a record of its own, cell (−1, −1, −1).
+    # A record is the lattice's index in the chain, the cell and its level;
+    # the band flag travels as a record of its own, lattice 0.
     packed = Int64[]
-    for (k, v) in cells
-        append!(packed, (k[1], k[2], k[3], v))
+    for (i, cells) in enumerate(cellsets), (k, v) in cells
+        append!(packed, (i, k[1], k[2], k[3], v))
     end
-    banded[] && append!(packed, (-1, -1, -1, 1))
+    banded[] && append!(packed, (0, 0, 0, 0, 1))
     gathered = MPI.gather(packed, comm; root=0)
     decision = nothing
     if MPI.Comm_rank(comm) == 0
-        flags = Dict{NTuple{3,Int},Int8}()
+        flagsets = [Dict{NTuple{3,Int},Int8}() for _ in chain]
         band = false
-        for buf in gathered, i in 1:4:length(buf)
-            k = (Int(buf[i]), Int(buf[i + 1]), Int(buf[i + 2]))
-            k[1] < 0 && (band = true; continue)
-            flags[k] = max(get(flags, k, zero(Int8)), Int8(buf[i + 3]))
+        for buf in gathered, i in 1:5:length(buf)
+            buf[i] == 0 && (band = true; continue)
+            flags = flagsets[buf[i]]
+            k = (Int(buf[i + 1]), Int(buf[i + 2]), Int(buf[i + 3]))
+            flags[k] = max(get(flags, k, zero(Int8)), Int8(buf[i + 4]))
         end
         band && _warn_margin_band(solver, spec.margin, ℓ)
-        decision = _decide_level(solver, ℓ, spec, flags, active, N, parent_changed)
+        decision = _decide_level(solver, ℓ, spec, flagsets, chain, active, N,
+                                 parent_changed)
     end
     decision = MPI.bcast(decision, comm; root=0)
+    _set_level_edges!(spec, ℓ, decision.edges)
     if decision.changed
         created = _created(spec, ℓ)
         empty!(created)
@@ -1754,6 +2046,15 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     kept_old = Set(old_index[ti] for ti in eachindex(wanted) if kept[ti])
     dropped = Decomp{T}[patches[li].decomp for (li, t) in zip(lev.patches, lev.tiles)
                         if !(t in kept_old)]
+    # Under a change of lattice every old tile this rank holds is a source
+    # of the carry, by old tile index.
+    carry = get(decision, :carry, nothing)
+    carry_src = Dict{Int,Tuple{eltype(states),Any}}()
+    if carry !== nothing
+        for (li, t) in zip(lev.patches, lev.tiles)
+            carry_src[t] = (states[li], patches[li].decomp)
+        end
+    end
     # The old group and, where the subset changes, the old level communicator
     # are freed by their members; the new ones are split over the parent's
     # new subset. `resized` is derived from broadcast values, so it agrees on
@@ -1895,6 +2196,18 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                            fine_extent(wanted[ti], active, folds[ti]), active,
                            old_table, _block_table(d_new, comm), comm, _EVERY_FACE)
         end
+    end
+    # Under a change of lattice a new tile takes the evolved solution of the
+    # old tiles it overlaps, over the run's communicator, whose rank numbers
+    # the owner ranges of both layouts use.
+    if init && carry !== nothing
+        new_data = Dict(ti => (states[local_of[ti]], patches[local_of[ti]].decomp)
+                        for ti in eachindex(wanted) if local_of[ti] != 0)
+        _carry_tiles!(T, comm, active, _level_period(solver, ℓ), carry.fine, carry.own,
+                      carry.owners,
+                      [_fine_region(tr, active, fo) for (tr, fo) in zip(wanted, folds)],
+                      owners, [old_index[ti] == 0 for ti in eachindex(wanted)],
+                      carry_src, new_data)
     end
     if init && parent_lc.owned
         # A moved survivor carries its planes and seeds as a survivor.

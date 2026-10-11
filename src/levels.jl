@@ -1597,14 +1597,35 @@ level_regions(solver, level::Int) =
 
 # --- Tile lattice -------------------------------------------------------------
 #
-# A refined level is tiled on a lattice of edge `tile` parent nodes anchored
-# at parent node 0: lattice cell k spans parent nodes k·tile + 1 .. (k+1)·tile
-# + 1, so abutting tiles share their interface plane (as root slabs do) and
-# every tile face is either fully shared with one neighbor or fully fed from
-# the parent. Tiles at the domain edge are clipped to the nesting margin and
-# dropped when clipping leaves them below the four-node minimum. The lattice
-# is global so that a regrid moves tiles in and out of the set without ever
-# changing a surviving tile's region.
+# A refined level is tiled on a lattice of edge `tile[d]` parent nodes along
+# dimension d, anchored at parent node 0: lattice cell k spans parent nodes
+# k·tile + 1 .. (k+1)·tile + 1 along each dimension, so abutting tiles share
+# their interface plane (as root slabs do) and every tile face is either
+# fully shared with one neighbor or fully fed from the parent. Tiles at the
+# domain edge are clipped to the nesting margin and dropped when clipping
+# leaves them below the four-node minimum. The lattice is global so that a
+# regrid moves tiles in and out of the set without ever changing a surviving
+# tile's region; a regrid that subdivides the lattice (`_select_lattice`,
+# regrid.jl) replaces every tile at once.
+
+# The lattice edge per dimension of a `tile` keyword: one integer for every
+# dimension, or a tuple of one to three edges, x first, a dimension it omits
+# taking its last entry. Zero along every dimension is one patch per level.
+_tile_edges(tile::Integer) = (Int(tile), Int(tile), Int(tile))
+_tile_edges(tile::NTuple{3,Int}) = tile
+function _tile_edges(tile::Tuple)
+    (1 <= length(tile) <= 3 && all(e -> e isa Integer, tile)) ||
+        throw(ArgumentError("tile must be an integer or a tuple of one to three " *
+                            "integers, x first; got $tile"))
+    return ntuple(d -> Int(tile[min(d, length(tile))]), 3)
+end
+_tile_edges(tile) =
+    throw(ArgumentError("tile must be an integer or a tuple of one to three " *
+                        "integers, x first; got $tile"))
+
+# Whether a `tile` setting tiles its levels rather than covering each with
+# one box.
+_tiled(tile) = any(>(0), _tile_edges(tile))
 
 # Lattice cell indices meeting the node interval [lo, hi]. A node on a
 # lattice plane belongs to both cells it separates, but an interval of two
@@ -1621,13 +1642,13 @@ end
 # root's last; a feasible interval reaching past either end of the lattice,
 # as it does at a fold below the first refined level (`_level_span`),
 # extends the first and the last cell to its ends instead of adding a cell.
-function _lattice_tile(k::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
+function _lattice_tile(k::NTuple{3,Int}, active::NTuple{3,Bool}, tile::NTuple{3,Int},
                        lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi)
-    any(d -> active[d] && k[d] * tile + 1 >= last[d], 1:3) && return nothing
+    any(d -> active[d] && k[d] * tile[d] + 1 >= last[d], 1:3) && return nothing
     offext = ntuple(3) do d
         active[d] || return (0, 1)
-        a = k[d] == 0 ? lo[d] : max(k[d] * tile + 1, lo[d])
-        top = k[d] * tile + tile + 1
+        a = k[d] == 0 ? lo[d] : max(k[d] * tile[d] + 1, lo[d])
+        top = k[d] * tile[d] + tile[d] + 1
         b = top >= last[d] ? hi[d] : min(top, hi[d])
         (a - 1, b - a + 1)
     end
@@ -1640,14 +1661,15 @@ end
 # the lattice crosses, the box may run past the seam and the cells it meets
 # are those of its pieces on either side (`_wrapped_parts`), on the lattice
 # over [1, P + 1] whose last cell ends on the seam.
-function _level_tiles(box::BlockRegion, active::NTuple{3,Bool}, tile::Int,
+function _level_tiles(box::BlockRegion, active::NTuple{3,Bool}, tile::NTuple{3,Int},
                       lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi,
                       wrap::NTuple{3,Int}=(0, 0, 0))
     spans = ntuple(3) do d
         active[d] || return [0]
         parts = _wrapped_parts(box.offset[d] + 1, box.offset[d] + box.extent[d],
                                wrap[d])
-        sort!(unique!(reduce(vcat, [collect(_tile_span(a, b, tile)) for (a, b) in parts])))
+        sort!(unique!(reduce(vcat, [collect(_tile_span(a, b, tile[d]))
+                                    for (a, b) in parts])))
     end
     tiles = BlockRegion[]
     for k3 in spans[3], k2 in spans[2], k1 in spans[1]
@@ -4059,7 +4081,7 @@ mutable struct RegridSpec{T}
     filt::Union{CompactScheme{T},BandedCompactScheme{T}}
     smoo::Union{CompactScheme{T},BandedCompactScheme{T}}
     backend::AbstractBackend
-    tile::Int                        # lattice edge; 0 = one box over the tags
+    tile::NTuple{3,Int}              # lattice edge per dimension; 0 = one box
     last_step::Int
     rebalance::Float64               # max/mean busy-time threshold; 0 = off
     persist::Int                     # consecutive checks above it before moving
@@ -4083,20 +4105,34 @@ mutable struct RegridSpec{T}
     restriction::Symbol              # level_restriction of a rebuilt transfer
     deep_created::Vector{Dict{BlockRegion,Int}} # `created` of levels 2, 3, ...
     boundaries::Bool                 # tags may place a level on a domain face
+    edges::Vector{NTuple{3,Int}}     # per refined level, its lattice's edges
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
               deriv, filt, smoo, backend, tile, last_step,
               rebalance=0.0, persist=1) where {T} =
     RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
-                  deriv, filt, smoo, backend, tile, last_step,
+                  deriv, filt, smoo, backend, _tile_edges(tile), last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[], true)
+                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[])
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]
+
+# The lattice edges refined level `ℓ` is tiled on: the configured `tile`
+# until the regrid subdivides it (`_select_lattice`).
+_level_edges(spec::RegridSpec, ℓ::Int) =
+    ℓ <= length(spec.edges) ? spec.edges[ℓ] : spec.tile
+
+function _set_level_edges!(spec::RegridSpec, ℓ::Int, edges::NTuple{3,Int})
+    while length(spec.edges) < ℓ
+        push!(spec.edges, spec.tile)
+    end
+    spec.edges[ℓ] = edges
+    return spec
+end
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

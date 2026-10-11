@@ -548,6 +548,61 @@ end
     @test sa.wait_total >= 0 && sa.wait_total <= sa.wall_total
 end
 
+@testset "per-dimension tile edges and lattice subdivision" begin
+    # `tile` takes one edge or one per dimension, x first, an omitted
+    # dimension taking the last entry given.
+    @test CL._tile_edges(12) == (12, 12, 12)
+    @test CL._tile_edges((4, 12)) == (4, 12, 12)
+    @test CL._tile_edges((4, 12, 8)) == (4, 12, 8)
+    @test !CL._tiled(0) && !CL._tiled((0, 0, 0)) && CL._tiled((4, 12))
+    @test_throws ArgumentError CL._tile_edges((4, 12, 8, 2))
+    @test_throws ArgumentError CL._tile_edges(4.0)
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
+                         refine=BlockRegion((16, 16, 0), (17, 17, 1)); kw...)
+    @test_throws ErrorException mk(tile=(4, 2))
+    @test_throws ErrorException mk(tile=(4, 0))
+    # A thin-normal lattice: tiles four parent nodes along x spanning the
+    # region along y.
+    s = mk(tile=(4, 16))
+    @test [lt.region for lt in s.levels[2].transfers] ==
+          [BlockRegion((16 + 4k, 16, 0), (5, 17, 1)) for k in 0:3]
+    @test getfield(mk(tile=(4, 16), regrid_interval=2), :regrid).tile == (4, 16, 16)
+    @test AMR(tile=(4, 12)).tile == (4, 12)
+    # The chain of lattices a level may take: the largest edge halved in turn,
+    # the lowest dimension first among equals, down to four parent nodes,
+    # and only along a dimension where the halved lattice reaches the domain
+    # faces the configured one does. A dimension of 12 nodes ending on a
+    # face its lattice reaches keeps an edge of 4 out (the last cell would
+    # span 3 parent cells, under the margin), and one rank takes the
+    # configured lattice alone.
+    none = CL._NO_BOUNDARY
+    @test CL._edge_chain((16, 16, 16), (true, true, false), (48, 48, 1), none, none,
+                         4, 8, 4, 8) ==
+          [(16, 16, 16), (8, 16, 16), (8, 8, 16), (4, 8, 16), (4, 4, 16)]
+    faces = ((true, true), (true, true), (true, true))
+    bare = ((true, true), (false, false), (false, false))
+    @test CL._edge_chain((12, 12, 12), (true, true, true), (73, 12, 12), faces, bare,
+                         4, 8, 4, 8) == [(12, 12, 12), (6, 12, 12), (6, 6, 12), (6, 6, 6)]
+    @test CL._edge_chain((12, 12, 12), (true, true, true), (73, 12, 12), faces, bare,
+                         4, 8, 4, 1) == [(12, 12, 12)]
+    @test CL._edge_chain((4, 12, 12), (true, true, false), (101, 12, 1), faces, bare,
+                         4, 8, 4, 8) == [(4, 12, 12), (4, 6, 12)]
+    # The choice among them, from the wanted tiles each gives: the coarsest
+    # giving a tile per rank, held until a coarser one gives two per rank or
+    # as many as the current one.
+    @test CL._select_lattice([1, 2, 4, 8], nothing, 4, true) == 3
+    @test CL._select_lattice([1, 2, 4, 8], 1, 4, false) == 3
+    @test CL._select_lattice([5, 9, 16, 30], 3, 4, false) == 2
+    @test CL._select_lattice([5, 9, 16, 30], 2, 4, false) == 2
+    @test CL._select_lattice([3, 6, 12, 24], 2, 4, false) == 2
+    # No lattice gives a tile per rank: the coarsest giving the most.
+    @test CL._select_lattice([1, 1, 2, 2], 1, 8, false) == 3
+    @test CL._select_lattice([1, 1, 2, 2], 4, 8, false) == 3
+    # Nothing wanted: the configured lattice.
+    @test CL._select_lattice([0, 0, 0], 2, 8, false) == 1
+end
+
 @testset "tile migration: interior rule and the rank's own copy" begin
     # `_migrate_tile!` moves a tile's solution between two decompositions
     # of it from their block tables alone. On one rank both blocks are the

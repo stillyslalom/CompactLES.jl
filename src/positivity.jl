@@ -354,7 +354,8 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
                               n_global, n_halo, L_domain, ::Type{T};
                               interface_flux::Symbol=:closure,
                               interface_rhs::Symbol=:extended,
-                              interface_divergence=nothing, tile::Int=0,
+                              interface_divergence=nothing,
+                              tile::NTuple{3,Int}=(0, 0, 0),
                               level_restriction::Symbol=:inject) where {T}
     fail(what) = throw(ArgumentError("positivity_limiter: $what"))
     radial = _limiter_radial_line(bcs, metric, n_global)
@@ -370,7 +371,7 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
             fail("on refined levels takes level_restriction = :inject: the " *
                  "filtered restriction writes values the limiter does not bound " *
                  "onto the parent")
-        radial && tile > 0 &&
+        radial && _tiled(tile) &&
             fail("on a radial grid supports a refined level as one box (tile = 0): " *
                  "a tile's radial line closes at a shared face, which the radial " *
                  "limiter does not take")
@@ -386,7 +387,7 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
         error("positivity limiter: interfaces under :ghost reached the check")
     # A device level's tiles share stacked storage, whose batched right-hand
     # side has no per-tile registers.
-    backend isa DeviceBackend && nlev > 1 && tile > 0 &&
+    backend isa DeviceBackend && nlev > 1 && _tiled(tile) &&
         fail("on a DeviceBackend supports a refined level as one box (tile = 0)")
     eos isa IdealMixture ||
         fail("supports the ideal-gas EOS (IdealSpecies, IdealMixture), whose " *
@@ -426,10 +427,12 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
         end
         # A tile's line on a refined level: 3 tile + 1 nodes between two
         # interface ends at the level's spacing. A box's extent changes at a
-        # regrid; its patch is checked as its limiter is built.
-        if nlev > 1 && tile > 0
+        # regrid; its patch is checked as its limiter is built. A regrid that
+        # subdivides the lattice stops at the edge this line needs
+        # (`_limiter_least_extent`).
+        if nlev > 1 && _tiled(tile)
             hf = T(L_domain[d] / (periodic[d] ? n_global[d] : n_global[d] - 1) / 3)
-            _check_limiter_line(fail, deriv, filt, d, 3tile + 1, hf, n_halo, T,
+            _check_limiter_line(fail, deriv, filt, d, 3tile[d] + 1, hf, n_halo, T,
                                 rows, rows)
         end
     end

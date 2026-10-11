@@ -44,12 +44,14 @@ One solver runs on four axes of configuration, combinable except where
   entering and leaving the set, on the Cartesian metric and on the
   axisymmetric (θ-collapsed) cylindrical one (`src/levels.jl`,
   `src/regrid.jl`).
-- **Distribution**: each level decomposes over its own rank subset, a prefix
-  of its parent's, and within it each tile over its own rank range, the
-  ranges dealt out along a Morton curve by tile volume; a rank holds the
-  root and the tiles of its range only. Ownership is stored across regrids,
-  a survivor keeping its range and a fresh tile going to the least loaded
-  group; each level is repartitioned by volume when that lowers its peak
+- **Distribution**: each level is owned by its own rank subset, a prefix
+  of its parent's, and within it each tile of a tiled level is held whole
+  by one rank, the tiles dealt out along a Morton curve, while a box level's
+  one patch is decomposed over as many ranks as it admits; a rank holds the
+  root and its own tiles only. A regridded level with fewer tiles than ranks
+  is tiled on a subdivided lattice. Ownership is stored across regrids,
+  a survivor keeping its rank and a fresh tile going to the least loaded
+  one; each level is repartitioned by volume when that lowers its peak
   rank load by more than `PLACEMENT_GAIN`, or, with one regridded level, on
   the per-rank busy time the run measures when that stays imbalanced past a
   threshold for a set number of checks, and a tile whose range moves
@@ -1165,15 +1167,21 @@ and no split exists). Within the subset each tile is owned by a contiguous
 rank range, and the subset's size is the union of the ranges
 (`_tile_owners`):
 
-- With at least as many ranks as tiles, each tile takes its own range,
-  sized by weight through largest-remainder rounding, at least one rank
-  and at most the count the tile admits under the 9-point scheme minimum,
-  and only at a count it admits, since admission is not monotone in the
-  count (`_rank_counts`); ranks left over hold nothing on the level.
-  A one-tile level therefore reduces to `_level_ranks`.
-- With more tiles than ranks, each tile takes one rank: the curve is cut into
-  `np` runs of about equal weight, by the position of each tile's weight
-  midpoint.
+- On a tiled level each tile is held whole by one rank. With at least as
+  many ranks as tiles the k-th tile along the curve takes rank k − 1 and
+  the ranks past the last tile hold nothing on the level; with more tiles
+  than ranks the curve is cut into `np` runs of about equal weight, by the
+  position of each tile's weight midpoint. A tile split over several ranks
+  pays a reduced-system `Allgather` in every line solve along a split
+  dimension and an `Allgatherv` per shell fill, and the rmicost 3-D amr2
+  profile, four 37-node tiles over eight ranks, spent about half of every
+  phase in MPI, the right-hand side included.
+- The one patch of a box level (`tile = 0`) takes as many ranks as it
+  admits under the 9-point scheme minimum (`_rank_counts`, `_level_ranks`).
+  A box is one compact feature that a regrid moves as a whole, so chopping
+  it would add closure faces and break the one-patch layout `refined_region`
+  and the box regrid's carry rest on, for a split that a box of root-like
+  size amortizes as the root does.
 
 The ranges are laid along a Morton curve over the tile offsets
 (`_sfc_order`), so a contiguous run of ranks holds a compact set of tiles and
@@ -1211,6 +1219,7 @@ Each collective is scoped to the rank set that owns the data it moves:
 | `_tag_tiles`, the box regrid's carry-over | the root communicator | every rank |
 | `_rebalance_due!` busy-time Allgather | the root communicator | every rank, when `rebalance > 0` |
 | `_migrate_tile!` (point-to-point, no collective) | the root communicator | the moved tile's old and new owners |
+| `_carry_tiles!` at a change of lattice (point-to-point, no collective) | the root communicator | the owners of each overlapping old and new tile |
 | `max_rate`, `positivity_floors`, `WhenState` | the root communicator | every rank |
 | the composite diagnostics (the `Vector` forms of `volume_integral` and the rest) | the root communicator | every rank, its own patches accumulated first |
 
@@ -1265,6 +1274,26 @@ post. A recomputed partition at every
 regrid would move a survivor whenever a tile entered ahead of it on the
 curve; stored ownership moves state only when the partition has drifted.
 
+A regridded level with fewer tiles than its parent has ranks would leave
+ranks idle, so the regrid tiles each level on the coarsest lattice of a
+chain that gives it a tile per rank (`_edge_chain`, `_select_lattice`), as
+AMReX chops its boxes until there are as many as ranks: the configured
+edges first, then each lattice halving the largest edge that stays at least
+`MIN_TILE_EDGE` = 4 parent nodes and keeps the domain faces the configured
+lattice reaches. Every lattice is tagged in one sweep and one reduction. A
+level keeps its lattice until a coarser one gives two tiles per rank, or as
+many as its own, so a tile count near the rank count does not switch
+lattices at every check. A change of lattice replaces every tile: the new
+tiles are filled from the parent, then take the old tiles' solution at
+every node an old tile held as its own, its parent-fed planes excluded, one
+point-to-point message per overlapping pair of whole tiles
+(`_carry_tiles!`); a re-chopped tile inherits the latest creation check of
+the old tiles it overlaps. `RegridSpec.edges` holds each level's lattice and
+the checkpoint carries it. On one rank the chain is the configured lattice
+alone, so a serial run never subdivides, and `SUBDIVIDE_LATTICE` turns the
+subdivision off so that the MPI suite compares a decomposed run with the
+serial one.
+
 After placement the level's most loaded rank is compared with a fresh
 partition by fine volume (`_balanced_owners`): whole tiles by largest-first
 assignment with swaps when the tiles outnumber the ranks
@@ -1277,11 +1306,9 @@ The decision reads only the reduced tile set and the stored owners, so it
 needs no measurement and applies to every regridded level, each on its own,
 since under subcycling the levels advance in turn. A moved survivor carries
 its whole tile, shared and imposed planes included (`_EVERY_FACE`), and
-seeds its shared planes as a survivor, so a tile held by one rank before
-and after continues bit for bit; a tile decomposed over several ranks
-continues at round-off, and so does the conservative coupling, whose
-junction registers are summed by an `Allreduce` whose order follows the
-ranks contributing.
+seeds its shared planes as a survivor, so it continues bit for bit; the
+conservative coupling continues at round-off, its junction registers summed
+by an `Allreduce` whose order follows the ranks contributing.
 
 Each regrid frees the tile groups and splits them afresh; a surviving
 tile's Cartesian communicator is independent of the group it was split from
@@ -1356,11 +1383,14 @@ at zero, so the two paths agree bitwise where both apply.
 
 ### Reproducibility tier
 
-A tile owned by a proper subset is a different decomposition of it, so it
-reproduces the every-rank answer to round-off rather than bitwise, the tier
-the MPI suite applies to decomposed patches, and the tiled wave and Sod
-regrid cases hold it at np = 2, 4 and 8
-([measurements](CALIBRATION_APPENDIX.md#amr)). A rank outside a subset
+A box level's patch owned by a proper subset is a different decomposition
+of it, so it reproduces the every-rank answer to round-off rather than
+bitwise, the tier the MPI suite applies to decomposed patches; a whole tile
+is the serial tile, and the tiled wave and Sod regrid cases hold the serial
+answer at np = 2, 4 and 8 with the subdivision off
+([measurements](CALIBRATION_APPENDIX.md#amr)). With it on, the layout and
+the solution to within the truncation error follow the rank count. A rank
+outside a subset
 follows the same step sequence and trigger firing as one inside it, which
 the suite pins; the smallest such case refines a region of four coarse
 nodes, which `_amr_dims` cannot split over two ranks and which runs with

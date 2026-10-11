@@ -91,6 +91,12 @@ end
 
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
+# A regridded level with fewer tiles than ranks takes a finer lattice, so a
+# decomposed run tiles its levels differently from the serial run the
+# phases compare it with. The suite keeps every level on its configured
+# lattice; the "lattice subdivision" phase turns the subdivision on.
+CL.SUBDIVIDE_LATTICE[] = false
+
 "Max interior error of a scalar field against an analytic function (this rank)."
 function ferr(solver, f, fn)
     e = 0.0
@@ -1944,6 +1950,148 @@ function test_deep_regrid_subsets()
               counts[2] > 0 ? 0.0 : 1.0, 0.5)
         check("deep regrid under subsets: a level-2 survivor moved",
               counts[3] > 0 ? 0.0 : 1.0, 0.5)
+    end
+end
+
+# Lattice subdivision: a level with fewer tiles than ranks takes a finer
+# lattice at the regrid (`_select_lattice`), every tile whole on one rank,
+# and its new tiles take the old tiles' solution (`_carry_tiles!`). A 2-D
+# level of one 16-node tile, built with the subdivision off, is regridded
+# with it on: at np = 2, 4 and 8 the level takes 2, 4 and 8 tiles, one per
+# rank, and every node the old tile held as its own solution reads the old
+# value bit for bit, all components. A three-level shock then runs with
+# the subdivision on.
+function subdivision_carry()
+    inside(p, I) = begin
+        i, j, _ = CL.interior_index(p, I)
+        gi, gj = i + p.decomp.offset[1], j + p.decomp.offset[2]
+        18 <= gi <= 32 && 18 <= gj <= 32
+    end
+    CL.SUBDIVIDE_LATTICE[] = false
+    solver = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                    tile=16, regrid_interval=1, tag_buffer=0, tag_threshold=Inf,
+                    tag_predicate=inside, refine=BlockRegion((16, 16, 0), (17, 17, 1)))
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) ->
+        Prim(u=(0.3, 0.2, 0), p=1.0, rho=1.0 + 0.1 * sin(2π * x) * sin(2π * y)))
+    run!(solver, states; tfinal=1.0, nmax=2)
+    lev = solver.levels[2]
+    check("lattice subdivision: one tile before", abs(length(lev.transfers) - 1), 0.5)
+    old = lev.transfers[1]
+    owner = first(lev.owners[1])
+    of = CL._fine_region(old)
+    own = CL._erode(of, old.imposed, (true, true, false))
+    # The old tile's padded state, from its owner to every rank.
+    dims = zeros(Int64, 7)
+    A = nothing
+    if rank == owner
+        li = lev.patches[1]
+        A = Array(parent(states[li]))
+        dims .= [size(A)..., solver.patches[li].decomp.n_halo_d...]
+    end
+    MPI.Bcast!(dims, comm; root=owner)
+    rank == owner || (A = zeros(Float64, dims[1:4]...))
+    MPI.Bcast!(A, comm; root=owner)
+    pad_old = Tuple(dims[5:7])
+    CL.SUBDIVIDE_LATTICE[] = true
+    CL.regrid!(solver, states, CL.Workspace(states), nothing)
+    lev = solver.levels[2]
+    spec = getfield(solver, :regrid)
+    expect = Dict(1 => (16, 16, 16), 2 => (8, 16, 16), 4 => (8, 8, 16),
+                  8 => (4, 8, 16))
+    check("lattice subdivision: a tile per rank", abs(length(lev.transfers) - np), 0.5)
+    check("lattice subdivision: the coarsest lattice giving them",
+          CL._level_edges(spec, 1) == get(expect, np, (0, 0, 0)) ? 0.0 : 1.0, 0.5)
+    check("lattice subdivision: each tile whole on one rank",
+          all(length(o) == 1 for o in lev.owners) ? 0.0 : 1.0, 0.5)
+    miss = 0
+    compared = 0
+    for (li, ti) in zip(lev.patches, lev.tiles)
+        nf = CL._fine_region(lev.transfers[ti])
+        pad = solver.patches[li].decomp.n_halo_d
+        Q = Array(parent(states[li]))
+        for j in 1:nf.extent[2], i in 1:nf.extent[1]
+            g = (nf.offset[1] + i, nf.offset[2] + j)
+            all(d -> own.offset[d] < g[d] <= own.offset[d] + own.extent[d], 1:2) ||
+                continue
+            for c in 1:size(Q, 4)
+                compared += 1
+                Q[i + pad[1], j + pad[2], 1 + pad[3], c] ==
+                    A[g[1] - of.offset[1] + pad_old[1], g[2] - of.offset[2] + pad_old[2],
+                      1 + pad_old[3], c] || (miss += 1)
+            end
+        end
+    end
+    # The planes the new tiles share are compared on both sides.
+    check("lattice subdivision: the old tile's nodes all compared",
+          max(0.0, prod(own.extent) * size(A, 4) - gsum(compared)), 0.5)
+    check("lattice subdivision: carried bit for bit", gsum(miss), 0.5)
+    run!(solver, states; tfinal=1.0, nmax=6)
+    check("lattice subdivision: the lattice holds while the tiles do",
+          abs(length(solver.levels[2].transfers) - np), 0.5)
+    check("lattice subdivision: finite state after the run",
+          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+end
+
+# Three regridded levels following the shock of the deep-regrid phase, with
+# the subdivision on: every tile whole on one rank, each level on a lattice
+# of its chain, and a restart that continues bit for bit on the lattices the
+# checkpoint records.
+function subdivision_deep()
+    ic = (x, y, z) -> x < 0.25 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                      x < 0.5  ? Prim(u=(0, 0, 0), p=0.1, rho=0.125) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.5)
+    wall2 = (SlipWallBC(), SlipWallBC())
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per3[2], per3[3]), ic=ic)
+    amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
+              max_levels=3)
+    num = Numerics(n_global=(81, 1, 1), cfl=0.2, amr=amr)
+    solver, states = setup(prob, num)
+    run!(solver, states; tfinal=0.1, nmax=10000)
+    save_checkpoint(solver, states, "mpi_subdivision")
+    run!(solver, states; tfinal=0.15, nmax=10000)
+    spec = getfield(solver, :regrid)
+    edges = [CL._level_edges(spec, l) for l in 1:2]
+    rank == 0 && println("    lattices ", edges, ", tiles ",
+                         [length(level_regions(solver, l)) for l in 1:2])
+    whole = all(all(length(o) == 1 for o in lev.owners) for lev in solver.levels[2:end])
+    check("lattice subdivision, three levels: each tile whole on one rank",
+          gmax(!whole), 0.5)
+    check("lattice subdivision, three levels: finite composite state",
+          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+    if np == 8
+        check("lattice subdivision, three levels: a level subdivided at eight ranks",
+              MPI.bcast(any(!=((8, 8, 8)), edges), comm; root=0) ? 0.0 : 1.0, 0.5)
+    end
+    MPI.Barrier(comm)
+    r, rs = setup(prob, num)
+    load_checkpoint!(r, rs, "mpi_subdivision")
+    run!(r, rs; tfinal=0.15, nmax=10000)
+    rspec = getfield(r, :regrid)
+    check("lattice subdivision, three levels: the restart takes the lattices",
+          gmax([CL._level_edges(rspec, l) for l in 1:2] != edges), 0.5)
+    d = length(rs) == length(states) && r.step == solver.step ? 0.0 : Inf
+    if isfinite(d)
+        for i in eachindex(states)
+            inner = CL.interior(solver.patches[i].decomp)
+            d = max(d, maximum(abs.(parent(rs[i])[inner, :] .- parent(states[i])[inner, :])))
+        end
+    end
+    check("lattice subdivision, three levels: restart continues bitwise", gmax(d), 1e-300)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_subdivision"), readdir()))
+    MPI.Barrier(comm)
+end
+
+function test_lattice_subdivision()
+    section("lattice subdivision: a tile per rank, the solution carried")
+    try
+        subdivision_carry()
+        subdivision_deep()
+    finally
+        CL.SUBDIVIDE_LATTICE[] = false
     end
 end
 
@@ -4653,6 +4801,7 @@ const SUITE = (
     ("unrefined start", test_unrefined_start),
     ("deep regrid", test_deep_regrid),
     ("deep regrid subsets", test_deep_regrid_subsets),
+    ("lattice subdivision", test_lattice_subdivision),
     ("placed levels", test_placed_levels),
     ("seam levels", test_seam_levels),
     ("two-patch layout", test_two_patch_layout),
@@ -4668,8 +4817,9 @@ const SUITE = (
 # solves, the transfer operators, the fold butterfly, the positivity repair
 # and the wall closures of "closed C6" ever see: those phases run. The
 # corner-halo check's default Dims_create grid changes shape outright (2x2x2
-# at np = 8, 2x1x1 at np = 2), and a tiled level of four tiles leaves four
-# of eight ranks without one. A composite face's member mask splits across more ranks,
+# at np = 8, 2x1x1 at np = 2), a tiled level of four tiles leaves four of
+# eight ranks without one, and the lattice subdivision takes a different
+# lattice at each count. A composite face's member mask splits across more ranks,
 # and the deep-regrid levels fall onto rank subsets and move a tile only at
 # np = 8. The level coupling's point-to-point messages pair different ranks at
 # each count, and so do the owner ranges a hierarchy's phase change carries.
@@ -4690,7 +4840,7 @@ const RANK_SHAPE_PHASES = (
     "NSCBC inflow", "NSCBC level face", "composite face", "freestream",
     "composite budgets", "positivity floor", "positivity limiter", "slicing",
     "shared piece planes", "hierarchy phase change", "deep regrid subsets",
-    "placed levels", "seam levels",
+    "lattice subdivision", "placed levels", "seam levels",
 )
 
 # `phases=` selects phases by name from SUITE, comma-separated and in SUITE's

@@ -292,7 +292,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 tag_predicate=nothing,
                 untag_ratio::Real=2,
                 tile_lifetime::Int=1,
-                tile::Int=0,
+                tile=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2,
                 max_levels::Union{Nothing,Int}=nothing,
@@ -307,6 +307,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # are compiled for the concrete types they are called with.
     @nospecialize
     bcs = _face_conditions(bcs)
+    tile = _tile_edges(tile)
+    tiled = _tiled(tile)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
     if positivity_limiter
@@ -476,7 +478,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         error("max_levels = $nlev holds fewer levels than the $(length(refines)) " *
               "refined region(s) of refine and the root")
     if nlev > length(refines) + 1
-        regrid_interval > 0 && tile > 0 ||
+        regrid_interval > 0 && tiled ||
             error("max_levels = $nlev asks for levels that refine does not give; " *
                   "they start with no tiles, which requires tile > 0 and " *
                   "regrid_interval > 0")
@@ -544,17 +546,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     tile_lifetime >= 1 || error("tile_lifetime must be at least 1 regrid check")
     # A lattice cell of `tile` parent nodes is a patch of tile + 1 nodes,
     # 3·tile + 1 fine nodes; the four-node minimum gives tile ≥ 3.
-    tile == 0 || tile >= 3 ||
-        error("tile must be 0 (one patch per level) or at least 3 parent nodes")
+    all(==(0), tile) || all(>=(3), tile) ||
+        error("tile must be 0 (one patch per level) or at least 3 parent nodes " *
+              "along every dimension; got $tile")
     # max/mean is at least one, so a threshold below one is not a setting.
     rebalance == 0 || rebalance >= 1 ||
         error("rebalance must be 0 (off) or a max/mean threshold of at least 1")
-    rebalance == 0 || (tile > 0 && regrid_interval > 0) ||
+    rebalance == 0 || (tiled && regrid_interval > 0) ||
         error("rebalance repartitions a tiled level at the regrid cadence; " *
               "it requires tile > 0 and regrid_interval > 0")
     rebalance_persist >= 1 || error("rebalance_persist must be at least 1")
     if regrid_interval > 0 && nlev > 2
-        tile > 0 ||
+        tiled ||
             error("regridding more than one refined level requires tile > 0; " *
                   "$(nlev - 1) refined levels were asked for")
         rebalance == 0 ||
@@ -623,12 +626,12 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             # once, and a tiled region spans the lattice's ring at most.
             for d in 1:3
                 period[d] > 0 || continue
-                most = tile == 0 ? period[d] - 2 * margin : period[d] + 1
+                most = !tiled ? period[d] - 2 * margin : period[d] + 1
                 rg.extent[d] <= most ||
                     error("level $ℓ region $rg spans $(rg.extent[d]) level-$(ℓ - 1) " *
                           "nodes along periodic dimension $d, whose period is " *
                           "$(period[d]) nodes; " *
-                          (tile == 0 ? "one refined patch spans at most $most, " *
+                          (!tiled ? "one refined patch spans at most $most, " *
                                        "keeping $margin nodes clear at either end, " *
                                        "and a tiled level (tile > 0) may close the ring" :
                                        "a tiled region spans at most the ring, $most"))
@@ -709,7 +712,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # A regrid builds refined patches mid-run, down to 10 fine nodes along
         # a dimension (4 parent nodes; a tile of t parent nodes gives 3t + 1),
         # and a patch closed at both ends by these rows needs 2 rows + 1.
-        min_fine = tile > 0 ? 3 * tile + 1 : 10
+        min_fine = tiled ? 3 * minimum(tile[d] for d in 1:3 if active_g[d]) + 1 : 10
         regrid_interval == 0 || 2 * length(idiv_rows) + 1 <= min_fine ||
             error("interface_divergence '$(interface_divergence.name)' closes a " *
                   "line with $(length(idiv_rows)) rows per end, more than a " *
@@ -1026,7 +1029,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         span = _level_span(n_global, active_g, ℓ - 1, bcs)
         period = _level_period(n_global, periodic, ℓ - 1)
         eligible = _level_boundary_eligible(bcs, active_g, periodic)
-        if tile == 0
+        if !tiled
             tregions = [rg]
         else
             # Clip the lattice to the parent patches' bounding box less the
@@ -1082,7 +1085,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             # all ranks pass the same inputs with no communication beyond
             # the splits themselves.
             owners, np_level = _tile_owners(tregions, active_g, parent_lc.size;
-                                            whole=tile > 0)
+                                            whole=tiled)
             lc = split_level_comm(parent_lc, np_level)
             group = lc.owned ? split_tile_comm(lc, owners) : absent_tile_group()
             held = [ti for ti in eachindex(tregions) if owners[ti] == group.ranks]
@@ -1191,7 +1194,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                            interface_divergence,
                            level_interpolation_order, level_restriction,
                            [Dict(r => 0 for r in regions)
-                            for regions in level_tiles[2:end]], level_boundaries)
+                            for regions in level_tiles[2:end]], level_boundaries,
+                           NTuple{3,Int}[])
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
@@ -1508,8 +1512,8 @@ Base.@nospecializeinfer _assemble_patch(id::Int, level::Int, region, comm, decom
 # every regrid.
 
 "Whether a tiled level's tiles take stacked storage on `backend`."
-_stacked_level(backend::AbstractBackend, tile::Int) =
-    backend isa DeviceBackend && tile > 0
+_stacked_level(backend::AbstractBackend, tile::NTuple{3,Int}) =
+    backend isa DeviceBackend && _tiled(tile)
 
 # Build this rank's tiles `held` (indices into `tregions`) of one level, ids
 # `id0 + 1, id0 + 2, ...` in `held` order: through `_build_fine_patch` on the
@@ -1522,7 +1526,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               deriv, filt, smoo, smoother::Symbol,
                               interface_rhs::Symbol, backend::AbstractBackend,
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
-                              grad_Q_columns::Int, id0::Int, level::Int, tile::Int;
+                              grad_Q_columns::Int, id0::Int, level::Int,
+                              tile::NTuple{3,Int};
                               interface_divergence=nothing,
                               ghost_viscous::Bool=false,
                               ring::Bool=false,
