@@ -1856,8 +1856,10 @@ function test_deep_regrid()
           gmax(solver.step != ref.step), 0.5)
     check("deep regrid: both refined levels regrid as serial",
           as_serial(solver, ref), 0.5)
-    check("deep regrid: level 2 holds tiles", isempty(level_regions(solver, 2)) ?
-          1.0 : 0.0, 0.5)
+    # A rank outside level 2's rank set holds none of its tiles, so the test
+    # is whether any rank does.
+    check("deep regrid: level 2 holds tiles",
+          1.0 - gmax(!isempty(level_regions(solver, 2))), 0.5)
     check("deep regrid: state vector aligned with the patches",
           gmax(length(states) != length(solver.patches)), 0.5)
     _, rho = line_sample(solver, states, :rho)
@@ -4876,13 +4878,19 @@ catch e
     MPI.Abort(comm, 1)
 end
 
-# Every check reduced its metric across all ranks, so _nfail is identical
-# everywhere: all ranks exit together with the same status.
-MPI.Barrier(comm)
+# Every check should reduce its metric across all ranks, so that _nfail is
+# identical everywhere. One that tests a rank-local value can fail on a rank
+# other than rank 0, which prints it as passing; the count is therefore
+# reduced, so that such a check fails the run on every rank instead of one
+# rank exiting alone and aborting the job.
+const _nfail_local = _nfail[]
+_nfail[] = MPI.Allreduce(_nfail_local, MPI.MAX, comm)
 if rank == 0
     total = _npass[] + _nfail[]
     println("\n=== $(_npass[])/$total checks passed" *
             (_nfail[] == 0 ? "" : "  ($(_nfail[]) FAILED)") * " ===")
+    _nfail[] > _nfail_local &&
+        println("    a check failed on another rank only; its line above reads ok")
 end
 MPI.Barrier(comm)
 
