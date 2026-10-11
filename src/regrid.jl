@@ -1284,8 +1284,8 @@ shortest step, the coarsest among equals, unless the level holds tiles on
 lattice `current` and the step on it is less than `PLACEMENT_GAIN` times
 the shortest, which keeps the current one. `current` is `nothing` when the
 level's lattice is not in the chain, and `fresh` marks a level holding no
-tile; either takes the shortest outright. Pure and deterministic, so every rank deciding from the same
-costs agrees.
+tile; either takes the shortest outright. Pure and deterministic, so every
+rank deciding from the same costs agrees.
 """
 function _cheapest_lattice(level::Vector{Float64}, rest::Float64,
                            current::Union{Nothing,Int}, fresh::Bool)
