@@ -61,6 +61,8 @@ using HDF5
     save_checkpoint_hdf5(s1, Q1, stem)
     MPI.Barrier(comm)
     @test isfile(stem * ".h5")
+    # Written as `.tmp` and renamed into place.
+    @test !isfile(stem * ".h5.tmp")
 
     # One file, whatever the rank count: this is the whole point of the shared
     # write. The per-rank checkpoint writes np of them.

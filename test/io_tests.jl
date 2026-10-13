@@ -69,6 +69,24 @@ end
     load_checkpoint!(sp, allocate_state(sp), stem; allow=(:boundaries,))
     @test sp.dt_prev == 1.5e-4
 
+    # The set is replaced through `.tmp` files and a commit marker, neither of
+    # which outlives a completed save.
+    @test !isfile(stem * ".r0000.ckpt.tmp") && !isfile(CL._ckpt_marker(stem))
+    # A `.tmp` without the marker is a write the job was killed in: the load
+    # reads the previous file, and the next save writes over the remainder.
+    write(stem * ".r0000.ckpt.tmp", "truncated")
+    s3 = io_solver(ExtrapolationBC(), SlipWallBC())
+    load_checkpoint!(s3, allocate_state(s3), stem)
+    @test s3.step == 42
+    # With the marker, the `.tmp` is the newer set's file, which the load
+    # renames over the old one before it reads.
+    s.step = 43
+    open(io -> CL._write_checkpoint(io, s, Q), stem * ".r0000.ckpt.tmp", "w")
+    write(CL._ckpt_marker(stem), "1")
+    load_checkpoint!(s3, allocate_state(s3), stem)
+    @test s3.step == 43
+    @test !isfile(stem * ".r0000.ckpt.tmp") && !isfile(CL._ckpt_marker(stem))
+
     # A file of any other version is refused by its version word.
     other = read(stem * ".r0000.ckpt")
     other[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION - 1)])

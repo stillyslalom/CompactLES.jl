@@ -115,7 +115,7 @@ validation cases are discussed, and never a viscosity.
 | `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
 | `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
 | `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
-| `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` triggers and their effects |
+| `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` / `BeforeWallLimit` triggers and their effects |
 | `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/regrid.jl`           | Tagging and regridding |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |

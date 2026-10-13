@@ -127,7 +127,8 @@ export ImplicitConduction
 export StepControl, SolverFailure
 export state_report, state_valid, validate_state!
 export StateGuard, state_guard
-export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog
+export Trigger, AtTime, EveryStep, EveryTime, WhenState, BeforeWallLimit, Callback,
+       ProgressLog
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
 export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile

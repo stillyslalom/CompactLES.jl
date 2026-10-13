@@ -1518,6 +1518,66 @@ function test_checkpoint()
 end
 
 # ---------------------------------------------------------------------------
+# 10a. The end of the job. A signal reaches one rank only, the last, and the
+#     BeforeWallLimit verdict must still be every rank's on the same step, or
+#     the checkpoint its effect writes is collective on some ranks only. The
+#     checkpoint it writes continues the run bit for bit. A commit interrupted
+#     between the ranks' renames, which leaves ranks on both sets, is then
+#     completed by the load: every rank reads the newer set.
+# ---------------------------------------------------------------------------
+function test_wall_limit()
+    section("wall limit: rank-local signal, interrupted commit")
+    build() = begin
+        s = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+                   art=ArtificialProperties(enabled=false), dims=splitdims(1))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y),
+                                            rho=1 + 0.1sin(x)))
+        s, Q
+    end
+    stem = "mpi_wall"
+    # Set on the last rank after step 3, ahead of the trigger in the tuple.
+    signal = (s, _) -> (rank == np - 1 && s.step == 3 && (CL.WALL_SIGNAL[] = 10); nothing)
+    stop = Callback(BeforeWallLimit(deadline=time() + 1e6),
+                    (s, Q) -> (save_checkpoint(s, Q, stem); true))
+    s, Q = build()
+    run!(s, Q; tfinal=1e9, nmax=12, callback=(signal, stop))
+    CL.WALL_SIGNAL[] = 0
+    check("a signal on one rank stops every rank on step 3",
+          MPI.Allreduce(abs(s.step - 3), max, comm), 0.5)
+
+    r, Qr = build()
+    load_checkpoint!(r, Qr, stem)
+    run!(s, Q; tfinal=1e9, nmax=6)
+    run!(r, Qr; tfinal=1e9, nmax=6)
+    inner = CL.interior(s.decomp)
+    check("the checkpoint it wrote continues bit for bit",
+          gmax(maximum(abs, parent(Qr)[inner, :] .- parent(Q)[inner, :])), 1e-300)
+
+    # The newer set at step 6, committed by hand and interrupted after the
+    # even ranks' renames: the odd ranks still hold step 3 beside a `.tmp`.
+    path = CL._ckpt_name(stem, rank)
+    open(io -> CL._write_checkpoint(io, s, Q), path * ".tmp", "w")
+    MPI.Barrier(comm)
+    rank == 0 && write(CL._ckpt_marker(stem), string(np))
+    MPI.Barrier(comm)
+    iseven(rank) && Base.Filesystem.rename(path * ".tmp", path)
+    MPI.Barrier(comm)
+    u, Qu = build()
+    load_checkpoint!(u, Qu, stem)
+    check("an interrupted commit is completed: every rank reads step 6",
+          MPI.Allreduce(abs(u.step - 6), max, comm), 0.5)
+    check("the completed set holds the newer state",
+          gmax(maximum(abs, parent(Qu)[inner, :] .- parent(Q)[inner, :])), 1e-300)
+    check("the marker is gone and every .tmp renamed",
+          gsum(Int(isfile(path * ".tmp")) + Int(rank == 0 && isfile(CL._ckpt_marker(stem)))),
+          0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith(stem), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # 7b. The hierarchy checkpoint, decomposed: a tiled regridding run written
 #     between checks and restored on the same rank count rebuilds the recorded
 #     tile set on the stored owner ranges, so every rank reads back its own
@@ -4962,6 +5022,7 @@ const SUITE = (
     ("slicing", test_slicing),
     ("line sample", test_line_sample),
     ("checkpoint", test_checkpoint),
+    ("wall limit", test_wall_limit),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("phase change", test_phase_change),
     ("hierarchy phase change", test_hierarchy_phase_change),

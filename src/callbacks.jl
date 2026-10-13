@@ -288,6 +288,297 @@ function rewind!(trigger::WhenState, t, step)
     return nothing
 end
 
+# --- The end of the job.
+#
+# A checkpoint schedule in simulation time and a job limit in wall time drift
+# apart as `dt` shrinks, so a run killed at its limit loses the wall time
+# since its last checkpoint. `BeforeWallLimit` fires once when the job is
+# about to end, read from the job's deadline, a signal, or both.
+#
+# A process-directed signal is delivered on whichever thread the kernel picks,
+# an OpenBLAS or MPI thread included, and Julia code cannot run on a thread
+# the runtime does not know: a `@cfunction` handler storing one atomic
+# segfaulted when signals arrived during a multithreaded matrix product. The
+# signal is therefore caught by libuv's watcher, whose native handler is safe
+# on any thread and only writes to a pipe; the event loop, polled at each
+# check, then runs the Julia callback on a Julia thread. The flag it sets
+# enters the same reduction as the deadline test. There is one flag per
+# process, since a signal means the end of the job for every trigger alike.
+const WALL_SIGNAL = Threads.Atomic{Int}(0)
+
+function _wall_signal_callback(handle::Ptr{Cvoid}, sig::Cint)
+    WALL_SIGNAL[] = Int(sig)
+    return nothing
+end
+
+# The watcher of each signal, installed once per process.
+const WALL_SIGNAL_WATCHERS = Dict{Int,Ptr{Cvoid}}()
+
+# Signal numbers by name. The values differ between Linux and the BSDs,
+# macOS included.
+function _signal_number(name::Symbol)
+    linux = Sys.islinux()
+    table = (USR1=linux ? 10 : 30, USR2=linux ? 12 : 31, TERM=15, INT=2, HUP=1)
+    haskey(table, name) ||
+        throw(ArgumentError("BeforeWallLimit: unknown signal :$name; name one of " *
+                            "$(keys(table)) or pass its number"))
+    return table[name]
+end
+_signal_number(sig::Integer) = Int(sig)
+
+# Julia's own handling, on unless `--handle-signals=no`, blocks these signals
+# in its threads and waits for them on a thread of its own, so a handler
+# installed beside it would never run.
+_signals_installable() = !Sys.iswindows() && Base.JLOptions().handle_signals == 0
+
+function _install_wall_signals(signals)
+    numbers = unique(Int[_signal_number(s) for s in signals])
+    (isempty(numbers) || !_signals_installable()) && return Int[]
+    callback = @cfunction(_wall_signal_callback, Cvoid, (Ptr{Cvoid}, Cint))
+    for sig in numbers
+        haskey(WALL_SIGNAL_WATCHERS, sig) && continue
+        # Zeroed: at exit Julia closes every handle of its loop and reads a
+        # non-null `data` field as a Julia object.
+        handle = Libc.calloc(1, ccall(:uv_handle_size, Csize_t, (Cint,), Base.UV_SIGNAL))
+        Base.iolock_begin()
+        try
+            status = ccall(:uv_signal_init, Cint, (Ptr{Cvoid}, Ptr{Cvoid}),
+                           Base.eventloop(), handle)
+            status == 0 || (Libc.free(handle); throw(Base._UVError("uv_signal_init", status)))
+            status = ccall(:uv_signal_start, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Cint),
+                           handle, callback, sig)
+            if status != 0
+                ccall(:uv_close, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), handle, C_NULL)
+                throw(Base._UVError("uv_signal_start($sig)", status))
+            end
+            # A watcher does not keep the loop, and so the process, alive.
+            ccall(:uv_unref, Cvoid, (Ptr{Cvoid},), handle)
+        finally
+            Base.iolock_end()
+        end
+        WALL_SIGNAL_WATCHERS[sig] = handle
+    end
+    return numbers
+end
+
+"""
+    BeforeWallLimit(; margin = 600.0, deadline = nothing, walltime = nothing,
+                      signals = (:USR1, :TERM), check_every = 1)
+
+Fire once when the job running the solver is about to reach its time limit,
+so that the [`Callback`](@ref) effect can write a checkpoint before the
+scheduler kills the job. An effect that writes the checkpoint and returns
+`true` ends the run:
+
+```julia
+stop = Callback(BeforeWallLimit(margin = 600.0),
+                (solver, Q) -> (save_checkpoint(solver, Q, "restart/state"); true))
+run!(solver, Q; tfinal, callback = (ProgressLog(), stop))
+```
+
+The trigger fires on the first check at which either of two conditions holds.
+
+The first is the wall-clock deadline. The trigger fires when the job would
+have less than `margin` seconds left at the following check, which is
+`check_every` steps of the last step's wall time later. `margin` should cover
+the checkpoint write and anything else the job does after `run!` returns. The
+deadline is taken from the first of these that gives one:
+
+- `deadline`, an absolute time in seconds since the Unix epoch, as `time()`
+  returns it;
+- `walltime`, in seconds from the trigger's construction;
+- the `SLURM_JOB_END_TIME` environment variable, where Slurm sets it;
+- under Slurm, `squeue -h -j \$SLURM_JOB_ID -o %L`, the job's remaining time;
+- under Flux, `flux job timeleft`.
+
+The scheduler is queried once, at the first check, by rank 0 alone. When none
+of these gives a deadline, the trigger fires on a signal only.
+
+The second condition is the receipt of one of `signals`, by name (`:USR1`,
+`:USR2`, `:TERM`, `:INT`, `:HUP`) or by number, on any rank. The signal only
+sets a flag, which the next check reads. Slurm sends `SIGTERM` at the time
+limit and `SIGKILL` after its `KillWait`, often 30 s, which is seldom long
+enough for a step and a checkpoint, so an earlier signal is the useful one:
+`#SBATCH --signal=USR1@600` sends `SIGUSR1` to every task 600 s before the
+limit. The form `--signal=B:USR1@600` signals the batch shell alone, and
+reaches the ranks only through a `trap` that forwards it.
+
+The signals are watched from construction, and only in a Julia started with
+`--handle-signals=no`, as an MPI launch at `-t 1` should be. Julia's own
+handling otherwise takes them (`SIGTERM` ends the process and `SIGUSR1`
+prints a profile), and the trigger reads the deadline alone. With more than
+one thread `--handle-signals=no` is not usable at all, since Julia's garbage
+collector then needs its own signal handlers. No signal is watched on
+Windows. Once watched, the listed signals set the flag for the rest of the
+process instead of ending it, so a `SIGTERM` that arrives outside `run!` is
+ignored until `SIGKILL` follows it.
+
+The check is one `Allreduce` of an `Int` per `check_every` steps, and every
+rank reaches the same verdict. The trigger fires once. A
+[`StepControl`](@ref) rollback to a savepoint before the step it fired on
+re-arms it, so that a run stopped by it and then rolled back by the final
+state check stops again on the replacement trajectory.
+
+`trigger.deadline` and `trigger.source` report the deadline the first check
+settled on (`Inf` and `:none` without one) and where it came from.
+"""
+mutable struct BeforeWallLimit <: Trigger
+    margin::Float64
+    check_every::Int
+    deadline::Float64     # seconds since the epoch, Inf for none
+    source::Symbol        # where `deadline` came from
+    resolved::Bool        # whether the first check has settled `deadline`
+    signals::Vector{Int}  # the signals watched
+    done::Bool
+    fired_step::Int       # completed step at which it fired; -1 before
+end
+
+# The sources of a deadline, in the order `_job_deadline` tries the
+# scheduler's; the first check broadcasts rank 0's as its index here.
+const DEADLINE_SOURCES = (:none, :deadline, :walltime, :slurm_env, :squeue, :flux)
+
+function BeforeWallLimit(; margin::Real=600.0, deadline::Union{Real,Nothing}=nothing,
+                         walltime::Union{Real,Nothing}=nothing,
+                         signals=(:USR1, :TERM), check_every::Int=1)
+    isfinite(margin) && margin >= 0 ||
+        throw(ArgumentError("BeforeWallLimit: margin must be finite and " *
+                            "non-negative, got $margin"))
+    check_every >= 1 ||
+        throw(ArgumentError("BeforeWallLimit: check_every must be >= 1, " *
+                            "got $check_every"))
+    deadline !== nothing && walltime !== nothing &&
+        throw(ArgumentError("BeforeWallLimit: give deadline or walltime, not both"))
+    given, source = if deadline !== nothing
+        isnan(deadline) &&
+            throw(ArgumentError("BeforeWallLimit: deadline must be a time, got NaN"))
+        Float64(deadline), :deadline
+    elseif walltime !== nothing
+        walltime >= 0 ||
+            throw(ArgumentError("BeforeWallLimit: walltime must be non-negative, " *
+                                "got $walltime"))
+        time() + Float64(walltime), :walltime
+    else
+        Inf, :none
+    end
+    return BeforeWallLimit(Float64(margin), check_every, given, source, false,
+                           _install_wall_signals(signals), false, -1)
+end
+
+function fired!(trigger::BeforeWallLimit, solver, Q)
+    trigger.done && return false
+    solver.step % trigger.check_every == 0 || return false
+    comm = solver.comm
+    rank = MPI.Comm_rank(comm)
+    # Settled from rank 0's reading, so every rank compares against the same
+    # instant: a `walltime` is counted from each rank's own construction, and
+    # the scheduler is asked once, by one rank.
+    if !trigger.resolved
+        deadline, source = trigger.deadline, trigger.source
+        rank == 0 && source === :none && ((deadline, source) = _job_deadline())
+        trigger.deadline = MPI.Allreduce(rank == 0 ? deadline : -Inf, max, comm)
+        index = rank == 0 ? findfirst(==(source), DEADLINE_SOURCES)::Int : 0
+        trigger.source = DEADLINE_SOURCES[MPI.Allreduce(index, max, comm)]
+        trigger.resolved = true
+        rank == 0 && _report_deadline(trigger)
+    end
+    # A signal received since the last check is still in libuv's pipe until
+    # the loop runs, which it does here and otherwise only when a task waits.
+    isempty(trigger.signals) || Base.process_events()
+    # The clock is read on rank 0 alone; the reduction carries its verdict
+    # and any rank's signal to every rank.
+    late = rank == 0 &&
+           time() + trigger.check_every * solver.wall_step >=
+           trigger.deadline - trigger.margin
+    hit = MPI.Allreduce(Int(late) | Int(WALL_SIGNAL[] != 0), max, comm) > 0
+    if hit
+        trigger.done = true
+        trigger.fired_step = solver.step
+    end
+    return hit
+end
+
+function rewind!(trigger::BeforeWallLimit, t, step)
+    if trigger.done && trigger.fired_step > step
+        trigger.done = false
+        trigger.fired_step = -1
+    end
+    return nothing
+end
+
+# The job's end, in seconds since the epoch, and where it was read; `Inf` and
+# `:none` outside a scheduler or when every query fails. Rank 0 only.
+function _job_deadline(env=ENV)
+    ending = tryparse(Float64, get(env, "SLURM_JOB_END_TIME", ""))
+    ending !== nothing && ending > 0 && return ending, :slurm_env
+    job = get(env, "SLURM_JOB_ID", "")
+    if !isempty(job)
+        left = _slurm_seconds(_command_output(`squeue -h -j $job -o %L`))
+        left !== nothing && return time() + left, :squeue
+    end
+    if haskey(env, "FLUX_JOB_ID")
+        out = _command_output(`flux job timeleft`)
+        left = out === nothing ? nothing : tryparse(Float64, strip(out))
+        left !== nothing && return time() + left, :flux
+    end
+    return Inf, :none
+end
+
+# The standard output of `cmd`, or `nothing` when it is missing, fails or
+# takes longer than `timeout` seconds, so that an unresponsive scheduler
+# controller delays the first step by at most that.
+function _command_output(cmd::Cmd; timeout::Real=30)
+    out = IOBuffer()
+    process = try
+        run(pipeline(cmd; stdout=out, stderr=devnull); wait=false)
+    catch
+        return nothing
+    end
+    timer = Timer(_ -> kill(process), timeout)
+    try
+        wait(process)
+    catch
+    finally
+        close(timer)
+    end
+    success(process) || return nothing
+    return String(take!(out))
+end
+
+# Slurm's remaining-time field in seconds: `[days-]hours:minutes:seconds`,
+# `minutes:seconds`, or a bare count of minutes; `nothing` for `UNLIMITED`,
+# `NOT_SET`, `INVALID` or anything else that is not a time.
+function _slurm_seconds(text)
+    text === nothing && return nothing
+    s = strip(text)
+    has_days = occursin('-', s)
+    days, rest = has_days ? split(s, '-'; limit=2) : ("0", s)
+    d = tryparse(Int, days)
+    parts = map(x -> tryparse(Int, x), split(rest, ':'))
+    (d === nothing || any(isnothing, parts) || length(parts) > 3) && return nothing
+    # After a day count the fields run from hours; without one, two fields
+    # are minutes and seconds and one is minutes.
+    h, m, sec = has_days ? vcat(parts, zeros(Int, 3 - length(parts))) :
+                length(parts) == 3 ? parts :
+                length(parts) == 2 ? [0; parts] : [0, parts[1], 0]
+    return Float64(((d * 24 + h) * 60 + m) * 60 + sec)
+end
+
+function _report_deadline(trigger::BeforeWallLimit)
+    signals = isempty(trigger.signals) ? "" :
+              " or on signal " * join(trigger.signals, " or ")
+    if isfinite(trigger.deadline)
+        at = Libc.strftime("%Y-%m-%d %H:%M:%S", trigger.deadline)
+        left = strip(_duration(max(trigger.deadline - time(), 0.0)))
+        @info "BeforeWallLimit: the job ends at $at (from $(trigger.source)), " *
+              "in $left; the trigger fires $(trigger.margin) s before it$signals."
+    elseif !isempty(get(ENV, "SLURM_JOB_ID", "")) || haskey(ENV, "FLUX_JOB_ID")
+        @warn "BeforeWallLimit: the scheduler gave no time limit for this job; " *
+              (isempty(signals) ? "with no signal installed, the trigger will not fire." :
+                                  "the trigger fires$signals only.")
+    end
+    return nothing
+end
+
 """
     Callback(trigger, effect!)
 

@@ -4991,6 +4991,75 @@ end
     run!(solver, Q; tfinal=1e9, nmax=1000,
          callback=Callback(WhenState((s, _) -> s.step >= 4), (_, _) -> true))
     @test solver.step == 4
+
+    # BeforeWallLimit: a deadline already inside the margin fires at the first
+    # check, `check_every` steps in, and once; one far off never fires.
+    for (every, want) in ((1, 1), (3, 3))
+        solver, Q = mkrun()
+        fires = Int[]
+        trigger = BeforeWallLimit(walltime=0.0, check_every=every, signals=())
+        run!(solver, Q; tfinal=1e9, nmax=6,
+             callback=Callback(trigger, (s, _) -> (push!(fires, s.step); nothing)))
+        @test fires == [want]
+        @test trigger.source === :walltime && isfinite(trigger.deadline)
+    end
+    solver, Q = mkrun()
+    far = BeforeWallLimit(deadline=time() + 1e6, signals=())
+    run!(solver, Q; tfinal=1e9, nmax=4,
+         callback=Callback(far, (_, _) -> true))
+    @test solver.step == 4 && !far.done
+    # A signal's flag fires it on the next check whatever the deadline, and the
+    # effect's `true` ends the run there.
+    solver, Q = mkrun()
+    raise = (s, _) -> (s.step == 2 && CL._wall_signal_callback(C_NULL, Cint(10)); nothing)
+    run!(solver, Q; tfinal=1e9, nmax=6,
+         callback=(raise, Callback(far, (_, _) -> true)))
+    CL.WALL_SIGNAL[] = 0
+    @test solver.step == 2 && far.fired_step == 2
+    # A real signal, in a process that leaves signals to the program, which
+    # the test runner does not.
+    if !Sys.iswindows()
+        script = """
+            using CompactLES
+            trigger = BeforeWallLimit(signals=(:USR1,))
+            ccall(:kill, Cint, (Cint, Cint), getpid(), $(CL._signal_number(:USR1)))
+            for _ in 1:100
+                Base.process_events()
+                CompactLES.WALL_SIGNAL[] == 0 || break
+                sleep(0.01)
+            end
+            print(trigger.signals == [$(CL._signal_number(:USR1))], " ",
+                  CompactLES.WALL_SIGNAL[])
+            """
+        cmd = `$(Base.julia_cmd()) --handle-signals=no -t 1 --startup-file=no
+               --project=$(Base.active_project()) -e $script`
+        @test read(cmd, String) == "true $(CL._signal_number(:USR1))"
+    end
+    # A rollback to before the step it fired on re-arms it; one after does not.
+    CL.rewind!(far, 0.0, 3)
+    @test far.done
+    CL.rewind!(far, 0.0, 1)
+    @test !far.done && far.fired_step == -1
+
+    @test_throws ArgumentError BeforeWallLimit(deadline=1.0, walltime=1.0)
+    @test_throws ArgumentError BeforeWallLimit(margin=-1)
+    @test_throws ArgumentError BeforeWallLimit(signals=(:NOPE,))
+    @test_throws ArgumentError BeforeWallLimit(check_every=0)
+
+    # The scheduler's remaining time, in each of the forms Slurm prints.
+    @test CL._slurm_seconds("1-02:03:04") == 93784.0
+    @test CL._slurm_seconds("2-03") == 2 * 86400.0 + 3 * 3600
+    @test CL._slurm_seconds("02:03:04\n") == 7384.0
+    @test CL._slurm_seconds("29:58") == 1798.0
+    @test CL._slurm_seconds("45") == 2700.0
+    @test CL._slurm_seconds("UNLIMITED") === nothing
+    @test CL._slurm_seconds(nothing) === nothing
+    @test CL._job_deadline(Dict("SLURM_JOB_END_TIME" => "1900000000")) ==
+          (1.9e9, :slurm_env)
+    @test CL._job_deadline(Dict{String,String}()) == (Inf, :none)
+    @test CL._command_output(`$(Base.julia_cmd()) --startup-file=no -e "print(42)"`) ==
+          "42"
+    @test CL._command_output(`a-command-that-does-not-exist`) === nothing
 end
 
 @testset "EveryTime: evenly spaced instants, restart anchoring, soft landing" begin

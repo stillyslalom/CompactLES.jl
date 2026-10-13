@@ -74,8 +74,9 @@ Write the interior of `Q` to `prefix.h5` as one global array, with the run
 state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
 `filter_rate_prev`, and the artificial coefficient arrays when the artificial
 properties are enabled, from which [`max_rate`](@ref) sizes the next step), and
-return `prefix`. An existing
-file of that name is truncated. Collective.
+return `prefix`. Collective. The file is written as `prefix.h5.tmp` and
+renamed over `prefix.h5` once every rank has closed it, so a job killed
+during the write leaves the previous checkpoint intact.
 
 Callback schedules and a `FieldWriter`'s frame index are not recorded and
 remain the caller's to restore; give a restarted writer a `start_index`.

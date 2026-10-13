@@ -53,6 +53,37 @@ run!(solver, Q; tfinal = 1.0, callback = (checkpoint, samples))
 defined by the solution. `WhenState` reduces the Boolean decision across the
 communicator.
 
+## Checkpoint before the job's time limit
+
+A checkpoint schedule in simulation time loses whatever wall time has passed
+since the last checkpoint when the scheduler kills the job, and late in a run
+whose timestep has fallen that can be hours. [`BeforeWallLimit`](@ref) fires
+once when the job nears its end, and an effect that writes a checkpoint and
+returns `true` ends the run there:
+
+```julia
+before_limit = Callback(BeforeWallLimit(margin = 600.0),
+                        (solver, Q) -> (save_checkpoint(solver, Q, "restart/state"); true))
+run!(solver, Q; tfinal = 1.0, callback = (checkpoint, before_limit))
+```
+
+The deadline is read from Slurm (`SLURM_JOB_END_TIME` or `squeue`) or Flux
+(`flux job timeleft`) at the first step, or given as `deadline` or `walltime`.
+The trigger also fires on `SIGUSR1` or `SIGTERM` when Julia was started with
+`--handle-signals=no`. Slurm's `SIGTERM` at the limit leaves only its
+`KillWait` (often 30 s) before `SIGKILL`, so ask for an earlier signal:
+
+```bash
+#SBATCH --signal=USR1@600
+srun julia --project=. -t 1 --handle-signals=no run.jl
+```
+
+`margin` is the time left for the checkpoint and for whatever the script does
+after `run!` returns. A script resubmitted as a chain of jobs compares
+`solver.t` against `tfinal` after `run!` to tell a stop at the limit from the
+end of the run. A checkpoint set is written to `.tmp` files and committed, so
+a job killed during the write leaves the previous set loadable.
+
 ## Diagnose a small timestep
 
 ```julia

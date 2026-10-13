@@ -236,12 +236,23 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
     rank = MPI.Comm_rank(comm)
     path = string(prefix, ".h5")
     ensure_output_dir(prefix, comm)
-    with_shared_file(path, "w", comm) do file
+    with_shared_file(string(path, ".tmp"), "w", comm) do file
         (has_parallel() || rank == 0) && _write_ckpt_meta!(file, solver, solver, Q, rank)
         _write_state!(file, "state", solver, Q, solver.decomp.n_global, comm,
                       solver.equations.n_cons, n_art_fields(solver), eltype(Q))
     end
+    _commit_shared(path, comm)
     return prefix
+end
+
+# The checkpoint is written to `<path>.tmp` and renamed over `path` once
+# every rank has closed it, which `with_shared_file`'s closing reduction
+# ensures, so a job killed during the write leaves the previous file whole.
+# One file is replaced by one rename, which is atomic.
+function _commit_shared(path::AbstractString, comm::MPI.Comm)
+    MPI.Comm_rank(comm) == 0 && Base.Filesystem.rename(string(path, ".tmp"), path)
+    MPI.Barrier(comm)
+    return path
 end
 
 # The refined-hierarchy form: the root's state under `state`, the hierarchy
@@ -265,7 +276,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver,
     T = eltype(states[1])
     path = string(prefix, ".h5")
     ensure_output_dir(prefix, comm)
-    with_shared_file(path, "w", comm) do file
+    with_shared_file(string(path, ".tmp"), "w", comm) do file
         if has_parallel() || rank == 0
             _write_ckpt_meta!(file, solver, root, states[1], rank)
             _write_record!(file, rec, rank)
@@ -281,6 +292,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver,
                           n_cons, n_art, T)
         end
     end
+    _commit_shared(path, comm)
     return prefix
 end
 

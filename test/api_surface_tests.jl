@@ -17,7 +17,7 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 # declaration is an API decision, not an incidental consequence of adding a
 # binding to the module.
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
-AMR AbstractTransport ArtificialProperties AtTime AxisBC BinaryDiffusion
+AMR AbstractTransport ArtificialProperties AtTime AxisBC BeforeWallLimit BinaryDiffusion
 BinaryDiffusionPolynomial BlockRegion BoundaryCondition Callback CartesianMetric
 CeaTransport Cells CompositeBC ConstantBodyForce ConstantTransport CylindricalMetric
 DeviceBackend DirichletBC EOS EveryStep EveryTime Execution ExtrapolationBC FieldWriter

@@ -89,6 +89,13 @@ checkpoint carries the artificial coefficient arrays beside the state, so
 the restarted run takes the same first step as the uninterrupted one and
 continues it bit for bit.
 
+Each rank writes its file as `.tmp`, and the new set replaces the old one only
+after every rank has finished, through a commit marker that the next save or
+load completes if the job was killed partway. A job killed while writing a
+checkpoint therefore leaves the previous set loadable. To write one before the
+scheduler's time limit, see
+[Checkpoint before the job's time limit](@ref).
+
 Checkpointing does not support a same-level `patch_grid` layout. Use an
 unpatched solver or a refined hierarchy; `save_vtk` remains available for both.
 

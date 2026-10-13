@@ -623,10 +623,17 @@ end
 
 Write the interior of `Q` plus the solver's mutable run state to
 `prefix.rNNNN.ckpt`, one file per rank, and return `prefix`. `NNNN` is the rank
-zero-padded to four digits, and an existing file of that name is truncated.
-Rank 0 creates `dirname(prefix)`, and every rank in `solver.comm` waits at the
-following barrier. Each rank then writes its own file without further
-communication.
+zero-padded to four digits. Rank 0 creates `dirname(prefix)`. Collective.
+
+The new set replaces an existing one only once it is complete. Each rank
+writes `prefix.rNNNN.ckpt.tmp` and syncs it to storage; when every rank has
+done so, rank 0 writes the marker `prefix.ckpt.commit`, every rank renames
+its file over the old one, and rank 0 removes the marker. A job killed at any
+point leaves either the previous set or the new one: before the marker the
+previous files are untouched, and once it exists the next
+`save_checkpoint` or [`load_checkpoint!`](@ref) of `prefix` completes the
+renames. A rank that fails to write throws on every rank and leaves the
+previous set in place.
 
 The header describes the state well enough for [`load_checkpoint!`](@ref) to
 reject a solver it does not belong to: the format version, the conserved and
@@ -659,10 +666,100 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     _multipatch(solver) &&
         error("save_checkpoint: this solver holds a patch layout; pass the state " *
               "vector allocate_state returned")
-    rank = MPI.Comm_rank(solver.comm)
-    ensure_output_dir(prefix, solver.comm)
-    open(io -> _write_checkpoint(io, solver, Q), _ckpt_name(prefix, rank), "w")
+    _commit_checkpoint(io -> _write_checkpoint(io, solver, Q), prefix, solver.comm)
     return prefix
+end
+
+# --- Committing a checkpoint set ---------------------------------------------
+#
+# A checkpoint is one file per rank, and a job killed while writing one must
+# leave a complete set behind, the old or the new. Each rank writes
+# `<file>.tmp` and syncs it to storage. Once every rank has done so, rank 0
+# writes the commit marker `prefix.ckpt.commit`, every rank renames its file
+# over the old one, and rank 0 removes the marker. A rename replaces a file
+# atomically, but the renames of different ranks are separate operations, so
+# a kill between them leaves ranks on both sets. The marker records that every
+# new file is complete, and `_finish_commit!` performs the remaining renames
+# wherever it finds one. Without a marker a `.tmp` file is the remainder of an
+# interrupted write and is never read. The writer finishes a pending commit
+# before it writes, and the loader before it reads.
+
+_ckpt_marker(prefix::AbstractString) = string(prefix, ".ckpt.commit")
+
+# Flushed and synced, so that a marker cannot reach storage ahead of the data
+# it records as complete when the node itself fails; a process kill alone
+# loses nothing the kernel has accepted. A file system without the call
+# (EINVAL) is passed over.
+function _sync_file(io::IOStream)
+    flush(io)
+    status = Sys.iswindows() ? ccall(:_commit, Cint, (Cint,), fd(io)) :
+                               ccall(:fsync, Cint, (Cint,), fd(io))
+    status == 0 || Libc.errno() == Libc.EINVAL || Base.systemerror("fsync", true)
+    return io
+end
+
+function _commit_checkpoint(write_body, prefix::AbstractString, comm::MPI.Comm)
+    rank = MPI.Comm_rank(comm)
+    ensure_output_dir(prefix, comm)
+    _finish_commit!(prefix, comm)
+    path = _ckpt_name(prefix, rank)
+    tmp = string(path, ".tmp")
+    _commit_step(comm, "write its file of $prefix; the previous checkpoint " *
+                       "set is unchanged") do
+        open(tmp, "w") do io
+            write_body(io)
+            _sync_file(io)
+        end
+    end
+    marker = _ckpt_marker(prefix)
+    _commit_step(comm, "write the commit marker of $prefix; the previous " *
+                       "checkpoint set is unchanged") do
+        if rank == 0
+            open(io -> (print(io, MPI.Comm_size(comm)); _sync_file(io)),
+                 string(marker, ".tmp"), "w")
+            Base.Filesystem.rename(string(marker, ".tmp"), marker)
+        end
+    end
+    _commit_step(comm, "rename its file of $prefix into place; the next save " *
+                       "or load completes the commit") do
+        Base.Filesystem.rename(tmp, path)
+    end
+    rank == 0 && rm(marker; force=true)
+    return prefix
+end
+
+# One step of the commit on every rank, closed by a reduction that doubles as
+# its barrier. A rank that fails throws its own error and the others a
+# summary, so that no rank waits at a barrier for one that has thrown.
+function _commit_step(body, comm::MPI.Comm, what::AbstractString)
+    failure = nothing
+    try
+        body()
+    catch e
+        failure = e
+    end
+    anyfail = MPI.Allreduce(failure === nothing ? 0 : 1, max, comm)
+    failure === nothing || throw(failure)
+    anyfail == 0 || error("checkpoint commit: another rank failed to $what")
+    return nothing
+end
+
+# Complete the renames of a commit a kill interrupted. Collective. The
+# barrier after the marker's removal keeps a writer's new `.tmp` files from
+# appearing while the marker still records the set as complete.
+function _finish_commit!(prefix::AbstractString, comm::MPI.Comm)
+    rank = MPI.Comm_rank(comm)
+    pending = rank == 0 && isfile(_ckpt_marker(prefix))
+    MPI.Allreduce(Int(pending), max, comm) == 0 && return false
+    path = _ckpt_name(prefix, rank)
+    tmp = string(path, ".tmp")
+    _commit_step(comm, "complete the interrupted commit of $prefix") do
+        isfile(tmp) && Base.Filesystem.rename(tmp, path)
+    end
+    _commit_step(comm, "complete the interrupted commit of $prefix") do
+        rank == 0 && rm(_ckpt_marker(prefix); force=true)
+    end
+    return true
 end
 
 # This rank's checkpoint image, onto any stream: the file of `save_checkpoint`,
@@ -680,19 +777,19 @@ The refined-hierarchy form: the root's block as above, then the hierarchy
 record (the tile layout and stored ownership of every refined level, and
 the regrid state: the last check's step, the check count, each tile's
 creation check and the rebalance streak), then this rank's block of every
-tile it holds, each with the tile's level and index. The file is per rank,
-so [`load_checkpoint!`](@ref) restores it onto the rank count that wrote it
-and, with the stored ownership, onto the same decompositions;
-[`save_checkpoint_hdf5`](@ref) is the rank-count-independent form. A
-same-level `patch_grid` layout has no checkpoint.
+tile it holds, each with the tile's level and index. The set is committed
+as above. The file is per rank, so [`load_checkpoint!`](@ref) restores it
+onto the rank count that wrote it and, with the stored ownership, onto the
+same decompositions; [`save_checkpoint_hdf5`](@ref) is the
+rank-count-independent form. A same-level `patch_grid` layout has no
+checkpoint.
 """
 function save_checkpoint(solver::Solver, states::Vector{<:ConservedState},
                          prefix::AbstractString)
     _check_hierarchy_layout(solver, "save_checkpoint")
     rec = hierarchy_record(solver)
-    rank = MPI.Comm_rank(solver.comm)
-    ensure_output_dir(prefix, solver.comm)
-    open(io -> _write_checkpoint(io, solver, states, rec), _ckpt_name(prefix, rank), "w")
+    _commit_checkpoint(io -> _write_checkpoint(io, solver, states, rec), prefix,
+                       solver.comm)
     return prefix
 end
 
@@ -773,7 +870,8 @@ end
     load_checkpoint!(solver, Q, prefix; allow = ())
 
 Restore the interior of `Q` and the solver's run state from `prefix.rNNNN.ckpt`,
-and return `Q`. Halos are left untouched. Every field of the header
+and return `Q`. Collective: a commit that [`save_checkpoint`](@ref) left
+unfinished is completed first. Halos are left untouched. Every field of the header
 [`save_checkpoint`](@ref) records is compared against `solver` and any mismatch
 throws, so a checkpoint restores only onto the decomposition that wrote it and
 only onto a solver whose species set, metric, EOS, element type and grid
@@ -815,6 +913,7 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString; allow=())
     _multipatch(solver) &&
         error("load_checkpoint!: this solver holds a patch layout; pass the state " *
               "vector allocate_state returned")
+    _finish_commit!(prefix, solver.comm)
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(io -> _read_checkpoint!(io, solver, Q, path, allow), path, "r")
     refresh_primitives!(solver, Q)
@@ -854,6 +953,7 @@ built with the recorded regions.
 function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
                           prefix::AbstractString; allow=())
     _check_hierarchy_layout(solver, "load_checkpoint!")
+    _finish_commit!(prefix, solver.comm)
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(io -> _read_checkpoint!(io, solver, states, path, allow), path, "r")
     # A block is a patch's interior. The ghost rings of the refined tiles are
