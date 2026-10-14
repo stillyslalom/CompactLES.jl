@@ -41,6 +41,10 @@ else
     error("backend must be amdgpu or cuda, got $(opt.backend)")
 end
 
+# Device memory held by live arrays, in bytes, where the package reports it
+# (-1 otherwise).
+device_live() = opt.backend == "amdgpu" ? (@eval AMDGPU.memory_stats().live) : -1
+
 const per = (PeriodicBC(), PeriodicBC())
 
 function compare_run(build, label; nmax, tfinal)
@@ -53,6 +57,101 @@ function compare_run(build, label; nmax, tfinal)
     @printf("%-34s steps %3d/%3d  max|dev-cpu| = %g%s\n", label,
             s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
     return (s1.step == s2.step, dmax, t_cpu, t_dev)
+end
+
+verdict(d) = d == 0 ? "  (bitwise)" : ""
+
+# A two-species tube with an NSCBC inflow at x = 0, whose target a phase
+# change switches from the light gas to the heavy one.
+function nscbc_mixture(backend)
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    light = Prim(Y=(1.0, 0.0), T_ion=1.0, p=1.0, u=(0.3, 0.0, 0.0))
+    heavy = Prim(Y=(0.0, 1.0), T_ion=2.5, p=1.0, u=(0.3, 0.0, 0.0))
+    bcs(inflow) = ((NSCBCInflowBC(inflow), NSCBCOutflowBC(pinf=1.0)), per, per)
+    prob = Problem(eos=eos, domain=((0.0, 1.0), (0.0, 0.5), (0.0, 0.25)),
+                   bcs=bcs(light), transport=ConstantTransport(mu0=1e-3),
+                   ic=(x, y, z) -> begin
+                       θ = 0.5 * (1 + tanh((x - 0.5 - 0.03 * cos(4π * y)) / 0.04))
+                       Prim(Y=(1 - θ, θ), rho=1 + θ, p=1.0,
+                            u=(0.3, 0.02 * sin(4π * y), 0.01 * cos(8π * z)))
+                   end)
+    num = Numerics(n_global=(32, 16, 12), execution=Execution(storage=backend))
+    return setup(prob, num)..., bcs(heavy)
+end
+
+function io_phases()
+    s1, Q1, switched = nscbc_mixture(CPUBackend())
+    s2, Q2, _ = nscbc_mixture(DeviceBackend(ka_backend))
+    run!(s1, Q1; tfinal=1.0, nmax=10)
+    run!(s2, Q2; tfinal=1.0, nmax=10)
+    o, n = s1.decomp.n_halo_d, s1.decomp.n_local
+    I = ntuple(d -> o[d]+1:o[d]+n[d], 3)
+    interior(Q) = Array(parent(Q))[I..., :]
+    d = maximum(abs.(interior(Q2) .- interior(Q1)))
+    @printf("%-34s max|dev-cpu| = %g%s\n", "NSCBC mixture, 10 steps", d, verdict(d))
+
+    # Every name field_snapshot takes, through the shared catalog.
+    names = (CL.SCALAR_FIELD_NAMES..., :velocity, :vorticity, :Y, :X, :D_art)
+    f1 = field_snapshot(s1, Q1; fields=names)
+    f2 = field_snapshot(s2, Q2; fields=names)
+    worst, at = 0.0, :none
+    for name in names
+        dn = maximum(abs.(f2[name] .- f1[name]))
+        dn > worst && ((worst, at) = (dn, name))
+    end
+    @printf("%-34s %d fields, worst %s max|dev-cpu| = %g%s\n", "field_snapshot",
+            length(names), at, worst, verdict(worst))
+    p1 = field_snapshot(s1, Q1; fields=(:X, :qcriterion), normal=3, index=6)
+    p2 = field_snapshot(s2, Q2; fields=(:X, :qcriterion), normal=3, index=6)
+    d = max(maximum(abs.(p2[:X] .- p1[:X])),
+            maximum(abs.(p2[:qcriterion] .- p1[:qcriterion])))
+    @printf("%-34s max|dev-cpu| = %g%s\n", "field_snapshot plane (:X, :qcrit)", d,
+            verdict(d))
+    # The padded arrays, compared over the interior: the halos hold whatever
+    # the last exchange or evaluation left there.
+    worst, at = 0.0, :none
+    for name in CL.SCALAR_FIELD_NAMES
+        dn = maximum(abs.(field_array(s2, Q2, name)[I...] .-
+                          field_array(s1, Q1, name)[I...]))
+        dn > worst && ((worst, at) = (dn, name))
+    end
+    @printf("%-34s worst %s max|dev-cpu| = %g%s\n", "field_array", at, worst,
+            verdict(worst))
+    dir = mktempdir()
+    save_vtk(s1, Q1, joinpath(dir, "cpu"); fields=names)
+    save_vtk(s2, Q2, joinpath(dir, "dev"); fields=names)
+    same = read(joinpath(dir, "cpu.r0000.vtr")) == read(joinpath(dir, "dev.r0000.vtr"))
+    @printf("%-34s piece files %s\n", "save_vtk", same ? "identical" : "DIFFER")
+
+    # A device checkpoint round trip, and the device file read on the host.
+    save_checkpoint(s2, Q2, joinpath(dir, "dev"))
+    saved = interior(Q2)
+    run!(s2, Q2; tfinal=1.0, nmax=15)
+    load_checkpoint!(s2, Q2, joinpath(dir, "dev"))
+    d = maximum(abs.(interior(Q2) .- saved))
+    @printf("%-34s max|loaded-saved| = %g%s, step %d\n", "device checkpoint round trip",
+            d, verdict(d), s2.step)
+    s3, Q3, _ = nscbc_mixture(CPUBackend())
+    load_checkpoint!(s3, Q3, joinpath(dir, "dev"))
+    d = maximum(abs.(interior(Q3) .- interior(Q1)))
+    @printf("%-34s max|host-cpu| = %g%s\n", "device checkpoint read on host", d,
+            verdict(d))
+
+    # The phase change on both, then steps under the new inflow.
+    live = device_live()
+    s1, Q1 = setup(s1, Q1; bcs=switched)
+    s2, Q2 = setup(s2, Q2; bcs=switched)
+    after = device_live()
+    run!(s1, Q1; tfinal=1.0, nmax=20)
+    run!(s2, Q2; tfinal=1.0, nmax=20)
+    d = maximum(abs.(interior(Q2) .- interior(Q1)))
+    @printf("%-34s steps %d/%d  max|dev-cpu| = %g%s\n", "phase change, 10 steps on",
+            s1.step, s2.step, d, verdict(d))
+    live < 0 ||
+        @printf("  device memory live: %.1f MiB before the phase change, %.1f after\n",
+                live / 2^20, after / 2^20)
+    return nothing
 end
 
 function main(opt)
@@ -85,6 +184,15 @@ function main(opt)
         end)
         return s, Q
     end
+
+    # --- output, checkpoint and phase change -------------------------------
+    # The output paths download device storage before indexing it, a
+    # checkpoint carries the state through the host, and a phase change
+    # carries it through a checkpoint image in memory and frees the previous
+    # phase's device arrays. Each is compared against the CPU solver advanced
+    # alongside, whose state the device state matches bitwise, so every
+    # comparison here is expected bitwise.
+    io_phases()
 
     # --- NSCBC inflow/outflow with isothermal no-slip wall ----------------
     compare_run("NSCBC duct", nmax=10, tfinal=0.05) do backend

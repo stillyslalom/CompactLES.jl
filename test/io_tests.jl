@@ -16,7 +16,8 @@ if !@isdefined(CL)
     using Test
     const CL = CompactLES
 end
-using CompactLES: padded_index, global_xcoord, FieldSnapshot, hdf5_available
+using CompactLES: padded_index, global_xcoord, FieldSnapshot, hdf5_available,
+                  PatchSolver, container_extension
 
 const io_per = (PeriodicBC(), PeriodicBC())
 

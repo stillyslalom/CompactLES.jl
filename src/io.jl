@@ -1479,7 +1479,30 @@ function _check_output(solver::SolverLike, stride::NTuple{3,Int}, slice, ranges)
                         "that dimension"))
 end
 
+# The output path below indexes fields point by point, which device storage
+# does not allow. A device field is downloaded whole first; a tile of a stacked
+# level holds a view of device storage, which a kernel gathers into a
+# contiguous device array before the download, as `art_block` does.
+function _host_field(a)
+    _cpu_storage(a) && return a
+    a isa SubArray || return Array(a)
+    staged = similar(a)
+    staged .= a
+    return Array(staged)
+end
+
+# A host copy of `a` that the solver does not hold, whatever `a`'s storage.
+_host_copy(a) = _cpu_storage(a) ? Array(a) : _host_field(a)
+
+# A host array to hold a field derived from `a`, whatever `a`'s storage.
+_host_similar(a) = Array{eltype(a)}(undef, size(a))
+
+# The mass fractions of every species on the host, as `mole_fraction` reads them.
+_host_mass_fractions(solver::SolverLike) =
+    [_host_field(solver.Y[sp]) for sp in 1:solver.equations.n_species]
+
 _interior(solver::SolverLike, a, ranges) = begin
+    a = _host_field(a)
     o1, o2, o3 = solver.decomp.n_halo_d
     Float32[a[i+o1, j+o2, k+o3]
             for i in ranges[1], j in ranges[2], k in ranges[3]][:]
@@ -1488,6 +1511,7 @@ end
 # Interleaved 3-component payload, rotated into the Cartesian frame when the
 # grid being written is curvilinear.
 function _interior_vector(solver::SolverLike, a1, a2, a3, rotate::Bool, ranges)
+    a1, a2, a3 = _host_field(a1), _host_field(a2), _host_field(a3)
     npts = prod(length.(ranges))
     out = Vector{Float32}(undef, 3 * npts)
     o1, o2, o3 = solver.decomp.n_halo_d
@@ -1516,8 +1540,9 @@ function _schlieren(solver::SolverLike)
         solver.decomp.active[d] || continue
         # a scalar is even across a fold
         deriv_scaled_along!(g, solver.rho, solver, d, 1)
+        gh = _host_field(g)
         @inbounds for idx in eachindex(acc)
-            acc[idx] += g[idx] * g[idx]
+            acc[idx] += gh[idx] * gh[idx]
         end
     end
     @inbounds for idx in eachindex(acc)
@@ -1529,8 +1554,8 @@ end
 # grad_u[d, j] is ∂u_j/∂x_d, so the curl reads the off-diagonal pairs.
 _vorticity_arrays(solver::SolverLike) = begin
     _check_scratch_writer(solver, :gradients, :vorticity)
-    g = solver.grad_u
-    w1 = similar(solver.rho); w2 = similar(solver.rho); w3 = similar(solver.rho)
+    g = _host_gradients(solver)
+    w1, w2, w3 = (_host_similar(solver.rho) for _ in 1:3)
     @inbounds for idx in eachindex(w1)
         w1[idx] = g[2, 3][idx] - g[3, 2][idx]
         w2[idx] = g[3, 1][idx] - g[1, 3][idx]
@@ -1541,11 +1566,12 @@ end
 
 # Mole (number) fraction of one species over the padded array, through the EOS
 # contract's `mole_fraction`, which the species channels of the artificial
-# diffusivity also read.
-function _mole_fraction_array(solver::SolverLike, species::Int)
-    out = similar(solver.rho)
+# diffusivity also read. `Y` is `_host_mass_fractions(solver)`, which a caller
+# taking every species passes once.
+function _mole_fraction_array(solver::SolverLike, species::Int,
+                              Y=_host_mass_fractions(solver))
+    out = _host_similar(solver.rho)
     eos = solver.eos
-    Y = solver.Y
     n_species = solver.equations.n_species
     @inbounds for I in CartesianIndices(out)
         out[I] = mole_fraction(eos, species, Y, I, n_species)
@@ -1553,8 +1579,14 @@ function _mole_fraction_array(solver::SolverLike, species::Int)
     return out
 end
 
+# The velocity gradients on the host, indexed as `solver.grad_u` is.
+_host_gradients(solver::SolverLike) =
+    [_host_field(solver.grad_u[a, b]) for a in 1:3, b in 1:3]
+
+# A derived field `f(idx)` on the host; `f` reads the host arrays its caller
+# downloaded.
 function _scalar_from(solver::SolverLike, f)
-    out = similar(solver.rho)
+    out = _host_similar(solver.rho)
     @inbounds for idx in eachindex(out)
         out[idx] = f(idx)
     end
@@ -1589,9 +1621,10 @@ velocity components `:u`/`:v`/`:w`, the per-species `:Y` and `:D_art` (selected
 by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
 `:kappa_art`. The per-species mole (number) fraction `:X` and the derived names
 `:mach`, `:divergence`, `:vorticity_magnitude`,
-`:qcriterion` and `:schlieren` allocate a new array, and assume the relevant
-gradient and artificial passes have run; `save_vtk` and `field_array`
-arrange that, and `field_array` also copies in every case.
+`:qcriterion` and `:schlieren` allocate a new array, a host `Array` whatever
+the storage, and assume the relevant gradient and artificial passes have run;
+`save_vtk` and `field_array` arrange that, and `field_array` also copies in
+every case.
 
 `:strain_mag`, `:sensor`, and the names derived from the velocity gradients
 read [`RHSWorkspace`](@ref) scratch, which the patches of equal extent on a
@@ -1604,7 +1637,6 @@ directional sub-communicators must reach this call in the same order.
 The result is valid only over the interior unless halos have been refreshed.
 """
 function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
-    g = solver.grad_u
     if name === :rho
         return solver.rho
     elseif name === :p
@@ -1626,11 +1658,12 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
     elseif name === :D_art
         return solver.D_art[species]
     elseif name === :mach
-        return _scalar_from(solver, idx ->
-            sqrt(solver.u[idx]^2 + solver.v[idx]^2 + solver.w[idx]^2) / solver.c[idx])
+        u, v, w, c = map(_host_field, (solver.u, solver.v, solver.w, solver.c))
+        return _scalar_from(solver, idx -> sqrt(u[idx]^2 + v[idx]^2 + w[idx]^2) / c[idx])
     elseif name === :divergence
         _check_scratch_writer(solver, :gradients, name)
-        return _scalar_from(solver, idx -> g[1, 1][idx] + g[2, 2][idx] + g[3, 3][idx])
+        gd = _host_gradients(solver)
+        return _scalar_from(solver, idx -> gd[1, 1][idx] + gd[2, 2][idx] + gd[3, 3][idx])
     elseif name === :vorticity_magnitude
         w1, w2, w3 = _vorticity_arrays(solver)
         return _scalar_from(solver, idx -> sqrt(w1[idx]^2 + w2[idx]^2 + w3[idx]^2))
@@ -1638,11 +1671,12 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
         # Q = ½(Ω_ij Ω_ij − S_ij S_ij): positive where rotation beats strain,
         # which is the usual vortex-core criterion.
         _check_scratch_writer(solver, :gradients, name)
+        gq = _host_gradients(solver)
         return _scalar_from(solver, idx -> begin
             ss = 0.0; oo = 0.0
             for b in 1:3, a in 1:3
-                s = 0.5 * (g[a, b][idx] + g[b, a][idx])
-                o = 0.5 * (g[a, b][idx] - g[b, a][idx])
+                s = 0.5 * (gq[a, b][idx] + gq[b, a][idx])
+                o = 0.5 * (gq[a, b][idx] - gq[b, a][idx])
                 ss += s * s; oo += o * o
             end
             0.5 * (oo - ss)
@@ -1697,7 +1731,9 @@ function vtk_field_entries(solver::SolverLike, Q, name::Symbol, rotate::Bool, ra
         return E[("Y$(sp)", 1, _interior(solver, solver.Y[sp], ranges))
                  for sp in 1:solver.equations.n_species]
     elseif name === :X
-        return E[("X$(sp)", 1, _interior(solver, _mole_fraction_array(solver, sp), ranges))
+        Y = _host_mass_fractions(solver)
+        return E[("X$(sp)", 1,
+                  _interior(solver, _mole_fraction_array(solver, sp, Y), ranges))
                  for sp in 1:solver.equations.n_species]
     elseif name === :D_art
         return E[("D_art$(sp)", 1, _interior(solver, solver.D_art[sp], ranges))

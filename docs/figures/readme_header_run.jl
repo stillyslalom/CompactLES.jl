@@ -121,15 +121,14 @@ function production(backend)
     end
 
     zmid, ymid = cld(c.nz, 2), cld(c.ny, 2)
-    Rk = c.eos.Rk
     xs = collect(range(0, c.Lx, length = c.nx))
     stop_reason = Ref("")
     function frame!(solver, Q)
         k = round(Int, (solver.t - c.t_impact) / (opt.frame * 1e-3))
         name = @sprintf("frame_%+05d", k)
-        fxy = field_snapshot(solver, Q; fields = (:Y, :rho, :p), normal = 3, index = zmid)
-        fxz = field_snapshot(solver, Q; fields = (:Y, :rho), normal = 2, index = ymid)
-        Xxy, Xxz = molefrac(fxy[:Y], Rk), molefrac(fxz[:Y], Rk)
+        fxy = field_snapshot(solver, Q; fields = (:X, :rho, :p), normal = 3, index = zmid)
+        fxz = field_snapshot(solver, Q; fields = (:X, :rho), normal = 2, index = ymid)
+        Xxy, Xxz = fxy[:X], fxz[:X]
         f32(a) = Float32.(a)
         serialize(joinpath(out, "frames", name * ".jls"),
                   (t = solver.t, t_after = solver.t - c.t_impact, step = solver.step,
@@ -152,7 +151,7 @@ function production(backend)
     end
     function volume!(solver, Q)
         k = round(Int, (solver.t - c.t_impact) / (opt.volume * 1e-3))
-        X = molefrac(field_snapshot(solver, Q; fields = (:Y,))[:Y], Rk)
+        X = field_snapshot(solver, Q; fields = (:X,))[:X]
         serialize(joinpath(out, "volumes", @sprintf("sf6_%+03d.jls", k)),
                   (t_after = solver.t - c.t_impact, step = solver.step,
                    X_sf6 = Float32.(selectdim(X, 4, 3)),
@@ -194,10 +193,6 @@ function production(backend)
                  callback = callbacks, control = control)
             if solver.t >= c.t_reflected && isempty(stop_reason[]) && solver.step < opt.nmax
                 ts = @elapsed solver, Q = setup(solver, Q; bcs = c.bcs(inflow(2)))
-                # The previous phase's device arrays stay allocated until a
-                # collection. With both phases resident a 16 GB card spills into
-                # host memory and each step takes 60% longer.
-                GC.gc(true)
                 note(@sprintf("inflow switched at step %d, t - t_impact = %.4f ms (%.1f s)",
                               solver.step, ms(solver.t), ts))
                 ph = 2
@@ -220,14 +215,6 @@ function production(backend)
     finally
         close(logio)
     end
-end
-
-# Mole fractions from mass fractions stacked along the last dimension, computed
-# on the host because field_snapshot's :X indexes device storage per element.
-function molefrac(Y, Rk)
-    d = ndims(Y)
-    YR = Y .* reshape(Rk, ntuple(i -> i == d ? length(Rk) : 1, d))
-    return YR ./ max.(sum(YR; dims = d), eps())
 end
 
 production(make_backend(opt.backend))

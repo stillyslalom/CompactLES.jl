@@ -54,7 +54,7 @@ function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
         end
         # An eltype-preserving copy: extraction must not hardcode Float64, since
         # the storage type is a backend decision.
-        return Array(scalar_field(solver, name; species=species))
+        return _host_copy(scalar_field(solver, name; species=species))
     end
 end
 
@@ -89,7 +89,7 @@ function field_array(solver::Solver, states::Vector{<:ConservedState}, name::Sym
             else
                 refresh_primitives!(ps, Q)
             end
-            Array(scalar_field(ps, name; species=species))
+            _host_copy(scalar_field(ps, name; species=species))
         end
     end
 end
@@ -667,21 +667,24 @@ function _snapshot_block(ps::PatchSolver, Q, names, plane=nothing)
     end
     interior = ntuple(d -> decomp.n_halo_d[d] .+ ranges[d], 3)
     # Device storage is copied to the host whole before the interior is cut.
-    grab(a) = (a isa Array ? a : Array(a))[interior...]
+    grab(a) = _host_field(a)[interior...]
     stacked(arrays) = cat(map(grab, arrays)...; dims=4)
     data = map(names) do name
         name === :velocity && return stacked((ps.u, ps.v, ps.w))
         name === :vorticity && return stacked(_vorticity_arrays(ps))
         name === :Y && return stacked(ps.Y)
-        name === :X && return stacked(ntuple(sp -> _mole_fraction_array(ps, sp),
-                                             ps.equations.n_species))
+        if name === :X
+            Y = _host_mass_fractions(ps)
+            return stacked(ntuple(sp -> _mole_fraction_array(ps, sp, Y),
+                                  ps.equations.n_species))
+        end
         name === :D_art && return stacked(ps.D_art)
         return grab(scalar_field(ps, name))
     end
     # The density the state holds, summed from the partial densities in the
     # order `mixture_density` sums them; where it is not positive the
     # primitives are placeholders, so `:rho` takes the sum and the rest NaN.
-    Qa = parent(Q) isa Array ? parent(Q) : Array(parent(Q))
+    Qa = _host_field(parent(Q))
     Qh = Qa[interior..., 1:ps.equations.n_species]
     ρ = Qh[:, :, :, 1]
     for sp in 2:ps.equations.n_species
