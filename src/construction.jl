@@ -1006,7 +1006,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, truncation, nothing, nothing, nothing)
+                  interface_flux, schemes, truncation, nothing, nothing, nothing,
+                  false)
         init_geometry!(solver)
         # The conduction stage reads the metric, so it is built last.
         implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
@@ -1213,7 +1214,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
-                  nothing)
+                  nothing, false)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1863,7 +1864,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
-                  nothing)
+                  nothing, false)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

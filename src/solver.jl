@@ -118,6 +118,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # `Solver(; ...)`. Read only by the phase change, `setup(solver, Q; ...)`
     # (phases.jl), which builds the next phase's solver from them.
     inputs::Any
+    # Set when a phase change has freed this solver's device storage
+    # (`_release_previous_phase!`), so that `run!` refuses it.
+    released::Bool
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every

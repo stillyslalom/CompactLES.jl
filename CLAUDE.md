@@ -394,7 +394,9 @@ Names are spelled out in full. Current vocabulary:
   `Numerics` that `setup` built it from), `_check_phase`, `_carry_phase!`
   (the checkpoint image written to memory by `_write_checkpoint` and read
   back by `_read_checkpoint!`), `_carry_accounts!`, `_prime_phase!` (the
-  artificial coefficients of a phase switching them on, through `_prime_art!`)
+  artificial coefficients of a phase switching them on, through `_prime_art!`),
+  `released` (a device-storage solver whose arrays a phase change freed,
+  through `_release_previous_phase!`; `run!` refuses it)
 - `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`,
   `piece` (one patch's block of one rank in a VTK dump; the multiblock
   writer names it `_patch_piece_name` and lists it in the `.vtm` through

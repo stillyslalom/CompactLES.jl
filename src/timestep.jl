@@ -2084,6 +2084,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # once the call dispatches on the concrete solver. Behind the barrier the
     # loop is inferred only for the concrete types it is called with, at the
     # cost of one dynamic dispatch per call.
+    _check_not_released(solver)
     _cold(_run!)(solver, Q, workspace, tfinal, nmax, callback, control)
     return Q
 end
@@ -2430,6 +2431,7 @@ function _positivity_failsafe!(solver, Q, rho_floor, e_floor, control, floor_0,
 end
 
 function run!(solver::Solver, Q; workspace=nothing, kwargs...)
+    _check_not_released(solver)
     work = workspace === nothing ? Workspace(Q) : workspace
     return run!(solver, Q, work; kwargs...)
 end

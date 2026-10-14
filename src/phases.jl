@@ -79,8 +79,11 @@ equation of state, the metric and the domain are not keywords. A refined
 level's tile edge must also be kept, and a same-level `patch_grid` layout,
 which has no checkpoint, has no phase change either.
 
-Rebind both results, as above: the returned state is new storage, and the
-previous solver and state are left as they were. Callbacks are not part of
+Rebind both results, as above: the returned state is new storage. On host
+storage the previous solver and state are left as they were. On device storage
+their device arrays are freed before this method returns, since the garbage
+collector may leave them allocated for the rest of the run, and
+[`run!`](@ref) refuses the previous solver afterwards. Callbacks are not part of
 the solver, so a [`FieldWriter`](@ref) passed to the next phase's `run!`
 continues its frame sequence. Collective over the solver's communicator.
 """
@@ -105,7 +108,70 @@ function setup(prev::Solver, Q; bcs=nothing, sources=nothing, transport=nothing,
     _carry_phase!(next, Q_next, prev, Q)
     # The retry-lowered CFL continues unless the next phase asks for another.
     num.cfl == num0.cfl || (next.cfl = oftype(next.cfl, num.cfl))
+    _release_previous_phase!(prev, Q, next, Q_next)
     return next, Q_next
+end
+
+# The previous phase's device arrays, freed at once. Left to the garbage
+# collector they outlive the phase: a device array is freed by its finalizer,
+# which only a full collection runs once the previous solver has aged into the
+# old generation, and the host collector, which keys on host allocation, has
+# no reason to make one. A full collection does not free them either while the
+# function that made the phase change is running, since its frame still roots
+# the previous solver whatever the variable is rebound to. Measured on a
+# 128 × 32 × 32 two-species phase change made inside a function, twenty
+# incremental collections and one full one left both phases resident; on a
+# 16 GB card running a 7 M node case that spilled into host memory and made
+# each step 60% slower for the rest of the run. Any array the next phase
+# reaches as well is kept.
+function _release_previous_phase!(prev::Solver, Q, next::Solver, Q_next)
+    _cpu_storage(Q_next isa ConservedState ? Q_next : first(Q_next)) && return prev
+    keep = _device_arrays(next, Q_next)
+    for a in _device_arrays(prev, Q)
+        a in keep || KernelAbstractions.unsafe_free!(a)
+    end
+    setfield!(prev, :released, true)
+    return prev
+end
+
+const _HostDense = isdefined(Core, :GenericMemory) ? Union{Array,Core.GenericMemory} :
+                                                     Array
+
+# The device arrays reachable from `roots`, by identity: the leaves of a walk
+# through fields, tuples and arrays of references, a device array being a
+# dense array that is not host memory. Types and modules are values here, not
+# containers, so the walk stays within the solver's own data.
+function _device_arrays(roots...)
+    found = IdSet{Any}()
+    seen = IdSet{Any}()
+    stack = Any[roots...]
+    while !isempty(stack)
+        x = pop!(stack)
+        (isbits(x) || x isa Union{Type,Module,Symbol,String,Task}) && continue
+        x in seen && continue
+        push!(seen, x)
+        if x isa _HostDense
+            isbitstype(eltype(x)) && continue
+            for i in eachindex(x)
+                isassigned(x, i) && push!(stack, x[i])
+            end
+        elseif x isa DenseArray
+            push!(found, x)
+        else
+            for f in 1:nfields(x)
+                isdefined(x, f) && push!(stack, getfield(x, f))
+            end
+        end
+    end
+    return found
+end
+
+function _check_not_released(solver::Solver)
+    getfield(solver, :released) &&
+        throw(ArgumentError("run!: this solver's device storage was freed by the " *
+                            "phase change setup(solver, Q); continue with the " *
+                            "solver and state that call returned"))
+    return solver
 end
 
 # The changes that would move the grid points, the process grid or the
