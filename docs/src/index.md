@@ -6,8 +6,8 @@ combines high-order compact finite differences, a compact filter, localized
 artificial fluid properties, low-storage Runge--Kutta time integration, and
 compact line solves distributed over MPI ranks.
 
-![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a
-cylindrical converging shock](assets/readme_header.png)
+![SF₆ mole fraction in a three-dimensional air/SF₆ Richtmyer–Meshkov
+simulation, drawn as a space-time strip from impact to 2.5 ms](assets/readme_header.png)
 
 A calculation is specified in two parts. A [`Problem`](@ref) holds the
 physics: equation of state, transport, geometry, boundary conditions, sources,

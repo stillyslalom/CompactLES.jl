@@ -3,10 +3,15 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://stillyslalom.github.io/CompactLES.jl/dev/)
 [![Build Status](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
-![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a cylindrical converging shock](docs/src/assets/readme_header.png)
+![SF₆ mole fraction in a three-dimensional air/SF₆ Richtmyer–Meshkov simulation, drawn as a space-time strip from impact to 2.5 ms](docs/src/assets/readme_header.png)
 
-*He/CO₂ shock–interface interaction, Taylor–Green vorticity, and a cylindrical
-converging shock. Produced by [`docs/figures/readme_header.jl`](docs/figures/readme_header.jl).*
+*Richtmyer–Meshkov instability of a multimode air/SF₆ interface struck by a
+Mach 1.21 shock, from a three-dimensional simulation: the SF₆ mole fraction on
+a mid-plane, air above and SF₆ below. Time runs from impact at the left edge
+to 2.5 ms at the right. Each pixel column is one position across the tube's
+60 mm periodic width, and the strip crosses that width four times. Drawn by
+[`docs/figures/readme_header.jl`](docs/figures/readme_header.jl) from the run
+in [`docs/figures/readme_header_run.jl`](docs/figures/readme_header_run.jl).*
 
 CompactLES solves the compressible, multicomponent Navier–Stokes equations for
 large-eddy simulation (LES) and direct numerical simulation (DNS). It is
