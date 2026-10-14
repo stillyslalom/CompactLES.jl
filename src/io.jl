@@ -855,12 +855,14 @@ function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
 end
 
 # One patch's interior block of `Q`, then its artificial coefficient block
-# behind the field count.
+# behind the field count. A slice of device storage is a device array, which
+# `write` would dump by its pointer as host memory; it is downloaded first.
 function _write_ckpt_block(io, ps::SolverLike, Q)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
+    block = parent(Q)[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :]
+    write(io, _cpu_storage(block) ? block : Array(block))
     write(io, Int64(n_art_fields(ps)))
     write(io, art_block(ps))
     return io
@@ -1085,7 +1087,8 @@ function _read_ckpt_block!(io, ps::SolverLike, Q, path::AbstractString,
     nx, ny, nz = decomp.n_local
     buf = Array{eltype(Q)}(undef, nx, ny, nz, ps.equations.n_cons)
     read!(io, buf)
-    Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
+    interior = view(parent(Q), o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :)
+    _cpu_storage(interior) ? (interior .= buf) : _upload!(interior, buf)
     stored = Int(read(io, Int64))
     phase || _check_art_count(stored, ps, path)
     block = read!(io, Array{eltype(Q)}(undef, nx, ny, nz, stored))
