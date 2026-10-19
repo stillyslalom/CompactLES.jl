@@ -1,7 +1,7 @@
 name = "CompactLES"
 uuid = "b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"
-authors = ["Alex Ames <alexander.m.ames@gmail.com> and contributors"]
 version = "0.1.0"
+authors = ["Alex Ames <alexander.m.ames@gmail.com> and contributors"]
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
@@ -24,7 +24,7 @@ CompactLESMakieExt = "Makie"
 [compat]
 Adapt = "3.5, 4"
 HDF5 = "0.17"
-KernelAbstractions = "0.9"
+KernelAbstractions = "0.9, 0.10"
 LinearAlgebra = "1"
 MPI = "0.20"
 MPIPreferences = "0.1.12"
