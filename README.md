@@ -297,6 +297,16 @@ Two shorter scripts have no documentation page:
 non-reflecting NSCBC outflow, and `examples/converging_shock.jl`, a
 cylindrically converging shock on a 1-D radial grid through the axis.
 
+**Capsule implosions driven by a hohlraum code.** `AblationDrive` is a stage-0
+x-ray ablation drive (a rocket closure: an ablation pressure and mass ablation
+rate from a radiation-temperature history, angle-dependent through Legendre
+moments of the capsule flux). With [Briareus.jl](https://github.com/stillyslalom/Briareus.jl)
+loaded, the `CompactLESBriareusExt` extension's `radiation_drive(capsule_drive)`
+builds one in memory from Briareus's view-factor hohlraum drive, for LLNL's
+two-step method (integrated hohlraum, then capsule only).
+`examples/briareus_capsule.jl` runs the chain on a 1-D N221204-class capsule; see
+[Ablation drive from a hohlraum code](docs/src/explanation/ablation-drive.md).
+
 ## Output and restart
 
 - **Checkpoints.** `save_checkpoint` / `load_checkpoint!` write one binary file

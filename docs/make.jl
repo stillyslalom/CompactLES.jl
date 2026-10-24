@@ -257,6 +257,8 @@ DocMeta.setdocmeta!(
                 "explanation/parallel-compact-solve.md",
             "Verification and validation" =>
                 "explanation/verification-validation.md",
+            "Ablation drive from a hohlraum code" =>
+                "explanation/ablation-drive.md",
         ],
         "Reference" => [
             "Supported combinations" => "reference/capabilities.md",

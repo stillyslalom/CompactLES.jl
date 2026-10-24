@@ -14,15 +14,18 @@ Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 [weakdeps]
+Briareus = "3e76a6d5-f1ed-43d7-92cb-456a492121d6"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 
 [extensions]
+CompactLESBriareusExt = "Briareus"
 CompactLESHDF5Ext = "HDF5"
 CompactLESMakieExt = "Makie"
 
 [compat]
 Adapt = "3.5, 4"
+Briareus = "0.1"
 HDF5 = "0.17"
 KernelAbstractions = "0.9"
 LinearAlgebra = "1"

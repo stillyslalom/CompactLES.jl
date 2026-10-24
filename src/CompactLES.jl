@@ -51,6 +51,7 @@ include("modes.jl")
 include("artificial.jl")
 include("stepcontrol.jl")
 include("sources.jl")
+include("ablation.jl")
 include("precision.jl")
 include("patches.jl")
 include("levels.jl")
@@ -122,6 +123,7 @@ export ArtificialProperties, Solver
 export DeviceBackend
 export nlevels, refined_region, level_regions
 export ConstantBodyForce
+export AblationDrive, ablation_pressure, ablation_pressure_scale, radiation_drive
 export Workspace, compute_dt, dt_report, run!, mpi_main
 export ImplicitConduction
 export StepControl, SolverFailure
@@ -155,6 +157,7 @@ export TurbulentInflow
         state_admissibility, conserved_parity, species_enthalpy,
         Metric, EquationSet, NavierStokes1T,
         fired!, next_time, rewind!, fires_at_start, add_source!,
+        MM_NS_MG, ablation_rate, drive_temperature, drive_modes, drive_factor,
         compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, max_rate,
         FloorTally, step!, sync_patches!, sync_levels!, eachpatch, npatches,
         ConservedState, CPUBackend, interior_index, padded_index, xcoord, global_xcoord,

@@ -17,7 +17,7 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 # declaration is an API decision, not an incidental consequence of adding a
 # binding to the module.
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
-AMR AbstractTransport ArtificialProperties AtTime AxisBC BeforeWallLimit BinaryDiffusion
+AblationDrive AMR AbstractTransport ArtificialProperties AtTime AxisBC BeforeWallLimit BinaryDiffusion
 BinaryDiffusionPolynomial BlockRegion BoundaryCondition Callback CartesianMetric
 CeaTransport Cells CompositeBC ConstantBodyForce ConstantTransport CylindricalMetric
 DeviceBackend DirichletBC EOS EveryStep EveryTime Execution ExtrapolationBC FieldWriter
@@ -28,7 +28,7 @@ PeriodicBC PoleBC Prim Problem ProgressLog Ramp SlipWallBC Solver SolverFailure
 Presets SphericalMetric StateFilter StateGuard StepControl StiffenedGas Stretch
 SymmetryPlaneBC Trigger
 TurbulentInflow WhenState Workspace
-allocate_state binary_diffusivity boundary_plane cartesian_coordinates cartesian_slice
+ablation_pressure ablation_pressure_scale allocate_state binary_diffusivity boundary_plane cartesian_coordinates cartesian_slice
 compact_filter compute_dt conserved_from_prim dissipation_rate domain_volume
 driver_pressure dt_report field_array field_slice field_snapshot fieldheatmap
 fieldheatmap! gaussian_filter initialize! lele_d1_10 lele_d1_6 lele_d1_8
@@ -36,7 +36,7 @@ level_regions line_profile line_sample load_checkpoint! load_checkpoint_hdf5!
 mass_fraction mass_fractions meshplot meshplot! mix_width mixture_density mole_fractions
 molecular_mixing mpi_main nasa9_constant_cp neutral_binary_diffusion nlevels
 nspecies plane_profile profile_coordinate profile_spacing profileplot profileplot!
-pyranda_filter read_cea_transport read_nasa9 reflected_shock refined_region
+pyranda_filter radiation_drive read_cea_transport read_nasa9 reflected_shock refined_region
 refresh_primitives! revolve_profile riemann_interface run! save_checkpoint
 save_checkpoint_hdf5 save_hdf5 save_vtk setup shock_jump shock_tube sine_cluster
 species_names species_pdf state_guard state_report state_valid
@@ -53,6 +53,7 @@ enforce! correct_flux! correct_rhs! validate_bc sensor_mirror isperiodic
 eos_phi eos_dphi_dY artificial_conductivity_scale wall_internal_energy
 state_admissibility conserved_parity species_enthalpy Metric EquationSet
 NavierStokes1T fired! next_time rewind! fires_at_start add_source!
+MM_NS_MG ablation_rate drive_temperature drive_modes drive_factor
 compute_rhs! apply_bcs! recover_primitives! filter_state! max_rate FloorTally
 step! sync_patches! sync_levels! eachpatch npatches
 ConservedState CPUBackend interior_index padded_index xcoord global_xcoord

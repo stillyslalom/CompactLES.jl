@@ -5807,6 +5807,7 @@ include("initial_states_tests.jl")
 include("turbulent_inflow_tests.jl")
 include("boundary_shorthand_tests.jl")
 include("capability_tests.jl")
+include("ablation_tests.jl")
 
 # The extension suites run only where their weak dependency loads. A skip is
 # recorded as a broken test, so the summary tree shows it in its own column
@@ -5864,3 +5865,22 @@ else
     end
 end
 
+
+# Briareus (the view-factor hohlraum code that drives `AblationDrive`) is not
+# registered, so it is in no test target: run test/briareus_ext_tests.jl from an
+# environment that develops both packages.
+briareus_loaded = try
+    @eval using Briareus
+    true
+catch
+    false
+end
+if briareus_loaded
+    include("briareus_ext_tests.jl")
+else
+    println("Briareus not loadable in this environment — extension tests SKIPPED. " *
+            "Run test/briareus_ext_tests.jl from an environment carrying both.")
+    @testset "Briareus extension: skipped" begin
+        @test briareus_loaded skip=!(:briareus in REQUIRED_SUITES)
+    end
+end
