@@ -97,6 +97,7 @@ for (k, tk) in enumerate(0.05:0.05:opt.tfinal)
         @printf("t %5.2f ns  Tr %5.1f eV  P_abl %6.1f Mbar  v_DT %6.1f km/s  ablator %5.1f %%  KE %5.2f kJ\n",
                 solver.t, drive_temperature(drive, solver.t), ablation_pressure(drive, solver.t),
                 -1e3s.v, 100s.mC / s0.mC, 1e3s.KE)
+    flush(stdout)
     best.v > 0.05 && -s.v < 0.8 * best.v && break  # well past peak velocity (> 50 km/s)
 end
 @printf("peak DT velocity %.0f km/s at %.2f ns, ablator remaining %.1f %%, shell KE %.1f kJ (stage 0)\n",
