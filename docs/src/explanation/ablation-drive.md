@@ -185,6 +185,35 @@ ablation rate.
 
 The body-force form failed at 5.1 ns (1 µm grid, before these changes).
 
+**r–θ: the drive's P2 history on the shell.** The same drive was run with its Legendre
+ratios through `l = 8` (P_abl ∝ (1 + Σ aₗ/a₀ Pₗ)^{3.3/4}) on an annulus 0.25–1.4 mm,
+575 × 64 cells (2 µm radial, the full polar range, a slip wall at 0.25 mm, which only
+matters near stagnation), and `A` = 2.85×10⁵. The run took about an hour on two
+threads to 7.6 ns, where it was stopped. Legendre ratios of the front radius `R_f(θ)`
+and of the DT-weighted shell radius, less their initial values (+0.05 %, the 64-cell
+quadrature of a sphere):
+
+| t (ns) | drive a₂/a₀ | front P2/P0 | DT shell P2/P0 | v (km/s) |
+|---|---|---|---|---|
+| 1.0 | +0.15 | −0.01 % | 0.00 % | 0 |
+| 3.0 | +0.07 | −0.19 % | 0.00 % | 0 |
+| 4.5 | +0.03 | −0.31 % | −0.11 % | 8 |
+| 5.5 | −0.09 | −0.45 % | −0.40 % | 54 |
+| 6.0 | −0.09 | −0.44 % | −0.44 % | 91 |
+| 6.5 | −0.09 | −0.35 % | −0.33 % | 125 |
+| 7.0 | −0.09 | −0.14 % | −0.10 % | 163 |
+| 7.6 | −0.09 | +0.43 % | +0.50 % | 211 |
+
+The pole-hot foot (P2 > 0 to 4.7 ns) flattens the shell at the poles (oblate,
+P2 < 0). The pole-cold peak (−0.09 from 5 ns) stops the flattening at 5.5–6 ns and
+reverses it, and the shell turns prolate near 7.1 ns. That is the swing: a shell shape
+that changes sign during the implosion, with a lag of about 1 ns after the drive. It
+is not yet Masse's sign inversion, which is a property of the response G(t, τ) to an
+impulse at τ (pole-hot before ~4.5 ns gives an oblate hot spot, later a prolate one).
+Here the drive's own P2 changes sign at 4.7 ns. Separating the two needs impulse runs
+(the same drive with P2 only before, or only after, a time τ), carried to stagnation
+on a grid that reaches the origin.
+
 Stage 1 replaces the closure
 with gray flux-limited diffusion and a Marshak boundary carrying `4F_inc(θ,t)/c`, with
 table equations of state and flux-limited conduction.
