@@ -534,6 +534,28 @@ promotion.
   **Gate:** per extension, the refined-versus-uniform convergence rows of
   `test/convergence.jl`.
 
+- [ ] **A21 — Resolve an indirect-drive capsule's shell with a refined band.**
+  The Briareus-driven ablation source (`AblationDrive`, binned form, level-wide
+  `prepare_source!` hook; [ablation drive](../docs/src/explanation/ablation-drive.md))
+  runs on r-z and 3-D Cartesian levels, and `ablation_band` tags a band that
+  follows the front. A 1 µm shell is only practical refined, and the band runs
+  are blocked by the hierarchy, not the source:
+  1. The root's covered nodes set its step (A17.1): with a 10–20 µm band over
+     a 30–60 µm root, the root's rate was 3865 against the band's 958 at
+     0.15 ns, about 8 times a uniform fine grid's steps; the 3-D band run
+     reached 0.1 ns in 30 minutes.
+  2. Tiles near the r-z axis: edge 10 failed within 0.1 ns, edge 8 at
+     0.62 ns, a single box ran (A17.4).
+  3. Cold start: multi-D runs from the cold, uniform-pressure ablator need
+     CFL ≤ 0.25 (r-z at 15 µm failed within 0.035 ns at 0.4, undriven).
+  4. The direction bins must span several coarsest-level cells (32 × 128
+     bins on a 60 µm 3-D root failed at 0.03 ns).
+  Not yet exercised: a regrid following the shell with `ablation_band`, the
+  binned source on MPI and GPU, and r-z or 3-D at 1–2 µm.
+  **Gate:** an r-z quadrant and a 3-D octant with a 2 µm band, driven by a
+  Briareus `CapsuleDrive` to peak velocity, matching the 1-D shell trajectory
+  to grid error for a spherical drive, at a wall below the uniform 2 µm grid's.
+
 ## HED physics
 
 H1 is the principal infrastructure dependency for stiff diffusion. These are
