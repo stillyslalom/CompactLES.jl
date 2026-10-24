@@ -162,6 +162,8 @@ and is rendered only for cross-references.
 ConstantBodyForce
 add_source!
 CompactLES.add_sources!
+CompactLES.prepare_source!
+CompactLES.release_source!
 ```
 
 ## X-ray ablation drive
@@ -169,16 +171,20 @@ CompactLES.add_sources!
 A stage-0 drive for capsule-only implosions: an ablation pressure and a mass
 ablation rate from a radiation-temperature history, applied at the ablator's
 outer density gradient. With Briareus loaded, `radiation_drive` builds one from
-a Briareus `CapsuleDrive`. See [Ablation drive from a hohlraum code](@ref).
+a Briareus `CapsuleDrive`. On r–z and 3-D grids, and on refined levels, the front
+is found per angular bin about the capsule centre; `ablation_band` refines a shell
+band about it. See [Ablation drive from a hohlraum code](@ref).
 
 ```@docs
 AblationDrive
 radiation_drive
+ablation_band
 ablation_pressure
 ablation_pressure_scale
 CompactLES.ablation_rate
 CompactLES.drive_temperature
 CompactLES.drive_modes
 CompactLES.drive_factor
+CompactLES.drive_harmonics
 CompactLES.MM_NS_MG
 ```

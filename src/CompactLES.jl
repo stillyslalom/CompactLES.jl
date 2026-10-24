@@ -52,6 +52,7 @@ include("artificial.jl")
 include("stepcontrol.jl")
 include("sources.jl")
 include("ablation.jl")
+include("ablation_bins.jl")
 include("precision.jl")
 include("patches.jl")
 include("levels.jl")
@@ -123,7 +124,8 @@ export ArtificialProperties, Solver
 export DeviceBackend
 export nlevels, refined_region, level_regions
 export ConstantBodyForce
-export AblationDrive, ablation_pressure, ablation_pressure_scale, radiation_drive
+export AblationDrive, ablation_pressure, ablation_pressure_scale, radiation_drive,
+       ablation_band
 export Workspace, compute_dt, dt_report, run!, mpi_main
 export ImplicitConduction
 export StepControl, SolverFailure

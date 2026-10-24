@@ -75,6 +75,37 @@ function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     return dQ
 end
 
+"""
+    prepare_source!(source, solver, lev, states, comm)
+
+Hook run before the right-hand side of every patch of refined level `lev` (and of a
+multi-patch root) at each stage, entered by every rank of `comm`, the level's
+communicator, with the level's `states` at the stage time `solver.tstage`. A source
+whose evaluation needs sums over the whole level (the binned
+[`AblationDrive`](@ref)) computes them here, where collectives are allowed; inside
+`add_source!` a patch sees only itself. [`release_source!`](@ref) follows the
+level's right-hand side. Both default to doing nothing.
+"""
+prepare_source!(source, solver, lev, states, comm) = nothing
+
+"""
+    release_source!(source, solver, lev)
+
+Drop what [`prepare_source!`](@ref) kept for level `lev`, after its right-hand side.
+"""
+release_source!(source, solver, lev) = nothing
+
+@inline _prepare_sources!(::Tuple{}, solver, lev, states, comm) = nothing
+@inline function _prepare_sources!(sources::Tuple, solver, lev, states, comm)
+    prepare_source!(first(sources), solver, lev, states, comm)
+    return _prepare_sources!(Base.tail(sources), solver, lev, states, comm)
+end
+@inline _release_sources!(::Tuple{}, solver, lev) = nothing
+@inline function _release_sources!(sources::Tuple, solver, lev)
+    release_source!(first(sources), solver, lev)
+    return _release_sources!(Base.tail(sources), solver, lev)
+end
+
 @inline _add_sources!(::Tuple{}, solver, dQ, Q, t) = dQ
 
 @inline function _add_sources!(sources::Tuple, solver, dQ, Q, t)

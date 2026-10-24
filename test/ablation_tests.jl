@@ -43,6 +43,9 @@ using Test
     eos = IdealMixture([IdealSpecies{Float64}("abl", 1.0, 5 / 3),
                         IdealSpecies{Float64}("gas", 2.0, 5 / 3)])
     ic = (r, θ, φ) -> begin
+        # local: the testset assigns ρa below, which the closure would otherwise share
+        # across the threads that evaluate it
+        local b, ρa, ρg
         b = tanh_blend(r, 0.6, 0.02) - tanh_blend(r, 0.8, 0.02)
         ρa, ρg = 1.0 * b + 1e-6, 0.01
         Prim(rho=ρa + ρg, p=0.1, Y=(ρa / (ρa + ρg), ρg / (ρa + ρg)))
@@ -125,4 +128,108 @@ using Test
                   bcs=((AxisBC(), SlipWallBC()), PeriodicBC(), PeriodicBC()), ic=(r, θ, z) -> ic(r, θ, z))
     sb, Qb = setup(bad, Numerics(n_global=(64, 1, 1)))
     @test_throws ArgumentError CompactLES.add_source!(d1, sb, similar(Qb), Qb, 0.0)
+end
+
+# The binned form (src/ablation_bins.jl): the same drive on r–z and 3-D Cartesian
+# grids, the front and the layer normalization summed over angular bins.
+@testset "ablation drive, binned geometry" begin
+    ts = [0.0, 1.0, 2.0, 8.0, 9.0]
+    Tr = [50.0, 150.0, 150.0, 300.0, 200.0]
+    unit = (pressure=1.0, mass_flux=1.0, time=1.0)
+    eos = IdealMixture([IdealSpecies{Float64}("abl", 1.0, 5 / 3),
+                        IdealSpecies{Float64}("gas", 2.0, 5 / 3)])
+    function shell(R)
+        local b = tanh_blend(R, 0.6, 0.02) - tanh_blend(R, 0.8, 0.02)
+        local ρa = b + 1e-6
+        return Prim(rho=ρa + 0.01, p=0.1, Y=(ρa / (ρa + 0.01), 0.01 / (ρa + 0.01)))
+    end
+    function rhs(prob, n, d; t=3.0)
+        solver, Q = setup(prob, Numerics(n_global=n))
+        dQ = similar(Q)
+        fill!(parent(dQ), 0.0)
+        CompactLES.add_source!(d, solver, dQ, Q, t)
+        return solver, Q, dQ
+    end
+    # Schmidt harmonics: Ŷ20 = P2, Ŷ22 = (√3/2) sin²θ cos 2φ, Ŷ3,-1 = √(1/6)(3/2)(5μ²−1) sinθ sinφ
+    H = zeros(16, length(ts))
+    H[1, :] .= 1
+    H[7, :] .= 0.05                      # (2, 0)
+    H[9, :] .= 0.1                       # (2, 2)
+    H[12, :] .= 0.03                     # (3, -1)
+    dh = AblationDrive(ts, Tr; harmonics=H)
+    @test dh isa AblationDrive{3} && CompactLES.drive_modes(dh, 1.0) == (0.0, 0.05, 0.0)
+    for (μ, φ) in ((0.3, 0.7), (-0.8, 2.5), (1.0, 0.0), (0.0, 4.0))
+        s = sqrt(1 - μ^2)
+        ref = 1 + 0.05 * (3μ^2 - 1) / 2 + 0.1 * sqrt(3) / 2 * s^2 * cos(2φ) +
+              0.03 * sqrt(1 / 6) * 1.5 * (5μ^2 - 1) * s * sin(φ)
+        @test CompactLES.drive_factor(dh, μ, φ, 1.0) ≈ ref
+    end
+    @test CompactLES.drive_factor(dh, 0.3, 1.0) ≈ 1 + 0.05 * (3 * 0.09 - 1) / 2   # m = 0 only
+    @test_throws ArgumentError AblationDrive(ts, Tr; harmonics=H, modes=zeros(3, 5))
+    @test_throws ArgumentError AblationDrive(ts, Tr; harmonics=zeros(5, 5))
+    @test_throws ArgumentError AblationDrive(ts, Tr; geometry=:rays)
+    # On a 1-D spherical grid the binned form is the per-line form, to rounding
+    sph = Problem(eos=eos, metric=SphericalMetric(), domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
+                  bcs=((OriginBC(), SlipWallBC()), PeriodicBC(), PeriodicBC()), ic=(r, θ, φ) -> shell(r))
+    for driver in (0, 2)
+        # (relaxation: the binned conversion is capped at ρₐ/relaxation per point, far
+        # above the unit system's ṁ here only for a tiny relaxation time)
+        kw = (; units=unit, layer=0.02, driver, relaxation=1e-12)
+        _, _, a = rhs(sph, (200, 1, 1), AblationDrive(ts, Tr; kw...))
+        _, _, b = rhs(sph, (200, 1, 1), AblationDrive(ts, Tr; kw..., geometry=:binned))
+        @test maximum(abs, parent(a) .- parent(b)) <= 1e-12 * maximum(abs, parent(a))
+    end
+    # r–z (axis): the ablated mass is ṁ per unit front area, R_f ≈ 0.79 at every angle;
+    # θ spans 1 rad, so the grid holds the solid angle 2
+    cyl = Problem(eos=eos, metric=CylindricalMetric(), domain=((0.0, 1.0), (0.0, 1.0), (-1.0, 1.0)),
+                  bcs=((AxisBC(), SlipWallBC()), PeriodicBC(), (SlipWallBC(), SlipWallBC())),
+                  ic=(r, θ, z) -> shell(sqrt(r^2 + z^2)))
+    db = AblationDrive(ts, Tr; units=unit, layer=0.02, driver=2, bins=(32, 1), relaxation=1e-12)
+    s3, Q3, dQ3 = rhs(cyl, (100, 1, 200), db)
+    o1, o3 = s3.decomp.n_halo_d[1], s3.decomp.n_halo_d[3]
+    M = sum(dQ3[o1+i, 1, o3+k, 1] * CompactLES.xcoord(s3, 1, i) * s3.h[1] * s3.h[3]
+            for i in 1:100, k in 1:200)
+    G = CompactLES._bin_geometry(db, s3)
+    bins = CompactLES._ablation_bins(db, ((s3, Q3, G),), 32, Float64, nothing, 3.0)
+    @test all(R -> 0.78 < R < 0.80, bins.Rf)
+    Rf2 = sum(bins.Rf .^ 2) / 32
+    @test M ≈ -CompactLES.ablation_rate(db, 3.0) * 2 * Rf2 rtol = 2e-2
+    @test all(iszero, dQ3[:, :, :, 3:5])                 # the driver form moves no momentum
+    # a P2 drive: the source's pressure follows (1 + a₂P₂)^(3.3/4) at each cell's angle
+    M2 = [0.0 0 0 0 0; 0.2 0.2 0.2 0.2 0.2]
+    dp = AblationDrive(ts, Tr; units=unit, layer=0.02, driver=0, modes=M2, bins=(32, 1),
+                       relaxation=1e-12)
+    s4, Q4, dQ4 = rhs(cyl, (100, 1, 200), dp)
+    m3 = s4.equations.i_mom[3]
+    pole = sum(dQ4[o1+i, 1, o3+k, m3] for i in 1:10, k in 1:200 if CompactLES.xcoord(s4, 3, k) > 0)
+    @test pole < 0                                       # the z force points inward at the pole
+    # 3-D Cartesian: the body force is radial and inward, with no net force for a
+    # centred capsule; a Y22 drive pushes harder along ±x than along ±y
+    car = Problem(eos=eos, metric=CartesianMetric(), domain=((-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)),
+                  bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC())),
+                  ic=(x, y, z) -> shell(sqrt(x^2 + y^2 + z^2)))
+    H22 = zeros(9, length(ts))
+    H22[1, :] .= 1
+    H22[9, :] .= 0.2
+    d3 = AblationDrive(ts, Tr; units=unit, layer=0.05, driver=0, harmonics=H22, bins=(8, 16),
+                       relaxation=1e-12)
+    s5, Q5, dQ5 = rhs(car, (40, 40, 40), d3)
+    o = s5.decomp.n_halo_d
+    m1, m2, m3 = s5.equations.i_mom
+    x(i) = CompactLES.xcoord(s5, 1, i)
+    Fx = [dQ5[o[1]+i, o[2]+j, o[3]+k, m1] for i in 1:40, j in 1:40, k in 1:40]
+    Fy = [dQ5[o[1]+i, o[2]+j, o[3]+k, m2] for i in 1:40, j in 1:40, k in 1:40]
+    # (measured 0.8e-5 and 3e-5: nodes on the diagonals sit on bin edges, where rounding
+    # bins a node and its mirror image differently)
+    @test abs(sum(Fx)) < 1e-4 * sum(abs, Fx) && abs(sum(Fy)) < 1e-4 * sum(abs, Fy)
+    @test all(i -> Fx[i, 20, 20] * x(i) <= 0, 1:40)       # inward along x
+    ax, ay = sum(abs, Fx[:, 20:21, 20:21]), sum(abs, Fy[20:21, :, 20:21])
+    @test ax / ay ≈ ((1 + 0.2 * sqrt(3) / 2) / (1 - 0.2 * sqrt(3) / 2))^(3.3 / 4) rtol = 0.05
+    # unsupported layouts
+    @test_throws ArgumentError rhs(Problem(eos=eos, metric=CartesianMetric(),
+                                           domain=((-1.0, 1.0), (-1.0, 1.0), (0.0, 1.0)),
+                                           bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()), PeriodicBC()),
+                                           ic=(x, y, z) -> shell(hypot(x, y))), (32, 32, 1), d3)
+    @test_throws ArgumentError rhs(cyl, (100, 1, 200),
+                                   AblationDrive(ts, Tr; units=unit, center=(0.1, 0.0, 0.0)))
 end

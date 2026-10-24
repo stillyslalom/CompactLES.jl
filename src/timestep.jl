@@ -437,6 +437,16 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
                      enforce::Bool=!prepared, comm=solver.comm)
     status = _prepare_level_transport!(solver, lev, states, prepared, enforce, comm)
     status == 0 || return status
+    # Sources that sum over the whole level (the binned ablation drive) do so here,
+    # before any patch's right-hand side, where the level's ranks may communicate.
+    _prepare_sources!(solver.sources, solver, lev, states, comm)
+    status = _level_rhs_patches!(solver, lev, states, dQs, prepared, enforce, comm)
+    _release_sources!(solver.sources, solver, lev)
+    return status
+end
+
+function _level_rhs_patches!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
+                             enforce::Bool, comm)
     if transport_has_domain(solver.transport)
         prepared = true
         enforce = false

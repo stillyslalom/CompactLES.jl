@@ -105,9 +105,55 @@ source itself) and three per-line sums.
   device.
 - **MPI.** The per-line sums are reduced over the radial sub-communicator, so the
   radius may be split across ranks (the reduction stages through a host copy).
-- **Limits.** `SphericalMetric`, an unstretched `(r, θ)` grid and one patch. The
-  axisymmetric `r–z` grid with refinement, where the drive must be mapped from the
-  sphere, is the next geometric step.
+- **Per-line form.** `SphericalMetric`, an unstretched `(r, θ)` grid and one patch.
+  The binned form below takes the rest.
+
+## Geometry: r–z and 3-D
+
+NIF capsule work runs in three metrics: 1-D spherical, 2-D axisymmetric r–z
+(cylindrical, the hohlraum axis as the grid axis) and 3-D Cartesian. On the last two
+no grid line is radial, so the per-line search has nothing to sum along. The drive
+therefore measures everything from the capsule centre (`center`, on the axis for r–z)
+and sums over **angular bins** instead of lines: `bins = (nμ, nφ)` equal intervals of
+`μ = cos θ` and `φ`, so the bins have equal solid angle. Each point's distance `R`,
+its direction `(μ, φ)` and the components of `R̂` in the grid's local basis are
+geometry, computed once per patch.
+
+1. *Front.* The marker `g = ρₐ(−∂ρₐ/∂R)⁺`, with `∂/∂R = R̂·∇` from central
+   differences along each grid direction (mirrored at an axis, origin, pole or
+   symmetry plane, one-sided at any other block end), gives per bin
+   `R_f = Σ g R dV/R² / Σ g dV/R²`.
+2. *Normalization.* The layer weight `k` (the same one-sided or Gaussian weight as on
+   lines, about `R_f` interpolated at the point) and the kernel
+   `a = e^{−x²}/(√π δ)` give per bin `N = Σ a dV/R² / Σ k dV/R²`. Weighting by
+   `dV/R²` makes each bin's sums `∫ … dr` per steradian, so `w = k N` is the per-line
+   `k / ∫ k dr`: on a 1-D spherical grid the binned form (`geometry = :binned`)
+   reproduces the per-line source to 1e-14, the calibration's convention included.
+3. *Source.* `R_f` and `N` are interpolated bilinearly between bin centres at each
+   point's direction, and the drive factor `T_eff⁴/T_r⁴` is evaluated there: the
+   Legendre sum on r–z (the azimuthal average), every `m` of the Schmidt harmonics
+   `bₗₘ` on a 3-D grid (`harmonics`, Briareus's `CapsuleDrive.ylm`, through the
+   extension). The body force is `−P w R̂` in the grid's components.
+
+**Refinement.** A patch sees only itself inside `add_source!`, and a tile of a
+refined shell band holds a few cells of the front, so the bins cannot be a patch's
+own. Before a level's right-hand side, at every stage, the solver calls
+`prepare_source!(source, solver, level, states, comm)` (a hook in `_level_rhs!`,
+entered by every rank of the level, where collectives are allowed), and the drive
+sums its two passes over all the level's patches and reduces them over the level's
+communicator; `release_source!` drops them after the level's right-hand side.
+Every level carries its own consistent source. A coarse level under the band does
+too, and its covered nodes are overwritten by the band's. `min_layer` widens the
+layer to that many cells on a level whose spacing does not resolve it (the coarse
+level under a 1 µm band). Shared tile planes count half in each tile's sums.
+`ablation_band(drive; inside, outside, initial, metric)` is an `AMR(initial = …)`
+predicate for a band about the root level's last `R_f(θ, φ)`; with
+`regrid_interval` and `tile` it follows the shell as it converges.
+
+**Device and MPI.** The passes are `pointwise!` bodies; the bin sums (a few thousand
+bins) are taken on the host, so a device run copies two per-point arrays per pass.
+Not yet run on a device. The single-patch path reduces over the patch's
+communicator, the level path over the level's.
 
 ## What stage 0 can and cannot check
 

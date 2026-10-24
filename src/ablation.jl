@@ -12,12 +12,24 @@ Unit factors of the problem system with lengths in mm, times in ns and masses in
 """
 const MM_NS_MG = (pressure = 1e-4, mass_flux = 1e-8, time = 1.0)
 
+# The binned form's state: per patch (by `Patch` identity) its static geometry, and,
+# between a level's `prepare_source!` and its release, the level's bins by patch id.
+struct _BinnedState
+    geometry::WeakKeyDict{Any,Any}
+    prepared::Dict{Int,Any}
+    lock::ReentrantLock
+    front::Base.RefValue{Any}         # the root level's last bins (`ablation_band`)
+end
+_BinnedState() = _BinnedState(WeakKeyDict{Any,Any}(), Dict{Int,Any}(), ReentrantLock(),
+                              Ref{Any}(nothing))
+
 """
-    AblationDrive(time, Tr; modes = nothing, species = 1, driver = 0,
-                  driver_gamma = 5/3, relaxation = 0.01, pressure = 4.0,
+    AblationDrive(time, Tr; modes = nothing, harmonics = nothing, species = 1,
+                  driver = 0, driver_gamma = 5/3, relaxation = 0.01, pressure = 4.0,
                   pressure_exponent = 3.3, time_exponent = -0.09, rate = 3e5,
                   rate_exponent = 3.0, layer = 0.005, t_on = 0.0, t_ref = 1.0,
-                  t_min = 0.1, units = MM_NS_MG)
+                  t_min = 0.1, units = MM_NS_MG, center = (0, 0, 0),
+                  geometry = :auto, bins = nothing, min_layer = 0)
 
 Stage-0 x-ray drive of a capsule-only implosion from a radiation-temperature history
 `Tr` (eV) on the times `time` (ns): an ablation pressure and a mass ablation rate,
@@ -42,6 +54,42 @@ incident flux about the +z axis (P2 > 0 pole-hot). On a spherical `(r, θ)` grid
 local temperature is `T_eff⁴ = Tr⁴ (1 + Σₗ (aₗ/a₀) Pₗ(cos θ))`, so `P_abl ∝
 (1 + Σ…)^(pressure_exponent/4)` and `ṁ ∝ (1 + Σ…)^(rate_exponent/4)`. A collapsed θ
 dimension (1-D spherical) takes the angle average, `a₀` alone.
+
+`harmonics` is the drive with every `m`: an `(L+1)² × nt` matrix of ratios `bₗₘ`
+of real Schmidt semi-normalized harmonics (rows `l² + l + m + 1`, row 1 the
+constant 1; Briareus's `CapsuleDrive.ylm`), `T_eff⁴ = Tr⁴ Σₗₘ bₗₘ Ŷₗₘ(θ, φ)`,
+`Ŷₗ₀ = Pₗ(cos θ)`, `Ŷₗ,±ₘ = √(2(l−m)!/(l+m)!) Pₗᵐ(cos θ) (cos mφ, sin mφ)` without
+the Condon–Shortley phase, `φ` from +x toward +y. Its `m = 0` rows are the Legendre
+`modes` (`bₗ₀ = aₗ/a₀`), which it replaces. A grid without a resolved azimuth (r–θ,
+r–z) takes the azimuthal average, `m = 0`; a 3-D grid takes every `m`.
+
+**Geometry.** On a `SphericalMetric` (r, θ) grid (`geometry = :auto` or `:lines`)
+the front is searched along each radial line, as below. On a `CylindricalMetric`
+r–z grid (axis `AxisBC`, θ collapsed or resolved) and a 3-D `CartesianMetric` grid,
+or with `geometry = :binned` on any of the three, the radial direction is measured
+from the capsule `center` (on the axis for cylindrical, the origin for spherical),
+and the sums run over angular bins instead of lines: `bins = (nμ, nφ)` equal
+intervals of `μ = cos θ` and of `φ` (default 32 × 64 with a resolved azimuth,
+64 × 1 without, `nμ = 1` without a resolved polar angle). A bin should span several
+cells of every level at the front: a 3-D bin holding one cell of a 60 µm coarse level
+made that level's normalization noisy enough to fail the run, and the conversion is
+capped at `ρₐ/relaxation` per cell for the same reason. Per bin the front is
+`R_f = Σ g R dV / Σ g dV`, `g = ρₐ (−∂ρₐ/∂R)⁺`, and the layer weight is
+normalized by the front area the bin's cells hold, `A = Σ e^(−x²)/(√π δ) dV`
+(`x = (R − R_f)/δ`), so `w = k A / Σ k dV` carries `P` and `ṁ` per unit area of the
+front: the per-line `∫ w dr = 1`, up to `R²` across the layer. `R_f` and `A/Σ k dV`
+are interpolated bilinearly between bin centres at each cell's direction, and the
+drive factor is evaluated there. With refinement (nested or tiled levels, static
+or regridded, subcycled or not) the bins of a level are summed over all its patches
+and ranks before the level's right-hand side, at every stage
+(`prepare_source!`), so a tile holding part of the layer gets the level's front and
+normalization; each level, the coarse one under a fine band included, carries its
+own consistent source. A refined band must hold the whole layer where it covers the
+front (the drive is then the band's; the coarse level's tail outside it is the
+coarse solution's). On a level whose spacing does not resolve `layer`, the binned
+form widens the layer to `min_layer` of its cells (the largest length spacing; `0`
+by default, so nothing changes): a coarse level under a refined band, whose cells
+are overwritten by the band's, then carries a smooth source instead of a sub-cell one.
 
 **Source.** Along each radial line, with `ρₐ` the ablator's partial density, the front
 is the mean radius of the ablator's outer density gradient,
@@ -83,10 +131,12 @@ the shell is a rocket driven at `P_abl` and losing `ṁ`. Nothing here is radiat
 transport: no spectrum, no albedo, no preheat; shock timing and adiabat are not
 predictions.
 
-Requirements: `SphericalMetric`, an unstretched `(r, θ)` grid, one patch (no
-refinement), and a problem in the `units` system (by default mm, ns, mg,
-[`MM_NS_MG`](@ref)). The per-line sums are reduced over the radial sub-communicator,
-so the radius may be decomposed across ranks.
+Requirements of the per-line form: `SphericalMetric`, an unstretched `(r, θ)` grid,
+one patch (no refinement); its sums are reduced over the radial sub-communicator. The
+binned form takes any decomposition (bins are reduced over the patch's, or the
+level's, ranks), stretching and refinement; its bin sums are taken on the host (a
+device run copies the per-point values over). Both need a problem in the `units`
+system (by default mm, ns, mg, [`MM_NS_MG`](@ref)).
 """
 struct AblationDrive{L}
     time::Vector{Float64}
@@ -107,14 +157,22 @@ struct AblationDrive{L}
     t_min::Float64
     units::NamedTuple{(:pressure, :mass_flux, :time),NTuple{3,Float64}}
     scratch::Base.RefValue{Any}       # per-point weights and per-line sums
+    harmonics::Matrix{Float64}        # (L+1)² × nt Schmidt ratios, or 0 × nt
+    center::NTuple{3,Float64}
+    geometry::Symbol                  # :auto, :lines or :binned
+    bins::Union{Nothing,NTuple{2,Int}}
+    min_layer::Float64
+    binned::_BinnedState              # per-patch geometry, the levels' bins
 end
 
 function AblationDrive(time::AbstractVector, Tr::AbstractVector; modes = nothing,
-                       species::Integer = 1, driver::Integer = 0, driver_gamma::Real = 5 / 3,
+                       harmonics = nothing, species::Integer = 1, driver::Integer = 0, driver_gamma::Real = 5 / 3,
                        relaxation::Real = 0.01, pressure::Real = 4.0,
                        pressure_exponent::Real = 3.3, time_exponent::Real = -0.09,
                        rate::Real = 3e5, rate_exponent::Real = 3.0, layer::Real = 0.005, t_on::Real = 0.0,
-                       t_ref::Real = 1.0, t_min::Real = 0.1, units = MM_NS_MG)
+                       t_ref::Real = 1.0, t_min::Real = 0.1, units = MM_NS_MG,
+                       center = (0.0, 0.0, 0.0), geometry::Symbol = :auto, bins = nothing,
+                       min_layer::Real = 0)
     nt = length(time)
     nt >= 1 && length(Tr) == nt ||
         throw(ArgumentError("AblationDrive: time and Tr must be non-empty and of one length"))
@@ -123,6 +181,22 @@ function AblationDrive(time::AbstractVector, Tr::AbstractVector; modes = nothing
     M = modes === nothing ? zeros(0, nt) : Matrix{Float64}(modes)
     size(M, 2) == nt ||
         throw(ArgumentError("AblationDrive: modes must have one column per time (l = 1…L rows)"))
+    H = zeros(0, nt)
+    if harmonics !== nothing
+        H = Matrix{Float64}(harmonics)
+        Lh = isqrt(size(H, 1)) - 1
+        (size(H, 1) == (Lh + 1)^2 && size(H, 2) == nt) ||
+            throw(ArgumentError("AblationDrive: harmonics must be (L+1)² × nt (rows l² + l + m + 1)"))
+        Mh = Lh == 0 ? zeros(0, nt) : H[[l^2 + l + 1 for l in 1:Lh], :]
+        modes === nothing || M == Mh ||
+            throw(ArgumentError("AblationDrive: the m = 0 rows of harmonics must equal modes"))
+        M = Mh
+    end
+    geometry in (:auto, :lines, :binned) ||
+        throw(ArgumentError("AblationDrive: geometry must be :auto, :lines or :binned"))
+    bins === nothing || (length(bins) == 2 && all(>=(1), bins)) ||
+        throw(ArgumentError("AblationDrive: bins must be (nμ, nφ), each at least 1"))
+    length(center) == 3 || throw(ArgumentError("AblationDrive: center must have three coordinates"))
     species >= 1 || throw(ArgumentError("AblationDrive: species must be a species index"))
     driver >= 0 && driver != species ||
         throw(ArgumentError("AblationDrive: driver must be 0 or a species other than the ablator"))
@@ -136,13 +210,16 @@ function AblationDrive(time::AbstractVector, Tr::AbstractVector; modes = nothing
                                      Int(species), Int(driver), driver_gamma, relaxation,
                                      pressure, pressure_exponent,
                                      time_exponent, rate, rate_exponent, layer, t_on, t_ref,
-                                     t_min, u, Ref{Any}(nothing))
+                                     t_min, u, Ref{Any}(nothing), H,
+                                     ntuple(i -> Float64(center[i]), 3), geometry,
+                                     bins === nothing ? nothing : (Int(bins[1]), Int(bins[2])),
+                                     Float64(min_layer), _BinnedState())
 end
 
 function Base.show(io::IO, d::AblationDrive{L}) where {L}
     print(io, "AblationDrive(", length(d.time), " times on [", first(d.time), ", ",
           last(d.time), "] ns, peak Tr ", round(maximum(d.Tr); digits=1), " eV, l ≤ ", L,
-          ", P = ", d.pressure, " T^", d.pressure_exponent, " t^", d.time_exponent,
+          isempty(d.harmonics) ? "" : " (all m)", ", P = ", d.pressure, " T^", d.pressure_exponent, " t^", d.time_exponent,
           " Mbar, ṁ = ", d.rate, " T^", d.rate_exponent, ")")
 end
 
@@ -177,6 +254,25 @@ The angle-averaged mass ablation rate of `drive` at time `t` (ns).
 ablation_rate(d::AblationDrive, t::Real) =
     d.rate * (drive_temperature(d, t) / 100)^d.rate_exponent
 
+"""
+    drive_harmonics(drive, t) -> NTuple{(L+1)²}
+
+The Schmidt ratios `bₗₘ` of `drive` at time `t` (row order `l² + l + m + 1`, the
+first the constant 1); the Legendre ratios at `m = 0` and zeros elsewhere for an
+axisymmetric drive.
+"""
+function drive_harmonics(d::AblationDrive{L}, t::Real) where {L}
+    τ = Float64(t)
+    a = drive_modes(d, τ)
+    h = isempty(d.harmonics)
+    return ntuple(Val((L + 1)^2)) do q
+        q == 1 && return 1.0
+        h || return _table_interp(d.time, view(d.harmonics, q, :), τ)
+        l = isqrt(q - 1)
+        q == l^2 + l + 1 ? a[l] : 0.0
+    end
+end
+
 "Legendre ratios `aₗ/a₀`, `l = 1…L`, of `drive` at time `t`, as an `NTuple{L}`."
 drive_modes(d::AblationDrive{L}, t::Real) where {L} =
     ntuple(l -> _table_interp(d.time, view(d.modes, l, :), Float64(t)), Val(L))
@@ -187,6 +283,40 @@ drive_modes(d::AblationDrive{L}, t::Real) where {L} =
 The incident flux at `μ = cos θ` relative to its angle average.
 """
 drive_factor(d::AblationDrive, μ::Real, t::Real) = _legendre_sum(drive_modes(d, t), μ)
+
+"""
+    drive_factor(drive, μ, φ, t) -> Σₗₘ bₗₘ Ŷₗₘ(μ, φ)
+
+The incident flux in the direction `(μ = cos θ, φ)` relative to its angle average,
+with every `m` of `harmonics` (the Legendre sum for an axisymmetric drive).
+"""
+drive_factor(d::AblationDrive, μ::Real, φ::Real, t::Real) =
+    _harmonic_sum(drive_harmonics(d, t), μ, φ)
+
+# Σ c_q Ŷ_q(μ, φ) over real Schmidt semi-normalized harmonics (q = l² + l + m + 1, no
+# Condon–Shortley phase), by the recursions S_m^m = √((2m−1)/2m) s S_{m−1}^{m−1}
+# (S_1^1 = s) and S_l^m = ((2l−1) μ S_{l−1}^m − √((l−1)²−m²) S_{l−2}^m)/√(l²−m²).
+@inline function _harmonic_sum(c::NTuple{N,T}, μ, φ) where {N,T}
+    L = isqrt(N) - 1
+    s = sqrt(max(1 - μ * μ, zero(μ)))
+    tot = zero(μ)
+    pmm = one(μ)
+    @inbounds for m in 0:L
+        m == 1 && (pmm = s)
+        m > 1 && (pmm *= sqrt(T(2m - 1) / T(2m)) * s)
+        cm, sm = cos(m * φ), sin(m * φ)
+        p2, p1 = zero(μ), pmm
+        for l in m:L
+            if l > m
+                p = (T(2l - 1) * μ * p1 - sqrt(T((l - 1)^2 - m^2)) * p2) / sqrt(T(l^2 - m^2))
+                p2, p1 = p1, p
+            end
+            q = l^2 + l + 1
+            tot += m == 0 ? c[q] * p1 : p1 * (c[q+m] * cm + c[q-m] * sm)
+        end
+    end
+    return tot
+end
 
 @inline function _legendre_sum(r::NTuple{L,T}, μ) where {L,T}
     s = one(μ)
@@ -349,6 +479,7 @@ function _line_integral!(G, a, h, decomp)
 end
 
 function add_source!(d::AblationDrive{L}, solver, dQ, Q, t) where {L}
+    _binned(d, solver) && return _add_binned_source!(d, solver, dQ, Q, t)
     _check_ablation_solver(solver)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
