@@ -103,6 +103,31 @@ The rocket's outputs are its validation: the implosion velocity (HYBRID-E
 380–400 km/s), the ablator mass remaining (5–6.6 %) and the coupled kinetic energy
 (19–33 kJ). With ideal-gas, fully ionized materials and no conduction, shock timing,
 adiabat, stagnation pressure and bang time are not predictions, and the energy the
-driver gas receives is not the capsule's absorbed energy. Stage 1 replaces the closure
+driver gas receives is not the capsule's absorbed energy.
+
+**First result (2026-10-24, `examples/briareus_capsule.jl`).** A static Briareus model
+of an N221204-class hohlraum (11.24 × 6.4 mm gold, 3.1 mm entrance holes, the
+delivered pulse by eye, the mock HYBRID-E pointing on 48 quads, no CBET) gives a
+capsule `Tr` peaking at 297 eV. The calibration (`peak = 145`) sets the prefactor to
+4.81 Mbar, so the foot gives 17 Mbar where `Tr` first reaches 150 eV (more than 12, as
+required). On a 1-D grid of 1400 points (1 µm), with a 5 µm layer, the driver-gas form
+and Lindl's ablation rate:
+
+| | stage 0 | HYBRID-E |
+|---|---|---|
+| shell pressure behind the ablation front | follows `P_abl` within 1 % from 0.75 ns (17 Mbar at 1 ns, 145 at the peak) | first shock > 12 Mbar, ≈ 140–150 Mbar at the peak |
+| peak DT velocity | 315 km/s at 8.7 ns | 380–400 km/s |
+| ablator remaining at peak velocity | 19.6 % | 5–6.6 % |
+| kinetic energy of ablator + DT at peak velocity | 36 kJ | 19–33 kJ (imploding mass) |
+
+The pressure is right by construction; the rocket burns too little ablator, so the
+shell is too heavy and too slow. Lindl's `3×10⁵ T³` is a Nova-era fit for ablators of
+low albedo; the next step is to calibrate the ablation rate to the mass remaining, and
+then to check the velocity, which the rocket equation then fixes. On a 2 µm grid the
+5 µm layer spans under three cells and the run fails in the foot: give the layer at
+least five cells. The body-force form failed at 5.1 ns on the same grid. The run takes
+about 30 minutes on 4 threads, its timestep set by the hot driver gas.
+
+Stage 1 replaces the closure
 with gray flux-limited diffusion and a Marshak boundary carrying `4F_inc(θ,t)/c`, with
 table equations of state and flux-limited conduction.

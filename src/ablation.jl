@@ -339,8 +339,9 @@ function add_source!(d::AblationDrive{L}, solver, dQ, Q, t) where {L}
     s <= eq.n_species || throw(ArgumentError("AblationDrive: species $s of $(eq.n_species)"))
     T = eltype(Q)
     sc = d.scratch[]
-    if !(sc isa Tuple) || size(sc[1]) != (nx, ny, nz) || eltype(sc[1]) != T ||
-       typeof(sc[1]) != typeof(similar(solver.rho, T, nx, ny, nz))
+    # one scratch set per drive, rebuilt when the extent or element type changes (a
+    # drive shared by two solvers of different size reallocates on every switch)
+    if !(sc isa Tuple) || size(sc[1]) != (nx, ny, nz) || eltype(sc[1]) != T
         sc = (similar(solver.rho, T, nx, ny, nz), similar(solver.rho, T, nx, ny, nz),
               similar(solver.rho, T, 1, ny, nz), similar(solver.rho, T, 1, ny, nz))
         d.scratch[] = sc

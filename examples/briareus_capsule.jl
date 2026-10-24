@@ -18,7 +18,7 @@ using CompactLES: drive_temperature, xcoord
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 const opt = CompactLES.script_args(ARGS, (nx=1400, tfinal=10.5, h=0.4, capsule_h=0.2,
-                                          peak=145.0, layer=0.005, fill=3e-4))
+                                          peak=145.0, layer=0.005, fill=3e-4, cfl=0.4))
 
 # --- Step 1: the hohlraum (Briareus). N221204-class geometry and delivered pulse, the
 # public mock HYBRID-E pointing on 48 quads, a static gold wall (examples/n221204.jl
@@ -62,7 +62,7 @@ end
 problem = Problem(name="stage-0 capsule", eos=IdealMixture(species), metric=SphericalMetric(),
                   sources=(drive,), domain=((0.0, 1.4), (π / 2, π / 2 + 1), (0.0, 1.0)),
                   bcs=((OriginBC(), SlipWallBC()), PeriodicBC(), PeriodicBC()), ic=ic)
-numerics = Numerics(n_global=(opt.nx, 1, 1), cfl=0.4,
+numerics = Numerics(n_global=(opt.nx, 1, 1), cfl=opt.cfl,
                     control=StepControl(retries=4, validity=:permissive, floor_ratio=1e-3),
                     execution=Execution(dims=(1, 1, 1)))
 solver, Q = setup(problem, numerics)
@@ -86,14 +86,18 @@ end
 
 s0 = shell(solver, Q)
 best = (v=0.0, t=0.0, mC=s0.mC, KE=0.0)
-for tk in 0.25:0.25:opt.tfinal
+# Short run! calls: each re-anchors the positivity floor (StepControl's floor_ratio is
+# relative to the state entering run!) and restarts the retry budget; the 1-D run of
+# the documentation completed this way and not with 0.25 ns calls.
+for (k, tk) in enumerate(0.05:0.05:opt.tfinal)
     run!(solver, Q; tfinal=tk, nmax=10_000_000)
     s = shell(solver, Q)
     -s.v > best.v && (global best = (v=-s.v, t=solver.t, mC=s.mC, KE=s.KE))
-    @printf("t %5.2f ns  Tr %5.1f eV  P_abl %6.1f Mbar  v_DT %6.1f km/s  ablator %5.1f %%  KE %5.2f kJ\n",
-            solver.t, drive_temperature(drive, solver.t), ablation_pressure(drive, solver.t),
-            -1e3s.v, 100s.mC / s0.mC, 1e3s.KE)
-    -s.v < 0.9 * best.v && break                 # past peak velocity
+    k % 5 == 0 &&
+        @printf("t %5.2f ns  Tr %5.1f eV  P_abl %6.1f Mbar  v_DT %6.1f km/s  ablator %5.1f %%  KE %5.2f kJ\n",
+                solver.t, drive_temperature(drive, solver.t), ablation_pressure(drive, solver.t),
+                -1e3s.v, 100s.mC / s0.mC, 1e3s.KE)
+    best.v > 0.05 && -s.v < 0.8 * best.v && break  # well past peak velocity (> 50 km/s)
 end
 @printf("peak DT velocity %.0f km/s at %.2f ns, ablator remaining %.1f %%, shell KE %.1f kJ (stage 0)\n",
         1e3best.v, best.t, 100best.mC / s0.mC, 1e3best.KE)
