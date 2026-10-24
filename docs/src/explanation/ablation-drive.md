@@ -155,6 +155,90 @@ bins) are taken on the host, so a device run copies two per-point arrays per pas
 Not yet run on a device. The single-patch path reduces over the patch's
 communicator, the level path over the level's.
 
+**What is validated (2026-10-24).** A flat drive (0 → 250 eV in 0.2 ns, then
+constant; `P₀ = 4.81`, `A = 2.85×10⁵`, not retuned) on the NIF capsule of the example
+(He driver 10 mg/cc), `layer` two cells, CFL 0.25, against the 1-D per-line run at
+the same spacing. Diagnostics per angular bin: the front `R_f` (the drive's marker),
+the DT-ice mass-weighted radius `R_DT`, the unconverted ablator, the radial momentum
+and kinetic energy of ablator and DT (per steradian).
+
+*(a) Spherical drive.* r–z at 10 µm (140 × 280, axis), uniform and with a tiled
+band (30 µm root, 10 µm tiles of 8 root nodes over 0.93 < R < 1.22 mm, `min_layer = 2`):
+
+| t (ns) | 1-D `R_f` (mm) | r–z − 1-D: `R_f` | `R_DT` | ablator left | radial momentum |
+|---|---|---|---|---|---|
+| 0.3 | 1.12519 | +0.42 µm (band +0.44) | −0.07 µm | 0.9763, same to 4 digits | −0.9 % (−0.7 %) |
+| 0.5 | 1.12325 | −0.38 µm (band −0.35) | −0.04 µm | 0.9448, same | −0.5 % (−0.2 %) |
+| 1.0 | 1.09585 | −0.09 µm | +0.15 µm | 0.8683, same | +0.2 % |
+| 1.5 | 1.07108 | −0.26 µm | +0.12 µm | 0.7952, same | −0.1 % |
+
+The kinetic energy is 18 % high at 0.3 ns and within 1 % from 1 ns. The banded
+run follows the uniform one to 0.6 ns (`R_f` −1.1 µm, momentum +0.3 %), then fails
+at 0.62 ns (negative density). The r–z grid itself imprints a spherical drive with
+P4/P0 +0.13 % (0.5–1 ns) to +0.25 % (1.5 ns) and P2/P0 −0.05…−0.1 % of `R_f`, a
+fraction of a cell.
+
+*(b) A pure P2 drive* (`b₂₀ = a₂/a₀ = +0.2`, pole-hot) on r–θ (per line, 10 µm ×
+96, annulus from 0.25 mm) and on r–z (binned, 10 µm uniform), the r–z values less
+its spherical run's imprint (P2/P0 of `R_f` and `R_DT`, %):
+
+| t (ns) | r–θ `R_f` | r–z `R_f` | r–θ `R_DT` | r–z `R_DT` |
+|---|---|---|---|---|
+| 0.5 | −0.14 | −0.12 | −0.00 | −0.00 |
+| 1.0 | −0.30 | −0.34 | −0.03 | −0.00 |
+| 1.5 | −0.55 | −0.50 | −0.19 | −0.18 |
+
+Both shells flatten at the hot poles (oblate) by the same amount to within 10–15 %
+of the response, about a micron at 1.5 ns. Both runs fail near 1.75 ns (r–θ 1.73,
+r–z 1.79), where the 0.2 P2 drive has driven the shell 5–8 µm out of round on
+10 µm cells.
+
+*(c) 3-D.* A uniform octant (symmetry planes at x, y, z = 0), 20 µm (70³), with
+the spherical drive, `b₂₀ = 0.2` and `b₂₂ = 0.2` (hot along ±x), bins 16 × 64,
+against 1-D at 20 µm (whose own run fails at 1.24 ns: 20 µm is the sanity
+resolution, two-cell layer). Spherical: `R_f` +0.5 to +1.7 µm (under a tenth of a
+cell), `R_DT` +0.3 µm, ablator left equal to 10⁻⁴, momentum within 0.7 % to 0.6 ns.
+The `Y₂₂` drive against the `Y₂₀` drive, each less the spherical run (Schmidt
+coefficients of `R_f` over the octant, % of `b₀₀`):
+
+| t (ns) | `Y₂₂` run: `R_f` b₂₂ | `Y₂₀` run: `R_f` b₂₀ | `Y₂₂` run: b₂₀, b₄₀, b₄₂, b₄₄ |
+|---|---|---|---|
+| 0.2 | −0.0042 | −0.0042 | +0.0001, −0.0002, −0.0001, −0.0002 |
+| 0.3 | −0.0083 | −0.0082 | +0.0000, +0.0001, −0.0009, +0.0003 |
+| 0.4 | −0.0020 | −0.0022 | +0.0003, +0.0000, +0.0048, −0.0004 |
+| 0.5 | −0.0378 | −0.0393 | +0.0026, +0.0016, +0.0137, −0.0008 |
+| 0.6 | −0.1227 | −0.1215 | +0.0007, +0.0031, −0.0095, +0.0014 |
+
+The two responses agree to 1–4 % at every time (both dip at 0.4 ns, where the
+marker crosses a cell): the binned drive is rotation invariant, as the physics is
+(the response of degree 2 does not depend on m), and the front is pushed in along
+the hot ±x as it is at the hot poles. The one leak above 0.003 % is into `Y₄₂`, up
+to 0.014 % (8 % of the signal at 0.6 ns; comparable to it while it is a few
+thousandths): the cubic grid's `Y₄₀`/`Y₄₄` imprint times `Y₂₂`, since `Y₂₂`² itself
+feeds only m = 0 and 4. The DT ice is not
+yet moving (the shock reaches it near 1 ns), its `b₂₂` −0.001 %. The spherical run's
+own imprint, `b₄₀` and `b₄₄` of `R_f` (−0.15 % each from 0.5 ns), is the cubic grid's.
+The `Y₂₂` run grows to −0.28 % at 0.9 ns and fails at 0.97 ns, as 1-D does at
+1.24 ns on this grid. A 3-D band (60 µm root, 20 µm tiles of 8 root nodes over
+0.93 < R < 1.22 mm, bins 16 × 64; 32 × 128 failed at 0.03 ns, one root cell per bin)
+runs the level path and reproduces the uniform run at 0.1 ns (ablator left 0.9995,
+front within 0.4 µm), but its covered-node timestep (below) kept it from 0.2 ns in
+30 minutes.
+
+**Not yet.** At 1 µm a full 3-D capsule shell is about 10⁹ cells: 3-D needs the band,
+and the band's cost is set by two CompactLES limits met here, not by the drive. (1) A
+root level under a band takes the timestep of its covered nodes, which hold the
+restricted shell: their artificial diffusivity at the root spacing made the level-0
+rate 3865 ns⁻¹ against the band's 958 at 0.15 ns, eight times the steps of the
+uniform 10 µm grid (subcycling does not help; covered nodes are held to CFL 0.75 in
+`max_rate`). (2) Tiled levels are fragile on this problem: r–z tiles of 10 root
+nodes failed at 0.03–0.08 ns near the axis where tile corners meet (8 and 16 run),
+and the 8-node run failed at 0.62 ns. A single box (`tile = 0`) ran stably in the
+same test. Moving refinement exists (a time-dependent predicate or `:sensor`, with
+`regrid_interval` and `tile`); `ablation_band` supplies the predicate, untested over
+a regrid here. Separately, the multi-D starts want CFL 0.25: from the cold initial
+state at 0.4, r–z at 15 µm failed near the axis within 0.035 ns with no drive at all.
+
 ## What stage 0 can and cannot check
 
 The rocket's outputs are its validation: the implosion velocity (HYBRID-E
