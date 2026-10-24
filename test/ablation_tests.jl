@@ -79,6 +79,10 @@ using Test
     centroid = sum(rc .* f) / sum(f)
     @test 0.75 < centroid < 0.8
     @test all(>=(0), f) && sum(f[rc .< 0.7]) < 1e-6 * sum(f)
+    # the body-force form keeps the two-sided layer, beyond the front as well (a force
+    # on tenuous ablator outside it would accelerate that without bound)
+    @test sum(f[rc .> 0.95]) < 1e-12 * sum(f)
+    @test maximum(abs, dQ[rows[rc .> 0.95], 1, 1, 1]) < 1e-12 * mdot
     # r–θ: each line carries P (1 + Σ aₗ/a₀ Pₗ)^(3.3/4)
     solver2, Q2, dQ2 = source_rhs(d1, 16)
     o1, o2 = solver2.decomp.n_halo_d[1], solver2.decomp.n_halo_d[2]
@@ -98,7 +102,23 @@ using Test
     @test all(iszero, dQd[rows, 1, 1, m1])
     ρd = Qd[rows, 1, 1, 1] .+ Qd[rows, 1, 1, 2]
     Yd = Qd[rows, 1, 1, 2] ./ ρd
-    @test dQd[rows, 1, 1, ie] ≈ Yd .^ 2 .* (P .- sd.p[rows, 1, 1]) ./ ((5 / 3 - 1) * 0.1)
+    # the front, as the source finds it: the ρₐ(−∂ρₐ/∂r)⁺-weighted mean radius
+    ρa = [Qd[i, 1, 1, 1] for i in (rows[1] - 1):(rows[end] + 1)]
+    gf = [max(ρa[k], 0) * max(-(ρa[k+1] - ρa[k-1]), 0) for k in 2:length(ρa)-1]
+    gf[1] = gf[end] = 0.0
+    Rf = sum(gf .* rc) / sum(gf)
+    @test 0.78 < Rf < 0.82
+    # the piston acts at and beyond the front, with weight exp(−x²) inside it
+    x = (rc .- Rf) ./ 0.02
+    S = ifelse.(x .> 0, 1.0, exp.(-x .^ 2))
+    @test dQd[rows, 1, 1, ie] ≈ S .* Yd .^ 2 .* (P .- sd.p[rows, 1, 1]) ./ ((5 / 3 - 1) * 0.1)
+    # the conversion takes all the ablator beyond the front (weight ρₐ there, so none
+    # is stranded behind an accelerating shell), the Gaussian layer inside it
+    k = rows[1] - 1
+    w = [Qd[k + i, 1, 1, 1] * (x[i] > 0 ? 1.0 : exp(-x[i]^2)) for i in eachindex(rc)]
+    @test -dQd[rows, 1, 1, 1] ≈ mdot .* w ./ (sum(w) * h)
+    far = rc .> Rf + 0.1
+    @test all(<(0), dQd[rows[far], 1, 1, 1])
     @test_throws ArgumentError AblationDrive(ts, Tr; driver=1)
     # unsupported layouts are refused
     bad = Problem(eos=eos, metric=CylindricalMetric(), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),

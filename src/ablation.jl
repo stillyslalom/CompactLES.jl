@@ -57,17 +57,28 @@ the sums exact on the grid. Two forms carry the pressure:
 - **Driver gas** (`driver = k`, the recommended form): the ablated ablator mass
   (`ṁ w` per unit volume) becomes species `k` in place, with momentum and energy
   unchanged, and species `k`'s pressure relaxes to the local ablation pressure through
-  the energy source `Y_k² (P_abl − p)/((driver_gamma − 1) relaxation)`. The driver gas
+  the energy source `S Y_k² (P_abl − p)/((driver_gamma − 1) relaxation)`. The driver gas
   (the problem's outer gas, and the converted blowoff) is then a piston at `P_abl`
   on the shell, and the energy the source adds is the work the ablation plasma does.
-  The driver gas is hot and light, so its sound speed sets the timestep.
+  The driver gas sets the timestep through its sound speed. Two one-sided weights keep
+  the rocket on the shell. The conversion weight is `ρₐ` itself beyond the front
+  (`ρₐ e^(−x²)` inside it, `x = (r − R_f)/layer`), so ablator left outside the front
+  is converted first; with the two-sided layer a partly converted layer was left
+  behind by the accelerating shell (22 % of the ablator at 6 ns in the NIF run), and
+  its own outer gradient then pulled `R_f` off the shell and stopped the ablation.
+  The piston weight is `S = 1` beyond the front and `e^(−x²)` inside it, so driver gas
+  converted inside the shell does not heat the shell toward `P_abl` behind the front.
 - **Body force** (`driver = 0`): the inward force density `−P_abl w r̂` on the layer,
   with its work, and the ablated mass removed from the problem with its momentum and
   specific total energy. Cheaper, but on cold ideal-gas ablators the accelerated layer
   lags the drive and spikes (it failed at the NIF rise in the 1-D tests, see
   docs/src/explanation/ablation-drive.md).
 
-Give `layer` (a length in problem units; 5 µm by default) several cells. Either way
+Give `layer` (a length in problem units; 5 µm by default) several cells, and the driver
+gas a density that keeps its temperature at `P_abl` moderate: at 1 mg/cc the
+ideal-gas driver reaches keV temperatures against a 0.05 eV ablator, the contact goes
+to negative internal energy in the foot and the run fails near 0.5 ns, while 10 mg/cc
+runs through without a retry (the driver's mass stays ~1 % of the ablator's). Either way
 the shell is a rocket driven at `P_abl` and losing `ṁ`. Nothing here is radiation
 transport: no spectrum, no albedo, no preheat; shock timing and adiabat are not
 predictions.
@@ -238,13 +249,16 @@ end
     return nothing
 end
 
-# The layer's mass weight k = ρₐ exp(−((r − R_f)/δ)²) about the line's front R_f.
-@inline function _ablation_layer_point!(g, Q, s, o1, o2, o3, g1, r0, h1, Rf, inv_δ, i, j, k)
+# The layer's mass weight k = ρₐ exp(−((r − R_f)/δ)²) about the line's front R_f, or,
+# `outside`, one-sided: ρₐ exp(−x²) inside the front and ρₐ beyond it.
+@inline function _ablation_layer_point!(g, Q, s, o1, o2, o3, g1, r0, h1, Rf, inv_δ,
+                                        outside, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         ρ = Q[I, s]
         x = (r0 + (g1 + i - 1) * h1 - Rf[1, j, k]) * inv_δ
-        g[i, j, k] = Rf[1, j, k] > 0 ? max(ρ, zero(ρ)) * exp(-x * x) : zero(ρ)
+        K = outside && x > 0 ? one(x) : exp(-x * x)
+        g[i, j, k] = Rf[1, j, k] > 0 ? max(ρ, zero(ρ)) * K : zero(ρ)
     end
     return nothing
 end
@@ -296,7 +310,7 @@ end
 # pressure, an energy source Y_d² (P_abl − p)/((γ_d − 1) τ).
 @inline function _ablation_driver_point!(dQ, Q, p, g, G, s, drv, n_species, ie, o1, o2,
                                          o3, P, mdot, rmodes, angular, θ0, hθ, jθ, aP, am,
-                                         gm1τ, i, j, k)
+                                         gm1τ, g1, r0, h1, Rf, inv_δ, i, j, k)
     @inbounds begin
         Pl, ml = _drive_angle(P, mdot, rmodes, angular, θ0, hθ, jθ, aP, am, j)
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -312,7 +326,12 @@ end
             ρ += Q[I, sp]
         end
         Yd = max(Q[I, drv] / ρ, zero(ρ))
-        dQ[I, ie] += Yd * Yd * (Pl - p[I]) * gm1τ
+        # the piston acts at and beyond the front; driver gas inside the shell (where
+        # the layer converts) relaxes with weight exp(−x²), so it does not heat the
+        # shell toward P_abl behind the front
+        x = (r0 + (g1 + i - 1) * h1 - Rf[1, j, k]) * inv_δ
+        S = x > 0 || !(Rf[1, j, k] > 0) ? one(x) : exp(-x * x)
+        dQ[I, ie] += S * Yd * Yd * (Pl - p[I]) * gm1τ
     end
     return nothing
 end
@@ -357,8 +376,9 @@ function add_source!(d::AblationDrive{L}, solver, dQ, Q, t) where {L}
     _line_integral!(Rf, gr, h1, decomp)
     Rf .= ifelse.(G .> 0, Rf ./ max.(G, floatmin(T)), zero(T))
     # the layer about it, weighted by the ablator mass
+    # (driver-gas form: and all the ablator beyond the front, so that none is stranded)
     pointwise!(_ablation_layer_point!, dQ, nx, ny, nz, g, Q, s, o1, o2, o3, g1, r0, h1,
-               Rf, T(1 / d.layer))
+               Rf, T(1 / d.layer), d.driver > 0)
     _line_integral!(G, g, h1, decomp)
     τ = Float64(t) / d.units.time
     P = T(ablation_pressure(d, τ) * d.units.pressure)
@@ -375,7 +395,8 @@ function add_source!(d::AblationDrive{L}, solver, dQ, Q, t) where {L}
         pointwise!(_ablation_driver_point!, dQ, nx, ny, nz, dQ, Q, solver.p, g, G, s,
                    d.driver, eq.n_species, eq.i_energy, o1, o2, o3, P, mdot, rmodes,
                    angular, θ0, hθ, jθ, aP, am,
-                   T(1 / ((d.driver_gamma - 1) * d.relaxation)))
+                   T(1 / ((d.driver_gamma - 1) * d.relaxation)), g1, r0, h1, Rf,
+                   T(1 / d.layer))
         return dQ
     end
     m1, m2, m3 = eq.i_mom

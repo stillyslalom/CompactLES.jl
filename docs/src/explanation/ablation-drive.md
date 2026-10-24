@@ -50,7 +50,9 @@ P_\text{abl} = P_0\,T^{3.3} \left(\frac{t}{1\,\text{ns}}\right)^{-0.09}\ \text{M
 
 with carbon's subsonic exponents from constant-temperature slab simulations (Trickey,
 Walsh and Pasley, HEDP 44, 100995 (2022)) and Lindl's mass ablation rate (Lindl et al.,
-PoP 11, 339 (2004), Eq. 6-3). The prefactor is not published; [`ablation_pressure_scale`](@ref)
+PoP 11, 339 (2004), Eq. 6-3), whose prefactor is the default `rate`. The NIF example
+below calibrates `rate` to 2.85×10⁵, keeping the T³ scaling. The pressure prefactor is
+not published; [`ablation_pressure_scale`](@ref)
 sets it from the peak pressure, 145 Mbar for HYBRID-E, and the foot is then checked
 against HYBRID-E's first-shock requirement, more than 12 Mbar at about 150 eV.
 
@@ -62,7 +64,9 @@ The angular structure enters through the local temperature,
 the source finds the front as the mean radius of the ablator's outer density gradient,
 weighted by `ρₐ (−∂ρₐ/∂r)⁺`, and acts on the ablator mass in a Gaussian layer of width
 `layer` about it. Both weights are normalized by per-line sums, so the pressure and the
-ablation rate the shell feels are exact on the grid, whatever the resolution.
+ablation rate the shell feels are exact on the grid, whatever the resolution. In the
+driver-gas form both weights are one-sided: everything beyond the front counts with
+weight one, the Gaussian applies only inside it (see below for why).
 
 **How the pressure is applied.** Two forms are implemented:
 
@@ -70,7 +74,15 @@ ablation rate the shell feels are exact on the grid, whatever the resolution.
   `k` (the outer gas: the hohlraum fill, then the blowoff), and species `k`'s pressure
   is relaxed to `P_abl` by an energy source. The driver gas is then a piston at the
   ablation pressure. This is the form that works: the shell's pressure follows the
-  drive to within a few percent from the foot to the peak.
+  drive to within a few percent from the foot to the peak. Two details matter. (1) Any
+  ablator beyond the front is converted first (weight `ρₐ` there). With a two-sided
+  layer the partly converted ablator just outside the front gets no push, because the
+  driver gas around it is held at uniform pressure. It stays behind as the shell
+  accelerates: 22 % of the ablator at 6 ns in the NIF run. That layer then pulls the
+  front marker off the shell, and from about 6 ns the shell stopped ablating. (2) The
+  pressure relaxation, too, acts fully only beyond the front (`e^{−x²}` inside it), so
+  driver gas converted inside the shell does not heat the shell toward `P_abl` behind
+  the front.
 - *Body force* (`driver = 0`). The force density `−P_abl w` on the layer, with the
   ablated mass removed from the problem. On cold ideal-gas ablators the accelerated
   layer lags the drive (the shell saw 18 Mbar while 117 Mbar was applied) and spikes
@@ -105,28 +117,73 @@ The rocket's outputs are its validation: the implosion velocity (HYBRID-E
 adiabat, stagnation pressure and bang time are not predictions, and the energy the
 driver gas receives is not the capsule's absorbed energy.
 
-**First result (2026-10-24, `examples/briareus_capsule.jl`).** A static Briareus model
+**The NIF drive (2026-10-24, `examples/briareus_capsule.jl`).** A static Briareus model
 of an N221204-class hohlraum (11.24 × 6.4 mm gold, 3.1 mm entrance holes, the
-delivered pulse by eye, the mock HYBRID-E pointing on 48 quads, no CBET) gives a
-capsule `Tr` peaking at 297 eV. The calibration (`peak = 145`) sets the prefactor to
-4.81 Mbar, so the foot gives 17 Mbar where `Tr` first reaches 150 eV (more than 12, as
-required). On a 1-D grid of 1400 points (1 µm), with a 5 µm layer, the driver-gas form
-and Lindl's ablation rate:
+delivered pulse by eye, the mock HYBRID-E pointing on 48 quads, no CBET; Briareus
+785684d) gives a capsule `Tr` peaking at 297 eV. The calibration (`peak = 145`) sets
+the pressure prefactor to 4.81 Mbar, so the foot gives 17 Mbar where `Tr` first
+reaches 150 eV (more than 12, as required). The capsule is ideal-gas carbon (3.5 g/cc,
+1.050–1.135 mm), DT ice and 0.3 mg/cc DT gas, with a 10 mg/cc He driver gas beyond it,
+on a 1-D grid of 1400 points (1 µm), with a 5 µm layer and the driver-gas form.
 
-| | stage 0 | HYBRID-E |
-|---|---|---|
-| shell pressure behind the ablation front | follows `P_abl` within 1 % from 0.75 ns (17 Mbar at 1 ns, 145 at the peak) | first shock > 12 Mbar, ≈ 140–150 Mbar at the peak |
-| peak DT velocity | 315 km/s at 8.7 ns | 380–400 km/s |
-| ablator remaining at peak velocity | 19.6 % | 5–6.6 % |
-| kinetic energy of ablator + DT at peak velocity | 36 kJ | 19–33 kJ (imploding mass) |
+*Robustness.* The first runs, with a 1 mg/cc driver, failed in the foot at about
+0.5 ns unless `run!` was called in 50 ps pieces with retries. Held at `P_abl`, that
+driver is a 2–7 keV ideal gas sitting against a 0.05 eV, 3.5 g/cc ablator. From 0.1 ns
+on, the two or three cells of that contact have negative internal energy. The deficit
+grows as the foot rises (1 to 5 Mbar between 0.3 and 0.5 ns) until a density goes
+negative and the timestep collapses. A lower CFL did not help (0.2 failed too). A
+10 mg/cc driver is ten times cooler and has a third of the sound speed. With it the
+foot runs at CFL 0.4 with no retry (so does `ArtificialProperties(C_kappa = 0.1)`, which
+smears the contact), and the negative-energy cells are then the ordinary ones at the
+shock in the cold ablator. Its mass is about 1 % of the ablator's. The run is now one
+`run!` call to past peak velocity. `StepControl(retries = 4)` recovers one or two
+timestep collapses near 7.3 ns, when the first shock converges on the origin through
+the 0.3 mg/cc gas, as in spherical Noh. The run takes 5–8 minutes on one thread, down
+from 30 on four. The 2 µm grid now runs too.
 
-The pressure is right by construction; the rocket burns too little ablator, so the
-shell is too heavy and too slow. Lindl's `3×10⁵ T³` is a Nova-era fit for ablators of
-low albedo; the next step is to calibrate the ablation rate to the mass remaining, and
-then to check the velocity, which the rocket equation then fixes. On a 2 µm grid the
-5 µm layer spans under three cells and the run fails in the foot: give the layer at
-least five cells. The body-force form failed at 5.1 ns on the same grid. The run takes
-about 30 minutes on 4 threads, its timestep set by the hot driver gas.
+*Calibration.* The mass ablation rate's prefactor `A` (`ṁ = A T³`) is set by the
+ablator remaining at peak DT velocity. That is the ablator inside the front,
+`r < R_f + 3·layer`. The rest of the unconverted ablator is a decompressed,
+inward-moving tail behind the front (the third column). All rows are single `run!`
+calls:
+
+| `A` (g cm⁻² s⁻¹) | peak DT velocity | ablator remaining | unconverted ablator | KE, ablator + DT inside the front |
+|---|---|---|---|---|
+| 2.6×10⁵ | 320 km/s at 8.86 ns | 7.4 % | 27 % | 26.5 kJ |
+| **2.85×10⁵** | **336 km/s at 8.76 ns** | **5.7 %** | 21 % | **25.8 kJ** |
+| 3.0×10⁵ (Lindl) | 346 km/s at 8.70 ns | 4.8 % | 18 % | 25.1 kJ |
+| 3.4×10⁵ | 375 km/s at 8.54 ns | 2.7 % | 9.7 % | 22.8 kJ |
+| 3.8×10⁵ | 406 km/s at 8.36 ns | 0.9 % | 2.9 % | 19.2 kJ |
+| HYBRID-E | 380–400 km/s | 5–6.6 % | | 19–33 kJ (imploding mass) |
+
+The band 5–6.6 % gives `A` = 2.7–3.0×10⁵, so Lindl's Nova-era 3×10⁵ already sits at
+its low-mass end. The T³ scaling is kept. Lindl's form ṁ ∝ I^{3/4} is T³, and the
+rocket's exhaust velocity P/ṁ ∝ T^{0.5} (his Eq. 6-4) with carbon's P ∝ T^{3.3}
+would give T^{2.8}. Most of the ablator goes in the 290–297 eV peak, so the exponent
+hardly matters next to the prefactor. With both prefactors fixed, the implosion
+velocity is the check. It is 328–344 km/s across the band, 10–14 % short of
+380–400. The coupled energy, 25–26 kJ, is inside HYBRID-E's 19–33 kJ. Reaching
+380–400 km/s takes `A` ≈ 3.5–3.75×10⁵, which leaves 1.5–2.5 % of the ablator. The
+rocket cannot meet both targets with this pressure history, so the shortfall is in
+P/ṁ at fixed mass, not in ṁ. Lindl's ideal rocket, 10⁷ T^{1/2} ln(m₀/m) cm/s, gives
+395 km/s at this mass ratio (295 eV; 4.69 mg to 0.47 mg of ablator and DT). The hydrodynamic rocket loses 15 % to a drive that
+falls from 8 ns, to convergence and to the fuel's pressure. Candidates, all beyond
+stage 0: the ideal-gas carbon's adiabat (on the 2 µm grid the shell's peak density
+falls from 18 g/cc at 5 ns to 5.6 g/cc at 7 ns), the 145 Mbar peak, and the gray
+drive.
+
+The calibration belongs to the drive. Briareus 3f25f29, with the late-time wall-loss
+history, peaks at 285 eV. Recalibrated to 145 Mbar (prefactor 5.53 Mbar, 19.6 Mbar at
+150 eV), the example with the same `A` gives 307 km/s at 9.12 ns, 8.2 % and 25.6 kJ.
+
+The grid is not converged at this level. At 2 µm the same `A` gives 298 km/s and
+7.3 %, against 336 km/s and 5.7 % at 1 µm, and the 0.5 µm run fails at the rise,
+5.5 ns. Read the velocity as ±10 %. Before the one-sided weights, the
+stranded layer counted as ablator remaining (19.6 % with Lindl's rate, 315 km/s, the
+first result reported here). That number measured the model's defect, not the
+ablation rate.
+
+The body-force form failed at 5.1 ns (1 µm grid, before these changes).
 
 Stage 1 replaces the closure
 with gray flux-limited diffusion and a Marshak boundary carrying `4F_inc(θ,t)/c`, with
