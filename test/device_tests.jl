@@ -958,6 +958,9 @@ end
 # must be added here deliberately. The scan below fails when this
 # list and the call sites disagree, in either direction.
 const POINTWISE_BODIES = (
+    :_ablation_apply_point!, :_ablation_bin_driver_point!, :_ablation_bin_force_point!,
+    :_ablation_bin_layer_point!, :_ablation_bin_marker_point!, :_ablation_driver_point!,
+    :_ablation_front_point!, :_ablation_layer_point!,
     :_area_flux_less_point!, :_area_flux_point!, :_blend_interior_point!,
     :_body_force_point!,
     :_bulk_flux_point!, :_child_derivative_mask_point!, :_child_mask_point!,
