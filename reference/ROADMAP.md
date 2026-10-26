@@ -556,6 +556,24 @@ promotion.
   Briareus `CapsuleDrive` to peak velocity, matching the 1-D shell trajectory
   to grid error for a spherical drive, at a wall below the uniform 2 µm grid's.
 
+- [ ] **A22 — Replace the effective ablation rate of the Briareus-driven shell.**
+  Stage 0's `AblationDrive` takes ṁ = A T³ with A = 2.85e5 g cm⁻² s⁻¹, an
+  effective rate fitted to the ablator remaining at peak velocity (5–6.6 %,
+  PRE 109 Table I and HYDRA; Briareus research notes, "Capsule drive
+  hand-over and CompactLES stage 0"); peak velocity, kinetic energy and bang
+  time are the checks it leaves. The measured planar HDC rates (Olson 2011,
+  A ≈ 4.15–5.2e5) over-ablate this shell: 4.15e5 leaves nothing and 5.0e5
+  fails at 7.33 ns with 0.11 % left. With the fitted rate the shell peaks at
+  340 km/s against 380–400 and stagnates 0.6–0.7 ns after bang. Remaining:
+  1. The ablation pressure tied to ṁ by the rocket relation (P/ṁ), not
+     calibrated separately as P₀ (145 Mbar).
+  2. A real carbon EOS for the ablator (H5, H5b) in place of the ideal-gas
+     adiabat that sets P/ṁ.
+  3. Grid robustness: at A = 2.85e5, nx 700 and 2000 fail on `dt_collapse`
+     and only nx 1400 completes, so v is read to ±10 %.
+  **Gate:** a measured HDC rate (no fitted A) reaching 5–6.6 % remaining and
+  380–400 km/s on a converged grid, with stagnation timing explained.
+
 ## HED physics
 
 H1 is the principal infrastructure dependency for stiff diffusion. These are
