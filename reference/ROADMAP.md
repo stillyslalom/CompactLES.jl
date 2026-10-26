@@ -571,6 +571,14 @@ promotion.
      adiabat that sets P/ṁ.
   3. Grid robustness: at A = 2.85e5, nx 700 and 2000 fail on `dt_collapse`
      and only nx 1400 completes, so v is read to ±10 %.
+  4. The stagnation lag (Briareus research notes, "Where the stagnation lag
+     comes from", 2026-10-27): of eight one-closure variants, a stronger foot
+     or stiff carbon (γ = 3) brings the first shock to the keyhole timing
+     (3.4–3.7 ns against 3.86–3.91) but slows the shell (301 km/s, 7–9 %
+     left) and stagnates later (10.4–10.5 ns); only more ablation closes the
+     late lag (A = 3.5e5: 386 km/s, lag +0.16 ns, 1.45 % left). No fitted A
+     gives v, remaining mass and timing together with ideal-gas carbon, so
+     items 1–2 come first; the drive is not the cause.
   **Gate:** a measured HDC rate (no fitted A) reaching 5–6.6 % remaining and
   380–400 km/s on a converged grid, with stagnation timing explained.
 
