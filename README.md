@@ -113,14 +113,14 @@ package extensions, available once `HDF5` or `Makie` (for example through
 `CairoMakie`) is loaded alongside CompactLES. A GPU run also needs `AMDGPU.jl`
 or `CUDA.jl` in the active environment.
 
-The package is not yet registered; install it from GitHub:
+The package can be installed from Julia’s general package registry:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/stillyslalom/CompactLES.jl")
+Pkg.add(“CompactLES”)
 ```
 
-`MPI.jl` ships its own MPI library, so a workstation needs nothing else. On a
+`MPI.jl` includes an MPI binary, so a workstation install needs no further configuration. On a
 cluster, configure `MPI.jl` (and `HDF5.jl`, if used) against the
 [system MPI library](https://juliaparallel.org/MPI.jl/stable/configuration/#using_system_mpi)
 before running. The bundled library also runs there, but it does not use the
@@ -131,25 +131,24 @@ slower without any error. The launch rules and measured penalties are in
 ## Running
 
 The same script runs on one process or many. Threads (`-t`) share the memory
-of one process; MPI ranks (`-n`) are separate processes, each holding one block
+of one process; MPI ranks (`-n`) are separate processes, each calculating one block
 of the grid. Under MPI, give each rank one thread. With the example above saved
 as `tgv.jl`:
 
 ```
 julia --project=. -t 8 tgv.jl                       # 8 threads, 1 process
 mpiexec -n 8 julia --project=. -t 1 tgv.jl          # 8 MPI ranks
-srun -N 2 -n 64 julia --project=. -t 1 tgv.jl       # 64 ranks on 2 Slurm nodes
+srun -N 2 -n 64 julia --project=. -t 1 tgv.jl       # 64 ranks on 2 nodes via Slurm
 ```
 
 If `mpiexec` is not on `PATH`, print the launcher `MPI.jl` is configured
 against with `julia --project=. -e 'using MPI; print(MPI.mpiexec(f -> f))'`.
 
-Along each decomposed dimension a rank needs at least 9 grid points, the
-smallest block the filter's stencils fit in. Choose `Execution(dims=...)` in
+Along each active dimension a rank needs at least 9 grid points, which is the
+width of the filter stencil. Choose `Execution(dims=...)` in
 `Numerics` so that a thin dimension is split across few ranks or none.
 
-The scripts in `examples/` plot with CairoMakie, which the `docs` environment
-of a clone carries. `julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'`
+The scripts in `examples/` plot with CairoMakie, which is loaded by the `docs` environment. `julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'`
 prepares it, and `mpiexec -n 8 julia --project=docs -t 1 examples/taylor_green.jl`
 runs the Taylor–Green example.
 
