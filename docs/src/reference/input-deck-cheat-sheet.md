@@ -108,7 +108,7 @@ diffusion data, a `BinaryDiffusion` or `BinaryDiffusionPolynomial`. See
 |---|---|---|
 | `CartesianMetric()` | `(x,y,z)`, `(u,v,w)` | Walls or periodic faces |
 | `CylindricalMetric()` | `(r,θ,z)`, `(u_r,u_θ,u_z)` | `AxisBC()` at `r=0`; `θ` may be collapsed |
-| `SphericalMetric()` | `(r,θ,φ)`, orthonormal components | `OriginBC()` at `r=0`, `PoleBC()` at both polar ends |
+| `SphericalMetric()` | `(r,θ,φ)`, orthonormal components | `OriginBC()` at `r=0`, `PoleBC()` at both polar ends; a collapsed `θ` at `π/2` |
 
 Grid stretching is set by the `Numerics` keyword `stretch=(sx,sy,sz)`, whose
 entries are `nothing` or `sine_cluster(lo,hi,ξc,a)`. A stretched direction
@@ -411,7 +411,10 @@ the support limits, and guidance on conservation and restart.
 ## Common traps
 
 - A collapsed dimension (`n_global[d] == 1`) must be periodic at both ends and
-  is not decomposed.
+  is not decomposed. Its node is the low end of its domain interval. A
+  collapsed spherical `θ` must lie at `π/2`, as in the domain
+  `(π/2, π/2 + 1)`, and a collapsed `r` raises a warning: the curvature term
+  of every flux through a collapsed `r` is omitted.
 - `bcs` has one entry per dimension, either one condition for both faces or a
   `(low, high)` pair. It is not a flat six-tuple.
 - The order and length of `Y` must match the EOS exactly, and the fractions

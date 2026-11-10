@@ -111,8 +111,10 @@ them.
   full range (0, π). Either may be combined with the other. φ may be collapsed
   or resolved over 2π with an even point count, as θ may be at the axis.
 - Without these folds, setup rejects a grid with a node at r = 0 or, under
-  `SphericalMetric`, at θ = 0 or π. A collapsed θ sits at the low end of its
-  range.
+  `SphericalMetric`, at θ = 0 or π. A collapsed dimension's node sits at the
+  low end of its range. Under `SphericalMetric` a collapsed θ must lie at π/2,
+  and a collapsed r under either curvilinear metric raises a warning; see
+  [`SphericalMetric`](@ref).
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 precision::Union{Nothing,Type}=nothing,
@@ -215,18 +217,23 @@ end
 # metric, and sin θ = 0 under SphericalMetric. The volume Jacobian (r, or
 # r² sin θ) vanishes there, so the first step divides by zero. The folds place
 # the nodes half a cell off the singularity, so a folded end never trips this;
-# an unfolded end or a collapsed dimension placed on it does. The node
-# coordinates follow `global_xcoord`, in the solver's element type, and the
-# tolerances absorb that type's representation of π and of the spacing.
+# an unfolded end or a collapsed r placed on it does. A collapsed spherical θ
+# must lie at π/2: no derivative is taken along a collapsed dimension, so the
+# θ divergence's area term (cot θ/r)·F_θ is absent for every flux, and it
+# vanishes only where cot θ does. The node coordinates follow `global_xcoord`,
+# in the solver's element type, and the tolerances absorb that type's
+# representation of π and of the spacing.
 function _check_singular_nodes(::Type{T}, metric, n_global, L_domain, origin,
                                stretch, coord_shift, h, angle_tol) where {T}
     metric isa Union{CylindricalMetric,SphericalMetric} || return nothing
-    function first_node(on_singularity, d)
+    function node(d, g)
         ξ0 = stretch[d] === nothing ? T(origin[d]) : zero(T)
+        ξ = ξ0 + coord_shift[d] + (g - 1) * h[d]
+        return Float64(stretch[d] === nothing ? ξ : stretch[d].x(ξ))
+    end
+    function first_node(on_singularity, d)
         for g in 1:n_global[d]
-            ξ = ξ0 + coord_shift[d] + (g - 1) * h[d]
-            x = stretch[d] === nothing ? ξ : stretch[d].x(ξ)
-            on_singularity(Float64(x)) && return g
+            on_singularity(node(d, g)) && return g
         end
         return nothing
     end
@@ -242,19 +249,47 @@ function _check_singular_nodes(::Type{T}, metric, n_global, L_domain, origin,
             "a cell, or start the radial domain above r = 0"))
     end
     metric isa SphericalMetric || return nothing
+    if n_global[2] == 1
+        θ = node(2, 1)
+        abs(θ - π / 2) <= angle_tol && return nothing
+        throw(ArgumentError(
+            "SphericalMetric: a collapsed θ must lie at π/2 (its node is at " *
+            "θ = $(round(θ; sigdigits=6))); place it there through origin[2], the " *
+            "low end of the θ domain, since a collapsed θ omits the area term " *
+            "(cot θ/r)·F_θ of the θ divergence, which vanishes only at π/2"))
+    end
     g = first_node(θ -> abs(θ - π * round(θ / π)) <= angle_tol, 2)
     g === nothing && return nothing
-    n_global[2] == 1 &&
-        throw(ArgumentError(
-            "SphericalMetric: the collapsed θ node lies on a pole (sin θ = 0), " *
-            "where the volume Jacobian vanishes; a collapsed θ sits at the low " *
-            "end of its domain, so start that domain away from 0 and π " *
-            "(at π/2, for example)"))
     throw(ArgumentError(
         "SphericalMetric: θ node $g lies on a pole (sin θ = 0), where the " *
         "volume Jacobian vanishes; fold both θ ends with PoleBC over (0, π), " *
         "which offsets the nodes half a cell, or keep every θ node strictly " *
         "between 0 and π"))
+end
+
+# Warn, from rank 0, for a collapsed r under either curvilinear metric. With
+# ∂/∂r = 0 the radial divergence (1/r^s)∂(r^s F_r)/∂r of every flux reduces to
+# its area term s F_r/r (s = 1 cylindrical, 2 spherical), which the solver does
+# not carry; its pressure part is left out together with the pressure part of
+# the momentum sources, so a state at rest holds. The run is consistent while
+# the radial fluxes vanish, as they do in an inviscid flow without radial
+# velocity. The sources keep the centrifugal terms and the viscous stresses,
+# which drive a radial velocity with no radial pressure gradient to oppose it;
+# for an inviscid flow they are quadratic in the velocity, so the run is
+# exact to first order in a perturbation of a state at rest with no radial
+# velocity.
+function _warn_collapsed_radius(metric, n_global, comm)
+    metric isa Union{CylindricalMetric,SphericalMetric} && n_global[1] == 1 || return nothing
+    spherical = metric isa SphericalMetric
+    MPI.Comm_rank(comm) == 0 &&
+        @warn "$(spherical ? "SphericalMetric" : "CylindricalMetric"): r is collapsed, " *
+              "so the area term $(spherical ? "2" : "")F_r/r of the radial divergence " *
+              "is omitted for every flux. The run is exact for a state at rest and, " *
+              "for an inviscid flow, to first order in a perturbation of that state " *
+              "with no radial velocity; the " *
+              "source $(spherical ? "ρ(u_θ² + u_φ²)/r" : "ρu_θ²/r") and the viscous " *
+              "stresses drive a radial velocity that no radial pressure gradient opposes."
+    return nothing
 end
 
 function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
@@ -427,6 +462,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
     _check_singular_nodes(T, metric, n_global, L_domain, origin, stretch,
                           coord_shift, h, angle_tol)
+    _warn_collapsed_radius(metric, n_global, comm)
     filter_weighting in (:none, :volume) ||
         error("filter_weighting must be :none or :volume, got :$filter_weighting")
     # --- Patch layout ----------------------------------------------------

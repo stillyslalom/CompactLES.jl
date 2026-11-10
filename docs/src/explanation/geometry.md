@@ -78,10 +78,12 @@ cylindrical, ``2`` spherical) or ``\cot\theta/r`` times the flux. The
 pressure parts of that term and of the momentum source cancel exactly, and
 both are left out, so a gas at rest stays at rest. The rest of the term is
 not carried, so such a grid is consistent only while the flow through the
-collapsed direction vanishes: a spherical radial line belongs at
-``\theta = \pi/2``, where the term is zero, and a collapsed ``r`` is
-consistent only at or near rest. The cylindrical ``(r, z)`` and
-``(r, \theta)`` grids and the spherical ``(r, \theta)`` grid omit nothing.
+collapsed direction vanishes. Setup therefore rejects a collapsed spherical
+``\theta`` away from ``\pi/2``, where the term is zero, and warns for a
+collapsed ``r``, which is exact for a state at rest and, for an inviscid
+flow, to first order in a perturbation of that state with no radial
+velocity. The cylindrical ``(r, z)`` and ``(r, \theta)`` grids and the
+spherical ``(r, \theta)`` grid omit nothing.
 The test suite checks freestream preservation in every metric, on these
 collapsed and stretched grids, and across MPI boundaries.
 

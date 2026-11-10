@@ -46,7 +46,7 @@ using CompactLES: compute_rhs!, apply_bcs!, xcoord
     @test axis <= 2 * inner
 end
 
-@testset "spherical: analytic cotθ/r, and a state at rest with θ walled or collapsed" begin
+@testset "spherical: analytic cotθ/r, and θ walled or collapsed" begin
     # The velocity-gradient correction and the momentum sources read one
     # analytic cotθ/r. A discrete value in its place, the θ derivative of the
     # area factor, deviates from it at the order of the θ closure rows, and in
@@ -70,13 +70,15 @@ end
     apply_bcs!(solver, Q)
     dQ = zero(Q); compute_rhs!(solver, Q, dQ)
     @test maximum(abs, dQ) < 1e-12
-    # θ collapsed off the equator, where cotθ/r is of order one: no θ
-    # divergence is taken, so the θ-momentum's source (cotθ/r)Π_φφ carries no
-    # pressure, and the state at rest holds as it does at θ = π/2.
-    solver = Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    origin=(0.2, π/2 - 0.5, 0.0), metric=SphericalMetric(),
-                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                    art=ArtificialProperties(enabled=false))
+    # θ collapsed: no θ divergence is taken, so the term (cotθ/r) F_θ of every
+    # θ flux is omitted. Setup rejects a collapsed θ off the equator, where
+    # that term is of order one, and on the equator a state at rest holds.
+    line(θ) = Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                     origin=(0.2, θ, 0.0), metric=SphericalMetric(),
+                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                     art=ArtificialProperties(enabled=false))
+    @test_throws "a collapsed θ must lie at π/2" line(π/2 - 0.5)
+    solver = line(π/2)
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)

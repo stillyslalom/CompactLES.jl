@@ -62,7 +62,7 @@ include("capability_cases.jl")
                 Numerics(n_global=(24, 1, 1)))
         rejects("SphericalMetric: radial node 1 lies on the origin r = 0",
                 C.problem(bcs=(wall, per, per),
-                          domain=((0.0, 1.0), (π / 2 - 0.5, π / 2 + 0.5), (0.0, 1.0)),
+                          domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
                           metric=SphericalMetric(), ic=C.ic_shell),
                 Numerics(n_global=(24, 1, 1)))
         rejects("SphericalMetric: θ node 1 lies on a pole",
@@ -73,11 +73,13 @@ include("capability_cases.jl")
                 C.problem(bcs=(wall, wall, per), domain=((0.5, 1.0), (0.1, π), (0.0, 1.0)),
                           metric=SphericalMetric(), ic=C.ic_shell),
                 Numerics(n_global=(16, 16, 1), execution=Execution(storage=Float32)))
-        rejects("SphericalMetric: the collapsed θ node lies on a pole",
-                C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
-                          domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)),
-                          metric=SphericalMetric(), ic=C.ic_radial),
-                Numerics(n_global=(24, 1, 1)))
+        for θdomain in ((π / 2 - 0.5, π / 2 + 0.5), (0.0, π))
+            rejects("SphericalMetric: a collapsed θ must lie at π/2",
+                    C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
+                              domain=((0.0, 1.0), θdomain, (0.0, 1.0)),
+                              metric=SphericalMetric(), ic=C.ic_radial),
+                    Numerics(n_global=(24, 1, 1)))
+        end
         rejects("SymmetryPlaneBC on dimension 1 requires CartesianMetric or the z " *
                 "dimension of CylindricalMetric",
                 C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per),

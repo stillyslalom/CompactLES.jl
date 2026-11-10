@@ -44,7 +44,7 @@ include("capability_cases.jl")
              (; n_global=(16, 16, 1))),
             ("spherical origin",
              C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
-                       domain=((0.0, 1.0), (π / 2 - 0.5, π / 2 + 0.5), (0.0, 1.0)),
+                       domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
                        metric=SphericalMetric(), ic=C.ic_radial),
              (; n_global=(24, 1, 1))),
             ("spherical poles",

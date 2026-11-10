@@ -33,7 +33,7 @@ released_communicators(decomp) =
     @test npatches(mk(art=ArtificialProperties(detector=:d8))) == 2
     @test npatches(mk(filt=pyranda_filter())) == 2
     @test_throws "refinement requires CartesianMetric" mk(metric=SphericalMetric(),
-                                                          origin=(0.5, 1.0, 0.0))
+                                                          origin=(0.5, π / 2, 0.0))
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
     # A region reaching the seam of a periodic dimension runs across it, but
     # one refined box does not close on itself around the period.

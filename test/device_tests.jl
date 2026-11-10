@@ -213,7 +213,7 @@ end
     # Freestream through the device plans. On the spherical origin and poles
     # the radial and polar pressure gradients cross both paired folds; on a
     # stretched annulus the radial momentum takes its pressure gradient along
-    # the stretched line; with θ collapsed off the equator the θ-momentum's
+    # the stretched line; with θ collapsed, on the equator, the θ-momentum's
     # source carries no pressure. Every other flux of the state at rest is
     # zero, so the right-hand side is the compact derivative of a constant on
     # either path and the two agree bitwise.
@@ -225,7 +225,7 @@ end
         (; n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0), origin=(0.2, 0.0, 0.0),
            bcs=(walls, per, per), metric=CylindricalMetric(),
            stretch=(sine_cluster(0.2, 1.2, 0.5, 0.4), nothing, nothing)),
-        (; n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=(0.2, π/2 - 0.5, 0.0),
+        (; n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=(0.2, π/2, 0.0),
            bcs=(walls, per, per), metric=SphericalMetric()),
     ]
     function rest(backend, config)

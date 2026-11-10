@@ -1512,7 +1512,7 @@ end
     @test abs(dv[1]) > 0.1
     @test abs(dv[1]) > 10 * abs(dn[1])
     orig = ((OriginBC(), SlipWallBC()), per3[2], per3[3])
-    sph = (; metric=SphericalMetric(), origin=(0.0, π / 2 - 0.5, 0.0))
+    sph = (; metric=SphericalMetric(), origin=(0.0, π / 2, 0.0))
     dn = defect(line(:none; bcs=orig, sph...))
     dv = defect(line(:volume; bcs=orig, sph...))
     @test maximum(abs, dn[1:4]) < 1e-9                # measured 6.5e-11
@@ -2219,7 +2219,8 @@ end
                  stretch=(sine_cluster(0.2, 1.2, 0.5, 0.4), nothing, nothing))),
         # r collapsed at r = 1: no radial divergence is taken, so the radial
         # momentum's source carries Π_θθ, and on the sphere Π_φφ, without the
-        # pressure.
+        # pressure. Setup warns once that the rest of the radial divergence's
+        # area term is omitted.
         (; n_global=(1, 12, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
            bcs=per3, kw=(; origin=(1.0, 0.0, 0.0))),
         (; n_global=(1, 12, 1), L_domain=(1.0, π/2, 1.0), metric=SphericalMetric(),
@@ -2229,7 +2230,8 @@ end
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
                      bcs=cs.bcs, art=ArtificialProperties(enabled=false)), cs.kw)
-        solver = Solver(; kw...)
+        solver = cs.n_global[1] == 1 ?
+                 (@test_logs (:warn, r"r is collapsed") Solver(; kw...)) : Solver(; kw...)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(solver, Q)
@@ -2351,7 +2353,7 @@ end
     c = sqrt(1.4 * (1 + δ))
     for (metric, origin, nc) in ((CartesianMetric(), (0.5, 0.0, 0.0), 0),
                                  (CylindricalMetric(), (0.5, 0.0, 0.0), 1),
-                                 (SphericalMetric(), (0.5, π / 2 - 0.5, 0.0), 2)),
+                                 (SphericalMetric(), (0.5, π / 2, 0.0), 2)),
         sigma in (0.0, 0.25, 4.0)
         solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=origin,
                         metric=metric,
@@ -4482,7 +4484,7 @@ end
     @test volume_integral(cyl, ones_c) ≈ 0.5 atol = 1e-14  # ∫r dr dθ dz, θ collapsed
     @test CL._edge_factor(cyl, 1, 1, padded_index(cyl, 1, 1, 1)) ≈ 11 / 12
     sph = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                 metric=SphericalMetric(), origin=(0.0, π / 2 - 0.5, 0.0),
+                 metric=SphericalMetric(), origin=(0.0, π / 2, 0.0),
                  bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
                  art=ArtificialProperties(enabled=false))
     @test CL._edge_factor(sph, 1, 1, padded_index(sph, 1, 1, 1)) == 1.0

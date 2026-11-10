@@ -1026,20 +1026,23 @@ dynamic and viscous parts of Π_θθ, Π_φφ and Π_φθ, and they drive a velo
 along d from a velocity across it: ρ(u_θ² + u_φ²)/r on the radial momentum
 with r collapsed, (cotθ/r)ρu_φ² on the θ-momentum with θ collapsed, and the
 viscous stresses in either. The artificial viscosities count as viscous
-stresses here, so a radial shock on a θ-collapsed line off the equator drives
-u_θ through (cotθ/r)·τ_φφ. A collapsed r is therefore consistent at rest
-and, inviscid, to first order about rest in perturbations with no radial
-velocity; a spherical θ collapsed off the equator is consistent for an
-inviscid radial flow, which is the flow the same grid carries at θ = π/2.
-The cylindrical r-z and r-θ planes, the spherical r-θ plane and the spherical
-radial line at θ = π/2, where cotθ is zero to round-off, omit nothing.
+stresses here, so a radial shock on a θ-collapsed line off the equator would
+drive u_θ through (cotθ/r)·τ_φφ. A collapsed r is exact for a state at rest
+and, inviscid, to first order in a perturbation of that state with no radial
+velocity, and setup warns for it (`_warn_collapsed_radius` in `construction.jl`). A
+spherical θ collapsed off the equator would be consistent only for an inviscid
+radial flow, which the same grid carries at θ = π/2, and setup rejects it
+(`_check_singular_nodes`). The cylindrical r-z and r-θ planes, the spherical
+r-θ plane and the spherical radial line at θ = π/2, where cotθ is zero to
+round-off, omit nothing.
 
 The sources weight the remaining parts of Π_φφ and Π_φθ by the analytic cotθ/r,
 the array `metric_correct_gradients!` reads for the curvature terms of ∇u:
 they are pointwise products and balance no discrete divergence. The freestream
 testsets of `test/serial_suite.jl` (every metric and fold, the stretched
 annulus, and r collapsed on both curvilinear metrics), `test/seam_tests.jl`
-(a θ-resolved shell closed by walls, and θ collapsed off the equator),
+(a θ-resolved shell closed by walls, θ collapsed on the equator, and the
+rejection off it),
 `test/float32_validation.jl`, `test/device_tests.jl` and `test/mpi_tests.jl`
 (a fold's antipodal partner on another rank, and the four collapsed and
 stretched configurations decomposed) check a uniform state to round-off.

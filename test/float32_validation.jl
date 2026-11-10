@@ -59,7 +59,7 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
            L_domain=(one(T), one(T), one(T)),
            metric=SphericalMetric(),
            bcs=((SlipWallBC(), SlipWallBC()), per, per),
-           extra=(; origin=(T(0.2), T(π / 2 - 0.5), zero(T)))),
+           extra=(; origin=(T(0.2), T(π / 2), zero(T)))),
     ]
     residuals = T[]
     for cs in cases
@@ -67,7 +67,10 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
                      metric=cs.metric, bcs=cs.bcs,
                      eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
                      filter_interval=0, typed...), cs.extra)
-        solver = Solver(; kw...)
+        # A collapsed r omits the rest of the radial divergence's area term,
+        # and setup warns.
+        solver = cs.n_global[1] == 1 ?
+                 (@test_logs (:warn, r"r is collapsed") Solver(; kw...)) : Solver(; kw...)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) ->
             Prim(u=(0, 0, 0), p=1, rho=1))

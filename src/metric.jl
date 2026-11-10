@@ -39,6 +39,14 @@ struct CartesianMetric   <: Metric end
 
 Cylindrical `(r, theta, z)` coordinates. Velocity components are physical
 components `(u_r, u_theta, u_z)` in the local orthonormal basis.
+
+θ may be collapsed (an axisymmetric r-z grid) and z may be collapsed (an r-θ
+grid); neither omits a term. Along a collapsed r no derivative is taken, so
+the term F_r/r that the radial flux F_r of every conserved quantity
+contributes to its divergence is omitted, and setup warns. Such a run is
+exact for a state at rest and, for an inviscid flow, to first order in a
+perturbation of that state with no radial velocity; swirl and the viscous
+stresses drive a radial velocity that no radial pressure gradient opposes.
 """
 struct CylindricalMetric <: Metric end   # (r, θ, z)
 
@@ -47,6 +55,18 @@ struct CylindricalMetric <: Metric end   # (r, θ, z)
 
 Spherical `(r, theta, phi)` coordinates with `theta` the polar angle. Velocity
 components are physical components in the local orthonormal basis.
+
+φ may be collapsed (a grid symmetric about the polar axis) without omitting a
+term. A collapsed θ, whose node is the low end of its domain, must lie at
+π/2, and setup rejects it elsewhere: along a collapsed dimension no
+derivative is taken, so the curvature term (cot θ/r) F_θ of every θ flux is
+omitted, and it vanishes only on the equator. A radial line, θ and φ both
+collapsed, is therefore placed at θ = π/2. A collapsed r omits the term
+2F_r/r of every radial flux F_r, and setup warns. Such a run is exact for a
+state at rest and, for an inviscid flow, to first order in a perturbation of
+that state with no radial velocity; the tangential velocities and the
+viscous stresses drive a radial velocity that no radial pressure gradient
+opposes.
 """
 struct SphericalMetric   <: Metric end   # (r, θ_polar, φ)
 
@@ -300,11 +320,14 @@ end
 # constant pressure is zero to round-off with no source to balance it. Along a
 # collapsed dimension no derivative is taken, so the divergence's area term,
 # (1/J)(∂A_d/∂ξ_d) F_d for a flux constant along the dimension, is absent for
-# every flux. Its pressure part, s p/r for a collapsed r (s = 1 cylindrical,
-# 2 spherical) and (cotθ/r) p for a collapsed spherical θ, equals the
-# pressure part of the source, and the two are left out together. A uniform
-# state at rest therefore leaves each momentum component at zero in every
-# metric, whichever dimensions are collapsed.
+# every flux. For a collapsed r that term is s F_r/r (s = 1 cylindrical,
+# 2 spherical); its pressure part, s p/r, equals the pressure part of the
+# source, and the two are left out together, while the rest of it is omitted
+# and setup warns (`_warn_collapsed_radius`). A collapsed spherical θ lies at
+# π/2 (`_check_singular_nodes`), where the term (cotθ/r) F_θ vanishes to
+# round-off; the source (cotθ/r) Π_φφ carries no pressure. A uniform state at
+# rest therefore leaves each momentum component at zero in every metric,
+# whichever dimensions are collapsed.
 #
 # On the spherical metric r and θ each take the gradient form or are
 # collapsed, so no spherical source carries the pressure; the φ-momentum's

@@ -131,6 +131,24 @@ end
 
 section(name) = rank == 0 && println("\n$name")
 
+# A logger keeping the messages of this rank's records at Warn and above, so a
+# phase can count the warnings a call raises on each rank.
+struct WarnRecorder <: Base.CoreLogging.AbstractLogger
+    messages::Vector{String}
+end
+Base.CoreLogging.min_enabled_level(::WarnRecorder) = Base.CoreLogging.Warn
+Base.CoreLogging.shouldlog(::WarnRecorder, args...) = true
+Base.CoreLogging.catch_exceptions(::WarnRecorder) = false
+Base.CoreLogging.handle_message(r::WarnRecorder, level, message, args...; kwargs...) =
+    (push!(r.messages, string(message)); nothing)
+
+"The value of `f()` and the warning messages it raised on this rank."
+function recorded_warnings(f)
+    recorder = WarnRecorder(String[])
+    value = Base.CoreLogging.with_logger(f, recorder)
+    return value, recorder.messages
+end
+
 "Process grid that puts all np ranks on dimension `ax`, one elsewhere."
 splitdims(ax) = ntuple(d -> d == ax ? np : 1, 3)
 
@@ -679,16 +697,23 @@ function test_freestream()
            n_global=(1, SPLITN, 1), L_domain=(1.0, π/2, 1.0), metric=SphericalMetric(),
            bcs=(per3[1], (SlipWallBC(), SlipWallBC()), per3[3]), dims=splitdims(2),
            kw=(; origin=(1.0, π/4, 0.0))),
-        (; name="spherical θ collapsed off the equator, r split",
+        (; name="spherical θ collapsed at π/2, r split",
            n_global=(SPLITN, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=SphericalMetric(),
            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(1),
-           kw=(; origin=(0.2, π/2 - 0.5, 0.0))),
+           kw=(; origin=(0.2, π/2, 0.0))),
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
                     bcs=cs.bcs, dims=cs.dims, art=ArtificialProperties(enabled=false),
                     filter_weighting=:volume), cs.kw)
-        solver = Solver(; kw...)
+        # A collapsed r warns once, from rank 0, and nothing else warns.
+        solver, warnings = recorded_warnings(() -> Solver(; kw...))
+        if cs.n_global[1] == 1
+            expected = rank == 0 ? 1 : 0
+            collapsed = count(m -> occursin("r is collapsed", m), warnings)
+            check(cs.name * ": one setup warning, from rank 0",
+                  gmax(abs(length(warnings) - expected) + abs(collapsed - expected)), 0.5)
+        end
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(solver, Q)

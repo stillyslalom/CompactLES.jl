@@ -63,9 +63,17 @@ No grid node may lie on a coordinate singularity, where the volume Jacobian
 vanishes. A radial domain that starts at r = 0 must close that end with
 [`AxisBC`](@ref) or [`OriginBC`](@ref), and every θ node of a spherical grid
 must lie strictly between 0 and π unless both θ ends carry [`PoleBC`](@ref);
-these folds offset the nodes half a cell from the singularity. With θ
-collapsed, the single θ node sits at the low end of the θ domain, so a domain
-such as `(0, π)` places it on the pole.
+these folds offset the nodes half a cell from the singularity.
+
+A collapsed dimension takes no derivative, and its single node sits at the low
+end of its domain. Under `SphericalMetric` a collapsed θ must lie at π/2, as
+in the θ domain `(π/2, π/2 + 1)` of a radial line: elsewhere the curvature
+term (cot θ/r) F_θ of every θ flux would be omitted. A collapsed r
+under either curvilinear metric is accepted with a warning, since the
+curvature term of every radial flux is omitted; such a run is exact for a
+state at rest and, for an inviscid flow, to first order in a perturbation of
+that state with no radial velocity. A collapsed cylindrical θ or z, or
+spherical φ, omits nothing.
 
 ## Patch and refinement layouts
 
@@ -100,7 +108,7 @@ under `patch_interfaces = :closure`, each slab serial or decomposed; on the
 r-z plane of a `CylindricalMetric` with θ
 collapsed, folded at r = 0 by [`AxisBC`](@ref), z resolved or not and a
 [`SymmetryPlaneBC`](@ref) allowed at its low end; and on the radial line of a
-`SphericalMetric` with θ and φ collapsed, folded at r = 0 by
+`SphericalMetric` with θ collapsed at π/2 and φ collapsed, folded at r = 0 by
 [`OriginBC`](@ref). The last two are accepted serial or decomposed along
 either dimension under the filter weighting `:none`. Refined levels are
 accepted on each of these grids under `patch_interfaces = :closure` and
@@ -155,6 +163,7 @@ text below.
 | `PoleBC` at one end of θ only | `PoleBC must be applied at both ends of θ` |
 | `SymmetryPlaneBC` on a cylindrical r or θ face, or any spherical face | `SymmetryPlaneBC on dimension d requires CartesianMetric or the z dimension of CylindricalMetric` |
 | NSCBC on an angular face | `the LODI formulation requires a face whose normal metric scale factor is one` |
+| a collapsed spherical θ away from π/2 | `SphericalMetric: a collapsed θ must lie at π/2` |
 | a stretched fold or symmetry plane | `folded dimensions cannot be stretched` |
 | a stretched periodic dimension | `stretched dimensions must be non-periodic` |
 | `patch_grid` with a fold | `patch decomposition across a coordinate fold is not supported` |

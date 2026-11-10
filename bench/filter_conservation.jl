@@ -96,7 +96,7 @@ function operator_part(opt)
                     metric=CylindricalMetric(), filt=filt(:cascade))),
         ("spherical origin, cascade", 1,
          wt -> line(wt; bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
-                    metric=SphericalMetric(), origin=(0.0, π / 2 - 0.5, 0.0),
+                    metric=SphericalMetric(), origin=(0.0, π / 2, 0.0),
                     filt=filt(:cascade))),
         ("spherical poles (θ line)", 2,
          wt -> Solver(; n_global=(12, N, 1), L_domain=(1.0, π, 1.0),
