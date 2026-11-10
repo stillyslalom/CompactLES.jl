@@ -130,13 +130,35 @@
 # rows the default C6 takes there, against 0.215 h at a `:neutral3` wall), and
 # the shared node is the end node of both patches. Its end face, which carries
 # the point flux of the node, is limited as well, toward the point flux of the
-# node's state, by one θ on both patches (`_exchange_interface_theta!`). Under
-# `:ghost` the inviscid flux and the rest close with different rows, so the
+# node's state, by one θ on both patches (`_exchange_interface_theta!`).
+#
+# The constructor closes the interfaces of a limited solver with these rows
+# in place of `:ghost`, with a warning, unless `LIMITED_GHOST_INTERFACES` is
+# set: on a tiled level a round-off perturbation of a limited `:ghost` run
+# grows to a visible difference within a few hundred steps, so its solution
+# depends on the rank count; under the closure rows the perturbation stays at
+# round-off.
+#
+# Under `:ghost` with that toggle set and the artificial properties on, the
+# gradient plans difference the whole flux of an interface dimension, ghost
+# values included (`_remainder_ghosted`), and their rows at the interface read
+# the ghosts. The
+# line is open there (`_limiter_line_weights`): its weights are h up to the
+# end node and h/2 there, h in the composite of the two patches, the end face
+# lies at the shared node, and the face values are anchored by the interior
+# face relation measured near the low end (`_limiter_open_face`), as on a
+# periodic line. The end face's first-order counterpart is again the node's
+# point flux, and the two patches limit it by one θ as above. Their end face
+# values differ by the scheme's own mismatch at the node, the explicit row
+# there in place of a compact one, which limiting moves toward zero. Where a
+# part of the flux took the divergence's one-sided rows, whose face form
+# differs (`_limiter_ghost`), and on regridded tiles of a radial grid, the
 # constructor closes the interfaces with the closure rows instead, with a
 # warning.
 #
 # Refined levels. A refined patch closes its lines at a coarse-fine face with
-# the same interface rows, so its weights there are a same-level patch's. The
+# the same interface rows, or leaves them open there, so its weights there are
+# a same-level patch's. The
 # end node at that face is not the patch's own: the parent's shell overwrites
 # it after each stage (before each stage under subcycling). The limiter leaves
 # it alone as it does a Dirichlet node: the face beside it is limited from the
@@ -222,8 +244,11 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
     areal::NTuple{3,Bool}           # d takes area-weighted fluxes, D(A_d F), on
                                     # lines of constant A_d (z on the r-z plane)
     interface::NTuple{3,NTuple{2,Bool}} # the ends of d at a patch interface
+    open::NTuple{3,NTuple{2,Bool}}  # the ends of d open under `:ghost`, at a
+                                    # same-level or a coarse-fine interface
     anchor::Vector{P}               # per d: (n_cons, n_a, n_b) Φ at the low face
     anchor_hi::Vector{P}            # Φ at the high face, at a patch interface
+                                    # closed by the interface rows
     totals::Vector{P}               # line totals of the local running sums
     aux::Vector{P}                  # anchor (stage) or measurement (filter)
     offset::Vector{P}               # this rank's running-sum offset
@@ -243,7 +268,7 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
     filter_psi::V
     periodic::NTuple{3,Bool}
     measure::NTuple{3,Int}          # local face of the filter relation, 0 none
-    anchor_face::NTuple{3,Int}      # local face of a periodic anchor
+    anchor_face::NTuple{3,Int}      # local face of a periodic or open-end anchor
     eps_rho::T
     eps_e::T
     active::Bool
@@ -343,14 +368,62 @@ end
 # rows' weights (`hi_closures` where the far end closes with rows other than
 # the scheme's own, at a coarse-fine face). The folded divergence is the
 # interior scheme on the mirrored data, so these serve either parity of the
-# folded field.
+# folded field. A far end that is open (`:open`, see `_limiter_line_weights`)
+# takes h up to it.
 function _limiter_fold_weights(scheme, N::Int, h, n_halo::Int, ::Type{T};
                                hi_closures=nothing) where {T}
+    hi_closures === :open && return _limiter_open_ends!(fill(Float64(h), N), h, false,
+                                                        true)
     W = _limiter_weights(scheme, 2N, h, n_halo, T; lo_closures=hi_closures,
                          hi_closures)[1][N+1:2N]
     W[1:N÷2] .= h
     return W
 end
+
+# The weights of a closed line of N nodes whose ends close with `lo` and `hi`:
+# a set of closure rows, `nothing` for the scheme's own, or `:open`, an end at
+# a patch or level interface where the gradient plans difference the flux from
+# its ghost values (`interface_flux = :ghost`). Those rows read the ghosts, so
+# no node weights write the line's divergence as a difference of face fluxes
+# with the point flux at that end. The line takes weight h up to the end
+# instead, the interior scheme's, and h/2 at the end node, whose end face then
+# lies at the node; the face values satisfy the interior face relation, which
+# anchors them (`_limiter_open_face`). An end node shared with another patch
+# has weight h/2 in each, h in the composite. A line closed at its other end
+# takes the weights of a closed line of 2N nodes there. Returns the weights and
+# the least-squares residual of the closed end's face form, zero where both
+# ends are open.
+function _limiter_line_weights(scheme, N::Int, h, n_halo::Int, ::Type{T}, lo,
+                               hi) where {T}
+    open_lo, open_hi = lo === :open, hi === :open
+    (open_lo || open_hi) ||
+        return _limiter_weights(scheme, N, h, n_halo, T; lo_closures=lo, hi_closures=hi)
+    open_lo && open_hi && return _limiter_open_ends!(fill(Float64(h), N), h, true, true),
+                                 0.0
+    rows = open_lo ? hi : lo
+    W, residual = _limiter_weights(scheme, 2N, h, n_halo, T; lo_closures=rows,
+                                   hi_closures=rows)
+    return _limiter_open_ends!(open_lo ? W[N+1:2N] : W[1:N], h, open_lo, open_hi),
+           residual
+end
+
+function _limiter_open_ends!(W, h, lo::Bool, hi::Bool)
+    lo && (W[1] = h / 2)
+    hi && (W[end] = h / 2)
+    return W
+end
+
+# The local face of a line's open low end at which the stage register's anchor
+# is measured from the interior face relation of the derivative, as on a
+# periodic line. The relation at face j holds at every face past the rows of
+# the interface closure, which the running sum's differences reproduce, and
+# reads the faces j − q to j + q, q the bands of the left-hand side: j is past
+# the closure by q + 1, so that none of them is the end face at node 1.
+_limiter_open_face(deriv) = length(interface_closures(deriv)) + length(_band_lhs(deriv)) + 1
+
+# The face relation's rows reach `length(_band_lhs(deriv))` faces past the
+# measured one, which the block of the rank holding the open end must hold.
+_limiter_open_reach(deriv) = _limiter_open_face(deriv) + length(_band_lhs(deriv))
 
 # The explicit face stencil of a filter's correction: (B − A) q, a symmetric
 # zero-sum stencil s_l, is ψ_{i+½} − ψ_{i−½} with ψ_{i+½} = Σ_l t_l q_{i+l},
@@ -371,14 +444,14 @@ end
 
 # The checks of the configurations the limiter covers, before anything is
 # built: patches of an unstretched Cartesian grid without folds, one or
-# several along a slab layout whose interfaces close the divergence with their
-# own rows (`interface_flux = :closure`), or a single radial grid folded at
-# r = 0 (`_limiter_radial_line`), on the r-z plane with a symmetry plane
-# allowed at the low end of z; refined levels on either, under the same
-# interface rows (the constructor switches `:ghost` to them, with a warning)
-# and the injected restriction, tiled on the host backend only; without the
-# implicit integrator, an ideal-gas mixture, and closed lines long enough for
-# the face relation of the filter.
+# several along a slab layout, or a single radial grid folded at r = 0
+# (`_limiter_radial_line`), on the r-z plane with a symmetry plane allowed at
+# the low end of z; refined levels on either under the injected restriction,
+# tiled on the host backend only; without the implicit integrator, an
+# ideal-gas mixture, and closed lines long enough for the face relation of
+# the filter. The interfaces are open ends of the lines under `:ghost`
+# (`_limiter_line_weights`), where the constructor has kept it
+# (`_limiter_ghost`), and close with their own rows under `:closure`.
 function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, eos,
                               implicit, equations, deriv, filt, filter_weighting,
                               n_global, n_halo, L_domain, ::Type{T};
@@ -401,14 +474,6 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
              "filtered restriction writes values the limiter does not bound " *
              "onto the parent")
     npatch = prod(patch_grid)
-    # Under `:ghost` the inviscid flux of an interface dimension takes the
-    # gradient's interface rows, whose composite weight at the shared node is
-    # h, and the rest of the flux the divergence's one-sided rows, whose
-    # composite weight there is twice the end weight: no one set of node
-    # weights writes both as differences of face fluxes. The constructor has
-    # switched such interfaces to `:closure` before this check.
-    (npatch == 1 && nlev == 1) || interface_flux === :closure ||
-        error("positivity limiter: interfaces under :ghost reached the check")
     # A device level's tiles share stacked storage, whose batched right-hand
     # side has no per-tile registers.
     backend isa DeviceBackend && nlev > 1 && _tiled(tile) &&
@@ -429,11 +494,11 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
                  "$(nameof(typeof(bc)))")
     end
     # Every closed line, a patch's line along the split dimension with the
-    # interface rows at its interface ends.
+    # interface rows, or an open end, at its interface ends.
     ds = npatch > 1 ? findfirst(>(1), patch_grid) : 0
     periodic = ntuple(d -> n_global[d] > 1 ? isperiodic(bcs[d][1]) : true, 3)
     regions = npatch > 1 ? patch_slabs(n_global, periodic, patch_grid) : BlockRegion[]
-    rows = _limiter_interface_rows(deriv, interface_rhs, interface_divergence)
+    rows = _limiter_end_rows(deriv, interface_flux, interface_rhs, interface_divergence)
     for d in 1:3
         n_global[d] > 1 || continue
         if d == ds
@@ -468,9 +533,9 @@ end
 # The fewest parent nodes a regridded box spans along a dimension under the
 # limiter: its fine line of 3(n − 1) + 1 nodes, between two coarse-fine faces,
 # takes the face form and the filter's face relation (`_check_limiter_line`).
-function _limiter_least_box(deriv, filt, interface_rhs, interface_divergence,
-                            n_halo::Int, ::Type{T}) where {T}
-    rows = _limiter_interface_rows(deriv, interface_rhs, interface_divergence)
+function _limiter_least_box(deriv, filt, interface_flux, interface_rhs,
+                            interface_divergence, n_halo::Int, ::Type{T}) where {T}
+    rows = _limiter_end_rows(deriv, interface_flux, interface_rhs, interface_divergence)
     N = _limiter_least_line(deriv, filt, n_halo, T, rows, rows)
     return N == typemax(Int) ? 4 : max(4, cld(N - 1, 3) + 1)
 end
@@ -480,10 +545,11 @@ end
 # dimension, the line's node count and the fewest nodes a line with the same
 # ends takes; `nothing` where every line passes or the solver has no limiter.
 # A line is tested as `PositivityLimiter` tests it: where an end lies at an
-# interface, closed there by the interface rows and at a domain face by that
-# face's own rows. A line folded at r = 0 and a line spanning the domain are
-# not tested. A partial lattice cell at a domain face or at the nesting margin
-# gives a tile shorter than the whole cell `_validate_positivity` checks.
+# interface, closed there by the interface rows or open, and at a domain face
+# closed by that face's own rows. A line folded at r = 0 and a line spanning
+# the domain are not tested. A partial lattice cell at a domain face or at the
+# nesting margin gives a tile shorter than the whole cell `_validate_positivity`
+# checks.
 function _limiter_tile_short(solver, region::BlockRegion, ℓ::Int)
     pl = getfield(solver, :positivity)
     pl isa PatchLimiters || return nothing
@@ -493,8 +559,8 @@ function _limiter_tile_short(solver, region::BlockRegion, ℓ::Int)
     extent = fine_extent(region, active, folded)
     schemes = getfield(solver, :schemes)
     deriv, filt = schemes.deriv, schemes.filt
-    rows = _limiter_interface_rows(deriv, schemes.interface_rhs,
-                                   schemes.interface_divergence)
+    rows = _limiter_end_rows(deriv, getfield(solver, :interface_flux),
+                             schemes.interface_rhs, schemes.interface_divergence)
     n_halo = getfield(solver, :patches)[1].decomp.n_halo
     T = eltype(getfield(solver, :h))
     for d in 1:3
@@ -543,9 +609,38 @@ _limiter_interface_rows(deriv, interface_rhs::Symbol, interface_divergence) =
     interface_rhs === :extended || interface_divergence !== nothing ?
     interface_divergence_rows(deriv, interface_divergence) : nothing
 
+# A line's end at a patch or level interface as the limiter takes it: open
+# under `:ghost` (`_limiter_line_weights`), closed by the divergence's
+# interface rows under `:closure`.
+_limiter_end_rows(deriv, interface_flux::Symbol, interface_rhs::Symbol,
+                  interface_divergence) =
+    interface_flux === :ghost ? :open :
+    _limiter_interface_rows(deriv, interface_rhs, interface_divergence)
+
+"""
+Test and benchmark toggle: `true` keeps `interface_flux = :ghost` at the patch
+and level interfaces of a limited solver where `_limiter_ghost` admits it, and
+the limiter takes those lines open at the interface. `false`, the default,
+closes the interfaces of every limited solver with the closure rows, with a
+warning. On a tiled level a round-off perturbation of a limited `:ghost` run
+grows to a visible difference within a few hundred steps, so its solution
+depends on the rank count; under the closure rows the perturbation stays at
+round-off. Read at construction.
+"""
+const LIMITED_GHOST_INTERFACES = Ref(false)
+
+# Whether a limited solver may keep `interface_flux = :ghost` at its
+# interfaces, under `LIMITED_GHOST_INTERFACES`: where the gradient plans
+# difference the whole flux of every interface dimension, the remainder F − f
+# with its ghost values included (`_remainder_ghosted`). Elsewhere a part of the
+# flux takes the divergence's one-sided rows, whose face form differs, and the
+# constructor closes the interfaces with the closure rows.
+_limiter_ghost(art) = _ghost_remainder(:ghost, art) && GHOST_REMAINDER_EXTRAPOLATE[]
+
 # A closed line of N nodes whose ends close with `lo` and `hi` (`nothing` for
-# the scheme's own rows): the face form exists, its weights are positive, and
-# the line holds an interior face for the filter's face relation.
+# the scheme's own rows, `:open` at an open end): the face form exists, its
+# weights are positive, and the line holds an interior face for the filter's
+# face relation.
 function _check_limiter_line(fail, deriv, filt, d, N, h, n_halo, ::Type{T}, lo,
                              hi) where {T}
     _limiter_line_ok(deriv, filt, N, n_halo, T, lo, hi) && return nothing
@@ -553,8 +648,7 @@ function _check_limiter_line(fail, deriv, filt, d, N, h, n_halo, ::Type{T}, lo,
     N < least < typemax(Int) &&
         fail("a line along dimension $d has $N nodes; the face relation of the " *
              "filter needs at least $least on a closed line")
-    W, res = _limiter_weights(deriv, max(N, 16), h, n_halo, T; lo_closures=lo,
-                              hi_closures=hi)
+    W, res = _limiter_line_weights(deriv, max(N, 16), h, n_halo, T, lo, hi)
     res <= sqrt(eps(T)) * 1e-2 ||
         fail("the closure rows of $(deriv.name) do not take a face-flux form " *
              "(residual $res)")
@@ -568,7 +662,8 @@ end
 function _limiter_line_ok(deriv, filt, N::Int, n_halo::Int, ::Type{T}, lo,
                           hi) where {T}
     (min(N, 128) - 1) ÷ 2 - 2 >= 4 || return false
-    W, res = _limiter_weights(deriv, N, one(T), n_halo, T; lo_closures=lo, hi_closures=hi)
+    lo === :open && N < _limiter_open_reach(deriv) && return false
+    W, res = _limiter_line_weights(deriv, N, one(T), n_halo, T, lo, hi)
     (res <= sqrt(eps(T)) * 1e-2 && all(>(0), W)) || return false
     least = 2 * _limiter_margin(W, one(T), filt, deriv, T; rows=_row_count(lo, hi)) + 4
     return N >= least || _limiter_relation_face(W, one(T), filt, N ÷ 2, T)
@@ -602,7 +697,10 @@ function _limiter_relation_face(W, h, filt, g::Int, ::Type{T}) where {T}
     return true
 end
 
-_row_count(lo, hi) = max(lo === nothing ? 0 : length(lo), hi === nothing ? 0 : length(hi))
+_row_count(lo, hi) = max(_row_count(lo), _row_count(hi))
+_row_count(::Nothing) = 0
+_row_count(::Symbol) = 0
+_row_count(rows) = length(rows)
 
 # Nodes from a closed end beyond which both the derivative's weights and the
 # filter's rows are interior, with the stencils' reach: the larger over the two
@@ -622,8 +720,9 @@ end
 
 # The limiter of one patch, after its geometry is filled: the weights at every
 # padded position this rank holds, the registers, and the local faces where a
-# periodic anchor and the filter relation are measured. A patch interface is a
-# closed end of the patch's lines, whose weights come from the interface rows.
+# periodic or open-end anchor and the filter relation are measured. A patch
+# interface is a closed end of the patch's lines, open under `:ghost` and
+# weighted by the interface rows under `:closure` (`_limiter_line_weights`).
 # A tile of a radial grid (`separate`) holds the radial pass's rates, face
 # speeds and pressure face values: the z faces of every tile read the rates
 # after the radial passes of all of them, and a radial correction waits for the
@@ -640,10 +739,10 @@ function PositivityLimiter(solver; separate::Bool=false)
     schemes = solver.schemes
     deriv = schemes.deriv
     filt = schemes.filt
-    irows = _limiter_interface_rows(deriv, schemes.interface_rhs,
-                                    schemes.interface_divergence)
+    irows = _limiter_end_rows(deriv, solver.interface_flux, schemes.interface_rhs,
+                              schemes.interface_divergence)
     # A same-level interface and a refined patch's coarse-fine face both close
-    # the divergence with the interface rows.
+    # the divergence with the interface rows, or both are open.
     end_rows(d, side) = solver.bcs[d][side] isa InterfaceBC ? irows : nothing
     fold_lo = ntuple(d -> decomp.active[d] && solver.folds[d] !== nothing &&
                           solver.folds[d].lo, 3)
@@ -657,6 +756,21 @@ function PositivityLimiter(solver; separate::Bool=false)
         _check_limiter_line(fail, plan_scheme(d), filt, d, decomp.n_global[d],
                             solver.h[d], decomp.n_halo, T, end_rows(d, 1), end_rows(d, 2))
     end
+    # An open end takes the face form of the gradient plans, which difference
+    # the whole flux there (`_limiter_ghost`).
+    open = ntuple(d -> decomp.active[d] ?
+                       (end_rows(d, 1) === :open, end_rows(d, 2) === :open) :
+                       (false, false), 3)
+    for d in 1:3
+        any(open[d]) && !_remainder_ghosted(solver, d) &&
+            error("positivity limiter: an interface of dimension $d under :ghost " *
+                  "takes a part of its flux through the divergence plans")
+        open[d][1] && decomp.offset[d] == 0 &&
+            decomp.n_local[d] < _limiter_open_reach(deriv) &&
+            fail("the block holding the low interface end along dimension $d has " *
+                 "$(decomp.n_local[d]) nodes, fewer than the " *
+                 "$(_limiter_open_reach(deriv)) the anchor of its face values reads")
+    end
     # The radial lines: the root's, folded at r = 0, and a refined patch's,
     # folded there where the patch reaches the axis or the origin and closed
     # at a coarse-fine face otherwise.
@@ -664,8 +778,8 @@ function PositivityLimiter(solver; separate::Bool=false)
     areal = ntuple(d -> decomp.active[d] && curved && !radial[d], 3)
     # The weights along each global line, and the nodes from a closed end
     # beyond which the filter's face relation is interior. A folded line's
-    # far end closes with the derivative's rows, or the interface rows at a
-    # coarse-fine face.
+    # far end closes with the derivative's rows, or at a coarse-fine face
+    # with the interface rows or open.
     global_weights = ntuple(3) do d
         decomp.active[d] || return Float64[1.0]
         N = decomp.n_global[d]
@@ -673,8 +787,8 @@ function PositivityLimiter(solver; separate::Bool=false)
         fold_lo[d] && return _limiter_fold_weights(deriv, N, solver.h[d],
                                                    decomp.n_halo, T;
                                                    hi_closures=end_rows(d, 2))
-        return _limiter_weights(plan_scheme(d), N, solver.h[d], decomp.n_halo, T;
-                                lo_closures=end_rows(d, 1), hi_closures=end_rows(d, 2))[1]
+        return _limiter_line_weights(plan_scheme(d), N, solver.h[d], decomp.n_halo, T,
+                                     end_rows(d, 1), end_rows(d, 2))[1]
     end
     # The dual face areas of a radial line, Ā_k = A(r_0 + Σ_{j≤k} W_j) at face
     # k + ½, where A is the metric's radial area factor J/h_1 and r_0 the low
@@ -754,8 +868,9 @@ function PositivityLimiter(solver; separate::Bool=false)
                                                              decomp.offset[d] + j, T) ? j : 0
         margin <= decomp.offset[d] + j <= N - margin ? j : 0
     end
-    anchor_face = ntuple(d -> decomp.active[d] ? clamp(decomp.n_local[d] ÷ 2, qd,
-                                                       decomp.n_local[d] - qd) : 0, 3)
+    anchor_face = ntuple(d -> !decomp.active[d] ? 0 :
+                              open[d][1] ? _limiter_open_face(deriv) :
+                              clamp(decomp.n_local[d] ÷ 2, qd, decomp.n_local[d] - qd), 3)
     ws = _limiter_flux_rows(solver, decomp.active, radial)
     # The ends at a same-level interface, whose node another patch holds too.
     # A coarse-fine end node is the parent's, not shared, and its face is
@@ -807,7 +922,7 @@ function PositivityLimiter(solver; separate::Bool=false)
         registers, register_fields,
         FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), rates, speeds,
         theta, map(up, areas), radial, fold_lo, n_comp, up(volume), volume_state, areal,
-        interface,
+        interface, open,
         copies(), copies(), copies(), copies(), copies(), copies(), copies(), copies(),
         line_counts, NTuple{3,Array{T,3}}[], send, recv, up(T.(_band_lhs(deriv))),
         up(T.(deriv.coeffs)), up(T.(filter_lhs)), up(_filter_face_stencil(filt, T)),
@@ -1075,11 +1190,12 @@ end
 # level by level as `step!` takes them; a subcycled solver takes
 # `subcycled_step!`'s schedule with the limiter (`_advance_level!`). A patch's
 # lines end at a same-level interface as at a wall, with the weights of the
-# interface rows, and `_exchange_interface_theta!` has what the two patches
-# share there. A refined patch's lines end at a coarse-fine face with the same
-# rows, and the end node there, which the parent's shell overwrites after the
-# stage, is left alone as a Dirichlet node is. Returns a `SolverFailure` where
-# the subcycled schedule rejects a substep, and `nothing` otherwise.
+# interface rows or of an open end, and `_exchange_interface_theta!` has what
+# the two patches share there. A refined patch's lines end at a coarse-fine
+# face in the same way, and the end node there, which the parent's shell
+# overwrites after the stage, is left alone as a Dirichlet node is. Returns a
+# `SolverFailure` where the subcycled schedule rejects a substep, and
+# `nothing` otherwise.
 function _limited_run_step!(solver, states::Vector{<:ConservedState}, workspace, dt,
                             prepared::Bool, control)
     lims = _follow_patches!(solver, getfield(solver, :positivity))
@@ -1171,6 +1287,10 @@ Base.@propagate_inbounds Base.setindex!(x::_LimiterRHS, v, I...) =
 Base.view(x::_LimiterRHS, I...) = view(x.dQ, I...)
 @inline _cpu_storage(x::_LimiterRHS) = _cpu_storage(x.dQ)
 @inline _kernel_arg(x::_LimiterRHS) = _kernel_arg(x.dQ)
+# It crosses into the ghost-differenced divergence of an interface dimension
+# whole (rhs.jl), where the gradient plans' subtractions take the registers.
+@inline _ghost_rhs_arg(x::_LimiterRHS) = x
+_rhs_state(x::_LimiterRHS) = x
 
 div_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::SolverLike, d::Int, σf::Int,
                     inv_J) = _limited_subtract!(dQ, c, c, f, solver, d, σf, inv_J)
@@ -1183,11 +1303,45 @@ pressure_subtract_along!(dQ::_LimiterRHS, c::Int, solver::SolverLike, d::Int) =
 # The subtraction from component `c` and the update of register `slot`.
 function _limited_subtract!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::Int,
                             σf::Int, inv_J)
+    div_along!(solver.tmp_a, f, solver, d, σf)
+    return _limited_registers!(dQ, c, slot, f, solver, d, σf, inv_J)
+end
+
+# Under `interface_flux = :ghost` the flux of an interface dimension, and the
+# radial pressure there, go through the gradient plans
+# (`_ghost_flux_divergence!`, `_ghost_flux_solves!`), whose subtraction takes
+# the registers in the same way. The derivative is the one
+# `_ext_subtract_along!` forms, through the fused route's plan where that
+# route is taken, so the subtraction is bit for bit the unlimited one.
+_ext_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::SolverLike, d::Int, inv_J,
+                     σf::Int) = _limited_ext_subtract!(dQ, c, c, f, solver, d, σf, inv_J)
+
+_ext_pressure_subtract!(dQ::_LimiterRHS, c::Int, solver::SolverLike, d::Int) =
+    _limited_ext_subtract!(dQ, c, solver.equations.n_cons + 1, solver.p, solver, d, 1,
+                           solver.inv_h[d])
+
+function _limited_ext_subtract!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::Int,
+                                σf::Int, inv_J)
+    fold = _fold_at(solver, d)
+    if fold !== nothing && !_fold_active(fold) && !(fold_dplan(fold, 1) isa DevicePlan)
+        apply_along!(solver.tmp_a, fold_dplan(fold, 1), f, solver.decomp)
+    else
+        deriv_along!(solver.tmp_a, f, solver, d, σf)
+    end
+    return _limited_registers!(dQ, c, slot, f, solver, d, σf, inv_J)
+end
+
+# The derivative of `f` in `tmp_a` subtracted from component `c` and taken into
+# register `slot`, and the face registers at the line's ends updated from it:
+# at the global low face from node 1's point flux, the relation of a periodic
+# line or an open end, or the fold (`_limiter_anchor_point!`), and at a high
+# end closed by the interface rows from its last node's point flux.
+function _limited_registers!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::Int,
+                             σf::Int, inv_J)
     lim = dQ.lim
     decomp = solver.decomp
     nx, ny, nz = decomp.n_local
     o1, o2, o3 = decomp.n_halo_d
-    div_along!(solver.tmp_a, f, solver, d, σf)
     pointwise!(_limiter_subtract_point!, dQ.dQ, nx, ny, nz,
                dQ.dQ, lim.registers[d, slot], solver.tmp_a, inv_J, c, dQ.A, dQ.dt,
                o1, o2, o3)
@@ -1195,10 +1349,10 @@ function _limited_subtract!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::In
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_anchor_point!, solver.tmp_a, nA, nB, 1,
                    lim.anchor[d], f, solver.tmp_a, lim.weights[d], dQ.A, dQ.dt, slot, d,
-                   lim.periodic[d], lim.fold_lo[d], σf, lim.anchor_face[d],
-                   lim.deriv_lhs, lim.deriv_rhs, o1, o2, o3)
+                   lim.periodic[d] || lim.open[d][1], lim.fold_lo[d], σf,
+                   lim.anchor_face[d], lim.deriv_lhs, lim.deriv_rhs, o1, o2, o3)
     end
-    if lim.interface[d][2] && decomp.coords[d] == decomp.dims[d] - 1
+    if lim.interface[d][2] && !lim.open[d][2] && decomp.coords[d] == decomp.dims[d] - 1
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_end_anchor_point!, solver.tmp_a, nA, nB, 1,
                    lim.anchor_hi[d], f, dQ.A, dQ.dt, slot, d, decomp.n_local[d],
@@ -1263,7 +1417,8 @@ function _stage_theta!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt
     τ = T(_stage_advance(stage) * dt)
     _line_faces!(lim, solver, Q, d, 1, B, zero(T))
     decomp = solver.decomp
-    if _limiter_ends(lim, decomp, d)[5]
+    # An open end's face value is the running sum's end itself.
+    if _limiter_ends(lim, decomp, d)[5] && !lim.open[d][2]
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_end_face_point!, solver.tmp_a, nA, nB, 1,
                    lim.faces, lim.anchor_hi[d], B, lim.n_comp[d], decomp.n_local[d], d,
@@ -1309,7 +1464,8 @@ end
 # weight. Each patch keeps its own update of the node within the node's bound,
 # and their mean, the admissible set being convex, is within it as well. The
 # update takes the face beside the node and the face at the node itself, the
-# patch's end face, which carries the point flux there. The first-order flux of
+# patch's end face, which carries the point flux there under the closure rows
+# and the open end's face value under `:ghost`. The first-order flux of
 # that face is the point flux of the node's state, the same on both sides, so
 # where the two patches' fluxes there agree (the inviscid flux of the averaged
 # state) limiting it on both sides by one θ conserves, and where they differ
@@ -2316,9 +2472,11 @@ end
 
 # The face register at the global low face of each line, Φ ← A Φ + dt F̂:
 # the point flux of node 1 on a closed line (the wall-corrected flux), and on
-# a periodic line the constant the interior face relation gives the running
-# sum of this stage's divergence, measured at local face `j` of the rank
-# holding the global low face. At a fold the mirrored face relation at face 0,
+# a periodic line (`periodic`) the constant the interior face relation gives
+# the running sum of this stage's divergence, measured at local face `j` of the
+# rank holding the global low face; an open end takes the same measurement
+# (`_limiter_open_face`), its end face at node 1. At a fold the mirrored face
+# relation at face 0,
 # Σ_{|s|≤q} l_s F̂_s = Σ_m c_m Σ_{l=1−m}^{m} f_l with F̂_{−s} = σf F̂_s and the
 # halo holding the mirror f_{1−l} = σf f_l, gives zero for an odd flux and,
 # for an even one, (Σ_m c_m Σ_l f_l − 2 Σ_s l_s S_s) / (1 + 2 Σ_s l_s).

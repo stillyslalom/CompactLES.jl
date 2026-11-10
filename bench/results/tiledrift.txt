@@ -1,60 +1,96 @@
-=== julia --project=. -t 1 bench/positivity.jl part=tiledrift
-    package commit d1529b85, Julia 1.13.3, one thread
+=== julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true
+    package commit HASH, Julia 1.13.3, one thread
 
-=== tiledrift: the cylindrical Noh level over 81 nodes, unlimited ===
+=== tiledrift: the cylindrical Noh level over 81 nodes ===
   uniform            6640 steps    4.2 s  plateau 15.6523  deficit 50.9%  shock 0.2033
                     mass -4.45e-07
                     L1 exact 1.456e-02  L1 uniform 0.000e+00  plateau |ρ - 4^ν| 0.3477
                     history -4.2e-08 -2.3e-07 -3.6e-07 -4.1e-07 -4.5e-07 -4.7e-07 -4.9e-07 -5.0e-07 -5.1e-07 -5.1e-07 -5.2e-07 -5.2e-07 -5.2e-07 -5.2e-07 -5.1e-07 -5.1e-07 -5.1e-07 -5.0e-07 -5.0e-07 -5.0e-07 -4.9e-07 -4.9e-07 -4.8e-07 -4.8e-07 -4.7e-07 -4.7e-07 -4.6e-07 -4.6e-07 -4.5e-07 -4.4e-07
-  box                6641 steps   10.7 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+  box                6641 steps   20.5 s  plateau 15.6523  deficit 50.9%  shock 0.2033
                     mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 8.1e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.91e-10  filter -4.57e-07
                     L1 exact 1.456e-02  L1 uniform 1.105e-05  plateau |ρ - 4^ν| 0.3477
                     history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
-  tiles8             6837 steps    5.6 s  plateau 15.8915  deficit 49.6%  shock 0.2024
+  tiles8             6837 steps   21.5 s  plateau 15.8915  deficit 49.6%  shock 0.2024
                     mass +1.73e-03  split +1.73e-03  root +2.55e-03  restricted 9.1e-07
+                    ledger rhs +6.10e-01  wall_enforce +1.87e-10  filter +1.32e-03  same_level +1.07e-15
                     L1 exact 1.398e-02  L1 uniform 8.474e-03  plateau |ρ - 4^ν| 0.3769
                     history +3.6e-08 -5.0e-06 -1.2e-05 -2.8e-05 +3.4e-06 +1.8e-05 +2.2e-05 +9.9e-07 +5.5e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.1e-04 +3.9e-04 +4.5e-04 +5.0e-04 +5.3e-04 +6.0e-04 +7.7e-04 +8.6e-04 +8.6e-04 +9.0e-04 +8.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.5e-03 +1.7e-03 +1.7e-03
-  tiles16            6737 steps    4.0 s  plateau 15.7918  deficit 51.0%  shock 0.2028
+  tiles16            6737 steps   17.0 s  plateau 15.7918  deficit 51.0%  shock 0.2028
                     mass +9.16e-04  split +9.15e-04  root +1.96e-03  restricted 5.5e-07
+                    ledger rhs +6.10e-01  wall_enforce +1.92e-10  filter +6.82e-04  same_level +2.65e-16
                     L1 exact 1.409e-02  L1 uniform 4.630e-03  plateau |ρ - 4^ν| 0.3474
                     history -8.3e-08 -2.8e-07 -4.6e-07 -6.2e-07 -1.1e-06 -4.7e-06 -1.1e-05 -2.6e-05 +8.4e-06 +1.6e-04 +1.7e-04 +1.8e-04 +1.9e-04 +1.9e-04 +1.9e-04 +1.9e-04 +1.9e-04 +2.6e-04 +4.2e-04 +5.3e-04 +5.4e-04 +5.5e-04 +5.6e-04 +5.6e-04 +5.7e-04 +5.6e-04 +5.4e-04 +6.6e-04 +8.9e-04 +9.2e-04
-  tiles80            6641 steps    3.2 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+  tiles80            6641 steps   12.8 s  plateau 15.6523  deficit 50.9%  shock 0.2033
                     mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 8.1e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.91e-10  filter -4.57e-07
                     L1 exact 1.456e-02  L1 uniform 1.105e-05  plateau |ρ - 4^ν| 0.3477
                     history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
-  box-sub            2213 steps    2.3 s  plateau 15.6524  deficit 50.8%  shock 0.2033
+  box-sub            2213 steps    8.3 s  plateau 15.6524  deficit 50.8%  shock 0.2033
                     mass -9.28e-07  split -1.81e-06  root +5.49e-04  restricted 9.3e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.23e-10  filter -3.78e-07
                     L1 exact 1.455e-02  L1 uniform 1.985e-05  plateau |ρ - 4^ν| 0.3476
                     history -6.9e-08 -2.8e-07 -4.3e-07 -5.1e-07 -5.7e-07 -6.3e-07 -6.7e-07 -7.1e-07 -7.4e-07 -7.6e-07 -7.9e-07 -8.1e-07 -8.3e-07 -8.4e-07 -8.6e-07 -8.7e-07 -8.8e-07 -8.9e-07 -9.0e-07 -9.0e-07 -9.1e-07 -9.1e-07 -9.2e-07 -9.2e-07 -9.2e-07 -9.3e-07 -9.3e-07 -9.3e-07 -9.3e-07 -9.3e-07
-  tiles8-sub         2277 steps    3.4 s  plateau 15.8828  deficit 49.4%  shock 0.2024
+  tiles8-sub         2277 steps   15.1 s  plateau 15.8828  deficit 49.4%  shock 0.2024
                     mass +1.56e-03  split +1.56e-03  root +2.33e-03  restricted 2.3e-07
+                    ledger rhs +6.10e-01  wall_enforce +1.18e-10  filter +1.20e-03  same_level +7.53e-16
                     L1 exact 1.371e-02  L1 uniform 8.243e-03  plateau |ρ - 4^ν| 0.3693
                     history -3.9e-07 -6.5e-06 -1.3e-05 -2.8e-05 +1.9e-05 +4.1e-05 +4.7e-05 +2.7e-05 +8.8e-05 +2.3e-04 +2.7e-04 +2.6e-04 +2.4e-04 +3.8e-04 +3.9e-04 +4.2e-04 +4.4e-04 +5.0e-04 +6.8e-04 +7.7e-04 +7.8e-04 +8.2e-04 +7.9e-04 +1.0e-03 +1.2e-03 +1.2e-03 +1.4e-03 +1.3e-03 +1.5e-03 +1.6e-03
-  regrid8            6836 steps    4.4 s  plateau 15.9152  deficit 49.5%  shock 0.2023
+  regrid8            6836 steps   16.0 s  plateau 15.9152  deficit 49.5%  shock 0.2023
                     mass +1.73e-03
+                    ledger rhs +6.10e-01  wall_enforce +1.88e-10  filter +1.35e-03  same_level -1.46e-16  reflux +7.23e-09  regrid -1.14e-06
                     L1 exact 1.394e-02  L1 uniform 8.700e-03  plateau |ρ - 4^ν| 0.3968
                     history -1.7e-06 -9.2e-06 -2.0e-05 -2.5e-05 +7.5e-06 +2.4e-05 +2.5e-05 +6.6e-06 +8.9e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.0e-04 +3.9e-04 +4.8e-04 +5.3e-04 +5.6e-04 +6.4e-04 +8.2e-04 +9.1e-04 +9.2e-04 +9.6e-04 +9.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.4e-03 +1.7e-03 +1.7e-03
-  tiles8-ghost       6634 steps    6.0 s  plateau 15.6554  deficit 50.8%  shock 0.2033
+  tiles8-ghost       6634 steps   21.6 s  plateau 15.6554  deficit 50.8%  shock 0.2033
                     mass +1.87e-05  split +1.79e-05  root +5.74e-04  restricted 2.2e-07
+                    ledger rhs +6.09e-01  wall_enforce +1.94e-10  filter +2.38e-05  same_level -3.30e-18
                     L1 exact 1.452e-02  L1 uniform 6.396e-04  plateau |ρ - 4^ν| 0.3446
                     history -1.3e-07 -2.2e-07 +2.9e-07 +9.4e-07 +3.4e-06 +1.8e-06 +1.4e-06 +2.0e-06 +4.9e-06 -1.8e-06 +2.8e-06 +4.0e-06 +5.8e-06 +1.8e-06 +8.2e-06 +6.2e-06 +8.0e-06 +1.6e-05 +9.5e-06 +1.1e-05 +1.0e-05 +1.0e-05 +6.9e-06 +8.5e-06 +1.2e-05 +1.3e-05 +1.6e-05 +2.6e-05 +2.1e-05 +1.9e-05
-  box-ghost          6640 steps    3.4 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+  box-ghost          6640 steps   13.0 s  plateau 15.6523  deficit 50.9%  shock 0.2033
                     mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 7.4e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.91e-10  filter -4.57e-07
                     L1 exact 1.456e-02  L1 uniform 9.047e-06  plateau |ρ - 4^ν| 0.3477
                     history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
-  tiles8-noreflux    6837 steps    4.7 s  plateau 15.8915  deficit 49.6%  shock 0.2024
+  tiles8-noreflux    6837 steps   20.7 s  plateau 15.8915  deficit 49.6%  shock 0.2024
                     mass +1.73e-03  split +1.73e-03  root +2.55e-03  restricted 9.1e-07
+                    ledger rhs +6.10e-01  wall_enforce +1.87e-10  filter +1.32e-03  same_level +1.09e-15
                     L1 exact 1.398e-02  L1 uniform 8.474e-03  plateau |ρ - 4^ν| 0.3769
                     history +1.1e-06 -3.9e-06 -1.1e-05 -2.7e-05 +4.3e-06 +1.9e-05 +2.3e-05 +1.8e-06 +5.6e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.1e-04 +4.0e-04 +4.5e-04 +5.0e-04 +5.3e-04 +6.0e-04 +7.7e-04 +8.6e-04 +8.6e-04 +9.1e-04 +8.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.5e-03 +1.7e-03 +1.7e-03
-  tiles8-clamp       6827 steps    4.8 s  plateau 15.8429  deficit 49.9%  shock 0.2026
+  tiles8-clamp       6827 steps   20.7 s  plateau 15.8429  deficit 49.9%  shock 0.2026
                     mass +1.05e-03  split +1.05e-03  root +1.84e-03  restricted 1.1e-06
+                    ledger rhs +6.10e-01  wall_enforce +1.85e-10  filter +8.55e-04  same_level +1.50e-15
                     L1 exact 1.437e-02  L1 uniform 6.895e-03  plateau |ρ - 4^ν| 0.3487
                     history +3.5e-08 -5.1e-06 -1.3e-05 -2.9e-05 -4.1e-06 +6.1e-06 +7.8e-06 -8.7e-06 +3.9e-05 +1.4e-04 +1.4e-04 +1.4e-04 +1.5e-04 +3.9e-04 +3.8e-04 +4.5e-04 +4.7e-04 +5.1e-04 +6.6e-04 +6.6e-04 +6.5e-04 +6.9e-04 +6.9e-04 +8.0e-04 +9.1e-04 +9.4e-04 +1.0e-03 +1.0e-03 +1.1e-03 +1.1e-03
-  tiles8-nofilter     224 steps    0.2 s  stopped at t = 0.0212
-  box-nofilter       1108 steps    0.5 s  stopped at t = 0.1036
+  tiles8-nofilter     224 steps    0.7 s  stopped at t = 0.0212
+  box-nofilter       1108 steps    2.0 s  stopped at t = 0.1036
+  box-lim            9217 steps   23.5 s  plateau 15.6672  deficit 50.8%  shock 0.2032
+                    mass -5.18e-07  split -1.85e-06  root +6.34e-04  restricted 2.6e-07
+                    ledger rhs +6.09e-01  wall_enforce +1.95e-10  filter -4.58e-07
+                    L1 exact 1.394e-02  L1 uniform 6.436e-04  plateau |ρ - 4^ν| 0.3328
+                    history +1.0e-06 +7.6e-07 +5.5e-07 +4.2e-07 +3.2e-07 +2.3e-07 +1.6e-07 +8.9e-08 +3.0e-08 -2.5e-08 -7.3e-08 -1.2e-07 -1.6e-07 -2.0e-07 -2.3e-07 -2.6e-07 -2.9e-07 -3.2e-07 -3.4e-07 -3.6e-07 -3.9e-07 -4.1e-07 -4.2e-07 -4.4e-07 -4.6e-07 -4.7e-07 -4.8e-07 -5.0e-07 -5.1e-07 -5.2e-07
+  tiles8-lim        10094 steps   33.9 s  plateau 15.6808  deficit 50.4%  shock 0.2033
+                    mass +4.14e-04  split +4.13e-04  root +1.12e-03  restricted 4.3e-07
+                    ledger rhs +6.09e-01  wall_enforce +1.90e-10  filter +3.49e-04  same_level -8.45e-16
+                    L1 exact 1.410e-02  L1 uniform 1.741e-03  plateau |ρ - 4^ν| 0.3192
+                    history +9.4e-07 +3.2e-07 -2.2e-06 +2.3e-06 -3.1e-06 +1.4e-05 +1.8e-05 +2.0e-05 +2.6e-05 +7.8e-05 +8.0e-05 +7.1e-05 +7.6e-05 +1.6e-04 +1.1e-04 +1.4e-04 +1.5e-04 +1.6e-04 +2.1e-04 +2.3e-04 +2.3e-04 +2.3e-04 +2.1e-04 +3.1e-04 +3.4e-04 +3.3e-04 +3.3e-04 +3.6e-04 +4.0e-04 +4.1e-04
+  box-ghostlim       9225 steps   19.4 s  plateau 15.6674  deficit 50.7%  shock 0.2032
+                    mass -5.19e-07  split -1.85e-06  root +6.32e-04  restricted 8.0e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.95e-10  filter -4.58e-07
+                    L1 exact 1.394e-02  L1 uniform 6.434e-04  plateau |ρ - 4^ν| 0.3326
+                    history +1.0e-06 +7.6e-07 +5.5e-07 +4.2e-07 +3.2e-07 +2.3e-07 +1.6e-07 +8.9e-08 +3.0e-08 -2.5e-08 -7.3e-08 -1.2e-07 -1.6e-07 -2.0e-07 -2.3e-07 -2.6e-07 -2.9e-07 -3.2e-07 -3.4e-07 -3.7e-07 -3.9e-07 -4.1e-07 -4.2e-07 -4.4e-07 -4.6e-07 -4.7e-07 -4.8e-07 -5.0e-07 -5.1e-07 -5.2e-07
+  tiles8-ghostlim    8890 steps   30.5 s  plateau 15.6628  deficit 50.9%  shock 0.2033
+                    mass +2.09e-04  split +2.08e-04  root +8.50e-04  restricted 1.5e-07
+                    ledger rhs +6.09e-01  wall_enforce +1.95e-10  filter +1.56e-04  same_level +1.88e-16
+                    L1 exact 1.423e-02  L1 uniform 7.479e-04  plateau |ρ - 4^ν| 0.3372
+                    history +9.5e-07 +6.5e-07 +1.0e-06 +1.6e-06 +2.3e-05 +2.3e-05 +2.2e-05 +2.3e-05 +3.1e-05 +4.9e-05 +5.4e-05 +5.5e-05 +5.5e-05 +8.3e-05 +9.5e-05 +9.2e-05 +9.3e-05 +9.4e-05 +1.3e-04 +1.3e-04 +1.3e-04 +1.3e-04 +1.3e-04 +1.6e-04 +1.7e-04 +1.7e-04 +1.7e-04 +2.1e-04 +2.1e-04 +2.1e-04
+  tiles16-ghostlim   9019 steps   25.2 s  plateau 15.6674  deficit 50.7%  shock 0.2032
+                    mass +1.18e-04  split +1.17e-04  root +7.64e-04  restricted 8.2e-08
+                    ledger rhs +6.09e-01  wall_enforce +1.95e-10  filter +8.78e-05  same_level -4.98e-16
+                    L1 exact 1.408e-02  L1 uniform 7.214e-04  plateau |ρ - 4^ν| 0.3326
+                    history +1.0e-06 +7.6e-07 +5.5e-07 +4.0e-07 +2.9e-07 +2.0e-07 -3.3e-07 +5.3e-07 +8.5e-06 +2.7e-05 +3.2e-05 +3.4e-05 +3.4e-05 +3.4e-05 +3.4e-05 +3.4e-05 +3.4e-05 +3.5e-05 +7.1e-05 +7.5e-05 +7.6e-05 +7.7e-05 +7.6e-05 +7.6e-05 +7.5e-05 +7.5e-05 +7.3e-05 +1.1e-04 +1.2e-04 +1.2e-04
 
-=== tiledrift: the planar Noh level over 81 nodes, unlimited ===
-  uniform           10484 steps    7.5 s  plateau 3.9989  deficit 20.2%  shock 0.2008
+=== tiledrift: the planar Noh level over 81 nodes ===
+  uniform           10484 steps    7.6 s  plateau 3.9989  deficit 20.2%  shock 0.2008
                     mass -4.95e-06
                     L1 exact 3.325e-03  L1 uniform 0.000e+00  plateau |ρ - 4^ν| 0.0011
                     history -1.4e-04 -8.9e-05 -7.4e-05 -6.0e-05 -5.1e-05 -4.3e-05 -3.8e-05 -3.3e-05 -2.9e-05 -2.6e-05 -2.4e-05 -2.1e-05 -1.9e-05 -1.7e-05 -1.6e-05 -1.5e-05 -1.3e-05 -1.2e-05 -1.1e-05 -1.0e-05 -9.6e-06 -8.9e-06 -8.3e-06 -7.7e-06 -7.1e-06 -6.6e-06 -6.1e-06 -5.7e-06 -5.3e-06 -4.9e-06
@@ -70,6 +106,14 @@
                     mass +4.54e-04  split +2.20e-03  root +2.46e-03  restricted 1.2e-01
                     L1 exact 2.088e-02  L1 uniform 1.837e-02  plateau |ρ - 4^ν| 0.0084
                     history -1.4e-04 -9.0e-05 -8.6e-05 -5.4e-05 -4.6e-05 -4.5e-05 -2.7e-05 -2.1e-05 -2.3e-05 -1.0e-05 -5.1e-06 -7.5e-06 +2.8e-06 +6.2e-06 +6.1e-06 +1.3e-05 +1.6e-05 +1.7e-05 +2.1e-05 +2.5e-05 +2.6e-05 +2.8e-05 +3.2e-05 +3.4e-05 +3.6e-05 +3.7e-05 +4.1e-05 +3.5e-05 -6.6e-04 +4.5e-04
+  tiles8-lim        27612 steps   25.8 s  plateau 4.0064  deficit 20.7%  shock 0.2027
+                    mass +3.60e-04  split +5.06e-04  root +1.05e-03  restricted 6.1e-02
+                    L1 exact 1.265e-02  L1 uniform 9.707e-03  plateau |ρ - 4^ν| 0.0192
+                    history -1.5e-04 -9.0e-05 +1.1e-04 +6.7e-05 +7.5e-05 +2.5e-04 +2.1e-04 +2.1e-04 +3.7e-04 +3.5e-04 +3.6e-04 +5.0e-04 +4.7e-04 +4.8e-04 +6.1e-04 +6.0e-04 +6.0e-04 +7.2e-04 +7.1e-04 +7.1e-04 +8.2e-04 +8.1e-04 +8.1e-04 +9.1e-04 +9.0e-04 +9.1e-04 +1.0e-03 +1.0e-03 +9.5e-04 +3.6e-04
+  tiles8-ghostlim   28130 steps   27.3 s  plateau 4.0012  deficit 20.8%  shock 0.2026
+                    mass -4.65e-04  split +5.01e-05  root +1.16e-04  restricted 8.3e-02
+                    L1 exact 1.061e-02  L1 uniform 8.154e-03  plateau |ρ - 4^ν| 0.0108
+                    history -1.5e-04 -9.0e-05 -5.1e-05 -2.2e-05 -7.9e-06 +2.7e-05 +4.5e-05 +5.4e-05 +8.6e-05 +1.0e-04 +1.1e-04 +1.3e-04 +1.4e-04 +1.5e-04 +1.8e-04 +1.9e-04 +1.9e-04 +2.2e-04 +2.3e-04 +2.3e-04 +2.6e-04 +2.6e-04 +2.7e-04 +2.9e-04 +3.0e-04 +3.0e-04 +3.3e-04 +3.3e-04 +2.9e-04 -4.7e-04
 
 === tiledrift: a smooth pulse at rest on the same line, to t = 0.3 ===
   box                1584 steps  mass at t = 0 against the first +0.00e+00, drift +1.12e-10

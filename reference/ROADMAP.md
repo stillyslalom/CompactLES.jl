@@ -280,22 +280,32 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   held, and their inadmissible states are kept out of held cells'
   first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
   rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
-  times the unlimited step. Under the limiter the interfaces close with the
-  closure rows, with a warning: under `:ghost` the inviscid flux closes the
-  interface with the gradient's rows (composite weight h at the shared
-  node) and the rest with the divergence's one-sided rows (twice the end
-  weight), so no one face form covers both. Two routes remain: write the
-  difference as a node term in each cell's limit, as the radial lines'
-  geometric part is, or take the rest through the gradient rows as `:ghost`
-  now does by default, which leaves one face form with weight h up to an
-  interface end; under it the limiter needs a register for the gradient-plan
-  solves and open-end anchors. Either is measured before it replaces
-  `:closure`, which lowers the interface's order and, on a tiled level,
-  gains mass each time a shock crosses a face two tiles share: on the
-  cylindrical and the planar Noh about a hundred times the drift of the same
-  tiles under `:ghost`
-  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)), so the
-  mass budget of A21's limited, tiled band waits on one of the two routes.
+  times the unlimited step. Under the limiter setup closes the patch and
+  level interfaces with the closure rows, with a warning. The default
+  `interface_flux = :ghost` is carried behind the test toggle
+  `LIMITED_GHOST_INTERFACES` (commit `HASH`): with the artificial
+  properties on, the gradient plans difference the whole flux of an
+  interface dimension, so a line is open at an interface, weight h up to it
+  and h/2 at the end node, its face values anchored by the derivative's face
+  relation near the low end, and the gradient-plan solves take the
+  registers. Under it patches, boxes and static tiles leave no inadmissible
+  point on the cases above, at 1.05 to 1.64 times the unlimited step, and
+  patches and boxes run bitwise against the host on device storage; on the
+  cylindrical Noh the limited tiles drift half as far as under `:closure`
+  and ten times as far as unlimited `:ghost` tiles
+  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)). The
+  toggle stays off because of three defects. The filter's row at a node two
+  tiles share is the identity, a row that does not conserve, and the filter
+  passes carry three quarters of that drift, so the mass budget of A21's
+  limited, tiled band waits on a conservative filter row there. On
+  regridded tiles of a radial grid the cylindrical Noh left inadmissible
+  points in the steps after two of its regrids, and setup keeps the closure
+  rows there under the toggle too. On a tiled level a perturbation of one
+  unit in the last place grows in the limited `:ghost` run to a visible
+  difference within a few hundred steps, where under the closure rows it
+  stays at round-off, so the solution depends on the rank count. Without
+  the artificial properties a part of the flux takes the divergence's
+  one-sided rows, whose face form differs, and setup keeps the closure rows.
   The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the

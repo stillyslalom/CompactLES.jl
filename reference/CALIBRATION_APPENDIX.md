@@ -2145,6 +2145,12 @@ julia --project=. -t 1 bench/positivity.jl part=levels levels=noh81,noh81tiles,n
 julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
 julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33 reps=3
 julia --project=. -t 1 bench/positivity.jl part=levels levels=a19regrid a19n=32
+julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3 flux=ghost
+julia --project=. -t 1 bench/positivity.jl part=levels flux=ghost levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,tiles,tilessub,noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/positivity.jl part=levels flux=ghost levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/positivity.jl part=levelcost flux=ghost levels=wc,wcsub,noh85,tiles,a19
+julia --project=. -t 1 bench/positivity.jl part=tilecost flux=ghost levels=a19,a19tiles a19n=33 reps=3
+julia --project=. -t 1 bench/positivity.jl part=tiledrift
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2310,6 +2316,29 @@ its corrections entered there; the running sum's end, which meets the register t
 and corrections left out of the low patch's anchor gave 8.5e-11. On the periodic blast of 80²
 the limited step costs 1.54 times the unlimited one on one patch and 1.49 on two.
 
+By default setup closes a limited run's interfaces with the closure rows. Under
+`LIMITED_GHOST_INTERFACES` (`flux=ghost` sets it) it keeps `patch_interfaces = :ghost`, the
+gradient plans difference the whole flux of an interface dimension from ghost values, and the
+limiter takes the line as open there:
+weight h up to the end node and h/2 at it, the end face at the node, and the face values
+anchored by the derivative's interior face relation measured at the third face from the low
+end. On a smooth periodic flux of two patches (64 nodes, ρu = 0.5(1 + 0.2 sin 2πx)), one
+stage's face values at the two shared nodes meet the point flux to 1.3e-11 on both patches, and
+every interior face the exact flux to 1.7e-5, where the closure rows' faces beside an interface
+are 1.3e-3 off. The same cases:
+
+```
+case   patches   steps off / on   bad point-steps off / on   L1 ρ against one patch, off / on
+WC     2         4382 / 5541      36930 / 0                  7.04e-4 / 1.03e-3
+WC     3         4383 / 5557      36701 / 0                  2.36e-3 / 2.61e-3
+Noh    2         3511 / 5120      30304 / 0                  7.98e-6 / 2.49e-4
+Noh    3         3511 / 5216      30305 / 0                  1.37e-5 / 2.01e-4
+```
+
+No limited run leaves an unguaranteed side. On device storage under the KernelAbstractions CPU
+backend the limited runs on two patches and through a box, at the global step and subcycled,
+reproduce the host bitwise under `:ghost` as under `:closure` (`test/device_tests.jl`).
+
 `part=levels` runs refined levels under `patch_interfaces = :closure`. A refined patch closes its
 lines at a coarse-fine face with the same interface rows, and its end node there, which the
 parent's shell overwrites, is not held. Held to their cell bounds, the parent's nodes the
@@ -2401,9 +2430,52 @@ of the four runs in one process: the box takes 5.35 ms per step unlimited and 9.
 tiles 6.87 and 11.43, so the limited tiled step costs 1.67 times the unlimited tiled one and
 1.25 times the limited box's.
 
-`part=tiledrift` (package commit `d1529b85`, Julia 1.13.3; transcript
-`bench/results/tiledrift.txt`) runs the same cylindrical Noh unlimited, the level over root
-nodes 1:81 under `patch_interfaces = :closure`, on one layout and with one change at a time.
+`part=levels flux=ghost` runs the same refined cases under `patch_interfaces = :ghost`, a
+refined patch's lines open at its coarse-fine and shared faces:
+
+```
+case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
+WC 200, box, global step               1993 / 2355      148, 15096             0, 0
+WC 200, box, subcycled                 1133 / 1578      130, 10354             0, 0
+WC 200, regridded box                  3201 / 4219      0, 32821               0, 0
+WC 200, regridded tiles of 8           1094 / 1429      0, 8433                0, 0
+WC 200, regridded tiles, subcycled     1085 / 1459      0, 8444                0, 0
+Noh ν = 2, box over 85 nodes           6641 / 9242      0, 56695               0, 0
+Noh ν = 2, box over 43 nodes           6006 / 8191      108, 50224             0, 0
+Noh ν = 2, 85 nodes, subcycled         2214 / 2985      0, 18929               0, 0
+Noh ν = 2, 43 nodes, subcycled         2321 / 4190      24, 19540              0, 0
+Noh ν = 2, tiles of 8 over 81 nodes    6634 / 8890      0, 63103               0, 0
+the same, subcycled                    2211 / 2904      0, 20984               0, 0
+the same, regridded                    6639 / 9344      5, 63315               0, 8
+regridded and subcycled                2214 / 3106      7, 21246               0, 0
+blast 64², tiles of 8                  221 / 248        1477, 9429             0, 0
+blast 64², tiles of 8, subcycled       135 / 226        1503, 6722             0, 0
+r-z converging shock 33², corner box   322 / 322        0, 109                 0, 0
+r-z converging shock 33², tiles of 8   323 / 322        0, 376                 0, 0
+the same, subcycled                    130 / 199        0, 143                 0, 0
+the same, regridded tiles              323 / 326        0, 349                 0, 0
+regridded tiles, subcycled             118 / 198        0, 152                 0, 0
+```
+
+The limited Noh box over 85 nodes gives plateau 15.6673, deficit 50.8%, shock 0.2032 and mass
+−5.2e-7, against the closure rows' 15.6672, 50.9%, 0.2032 and −1.9e-6; over 43 nodes 14.8038,
+50.6%, 0.2086 and −1.2e-4 with 3786 unguaranteed sides (unlimited 14.9507, 50.7%, 0.2109,
++8.4e-6). The tiles of 8 over 81 nodes give 15.6628, 50.9%, 0.2033 and +2.1e-4, against
++4.1e-4 under the closure rows and +1.9e-5 unlimited (`part=tiledrift` below). The regridded
+tiles on the cylindrical line leave 8 inadmissible point-steps, at an interior node of a tile
+in the steps after the regrids at steps 5570 and 8840 (t = 0.380 and 0.571), each recovering
+within five steps, where the closure rows leave none; setup keeps the closure rows on regridded
+tiles of a radial grid. The tiled rows leave 0 to 132 unguaranteed sides. Under
+`part=levelcost flux=ghost` the limited step costs 1.05 times the unlimited one on
+Woodward–Colella with a box, 1.13 subcycled, 1.19 on the Noh box over 85 nodes, 1.27 on the
+blast's tiles and 1.64 on the r-z corner box; under `part=tilecost flux=ghost` the box takes
+7.17 ms per step unlimited and 10.72 limited, the tiles 9.01 and 13.20, so the limited tiled
+step costs 1.47 times the unlimited tiled one and 1.24 times the limited box's.
+
+`part=tiledrift ledger=true` (package commit `HASH`, Julia 1.13.3; transcript
+`bench/results/tiledrift.txt`) runs the same cylindrical Noh, the level over root nodes 1:81,
+unlimited and under `patch_interfaces = :closure` except where a row says otherwise, on one layout
+and with one change at a time.
 Beside the composite mass it prints two that use no covered mask and no junction weight: each
 refined patch's single-patch quadrature plus the root's from node 81 out (split), and the
 root's alone over the whole line, which holds the restricted level (root). Drift is against
@@ -2423,6 +2495,11 @@ regridded tiles of 8           6836   15.9152  49.5%    0.2023  +1.73e-3
 tiles of 8, REFLUX off         6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e-3  +2.55e-3
 tiles of 8, sensor clamped     6827   15.8429  49.9%    0.2026  +1.05e-3  +1.05e-3  +1.84e-3
 tiles of 8, :ghost             6634   15.6554  50.8%    0.2033  +1.9e-5   +1.8e-5   +5.7e-4
+box, limited                   9217   15.6672  50.8%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4
+tiles of 8, limited            10094  15.6808  50.4%    0.2033  +4.1e-4   +4.1e-4   +1.12e-3
+box, limited, :ghost           9225   15.6674  50.7%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4
+tiles of 8, limited, :ghost    8890   15.6628  50.9%    0.2033  +2.1e-4   +2.1e-4   +8.5e-4
+tiles of 16, limited, :ghost   9019   15.6674  50.7%    0.2032  +1.2e-4   +1.2e-4   +7.6e-4
 ```
 
 The drift is in the solution. The split mass agrees with the composite to 1e-6 on every static
@@ -2440,13 +2517,28 @@ the sensor at the faces (`SENSOR_INTERFACE_GHOSTS` off) lowers it by two fifths.
 with the interior stencil, the drift is 1% of its value under `:closure`. A smooth density
 pulse at rest crossing the same faces to t = 0.3 drifts by −1.9e-9 on the tiles under
 `:closure` against 1.1e-10 on the box, so the closure-row faces conserve mass on resolved data.
-The filter's share could not be separated on Noh: without the filter the tiles stop at
-t = 0.021 and the box at 0.104. Under the positivity limiter setup takes `:closure`, so the
-limited tiled rows above cannot use `:ghost`.
+Without the filter the tiles stop at t = 0.021 and the box at 0.104, but the budget ledger
+attributes the drift: the filter passes carry +1.32e-3 of the +1.73e-3 on tiles of 8, +6.8e-4
+of the +9.2e-4 on tiles of 16, +2.4e-5 of the +1.9e-5 under `:ghost`, and −4.6e-7 on the box.
+The filter's row at a node two tiles share is the identity on both, a row that does not
+conserve, as a closure row at a wall does not.
+
+Under the positivity limiter the tiles drift +4.1e-4 under `:closure` and +2.1e-4 under
+`:ghost`, of which the filter passes carry +3.5e-4 and +1.56e-4; the limited box drifts −5.2e-7
+under either. The limited `:ghost` tiles are half the limited `:closure` tiles' drift and closer
+to the uniform run in L1 (7.5e-4 against 1.7e-3), but ten times the unlimited `:ghost` tiles':
+the filter's share grows sixfold under the limiter, the stage's from −5e-6 to +5e-5. Two
+changes to the limited filter pass at a shared node were measured and
+removed: one θ on both tiles' faces beside the node, by the exchange the stage takes, drifted
++1.9e-4 with the filter passes carrying +1.4e-4; the node taking the correction of the face
+beside it on both tiles, which makes each tile's correction telescope, drifted +2.0e-4 and left
+1389 inadmissible point-steps and 6914 unguaranteed sides, its half state at weight h/2 failing
+the bound.
 
 On the planar Noh (ν = 1, 400 root nodes, the level over the first 81) the mass drift at
 t = 0.5, before the shock reaches the level's outer face at x = 0.2005, is −7.0e-6 on the box,
-+3.9e-3 on tiles of 8 and +3.6e-5 on tiles of 8 under `:ghost`. At t = 0.6 the shock lies on
++3.9e-3 on tiles of 8 and +3.6e-5 on tiles of 8 under `:ghost`; limited, +9.1e-4 under
+`:closure` and +3.0e-4 under `:ghost`. At t = 0.6 the shock lies on
 that face, so the planar runs' final metrics and unmasked masses there measure the coarse-fine
 face and not the tiles.
 
@@ -2457,6 +2549,29 @@ for the tiles against 1.456e-2 for the box, and the shock lies at 0.2024 against
 by 0.24 and its spread grows, with the mass gained at the faces. Against the uniform run at the
 level's spacing, which the box matches to 1.1e-5 in the same norm, the tiles differ by 8.5e-3,
 61% of their own error against the exact solution; under `:ghost` by 6.4e-4.
+
+Round-off sensitivity, measured on one rank as the L1 density difference between a limited run
+and the same run with one unit in the last place added to one node's initial density, on the
+blasts of the MPI phase's patched case (96 × 32 nodes) and refined case (48², tiles of 8 over
+the centre 24²; the subcycled steps are root steps):
+
+```
+run                          step 40    step 80    step 200   step 400
+one patch                    1.6e-5     1.2e-3     3.4e-3     1.6e-3
+two patches, :closure        5.4e-13    8.4e-4     4.8e-3     4.7e-4
+two patches, :ghost          1.7e-9     1.5e-3     1.8e-2     1.8e-2
+tiles, :closure              1.5e-15    8.8e-14    3.4e-11
+tiles, :ghost                1.5e-15    1.1e-11    1.6e-2
+subcycled tiles, :closure    7.0e-12    1.2e-8     1.5e-8 at step 100
+subcycled tiles, :ghost      1.1e-11    6.7e-3     6.4e-3 at step 100
+```
+
+On the patched blast round-off grows on one patch as on two: the difference reaches 1e-3 by
+step 80 under either flux, and the relative maximum 0.2 to 0.4 by step 300, against the 2.7e-3
+to 9.6e-3 by which the `:ghost` and `:closure` patches differ from each other between steps 100
+and 400. On the tiles the difference stays at round-off under the closure rows and reaches 1e-2
+under `:ghost` within 200 steps (80 subcycled), so a limited `:ghost` level depends on its
+decomposition; setup keeps the closure rows unless `LIMITED_GHOST_INTERFACES` is set.
 
 ## Directional bulk viscosity
 

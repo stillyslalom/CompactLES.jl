@@ -349,15 +349,28 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     if positivity_limiter
         nlev_limited = something(max_levels, refine === nothing ? 1 :
                                  refine isa BlockRegion ? 2 : length(refine) + 1)
-        # The limiter's face form holds on lines the closure rows close at an
-        # interface (`_validate_positivity`), so the interfaces take them
-        # before any plan is built.
-        if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1)
+        # The limiter's face form holds on a line whose divergence closes at an
+        # interface with the closure rows, or with the gradient plans' rows
+        # where those take the whole flux (`_limiter_ghost`), which the
+        # limiter takes only under `LIMITED_GHOST_INTERFACES`; otherwise the
+        # interfaces take the closure rows before any plan is built. Regridded
+        # tiles of a radial grid take them as well: under :ghost the
+        # cylindrical Noh of the level rows left inadmissible points in the
+        # steps after two of its regrids, where the closure rows left none.
+        ghost_kept = LIMITED_GHOST_INTERFACES[]
+        regridded_radial = ghost_kept && tiled && regrid_interval > 0 &&
+                           _limiter_radial_line(bcs, metric, n_global)
+        if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1) &&
+           (!ghost_kept || !_limiter_ghost(art) || regridded_radial)
             MPI.Comm_rank(comm) == 0 &&
-                @warn "positivity_limiter: the limiter takes interface lines closed by " *
-                      "the closure rows, so the patch and level interfaces close with " *
-                      "them (PatchInterfaces(flux = :closure)) in place of :ghost; " *
-                      "this can lower the order of accuracy at an interface."
+                @warn "positivity_limiter: " *
+                      (!ghost_kept ? "" :
+                       regridded_radial ? "on regridded tiles of a radial grid " :
+                                          "with the artificial properties off ") *
+                      "the limiter takes interface lines closed by the closure rows, " *
+                      "so the patch and level interfaces close with them " *
+                      "(PatchInterfaces(flux = :closure)) in place of :ghost; this can " *
+                      "lower the order of accuracy at an interface."
             interface_flux = :closure
         end
         _validate_positivity(bcs, metric, stretch, patch_grid, nlev_limited,
@@ -1261,7 +1274,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # patches a regrid replaces (`_follow_patches!`).
     positivity_limiter &&
         (solver.positivity = PatchLimiters(Any[], Any[],
-                                           _limiter_least_box(deriv, filt, interface_rhs,
+                                           _limiter_least_box(deriv, filt, interface_flux,
+                                                              interface_rhs,
                                                               interface_divergence, n_halo,
                                                               T),
                                            tiled && _limiter_radial_line(bcs, metric,

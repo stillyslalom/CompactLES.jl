@@ -1665,7 +1665,7 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     # the origin and the poles. Ahead of the early return below, since it is
     # a line solve every rank of the patch takes.
     less_p = _pressure_gradient(solver, d, c)
-    less_p && _ext_subtract_along!(dQ, c, solver.p, solver, d, solver.inv_h[d], 1)
+    less_p && _ext_pressure_subtract!(dQ, c, solver, d)
     # The whole flux waits for phase two (`GHOST_FLUX_REMAINDER`).
     _remainder_ghosted(solver, d) && return dQ
     if viscous
@@ -1688,6 +1688,13 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     end
     return dQ
 end
+
+# The pressure term of `_ghost_flux_divergence!`, inv_h_d ∂p/∂ξ_d through the
+# gradient plans. A separate function so that the positivity limiter's stage
+# array keeps it in a register of its own, as `pressure_subtract_along!` does
+# on the divergence plans.
+_ext_pressure_subtract!(dQ, c::Int, solver::SolverLike, d::Int) =
+    _ext_subtract_along!(dQ, c, solver.p, solver, d, solver.inv_h[d], 1)
 
 # The sign of component `c`'s flux product across the fold on `d`; 1 without
 # one.
@@ -2016,8 +2023,15 @@ end
 _cold_bulk_gradients!(root, patch, q, level_smoothed::Bool) =
     _bulk_gradients!(_rejoin(root, patch), ConservedState(q), level_smoothed)
 _cold_ghost_flux_divergence!(dq, c::Int, Fdc, root, patch, q, d::Int) =
-    _ghost_flux_divergence!(ConservedState(dq), c, Fdc, _rejoin(root, patch),
+    _ghost_flux_divergence!(_rhs_state(dq), c, Fdc, _rejoin(root, patch),
                             ConservedState(q), d)
+
+# The right-hand side array as it crosses into `_cold_ghost_flux_divergence!`
+# and is rewrapped there: the array under a `ConservedState`, or the positivity
+# limiter's stage array whole (positivity.jl), whose subtractions take its
+# registers.
+@inline _ghost_rhs_arg(dQ) = parent(dQ)
+_rhs_state(dq) = ConservedState(dq)
 
 @inline _root_part(solver::Solver) = solver
 @inline _root_part(ps::PatchSolver) = getfield(ps, :solver)
@@ -2476,7 +2490,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
             # Setup constants of the patch, identical on every rank of its
             # communicator, so each rank takes the same solves.
             if ghost && _interface_dim(solver, d)
-                _cold_ghost_flux_divergence!(parent(dQ), c, Fdc,
+                _cold_ghost_flux_divergence!(_ghost_rhs_arg(dQ), c, Fdc,
                                              _cold(_root_part(solver)),
                                              _cold(_patch_part(solver)), parent(Q), d)
             elseif unitgeom

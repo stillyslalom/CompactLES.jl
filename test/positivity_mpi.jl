@@ -142,53 +142,76 @@ function test_positivity_limiter()
     check("r-z, one rank: the limiter acted (expect > 0)",
           cpref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
 
-    # Two same-level patches split along x, each on its own share of the
-    # ranks and decomposed within it at np > 2, against both patches on one
-    # rank: a patch's lines end at the interface as at a wall, and nothing of
-    # the limiter crosses it.
-    section("positivity limiter: same-level patches across ranks against one rank")
-    function patched(comm_here)
-        s = Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                   art=ArtificialProperties(enabled=true), cfl=0.4,
-                   control=StepControl(validity=:permissive), positivity_limiter=true,
-                   patch_grid=(2, 1, 1), interface_flux=:closure, comm=comm_here)
-        Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
-                                            p=1e-3 + exp(-((x - 0.5)^2 + (y - 0.5)^2) /
-                                                         0.004)))
-        run!(s, Q; tfinal=1.0, nmax=40)
-        return s, Q
-    end
-    tref, Qtref = patched(MPI.COMM_SELF)
-    ctref = CL.positivity_counts(tref)
-    s, Q = patched(comm)
-    c = CL.positivity_counts(s)
-    worst = 0.0
-    for (ps, q) in CL.eachpatch(s, Q)
-        pref = getfield(tref, :patches)[ps.patch.id]
-        qref = Qtref[ps.patch.id]
-        off = ps.decomp.offset
-        for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
-            k in 1:s.equations.n_cons
-            a = q[padded_index(ps, i, j, 1), k]
-            b = qref[padded_index(CL.PatchSolver(tref, pref), i + off[1], j + off[2], 1), k]
-            worst = max(worst, abs(a - b))
+    # A solver built by `build`, with the patch and level interfaces of a
+    # limited run kept at `:ghost` when `flux` is `:ghost`
+    # (`LIMITED_GHOST_INTERFACES`, off by default).
+    function kept(build, flux)
+        flux === :ghost || return build()
+        CL.LIMITED_GHOST_INTERFACES[] = true
+        try
+            return build()
+        finally
+            CL.LIMITED_GHOST_INTERFACES[] = false
         end
     end
-    scale = maximum(q -> maximum(abs, parent(q)), Qtref)
-    check("patches: state against one rank (relative)", gmax(worst) / scale, 1e-8)
-    check("patches: clock against one rank", abs(s.t - tref.t) / tref.t, 1e-8)
-    check("patches: stage faces limited (relative difference)",
-          abs(c.stage_limited - ctref.stage_limited) / max(ctref.stage_limited, 1), 1e-2)
-    check("patches: faces tested, counted once",
-          abs(c.stage_faces - ctref.stage_faces) +
-          abs(c.filter_faces - ctref.filter_faces), 0.5)
-    report = state_report(s, Q)
-    check("patches: inadmissible points at the end",
-          report.inadmissible + report.negative_density, 0.5)
-    check("patches, one rank: the limiter acted (expect > 0)",
-          ctref.stage_limited > 0 && ctref.filter_limited > 0 ? 0.0 : 1.0, 0.5)
+
+    # Two same-level patches split along x, each on its own share of the
+    # ranks and decomposed within it at np > 2, against both patches on one
+    # rank, under either interface flux: a patch's lines end at the interface
+    # as at a wall, closed by the interface rows or open, and the θ of the
+    # faces about the shared node crosses it.
+    for flux in (:closure, :ghost)
+        section("positivity limiter: same-level patches across ranks against one " *
+                "rank, :$flux")
+        function patched(comm_here)
+            s = kept(flux) do
+                Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.4,
+                       control=StepControl(validity=:permissive), positivity_limiter=true,
+                       patch_grid=(2, 1, 1), interface_flux=flux, comm=comm_here)
+            end
+            Q = allocate_state(s)
+            initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                                p=1e-3 + exp(-((x - 0.5)^2 +
+                                                               (y - 0.5)^2) / 0.004)))
+            run!(s, Q; tfinal=1.0, nmax=40)
+            return s, Q
+        end
+        tref, Qtref = patched(MPI.COMM_SELF)
+        ctref = CL.positivity_counts(tref)
+        s, Q = patched(comm)
+        c = CL.positivity_counts(s)
+        worst = 0.0
+        for (ps, q) in CL.eachpatch(s, Q)
+            pref = getfield(tref, :patches)[ps.patch.id]
+            qref = Qtref[ps.patch.id]
+            off = ps.decomp.offset
+            for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
+                k in 1:s.equations.n_cons
+                a = q[padded_index(ps, i, j, 1), k]
+                b = qref[padded_index(CL.PatchSolver(tref, pref), i + off[1], j + off[2],
+                                      1), k]
+                worst = max(worst, abs(a - b))
+            end
+        end
+        scale = maximum(q -> maximum(abs, parent(q)), Qtref)
+        tag = "patches, :$flux"
+        check("$tag: interface flux kept", s.interface_flux === flux ? 0.0 : 1.0, 0.5)
+        check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
+        check("$tag: clock against one rank", abs(s.t - tref.t) / tref.t, 1e-8)
+        check("$tag: stage faces limited (relative difference)",
+              abs(c.stage_limited - ctref.stage_limited) / max(ctref.stage_limited, 1),
+              1e-2)
+        check("$tag: faces tested, counted once",
+              abs(c.stage_faces - ctref.stage_faces) +
+              abs(c.filter_faces - ctref.filter_faces), 0.5)
+        report = state_report(s, Q)
+        check("$tag: inadmissible points at the end",
+              report.inadmissible + report.negative_density, 0.5)
+        check("$tag, one rank: the limiter acted (expect > 0)",
+              ctref.stage_limited > 0 && ctref.filter_limited > 0 ? 0.0 : 1.0, 0.5)
+    end
 
     # The same decomposed runs on device storage, under FORCE_KA and
     # FORCE_DEVICE_EXCHANGE, against the host runs on the same ranks: the
@@ -226,12 +249,14 @@ function test_positivity_limiter()
           0.0 : 1.0, 0.5)
     # A pressure jump beside the interface, whose shock limits the faces about
     # the shared node from one side first, so that the exchange acts.
-    function patched2(backend)
-        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+    function patched2(backend, flux)
+        s = kept(flux) do
+            Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
                    art=ArtificialProperties(enabled=true), cfl=0.3, filter_cfl=0.35,
                    control=StepControl(validity=:permissive), positivity_limiter=true,
-                   patch_grid=(2, 1, 1), interface_flux=:closure, backend=backend)
+                   patch_grid=(2, 1, 1), interface_flux=flux, backend=backend)
+        end
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                             p=1000 * (1 - tanh_blend(x, 0.45, 2 / 95)) +
@@ -239,34 +264,39 @@ function test_positivity_limiter()
         run!(s, Q; tfinal=1.0, nmax=30)
         return s, Q
     end
-    s1, Q1 = patched2(CPUBackend())
-    s2, Q2 = staged(() -> patched2(DeviceBackend(cpu)))
-    worst = isempty(Q1) ? 0.0 :
-            maximum(maximum(abs.(parent(Q1[i]) .- parent(Q2[i]))) for i in eachindex(Q1))
-    check("device patches: bitwise against the host", gmax(worst), 1e-300)
-    check("device patches: counts and steps agree",
-          CL.positivity_counts(s1) == CL.positivity_counts(s2) && s1.step == s2.step ?
-          0.0 : 1.0, 0.5)
+    for flux in (:closure, :ghost)
+        s1, Q1 = patched2(CPUBackend(), flux)
+        s2, Q2 = staged(() -> patched2(DeviceBackend(cpu), flux))
+        worst = isempty(Q1) ? 0.0 :
+                maximum(maximum(abs.(parent(Q1[i]) .- parent(Q2[i]))) for i in eachindex(Q1))
+        check("device patches, :$flux: bitwise against the host", gmax(worst), 1e-300)
+        check("device patches, :$flux: counts and steps agree",
+              CL.positivity_counts(s1) == CL.positivity_counts(s2) && s1.step == s2.step ?
+              0.0 : 1.0, 0.5)
+    end
 
     # A refined level of tiles, which the level's rank subset holds, a tile
     # decomposed within its owners where they are several, at the global step
-    # and subcycled, against every patch on one rank: the tiles' shared faces
-    # take one θ through the level's records and communicator. The subcycled
-    # run's root step is three of the global run's, and its limiter acts within
-    # the steps taken; at a lower ambient pressure, where it acts sooner, a
-    # last-bit difference in the root's decomposed running sums flips a θ in
-    # the cold gas and the states differ by 3e-5 after twelve steps.
-    for sub in (false, true)
+    # and subcycled, under either interface flux, against every patch on one
+    # rank: the tiles' shared faces take one θ through the level's records and
+    # communicator. The subcycled run's root step is three of the global run's,
+    # and its limiter acts within the steps taken; at a lower ambient pressure,
+    # where it acts sooner, a last-bit difference in the root's decomposed
+    # running sums flips a θ in the cold gas and the states differ by 3e-5
+    # after twelve steps.
+    for flux in (:closure, :ghost), sub in (false, true)
         section("positivity limiter: refined tiles across ranks against one rank" *
-                (sub ? ", subcycled" : ""))
+                (sub ? ", subcycled" : "") * ", :$flux")
         function refined(comm_here)
-            s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+            s = kept(flux) do
+                Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
                             per3[3]), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.4,
                        control=StepControl(validity=:permissive), positivity_limiter=true,
                        refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
-                       subcycle=sub, interface_flux=:closure, comm=comm_here)
+                       subcycle=sub, interface_flux=flux, comm=comm_here)
+            end
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -293,7 +323,7 @@ function test_positivity_limiter()
             end
         end
         scale = maximum(q -> maximum(abs, parent(q)), Qrref)
-        tag = sub ? "subcycled tiles" : "tiles"
+        tag = (sub ? "subcycled tiles" : "tiles") * ", :$flux"
         check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
         check("$tag: clock against one rank", abs(s.t - rref.t) / rref.t, 1e-8)
         check("$tag: stage faces limited (relative difference)",
@@ -308,25 +338,27 @@ function test_positivity_limiter()
 
     # Tiles at the corner of the r-z axis and the plane at z = 0, the level's
     # tiles held by the ranks of the level, at the global step and subcycled,
-    # against every patch on one rank: the θ of a face two tiles share along r
-    # or along z crosses between ranks through the level's records, and each
-    # tile's radial pass keeps its rates for its z faces. As for the Cartesian
-    # tiles above, the limiter acts within the twenty steps of the subcycled
-    # run, whose root step is three of the global run's. The root has 36
-    # nodes a side so that its blocks at eight ranks, four along one
-    # dimension, keep the nine points the filter takes.
-    for sub in (false, true)
+    # under either interface flux, against every patch on one rank: the θ of a
+    # face two tiles share along r or along z crosses between ranks through
+    # the level's records, and each tile's radial pass keeps its rates for its
+    # z faces. As for the Cartesian tiles above, the limiter acts within the
+    # twenty steps of the subcycled run, whose root step is three of the global
+    # run's. The root has 36 nodes a side so that its blocks at eight ranks,
+    # four along one dimension, keep the nine points the filter takes.
+    for flux in (:closure, :ghost), sub in (false, true)
         section("positivity limiter: r-z tiles across ranks against one rank" *
-                (sub ? ", subcycled" : ""))
+                (sub ? ", subcycled" : "") * ", :$flux")
         function rztiled(comm_here)
-            s = Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
+            s = kept(flux) do
+                Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
                        metric=CylindricalMetric(),
                        bcs=((AxisBC(), SlipWallBC()), per3[2],
                             (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.3,
                        control=StepControl(validity=:permissive), positivity_limiter=true,
                        refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8, subcycle=sub,
-                       interface_flux=:closure, comm=comm_here)
+                       interface_flux=flux, comm=comm_here)
+            end
             Q = allocate_state(s)
             initialize!(s, Q, corner)
             run!(s, Q; tfinal=1.0, nmax=20)
@@ -351,7 +383,7 @@ function test_positivity_limiter()
             end
         end
         scale = maximum(q -> maximum(abs, parent(q)), Qzref)
-        tag = sub ? "subcycled r-z tiles" : "r-z tiles"
+        tag = (sub ? "subcycled r-z tiles" : "r-z tiles") * ", :$flux"
         check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
         check("$tag: clock against one rank", abs(s.t - zref.t) / zref.t, 1e-8)
         check("$tag: stage faces limited (relative difference)",

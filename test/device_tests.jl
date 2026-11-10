@@ -839,13 +839,13 @@ end
     # the step count, the time and the limiter's counts agree. The cases are
     # the strong shocks of positivity_tests.jl at test scale: Woodward–Colella
     # on one patch, on two and through a refined box at the global step and
-    # subcycled, a planar blast at a wall, the Sedov blast on the spherical
-    # line folded at the origin, and on the r-z plane at the corner of the
-    # axis and a symmetry plane.
+    # subcycled, the last two under either interface flux, a planar blast at a
+    # wall, the Sedov blast on the spherical line folded at the origin, and on
+    # the r-z plane at the corner of the axis and a symmetry plane.
     cpu_ka = CL.KernelAbstractions.CPU()
     gas = IdealSpecies("gas"; gamma=1.4, R=1.0)
     per = (PeriodicBC(), PeriodicBC())
-    shock(backend; N=120, nmax=40, patches=1, amr=nothing) = begin
+    shock(backend; N=120, nmax=40, patches=1, amr=nothing, flux=:closure) = begin
         h = 1.0 / (N - 1)
         prob = Problem(eos=gas, transport=ConstantTransport(mu0=0.0),
                        domain=((0.0, 1.0), (0.0, h), (0.0, h)),
@@ -860,7 +860,7 @@ end
                              control=StepControl(validity=:permissive),
                              execution=Execution(storage=backend,
                                                  patch_grid=(patches, 1, 1)),
-                             patch_interfaces=:closure, amr=amr,
+                             patch_interfaces=flux, amr=amr,
                              positivity_limiter=true))
     end
     blast(backend) = setup(
@@ -895,7 +895,7 @@ end
     # A pressure jump beside the interface of two patches, whose shock limits
     # the faces about the shared node from one side first, so that the
     # exchange lowers θ on the other.
-    patched(backend) = setup(
+    patched(backend; flux=:closure) = setup(
         Problem(eos=gas, transport=ConstantTransport(mu0=0.0),
                 domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                 bcs=((SlipWallBC(), SlipWallBC()), per, per),
@@ -905,13 +905,28 @@ end
                  filter=StateFilter(compact_filter(); cfl=0.35),
                  control=StepControl(validity=:permissive),
                  execution=Execution(storage=backend, patch_grid=(2, 1, 1)),
-                 patch_interfaces=:closure, positivity_limiter=true))
+                 patch_interfaces=flux, positivity_limiter=true))
+    # A :ghost case's build, which keeps the limited interfaces at :ghost
+    # (`LIMITED_GHOST_INTERFACES`, off by default).
+    kept(build) = backend -> begin
+        CL.LIMITED_GHOST_INTERFACES[] = true
+        try
+            build(backend)
+        finally
+            CL.LIMITED_GHOST_INTERFACES[] = false
+        end
+    end
     cases = (("one patch", b -> shock(b), 40), ("planar blast", blast, 8),
              ("spherical line", sedov, 60), ("r-z corner", corner, 12),
              ("two patches", patched, 30),
              ("refined box", b -> shock(b; amr=AMR(initial=box)), 30),
              ("refined box, subcycled",
-              b -> shock(b; amr=AMR(initial=box, subcycle=true)), 20))
+              b -> shock(b; amr=AMR(initial=box, subcycle=true)), 20),
+             ("two patches, :ghost", kept(b -> patched(b; flux=:ghost)), 30),
+             ("refined box, :ghost",
+              kept(b -> shock(b; amr=AMR(initial=box), flux=:ghost)), 30),
+             ("refined box, subcycled, :ghost",
+              kept(b -> shock(b; amr=AMR(initial=box, subcycle=true), flux=:ghost)), 20))
     for (name, build, nmax) in cases
         s1, q1 = build(CPUBackend())
         run!(s1, q1; tfinal=1.0, nmax=nmax)

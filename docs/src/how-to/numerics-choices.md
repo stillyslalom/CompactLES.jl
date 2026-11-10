@@ -142,7 +142,11 @@ Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
 
 - shock-dominated runs, where the interface order does not show in the
   error: a shock crossing a patch or level interface reaches the same minimum
-  pressure under both, and the closure rows cost less per step;
+  pressure under both, and the closure rows cost less per step. On a tiled
+  level without the positivity limiter keep `:ghost`: under the closure rows
+  the level gains mass each time a shock crosses a face two tiles share. With
+  the limiter on, setup closes every patch and level interface with the
+  closure rows;
 - Float32 runs, whose interface error reaches the precision floor under
   either choice, so the ghost fluxes add cost without lowering the error;
 - configurations the ghost fluxes do not support, which setup rejects with

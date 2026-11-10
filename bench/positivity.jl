@@ -17,6 +17,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tiledrift
+#   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,noh81tiles flux=ghost
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -91,12 +92,15 @@
 #             cases into that many same-level patches along x
 #   patches   Woodward–Colella and planar Noh on one patch and on each count
 #             of same-level patches in `patches`, along x under
-#             `patch_interfaces = :closure`, limiter off and on: the steps, the
+#             `patch_interfaces = flux` (`:closure` unless `flux=ghost`, which
+#             sets `LIMITED_GHOST_INTERFACES` so that a limited run keeps it;
+#             the same for `cost` and the level parts below), limiter off and
+#             on: the steps, the
 #             inadmissible point-steps, the unguaranteed sides and the L1
 #             density difference from the one-patch run in the same state, and
 #             the one-patch runs' own difference after a relative change of
 #             1e-15 to the initial energy. Not in `part=all`
-#   levels    refined levels under `patch_interfaces = :closure`, limiter off
+#   levels    refined levels under `patch_interfaces = flux`, limiter off
 #             and on, each case of `levels` to its end time: the steps, the
 #             inadmissible point-steps after every step, split into the nodes
 #             of a refined patch's coarse-fine plane (the parent's shell) and
@@ -126,11 +130,15 @@
 #   tilecost  the same for two cases of `levels`, a box and then tiles, the
 #             four runs alternated in one process: the limited tiled step over
 #             the unlimited one and over the limited box. Not in `part=all`
-#   tiledrift the cylindrical Noh of `noh81`, unlimited, under each variant of
-#             `drift`: a layout (`box`, `tiles8`, `tiles16`, `tiles80`,
-#             `regrid8`, `uniform`), optionally followed after a hyphen by one
-#             change (`sub`, `ghost`, `noreflux`, `clamp`, `nofilter`; see
-#             `drift_variant`). Each run prints the metrics of `levels`, the
+#   tiledrift the cylindrical Noh of `noh81` under each variant of `drift`: a
+#             layout (`box`, `tiles8`, `tiles16`, `tiles80`, `regrid8`,
+#             `uniform`), optionally followed after a hyphen by one change
+#             (`sub`, `ghost`, `noreflux`, `clamp`, `nofilter`, `lim`,
+#             `ghostlim`; see `drift_variant`), unlimited and under
+#             `:closure` unless the change says otherwise; `ledger=true` adds
+#             each cylindrical run's mass drift attributed to the mechanism
+#             that made it (`:rhs`, `:filter`, ...) by the budget ledger of
+#             src/ledger.jl. Each run prints the metrics of `levels`, the
 #             composite mass drift beside two forms that use no mask, the L1
 #             density error over the level's region against the exact solution
 #             and the uniform run, and the drift's history; then the planar
@@ -175,6 +183,9 @@ const PLANE_CASES = (:rz, :blast)
 const PARTS = ("weights", "identity", "pulse", "variants", "src")
 const VARIANTS = ("none", "A", "A-nostore", "A-rhs", "B", "A+B", "A-rhs+B")
 const WC_AMBIENT = 0.01
+# The patch and level interfaces' flux (`flux=`) of the parts `patches`, `cost`,
+# `levels`, `levelcost` and `tilecost`.
+const FLUX = Ref(:closure)
 # Hu, Adams & Shu take ε = min(1e-13, the initial minimum) for ρ and for ρe.
 # A variant named `name@r` takes ε = r times the initial minimum instead.
 const EPS = 1e-13
@@ -228,7 +239,7 @@ function build(case; interval=0, limiter=false, patches=1)
                      Numerics(n_global=(WC_N, 1, 1), art=art, cfl=0.3, filter=filter,
                               control=control, positivity_limiter=limiter,
                               execution=execution,
-                              patch_interfaces=:closure))
+                              patch_interfaces=FLUX[]))
     case === :sedov &&
         return setup(sedov_problem(),
                      Numerics(n_global=(SEDOV_N, 1, 1), art=art, cfl=0.3, filter=filter,
@@ -244,7 +255,7 @@ function build(case; interval=0, limiter=false, patches=1)
                      Numerics(n_global=(Dict(NOH_N)[1], 1, 1), art=art, cfl=NOH_CFL,
                               filter=filter, control=control,
                               positivity_limiter=limiter, execution=execution,
-                              patch_interfaces=:closure))
+                              patch_interfaces=FLUX[]))
     return setup(pulse_problem(),
                  Numerics(n_global=(PULSE_N, 1, 1), art=art, cfl=0.3, filter=filter,
                           control=control, positivity_limiter=limiter))
@@ -1084,7 +1095,7 @@ plane_numerics(on, n; patches=1) =
     Numerics(n_global=n, art=ArtificialProperties(enabled=true), cfl=0.3,
              filter=StateFilter(compact_filter(); cfl=0.35),
              control=StepControl(validity=:permissive), positivity_limiter=on,
-             execution=Execution(patch_grid=(patches, 1, 1)), patch_interfaces=:closure)
+             execution=Execution(patch_grid=(patches, 1, 1)), patch_interfaces=FLUX[])
 
 # Sedov on the r-z quarter plane and on the spherical line at the same spacing.
 function rz_part(N)
@@ -1165,7 +1176,7 @@ function line_density(solver, Q)
 end
 
 function patches_part(counts)
-    println("\n=== patches: same-level patches along x, interface_flux = :closure ===")
+    println("\n=== patches: same-level patches along x, interface_flux = :$(FLUX[]) ===")
     for case in (:woodward, :noh), limiter in (false, true)
         function run_case(patches; perturb=false)
             solver, Q = build(case; interval=1, limiter, patches)
@@ -1243,7 +1254,7 @@ end
 level_numerics(n, amr, on; kw...) =
     Numerics(; n_global=n, art=ArtificialProperties(enabled=true),
              filter=StateFilter(compact_filter(); cfl=0.35),
-             control=StepControl(validity=:permissive), patch_interfaces=:closure, amr,
+             control=StepControl(validity=:permissive), patch_interfaces=FLUX[], amr,
              positivity_limiter=on, kw...)
 
 const LEVEL_CASES = ("wc", "wcsub", "wcregrid", "noh85", "noh43", "noh85sub", "noh43sub",
@@ -1300,7 +1311,7 @@ function level_runs(name; a19n=64)
         end
         noh_num(on) = Numerics(n_global=(uniform ? 3N - 1 : N, 1, 1),
                                art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
-                               positivity_limiter=on, patch_interfaces=:closure,
+                               positivity_limiter=on, patch_interfaces=FLUX[],
                                control=StepControl(validity=:permissive), amr=amr)
         return [(label, noh_problem(2; N, t0=0.0), noh_num, NOH_T, metric)]
     elseif startswith(name, "a19")
@@ -1323,7 +1334,7 @@ function level_runs(name; a19n=64)
                  regrid ? "regridded tiles of 8" : "box at the corner") * (sub ? ", sub" : "")
         return [(label, rz,
                  on -> Numerics(n_global=(a19n, 1, a19n), amr=amr,
-                                positivity_limiter=on, patch_interfaces=:closure,
+                                positivity_limiter=on, patch_interfaces=FLUX[],
                                 control=StepControl(validity=:permissive)), 0.165, nothing)]
     end
     blast = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
@@ -1341,7 +1352,8 @@ function level_runs(name; a19n=64)
 end
 
 function levels_part(names, a19n)
-    println("\n=== levels: refined levels, limiter off and on ===")
+    println("\n=== levels: refined levels, interface_flux = :$(FLUX[]), " *
+            "limiter off and on ===")
     for name in names, (label, prob, num, tfinal, metric) in level_runs(name; a19n),
         on in (false, true)
         s, Q = setup(prob, num(on))
@@ -1363,7 +1375,8 @@ function levels_part(names, a19n)
 end
 
 function level_cost_part(names, reps, a19n)
-    println("\n=== levelcost: wall time per step of refined runs, limiter off and on ===")
+    println("\n=== levelcost: wall time per step of refined runs, interface_flux = " *
+            ":$(FLUX[]), limiter off and on ===")
     steps = Dict("wc" => 600, "wcsub" => 300, "noh85" => 1000, "noh43" => 1000,
                  "noh85sub" => 400, "noh43sub" => 400, "a19" => 150, "a19tiles" => 150,
                  "tiles" => 60, "tilessub" => 30)
@@ -1392,7 +1405,8 @@ end
 # process: the medians per step and the medians of the ratios of tiles on to
 # tiles off and to the box on.
 function tile_cost_part(names, reps, a19n)
-    println("\n=== tilecost: the limited tiled step against the unlimited one and the box ===")
+    println("\n=== tilecost: the limited tiled step against the unlimited one and the box, " *
+            "interface_flux = :$(FLUX[]) ===")
     length(names) == 2 || throw(ArgumentError("part=tilecost takes two level cases"))
     nmax = 150
     runs = [only(level_runs(name; a19n)) for name in names]
@@ -1423,10 +1437,14 @@ end
 # `tilesE`, static tiles of edge E (80 is one tile); `regrid8`, tiles of edge 8
 # regridded every 10 steps; `uniform`, the run at the level's spacing. The
 # changes are `sub` (subcycled), `ghost` (`interface_flux = :ghost`),
-# `noreflux` (`REFLUX` off), `clamp` (`SENSOR_INTERFACE_GHOSTS` off) and
-# `nofilter` (no filter pass).
+# `noreflux` (`REFLUX` off), `clamp` (`SENSOR_INTERFACE_GHOSTS` off),
+# `nofilter` (no filter pass), `lim` (the positivity limiter on) and
+# `ghostlim` (the limiter on under `:ghost`, `LIMITED_GHOST_INTERFACES` set).
+# The limited runs take no
+# conservative coarse-fine coupling, as `REFLUX` off.
 const DRIFT_LAYOUTS = ("box", "tiles8", "tiles16", "tiles80", "regrid8", "uniform")
-const DRIFT_CHANGES = ("", "sub", "ghost", "noreflux", "clamp", "nofilter")
+const DRIFT_CHANGES = ("", "sub", "ghost", "noreflux", "clamp", "nofilter", "lim",
+                       "ghostlim")
 const DRIFT_M = 81
 # The drift history's sample times.
 const DRIFT_MARKS = collect(0.02:0.02:NOH_T)
@@ -1453,19 +1471,21 @@ function drift_numerics(layout, change, N, ν=2)
     return Numerics(n_global=(layout == "uniform" ? n_uniform : N, 1, 1),
                     art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
                     filter=change == "nofilter" ? nothing : StateFilter(),
-                    patch_interfaces=change == "ghost" ? :ghost : :closure,
+                    patch_interfaces=change in ("ghost", "ghostlim") ? :ghost : :closure,
+                    positivity_limiter=change in ("lim", "ghostlim"),
                     control=StepControl(validity=:permissive), amr=amr)
 end
 
 # Run `f` with the toggles of `change` set, and restore them.
 function with_drift_toggles(f, change)
-    saved = (CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[])
+    saved = (CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[], CL.LIMITED_GHOST_INTERFACES[])
     CL.REFLUX[] = change != "noreflux"
     CL.SENSOR_INTERFACE_GHOSTS[] = change != "clamp"
+    CL.LIMITED_GHOST_INTERFACES[] = change == "ghostlim"
     try
         return f()
     finally
-        CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[] = saved
+        CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[], CL.LIMITED_GHOST_INTERFACES[] = saved
     end
 end
 
@@ -1512,6 +1532,21 @@ function unmasked_masses(s, Q)
 end
 
 const DRIFT_UNIFORM = Ref{Any}(nothing)
+# `ledger=true`: each cylindrical run's mass drift attributed to the mechanism
+# that made it by the private budget ledger of src/ledger.jl.
+const DRIFT_LEDGER = Ref(false)
+
+# The ledger's mass pieces, summed over the levels, relative to `mass`.
+function print_drift_ledger(r, mass)
+    pieces = Dict{Symbol,Float64}()
+    for ((phase, _), v) in r.pieces
+        phase in CL.LEDGER_PHASES || continue
+        pieces[phase] = get(pieces, phase, 0.0) + v[1]
+    end
+    @printf("  %-17s ledger %s\n", "",
+            join((@sprintf("%s %+.2e", p, pieces[p] / mass)
+                  for p in CL.LEDGER_PHASES if haskey(pieces, p)), "  "))
+end
 
 # The Noh of the level rows (`noh81`, unlimited; ν = 1 the planar line of
 # test/cases.jl, whose exact mass is 1 + t) under one drift variant: the
@@ -1527,9 +1562,12 @@ function noh_drift_run(name, ν=2)
     N = Dict(NOH_N)[ν]
     exact_mass = ν == 2 ? noh_cylinder_mass : t -> 1 + t
     history = Float64[]
+    ledger = Ref{Any}(nothing)
     s, Q, wall = with_drift_toggles(change) do
         solver, states = setup(noh_problem(ν; N, t0=0.0),
                                drift_numerics(layout, change, N, ν))
+        track = DRIFT_LEDGER[] && ν == 2 && states isa Vector
+        track && CL._ledger_begin!(solver, states)
         record = (sv, q) -> begin
             while length(history) < length(DRIFT_MARKS) &&
                   sv.t >= DRIFT_MARKS[length(history)+1] - 1e-12
@@ -1542,6 +1580,7 @@ function noh_drift_run(name, ν=2)
         catch err
             err isa SolverFailure || rethrow()
         end
+        track && (ledger[] = CL._ledger_end!(solver, states))
         solver, states, elapsed
     end
     if s.t < NOH_T - 1e-12
@@ -1561,6 +1600,7 @@ function noh_drift_run(name, ν=2)
                 composite, split_mass / exact_mass(s.t) - 1, root / exact_mass(s.t) - 1,
                 restricted)
     end
+    ledger[] === nothing || print_drift_ledger(ledger[], exact_mass(s.t))
     # The level's spacing and the station of root node DRIFT_M.
     hf, xM = ν == 2 ? (1 / (3 * (N - 0.5)), (DRIFT_M - 0.5) / (N - 0.5)) :
                       (1 / (3 * (N - 1)), (DRIFT_M - 1) / (N - 1))
@@ -1611,13 +1651,13 @@ function pulse_drift_run(name, mass0)
 end
 
 function tile_drift_part(names, pulse_names, planar_names)
-    println("\n=== tiledrift: the cylindrical Noh level over 81 nodes, unlimited ===")
+    println("\n=== tiledrift: the cylindrical Noh level over 81 nodes ===")
     DRIFT_UNIFORM[] = nothing
     for name in names
         noh_drift_run(name)
     end
     if !isempty(planar_names)
-        println("\n=== tiledrift: the planar Noh level over 81 nodes, unlimited ===")
+        println("\n=== tiledrift: the planar Noh level over 81 nodes ===")
         DRIFT_UNIFORM[] = nothing
         for name in planar_names
             noh_drift_run(name, 1)
@@ -1637,12 +1677,19 @@ function main(args)
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
                                 patches="1", levels="wc,wcsub,noh43", a19n=64,
+                                flux="closure", ledger=false,
                                 drift="uniform,box,tiles8,tiles16,tiles80,box-sub," *
                                       "tiles8-sub,regrid8,tiles8-ghost,box-ghost," *
                                       "tiles8-noreflux,tiles8-clamp,tiles8-nofilter," *
-                                      "box-nofilter",
+                                      "box-nofilter,box-lim,tiles8-lim,box-ghostlim," *
+                                      "tiles8-ghostlim,tiles16-ghostlim",
                                 pulse="box,tiles8,tiles8-ghost,box-nofilter,tiles8-nofilter",
-                                planar="uniform,box,tiles8,tiles8-ghost"))
+                                planar="uniform,box,tiles8,tiles8-ghost,tiles8-lim," *
+                                       "tiles8-ghostlim"))
+    opt.flux in ("closure", "ghost") ||
+        throw(ArgumentError("unknown flux '$(opt.flux)', want closure or ghost"))
+    FLUX[] = Symbol(opt.flux)
+    DRIFT_LEDGER[] = opt.ledger
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     counts = parse.(Int, split(opt.patches, ','))
@@ -1669,6 +1716,20 @@ function main(args)
             throw(ArgumentError("the radial case '$c' runs in part=src or part=cost alone"))
     end
     variants = variant_flags.(split(opt.variants, ','))
+    # A limited run keeps :ghost at its interfaces only under the toggle.
+    saved = CL.LIMITED_GHOST_INTERFACES[]
+    CL.LIMITED_GHOST_INTERFACES[] = FLUX[] === :ghost
+    try
+        run_parts(parts, cases, counts, variants, level_names, drift_names, pulse_names,
+                  planar_names, opt)
+    finally
+        CL.LIMITED_GHOST_INTERFACES[] = saved
+    end
+    return nothing
+end
+
+function run_parts(parts, cases, counts, variants, level_names, drift_names, pulse_names,
+                   planar_names, opt)
     weights = "weights" in parts ? weights_part(cases) : Dict{Symbol,Vector{Float64}}()
     "identity" in parts && identity_part(cases, opt.identity_steps, weights)
     "pulse" in parts && pulse_part()
