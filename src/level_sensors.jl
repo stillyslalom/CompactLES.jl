@@ -579,7 +579,7 @@ end
 end
 
 @inline function _edge_fill_z_point!(f, pad, n, n3, lo, i, j, k)
-    layer = (k - 1) % n3 + 1
+    layer = _unchecked_rem(k - 1, n3) + 1
     base = k - layer
     @inbounds if lo
         f[i, j, base+pad-layer+1] = f[i, j, base+pad+1]

@@ -753,6 +753,15 @@ KernelAbstractions CPU backend is correct, so no CI job sees it. Write
 shape; `reference/bugreports/amdgpu_shortcircuit_bug_report.md` has the
 reproducers.
 
+**No exception path in a device body.** Under Julia 1.12 and 1.13 AMDGPU.jl
+fails to compile a kernel that keeps a `throw`: the divisor test of an integer
+`div`, `rem` or `%`, a bounds check outside `@inbounds`, a checked conversion.
+The symptom is `InvalidIRError ... call to kernel_state()` at the first device
+launch, with the KA-CPU suite green. Divide extents and strides with
+`_unchecked_div` / `_unchecked_rem` (`src/pointwise.jl`), keep every access
+inside `@inbounds`, and narrow an integer as `x % UInt8`, not `UInt8(x)`;
+`reference/bugreports/amdgpu_exception_path_bug_report.md` has the reproducer.
+
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
 progress. A sweep that visits bad configurations must pass a low `nmax`, and

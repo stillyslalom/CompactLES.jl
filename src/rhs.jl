@@ -1469,7 +1469,7 @@ end
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i, j, k)
-        kl = (k - 1) % stride + 1
+        kl = _unchecked_rem(k - 1, stride) + 1
         inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
                  pad[3] < kl <= pad[3] + nl[3]
         if !inside
@@ -1619,7 +1619,7 @@ end
     @inbounds begin
         i, j, k = ib + o1, jb + o2, kb + o3
         I = CartesianIndex(i, j, k)
-        kl = (k - 1) % stride + 1
+        kl = _unchecked_rem(k - 1, stride) + 1
         inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
                  pad[3] < kl <= pad[3] + nl[3]
         if !inside

@@ -1070,15 +1070,17 @@ end
 @inline function _diffusive_rate(eos, ρ, p, T_ion, cp, molecular,
                                  mu_art, beta_art, kappa_art, D_art, I,
                                  n_species)
-    ri = one(ρ) / ρ
-    Dmax = molecular.D[1]
-    for sp in 1:n_species
-        Dmax = max(Dmax, molecular.D[sp] + D_art[sp][I])
+    return @inbounds begin
+        ri = one(ρ) / ρ
+        Dmax = molecular.D[1]
+        for sp in 1:n_species
+            Dmax = max(Dmax, molecular.D[sp] + D_art[sp][I])
+        end
+        κ = molecular.kappa + kappa_art[I]
+        cv = mixture_cv(eos, ρ, p, T_ion, cp)
+        thermal = κ * ri / (cv > 0 ? cv : cp)
+        (molecular.mu + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
     end
-    κ = molecular.kappa + kappa_art[I]
-    cv = mixture_cv(eos, ρ, p, T_ion, cp)
-    thermal = κ * ri / (cv > 0 ? cv : cp)
-    return (molecular.mu + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
 end
 
 @inline function _rate_point!(rate_out, rhoq_out, dir_out, Q, rho, u, v, w,

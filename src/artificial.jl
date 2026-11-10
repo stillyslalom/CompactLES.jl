@@ -320,7 +320,7 @@ _sharpening_constants(solver) =
     isum = zero(c)
     dsum = zero(c)
     idx_min = oftype(c, Inf)
-    for d in 1:3
+    @inbounds for d in 1:3
         act[d] || continue
         idx = ih[d][I] / hh[d]
         isum += idx
@@ -601,7 +601,7 @@ end
         # patch k < n3p and the reduction is the identity. The taps are read
         # relative to `I`, which carries the shift. `_delta4_signed_point!`
         # keeps the bare `k`: it serves the folds, which no refined run has.
-        il = (d == 1 ? i : d == 2 ? j : rem(k - 1, n3p) + 1)
+        il = (d == 1 ? i : d == 2 ? j : _unchecked_rem(k - 1, n3p) + 1)
         # The edge tests sit outside the stencil loop, not on each tap: every
         # flag is invariant over the whole sweep, and the clamped branch is the
         # one a line with neither a wall nor a folded end takes. A node whose

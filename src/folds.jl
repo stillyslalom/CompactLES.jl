@@ -187,7 +187,7 @@ end
 # `k` the halo layer plus a stacked launch's tile offset, a multiple of the
 # padded extent `n3` (zero on ordinary storage).
 @inline function _fold_fill_z_point!(f, sgn, pad, n, n3, lo, i, j, k)
-    layer = (k - 1) % n3 + 1
+    layer = _unchecked_rem(k - 1, n3) + 1
     base = k - layer
     @inbounds if lo
         f[i, j, base+pad-layer+1] = sgn * f[i, j, base+pad+layer]

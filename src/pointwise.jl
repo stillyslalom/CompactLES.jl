@@ -192,6 +192,18 @@ const DEVICE_SYNC = Ref(false)
 
 @inline _maybe_sync(backend) = (DEVICE_SYNC[] && synchronize(backend); nothing)
 
+# Integer quotient and remainder for the device bodies. `div` and `rem` of two
+# `Int`s test the divisor and throw a `DivideError`, and under Julia 1.12 and
+# 1.13 AMDGPU.jl fails to compile a kernel in which an exception path survives
+# optimization (`InvalidIRError` on a call to `kernel_state()`), while the
+# KernelAbstractions CPU backend compiles it. The intrinsics carry no test. A
+# divisor here is an extent or a stride, positive by construction, and for a
+# positive divisor the intrinsics give the values of `div` and `rem`.
+# A body therefore also keeps every array and tuple access inside `@inbounds`
+# and narrows an integer as `x % UInt8`, not `UInt8(x)`, for the same reason.
+@inline _unchecked_div(a::Int, b::Int) = Core.Intrinsics.sdiv_int(a, b)
+@inline _unchecked_rem(a::Int, b::Int) = Core.Intrinsics.srem_int(a, b)
+
 @kernel function _point_kernel!(body!, args)
     i, j, k = @index(Global, NTuple)
     body!(args..., i, j, k)

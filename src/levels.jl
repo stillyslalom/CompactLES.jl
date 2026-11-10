@@ -2188,7 +2188,7 @@ end
 # third index and the component slot. The arithmetic is `_hermite_box!`'s.
 @inline function _hermite_point!(dst, Q0, dQ0, Q1, dQ1, h, dtT, pad, n3,
                                  c1, cstep, i, j, kb)
-    b, kk = divrem(kb - 1, n3)
+    b, kk = _unchecked_div(kb - 1, n3), _unchecked_rem(kb - 1, n3)
     c = c1 + b * cstep
     @inbounds begin
         I = CartesianIndex(i + pad[1], j + pad[2], kk + 1 + pad[3])
@@ -2242,7 +2242,7 @@ end
 
 @inline function _interp_point!(tmp, coarse, W, p, nc, periodic, nintervals,
                                 padf, padc, n2, D, start, mi, ji, kb)
-    b, kk = divrem(kb - 1, n2)
+    b, kk = _unchecked_div(kb - 1, n2), _unchecked_rem(kb - 1, n2)
     m = start[1] + mi
     j = start[2] + ji
     k = start[3] + kk + 1
@@ -2278,10 +2278,10 @@ end
         n3 = hi[3] - lo[3] + 1
         if base < at <= base + n1 * n2 * n3
             r = at - base - 1
-            g1 = lo[1] + r % n1
-            r ÷= n1
-            g2 = lo[2] + r % n2
-            g3 = lo[3] + r ÷ n2
+            g1 = lo[1] + _unchecked_rem(r, n1)
+            r = _unchecked_div(r, n1)
+            g2 = lo[2] + _unchecked_rem(r, n2)
+            g3 = lo[3] + _unchecked_div(r, n2)
             send[(b - 1) * ringlen + at] =
                 stage[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                       g3 + shift[3] + padb[3], b]
@@ -3806,10 +3806,10 @@ end
         n3 = hi[3] - lo[3] + 1
         if sbase < at <= sbase + n1 * n2 * n3
             r = at - sbase - 1
-            g1 = lo[1] + r % n1
-            r ÷= n1
-            g2 = lo[2] + r % n2
-            g3 = lo[3] + r ÷ n2
+            g1 = lo[1] + _unchecked_rem(r, n1)
+            r = _unchecked_div(r, n1)
+            g2 = lo[2] + _unchecked_rem(r, n2)
+            g3 = lo[3] + _unchecked_div(r, n2)
             send[base + at] = src[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                                   g3 + shift[3] + padb[3]]
         end
@@ -3825,10 +3825,10 @@ end
 @inline function _ring_unpack_point!(ring, gring, linear, recv, ringlen, np, n_cons,
                                      per, at, p, _k)
     @inbounds begin
-        blk, j = divrem(p - 1, per)
+        blk, j = _unchecked_div(p - 1, per), _unchecked_rem(p - 1, per)
         c = 0
         for r in 0:np-1
-            nr = r < n_cons ? (n_cons - r - 1) ÷ np + 1 : 0
+            nr = r < n_cons ? _unchecked_div(n_cons - r - 1, np) + 1 : 0
             if blk < nr
                 c = r + 1 + blk * np
                 break
@@ -3905,10 +3905,10 @@ end
         n3 = hi[3] - lo[3] + 1
         if sbase < at <= sbase + n1 * n2 * n3
             r = at - sbase - 1
-            g1 = lo[1] + r % n1
-            r ÷= n1
-            g2 = lo[2] + r % n2
-            g3 = lo[3] + r ÷ n2
+            g1 = lo[1] + _unchecked_rem(r, n1)
+            r = _unchecked_div(r, n1)
+            g2 = lo[2] + _unchecked_rem(r, n2)
+            g3 = lo[3] + _unchecked_div(r, n2)
             i = g1 - off[1] + padf[1]
             j = g2 - off[2] + padf[2]
             k = g3 - off[3] + padf[3]
