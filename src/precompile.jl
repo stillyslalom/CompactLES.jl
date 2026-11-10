@@ -87,6 +87,317 @@ setting it rebuilds the package image.
 """
 const PRECOMPILE_FLOAT32 = @load_preference("precompile_float32", false)
 
+"""
+Whether the workload builds the solver configurations of the compile-bound
+phases of the multi-rank suite's eight-rank selection (`rank_shape=true` in
+`test/mpi_tests.jl`): the positivity limiter on each of its layouts, the
+symmetry planes, a refined level at a symmetry plane and on the r-z axis, the
+staggered diffusion operator and the implicit stage on their metrics, and the
+implicit-conduction pair. Every rank of that suite otherwise compiles each of
+them for itself, and on a runner with fewer cores than ranks the ranks share
+the cores while they compile. Off by default, since a user's run builds few of
+these types and every package precompile takes longer with the block on.
+
+Turn it on where the suite runs at many ranks, as CI's eight-rank job does:
+
+```julia
+using Preferences, CompactLES
+Preferences.set_preferences!(CompactLES, "precompile_mpi_suite" => true)
+```
+
+Like the other preferences, it is read at precompile time, so setting it
+rebuilds the package image. The block reproduces each phase's types, not its
+data: the precision, metric, equation of state, transport, folded faces,
+active dimensions, refinement and the keyword types of the `Solver` call. A
+phase whose configuration changes without a matching change here still runs,
+and compiles its tree on every rank.
+"""
+const PRECOMPILE_MPI_SUITE = @load_preference("precompile_mpi_suite", false)
+
+# The solver configurations of the compile-bound eight-rank phases of
+# `test/mpi_tests.jl`, each built as its phase builds it, with the keywords in
+# the phase's order and of its types, at np = 1. A grid or a step count may be
+# smaller than the phase's where that leaves the types and the paths taken
+# unchanged.
+function _mpi_suite_workload(cpu)
+    per = (PeriodicBC(), PeriodicBC())
+    per3 = (per, per, per)
+    walls = (SlipWallBC(), SlipWallBC())
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    noart = ArtificialProperties(enabled=false)
+    world = MPI.COMM_WORLD
+    whole = (1, 1, 1)
+    # "symmetry plane": two species, constant viscosity, the artificial
+    # properties and a filter every step, with the planes on one dimension at
+    # a time in both precisions, on the first two together, and on the high
+    # end of a line whose low end is a Dirichlet inflow.
+    function plane_case(T, ng, bcs, ic, detector, channel)
+        local s, Q
+        s = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)), bcs=bcs,
+                   eos=IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
+                                     IdealSpecies{T}("b", T(0.7), T(1.3))]),
+                   comm=world, dims=whole,
+                   transport=ConstantTransport{T}(mu0=T(0.01)),
+                   art=ArtificialProperties{T}(enabled=true, detector=detector,
+                                               species_flux=channel),
+                   deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+                   filter_interval=1, filter_cfl=zero(T), cfl=T(0.4))
+        Q = allocate_state(s)
+        initialize!(s, Q, ic)
+        apply_bcs!(s, Q)
+        compute_rhs!(s, Q, zero(Q))
+        run!(s, Q; tfinal=1e9, nmax=2)
+    end
+    for T in (Float64, Float32), ax in 1:3
+        ic = (x, y, z) -> begin
+            r = (x, y, z)[ax]
+            Prim(rho=one(T) + T(0.05) * cos(T(pi) * r), T_ion=T(2), Y=(T(0.4), T(0.6)),
+                 u=ntuple(d -> d == ax ? T(0.1) * sin(T(pi) * r) : zero(T), 3))
+        end
+        plane_case(T, ntuple(d -> d == ax ? 16 : 1, 3),
+                   ntuple(d -> d == ax ? sym : per, 3), ic,
+                   ax == 3 ? :d8 : :delta4, (:partial_density, :bulk, :fickian)[ax])
+    end
+    flat = (x, y, z) -> Prim(rho=1.0 + 0.05x, T_ion=2.0, Y=(0.4, 0.6), u=(0.1, 0.0, 0.0))
+    plane_case(Float64, (16, 12, 1), (sym, sym, per), flat, :delta4, :fickian)
+    inflow = Prim(rho=1.0, T_ion=2.0, Y=(0.4, 0.6), u=(-0.2, 0.0, 0.0))
+    plane_case(Float64, (16, 1, 1),
+               ((DirichletBC((x, y, z, t) -> inflow), SymmetryPlaneBC()), per, per),
+               flat, :delta4, :fickian)
+    # "level at a symmetry plane" and "level on the axis": two species, the
+    # artificial properties under the `:d8` detector and a refined level
+    # reaching the fold, as one box and as tiles.
+    pair = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                         IdealSpecies{Float64}("b", 0.7, 1.3)])
+    mixed = (x, y, z) -> Prim(rho=1 + 0.1 * cos(pi * x), u=(0.05 * sin(pi * x), 0.0, 0.0),
+                              p=1.0, Y=(0.5 + 0.1 * cos(pi * x), 0.5 - 0.1 * cos(pi * x)))
+    for tile in (0, 5)
+        s = Solver(n_global=(48, 24, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(sym, per, per), comm=world, cfl=0.4, eos=pair,
+                   transport=ConstantTransport{Float64}(mu0=0.01),
+                   art=ArtificialProperties(enabled=true, detector=:d8),
+                   filter_interval=1, tile=tile,
+                   refine=BlockRegion((0, 4, 0), (10, 16, 1)))
+        Q = allocate_state(s)
+        initialize!(s, Q, mixed)
+        run!(s, Q; tfinal=1e9, nmax=2)
+        domain_volume(s)
+        s = Solver(n_global=(48, 1, 36), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                   metric=CylindricalMetric(), comm=world, cfl=0.4, eos=pair,
+                   transport=ConstantTransport{Float64}(mu0=0.01),
+                   art=ArtificialProperties(enabled=true, detector=:d8),
+                   filter_interval=1, tile=tile,
+                   refine=BlockRegion((0, 0, 0), (10, 1, 10)))
+        Q = allocate_state(s)
+        initialize!(s, Q, mixed)
+        run!(s, Q; tfinal=1e9, nmax=2)
+        domain_volume(s)
+    end
+    # "staggered operators": the operator on a bare decomposition, periodic,
+    # closed and folded under both parities, and from solvers on a stretched
+    # line, the resolved axis and the spherical origin and poles; then the
+    # implicit stage on walls of both parities, a periodic box and the axis.
+    for ax in 1:3, (periodic, parity, folded) in ((true, 1, false), (false, 1, false),
+                                                  (false, -1, false), (false, 1, true),
+                                                  (false, -1, true))
+        decomp = Decomp(ntuple(d -> d == ax ? 16 : 6, 3),
+                        ntuple(d -> d == ax ? periodic : true, 3); comm=MPI.COMM_SELF)
+        σ = folded ? parity : nothing
+        op = StaggeredDiffusion(decomp, ax, 1 / 16; parity=parity, lo_fold=σ, hi_fold=σ)
+        T = field(decomp); κ = field(decomp); out = field(decomp)
+        fill!(T, 1.0); fill!(κ, 1.0)
+        staggered_diffusion!(out, op, T, κ, decomp)
+    end
+    stretched = Solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(walls, per, per),
+                       stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
+                       art=noart, comm=world, dims=whole)
+    cyl(n) = Solver(n_global=(n, 16, 1), L_domain=(1.0, 2π, 1.0),
+                    metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), per, per), art=noart,
+                    comm=world, dims=whole)
+    sph = Solver(n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
+                 bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+                 art=noart, comm=world, dims=whole)
+    for (s, d) in ((stretched, 1), (cyl(16), 1), (sph, 1), (sph, 2))
+        op = StaggeredDiffusion(s, d)
+        T = field(s.decomp); κ = field(s.decomp); L = field(s.decomp)
+        fill!(T, 1.0); fill!(κ, 1.0)
+        staggered_diffusion!(L, op, T, κ, s.decomp)
+    end
+    closed = Solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(walls, per, per), art=noart, comm=world, dims=whole)
+    box = Solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart,
+                 comm=world, dims=whole)
+    for (s, parity) in ((closed, 1), (closed, -1), (box, 1), (cyl(12), 1))
+        stage = DiffusionStage(s; parity=parity)
+        r = field(s.decomp); κ = field(s.decomp); out = field(s.decomp)
+        fill!(κ, 1.0)
+        for I in interior(s.decomp)
+            r[I] = 1 + 0.1 * I[1]
+        end
+        T = copy(r)
+        solve_stage!(T, stage, r, κ, 0.1)
+        stage_operator!(out, stage, T, κ, 0.1)
+    end
+    # "implicit conduction": the additive pair on a periodic box under the
+    # default step rule, and on a line under `:none` with rollbacks.
+    s = Solver(n_global=(24, 36, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+               eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+               transport=ConstantTransport(mu0=1e-3, Pr=1e-3 * 3.5 / 2.5, Sc=1.0),
+               art=noart, cfl=0.5, implicit=ImplicitConduction(rtol=1e-12),
+               comm=world, dims=whole)
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(rho=1 / (1 + 0.3exp(-((x - 0.4)^2 +
+                                                              (y - 0.55)^2) / 0.02)),
+                                        u=(0.2sinpi(2y), 0.2cospi(2x), 0.0), p=1.0))
+    run!(s, Q; tfinal=1e9, nmax=2)
+    n = 72
+    h = 2 / n
+    gas = 1e-10
+    mu = 1e-3 * h^2
+    s = Solver(n_global=(n, 1, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.0, 0.0),
+               bcs=per3, eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
+               transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas), Sc=1.0),
+               art=noart, filter_interval=0, cfl=1e6, control=StepControl(retries=6),
+               implicit=ImplicitConduction(step_rule=:none, rtol=1e-12),
+               comm=world, dims=whole)
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                        p=gas * (abs(x + 0.5) < h / 2 ? 1.2 : 0.2)))
+    # The spike's first attempts fail and roll back, as the phase's do; the
+    # warnings each rollback raises are kept out of the precompile output.
+    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        run!(s, Q; tfinal=32 * h^2 / 2)
+    end
+    # "positivity limiter": a blast in a box, through the spherical origin, at
+    # the corner of the r-z axis and a plane, on two same-level patches, on
+    # refined tiles at the global step and subcycled, Cartesian and r-z, and
+    # the shell's fallback on a subcycled box; under `PRECOMPILE_DEVICE` the
+    # box and the patches on device storage as well. The patches and tiles run
+    # under either interface flux. A limited solver keeps `:ghost` only when
+    # `LIMITED_GHOST_INTERFACES` is set during its construction, as the phase
+    # sets it; without it the constructor takes `:closure` and warns, so a
+    # `:ghost` case would take the closure path a second time and the ghost
+    # path would be compiled at run time on every rank.
+    function kept(build, flux)
+        flux === :ghost || return build()
+        saved = LIMITED_GHOST_INTERFACES[]
+        LIMITED_GHOST_INTERFACES[] = true
+        try
+            return build()
+        finally
+            LIMITED_GHOST_INTERFACES[] = saved
+        end
+    end
+    gas = IdealSpecies("gas"; gamma=1.4, R=1.0)
+    permissive = StepControl(validity=:permissive)
+    blast = (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                              p=1e-3 + exp(-((x - 0.45)^2 + (y - 0.5)^2) / 0.004))
+    corner = (r, θ, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                               p=1e-4 + exp(-(r^2 + z^2) / 0.06^2))
+    function limited(s, ic, nmax)
+        local Q = allocate_state(s)
+        initialize!(s, Q, ic)
+        run!(s, Q; tfinal=1.0, nmax=nmax)
+        positivity_counts(s)
+        state_report(s, Q)
+    end
+    limited(Solver(n_global=(36, 36, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(walls, per, per), eos=gas,
+                   art=ArtificialProperties(enabled=true), cfl=0.4,
+                   control=permissive, positivity_limiter=true,
+                   comm=world, dims=whole), blast, 20)
+    limited(Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   origin=(0.0, π / 2, 0.0), metric=SphericalMetric(),
+                   bcs=((OriginBC(), SlipWallBC()), per, per), eos=gas,
+                   art=ArtificialProperties(enabled=true), cfl=0.3,
+                   control=permissive, positivity_limiter=true,
+                   comm=world, dims=whole),
+            (r, θ, φ) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1e-4 + exp(-(r / 0.08)^2)),
+            30)
+    limited(Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
+                   metric=CylindricalMetric(),
+                   bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                   eos=gas, art=ArtificialProperties(enabled=true), cfl=0.3,
+                   control=permissive, positivity_limiter=true,
+                   comm=world, dims=whole), corner, 20)
+    for flux in (:closure, :ghost)
+        limited(kept(flux) do
+                    Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(walls, per, per), eos=gas,
+                           art=ArtificialProperties(enabled=true), cfl=0.4,
+                           control=permissive, positivity_limiter=true,
+                           patch_grid=(2, 1, 1), interface_flux=flux, comm=world)
+                end, blast, 20)
+    end
+    for flux in (:closure, :ghost), sub in (false, true)
+        limited(kept(flux) do
+                    Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(walls, walls, per), eos=gas,
+                           art=ArtificialProperties(enabled=true), cfl=0.4,
+                           control=permissive, positivity_limiter=true,
+                           refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
+                           subcycle=sub, interface_flux=flux, comm=world)
+                end, blast, 10)
+        limited(kept(flux) do
+                    Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
+                           metric=CylindricalMetric(),
+                           bcs=((AxisBC(), SlipWallBC()), per,
+                                (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
+                           art=ArtificialProperties(enabled=true), cfl=0.3,
+                           control=permissive, positivity_limiter=true,
+                           refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
+                           subcycle=sub, interface_flux=flux, comm=world)
+                end, corner, 10)
+    end
+    s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=(walls, walls, per), eos=gas, transport=ConstantTransport(mu0=0.0),
+               art=ArtificialProperties(enabled=true), cfl=0.4,
+               control=permissive,
+               refine=BlockRegion((20, 18, 0), (10, 10, 1)), subcycle=true,
+               comm=world)
+    Q = allocate_state(s)
+    initialize!(s, Q, blast)
+    run!(s, Q; tfinal=1.0, nmax=10)
+    # The same box split and the same patches on device storage under the two
+    # toggles, and on the host without them, as the phase runs them.
+    for device in (PRECOMPILE_DEVICE ? (false, true) : (false,))
+        backend = device ? DeviceBackend(cpu) : CPUBackend()
+        FORCE_KA[] = device
+        FORCE_DEVICE_EXCHANGE[] = device
+        try
+            s = Solver(n_global=(36, 36, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(walls, per, per), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.4,
+                       control=permissive, positivity_limiter=true,
+                       dims=whole, backend=backend)
+            Q = allocate_state(s)
+            initialize!(s, Q, blast)
+            run!(s, Q; tfinal=1.0, nmax=10)
+            for flux in (:closure, :ghost)
+                s = kept(flux) do
+                    Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(walls, per, per), eos=gas,
+                           art=ArtificialProperties(enabled=true), cfl=0.3,
+                           filter_cfl=0.35, control=permissive, positivity_limiter=true,
+                           patch_grid=(2, 1, 1), interface_flux=flux, backend=backend)
+                end
+                Q = allocate_state(s)
+                initialize!(s, Q, (x, y, z) ->
+                    Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                         p=1000 * (1 - tanh_blend(x, 0.45, 2 / 95)) + 0.01))
+                run!(s, Q; tfinal=1.0, nmax=10)
+            end
+        finally
+            FORCE_KA[] = false
+            FORCE_DEVICE_EXCHANGE[] = false
+        end
+    end
+    return nothing
+end
+
 if MPIPreferences.binary != "system"
 @setup_workload begin
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -327,6 +638,7 @@ if MPIPreferences.binary != "system"
                 FORCE_DEVICE_EXCHANGE[] = false
             end
         end
+        PRECOMPILE_MPI_SUITE && _mpi_suite_workload(cpu)
     end
 end
 end

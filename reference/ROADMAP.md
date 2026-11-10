@@ -377,9 +377,15 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   from the one that built it, in every cached job; the images are now
   compiled for the system image's AVX2 target (`JULIA_CPU_TARGET` in
   `CI.yml`) (commit `eed8aad`). A new Julia release and a cache unused for
-  seven days are still followed by a rebuild.
-  Remaining: trim the step-bound eight-rank phases and the serial Julia 1
-  and pre jobs.
+  seven days are still followed by a rebuild. The solver configurations of
+  the compile-bound eight-rank phases are in the package image behind the
+  `precompile_mpi_suite` preference, which the eight-rank job sets (commit
+  `HASH`). Building each serial reference of the MPI suite on rank 0 alone
+  was measured and did not change the eight-rank wall, since the time is in
+  the decomposed runs' collectives, so that trim is dropped.
+  Remaining: read the eight-rank job's wall in the first CI runs with the
+  preference set, trim the step-bound eight-rank phases and the serial
+  Julia 1 and pre jobs.
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
 

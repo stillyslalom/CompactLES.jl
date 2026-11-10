@@ -193,7 +193,11 @@ jobs:
           cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       # As in the numerics job: the MPI device and Float32 phases run here,
       # and neither this step nor buildpkg precompiles, so that the one image
-      # build happens after the preferences are set.
+      # build happens after the preferences are set. This job also sets
+      # precompile_mpi_suite, which adds the solver configurations of the
+      # compile-bound phases of the eight-rank selection to the image (see
+      # PRECOMPILE_MPI_SUITE in src/precompile.jl): the image is built once,
+      # where eight ranks would otherwise compile those trees each.
       - name: Set the precompile preferences
         shell: julia --project=. --color=yes {0}
         env:
@@ -204,7 +208,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true, "precompile_float32" => true;
+              "precompile_device" => true, "precompile_float32" => true,
+              "precompile_mpi_suite" => true;
               force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # As in the numerics job, for comparison with it.
