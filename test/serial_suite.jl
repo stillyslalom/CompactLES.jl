@@ -5814,6 +5814,9 @@ include("runloop_tests.jl")
 include("phase_tests.jl")
 include("incompressible_tests.jl")
 include("docrefs_tests.jl")
+# The scripts under bench/, examples/, probes/ and docs/literate/, which no
+# testset runs, are parsed for CompactLES names and keywords that do not exist.
+include("scriptrefs_tests.jl")
 include("reference_tests.jl")
 include("api_surface_tests.jl")
 include("pointwise_callbacks_tests.jl")

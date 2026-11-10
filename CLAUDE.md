@@ -101,9 +101,9 @@ required coverage that remains unavailable.
   changed. Build the documentation when changing Documenter configuration,
   page generation, or executable documentation examples.
 - **Benchmarks, examples, and standalone tooling:** run
-  `test/scriptrefs_tests.jl`, then the affected scripts with a small
-  representative workload. Changes to shared package code also require the
-  checks below.
+  `test/scriptrefs_tests.jl` standalone (the serial suite includes it), then
+  the affected scripts with a small representative workload. Changes to
+  shared package code also require the checks below.
 - **Tests only:** run the affected suite, including its enclosing runner when
   the file is not standalone. Changes to numerical guards or stored references
   require the corresponding numerical suite and an explanation of the new
@@ -154,8 +154,9 @@ For the full gate, replace the two MPI commands with full-suite runs at
 broad numerical refactors, release validation, or uncertain impact.
 Affected extension and hardware checks remain additional requirements.
 
-A passing `runtests.jl` already satisfies the documentation-reference check;
-do not run it separately unless documentation inputs changed afterward.
+A passing `runtests.jl` already satisfies the documentation-reference and
+script-reference checks; do not run either separately unless its inputs
+changed afterward (a docstring or `docs/`, or a script).
 
 **Run `test/docrefs_tests.jl` before every push unless it already passed,
 standalone or through `runtests.jl`, for the current documentation inputs.
@@ -169,15 +170,15 @@ the package loads; it also checks that every `@docs` entry is a documented
 binding and that every exported name with a docstring is rendered somewhere
 (`checkdocs = :exports`). A private name may be linked with `@ref` only if
 it is listed in a `@docs` block on some page; otherwise write it in plain
-backticks. `runtests.jl` includes the same check as its last testset.
+backticks. `runtests.jl` includes the same check as one testset.
 
-The `159 testsets` and the `242/242` are counted by different mechanisms and are
+The `321 testsets` and the `242/242` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
-`@test`s, and each row beneath it is one `@testset` of the suite, the ones
-its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
-`patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `159` counts those rows. A failure is
+`@test`s, and each row one indent beneath it is one top-level `@testset` of
+`serial_suite.jl` or of a file it includes; the `321` counts those rows from
+the package environment, where HDF5 does not load, and the count is 331 under
+`Pkg.test`, whose test target carries HDF5. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
@@ -317,13 +318,13 @@ distributed-solve and off-rank-fold code that only a decomposed run touches.
 Julia's `.cov` output omits methods that were never compiled, so the percentage
 overstates coverage; watch the executable-line count too.
 
-**The test suite does not import `bench/` or `examples/`.** They stay green
-while broken. After a cross-cutting API change, run `test/scriptrefs_tests.jl`:
-it parses every script under `bench/`, `examples/`, `probes/` and
-`docs/literate/` without running it, and fails on a CompactLES name, imported
-name or keyword that no longer exists. A script that resolves can still
-compute the wrong thing, so also identify and run the affected consumers with
-small representative workloads.
+**The test suite does not import `bench/` or `examples/`.** The serial suite
+includes `test/scriptrefs_tests.jl`, which parses every script under `bench/`,
+`examples/`, `probes/` and `docs/literate/` without running it and fails on a
+CompactLES name, imported name or keyword that no longer exists; after a
+cross-cutting API change, run it standalone before the suite. A script that
+resolves can still compute the wrong thing, so also identify and run the
+affected consumers with small representative workloads.
 
 ## Naming
 

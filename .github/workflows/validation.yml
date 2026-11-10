@@ -38,12 +38,6 @@ jobs:
       - name: Run the validation battery
         if: ${{ !cancelled() }}
         run: julia --project=. --color=yes test/validation.jl
-      # The scripts under bench/, examples/, probes/ and docs/literate/ are
-      # parsed, not run, and their CompactLES names and keywords are checked
-      # against the package, in seconds after it loads.
-      - name: Check the scripts' references to the package
-        if: ${{ !cancelled() }}
-        run: julia --project=. --color=yes test/scriptrefs_tests.jl
       # The documentation shows the examples' committed figures without running
       # them, so nothing else notices an example that an API change has broken.
       # Each one listed in docs/make.jl runs here for a few steps (smoke=true),

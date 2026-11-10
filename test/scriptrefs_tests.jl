@@ -1,7 +1,7 @@
-# Script reference guard. The test suite does not include the scripts under
-# bench/, examples/, probes/ and docs/literate/, so an API change that removes
-# or renames a binding or a keyword leaves them broken with nothing to report
-# it. This file parses every script without running it, since the scripts load
+# Script reference guard. No testset runs the scripts under bench/, examples/,
+# probes/ and docs/literate/, so an API change that removes or renames a
+# binding or a keyword would leave them broken with no failing test. This
+# file parses every script without running it, since the scripts load
 # JET, CairoMakie, AMDGPU, HDF5 and other packages the package environment
 # does not carry, and checks its references to CompactLES against the loaded
 # package:
@@ -34,7 +34,8 @@
 # change.
 #
 # Standalone: julia --project=. test/scriptrefs_tests.jl
-# `ScriptRefs.check(paths)` checks other files or directories.
+# The serial suite includes it as one testset. `ScriptRefs.check(paths)`
+# checks other files or directories.
 
 if !isdefined(Main, :CompactLES)
     using CompactLES
@@ -138,6 +139,10 @@ function alias!(scope, name, m::Module; assigned::Bool)
 end
 
 const PARSED = Dict{String,Any}()
+
+# `Meta.parseall`, which parses a whole file as `include` does, is not public;
+# where it is not defined, nothing is checked and a skipped test is recorded.
+const PARSES = isdefined(Meta, :parseall)
 
 function parse_file(file)
     get!(PARSED, file) do
@@ -436,9 +441,47 @@ end
 
 # --- Keywords ---------------------------------------------------------------
 
+# The keyword check reads Julia internals that no public function replaces:
+# `Base.kwarg_decl` for the keywords of a method, and `Base._methods_by_ftype`
+# at `Base.get_world_counter()` for the `T{P}(...)` constructors of a parametric
+# type. Julia 1.10, 1.12 and 1.13 report them identically. The probe methods
+# below have the three forms the check distinguishes: explicit keywords,
+# collected keywords, and the method the compiler generates for an omitted
+# optional argument, which forwards its keywords and is reported as `...`. On a
+# version that lacks one of the functions or reports a form differently, every
+# keyword call is counted as not checked and a skipped test is recorded.
+_probe(x, y=1; a=1) = x
+_probe_collect(x; rest...) = x
+struct _Probe{T}
+    x::T
+end
+_Probe{T}(; x::T) where {T} = _Probe{T}(x)
+
+function keyword_support()
+    for n in (:kwarg_decl, :_methods_by_ftype, :get_world_counter)
+        isdefined(Base, n) || return "`Base.$n` is not defined"
+    end
+    try
+        Set([Base.kwarg_decl(m) for m in methods(_probe)]) ==
+            Set([[:a], [Symbol("...")]]) ||
+            return "`Base.kwarg_decl` reports a forwarding method differently"
+        [Base.kwarg_decl(m) for m in methods(_probe_collect)] == [[Symbol("rest...")]] ||
+            return "`Base.kwarg_decl` reports collected keywords differently"
+        ms = Base._methods_by_ftype(Tuple{Type{<:_Probe},Vararg{Any}}, -1,
+                                    Base.get_world_counter())
+        any(x -> Base.kwarg_decl(x.method) == [:x], ms) ||
+            return "`Base._methods_by_ftype` does not list `T{P}(...)` constructors"
+    catch err
+        return "the keyword internals raise $(sprint(showerror, err))"
+    end
+    return nothing
+end
+
+# `nothing` where the keyword check runs, otherwise the reason it does not.
+const KEYWORD_SUPPORT = keyword_support()
+
 function callable_methods(f)
-    ms = if f isa UnionAll && (u = Base.unwrap_unionall(f); u isa DataType) &&
-            !isabstracttype(u)
+    ms = if f isa UnionAll && (Base.isstructtype(f) || isprimitivetype(f))
         # A parametric type's constructors include the `T{P}(...)` methods,
         # which `methods(T)` does not list.
         [x.method for x in Base._methods_by_ftype(Tuple{Type{<:f},Vararg{Any}}, -1,
@@ -478,7 +521,7 @@ function _accepted_keywords(f)
     getfield(parentmodule(f), nameof(f)) === f || return nothing
     for t in targets
         if t === :fields
-            union!(names, fieldnames(Base.unwrap_unionall(f)))
+            union!(names, fieldnames(f))
         elseif t !== :self
             g = getfield(CompactLES, t)
             for m in callable_methods(g), k in Base.kwarg_decl(m)
@@ -600,6 +643,10 @@ function check_call!(c::Checker, ex)
     v === nothing && return
     owned(v) || return
     nameof(v) in c.scope.extended && return
+    if KEYWORD_SUPPORT !== nothing
+        c.stats[:skipped] += 1
+        return
+    end
     accepted = accepted_keywords(v)
     if accepted === nothing
         c.stats[:skipped] += 1
@@ -720,17 +767,28 @@ const SCRIPT_BREAKAGES = Tuple{String,String}[
 ]
 
 @testset "script references resolve" begin
-    failures, stats, _ = ScriptRefs.check()
-    known(f) = (f.file, f.name) in SCRIPT_BREAKAGES
-    for (file, name) in SCRIPT_BREAKAGES
-        @test_broken !any(f -> f.file == file && f.name == name, failures)
+    if !ScriptRefs.PARSES
+        @info "script references not checked: `Meta.parseall` is not defined in " *
+              "Julia $VERSION"
+        @test_skip ScriptRefs.PARSES
+    else
+        failures, stats, _ = ScriptRefs.check()
+        known(f) = (f.file, f.name) in SCRIPT_BREAKAGES
+        for (file, name) in SCRIPT_BREAKAGES
+            @test_broken !any(f -> f.file == file && f.name == name, failures)
+        end
+        unexpected = filter(!known, failures)
+        for f in unexpected
+            @warn "broken script reference: $f"
+        end
+        @test isempty(unexpected)
+        @info "script references: $(stats[:files]) files, $(stats[:references]) " *
+              "qualified references, $(stats[:imports]) imported names, " *
+              "$(stats[:calls]) keyword calls checked, $(stats[:skipped]) not checked"
+        if ScriptRefs.KEYWORD_SUPPORT !== nothing
+            @info "script keywords not checked in Julia $VERSION: " *
+                  ScriptRefs.KEYWORD_SUPPORT
+            @test_skip ScriptRefs.KEYWORD_SUPPORT === nothing
+        end
     end
-    unexpected = filter(!known, failures)
-    for f in unexpected
-        @warn "broken script reference: $f"
-    end
-    @test isempty(unexpected)
-    @info "script references: $(stats[:files]) files, $(stats[:references]) " *
-          "qualified references, $(stats[:imports]) imported names, " *
-          "$(stats[:calls]) keyword calls checked, $(stats[:skipped]) not checked"
 end
