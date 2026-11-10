@@ -472,7 +472,11 @@ function _setup_amr(prob, num, amr::AMR)
     if amr.initial isa BlockRegion || amr.initial isa Vector{BlockRegion}
         amr.initial isa Vector{BlockRegion} && isempty(amr.initial) &&
             throw(ArgumentError("AMR initial region vector cannot be empty"))
-        return _setup_with_amr_keywords(prob, num, _amr_keywords(amr))
+        solver, states = _setup_with_amr_keywords(prob, num, _amr_keywords(amr))
+        # The constructor checks a static hierarchy under the limiter; the
+        # tiles of a regridded one, from the regions given, are checked here.
+        amr.regrid_interval > 0 && _check_limiter_tiles(solver)
+        return solver, states
     end
     seed = _amr_seed_region(num.n_global, num.n_halo)
     solver, states = _setup_with_amr_keywords(

@@ -114,9 +114,10 @@
 #             (64), with a box at the corner of the axis and the plane, to
 #             t = 0.165, and `a19tiles`, `a19regrid` (each also with `sub`)
 #             with tiles of edge 8 over the lattice cells within that box,
-#             static and regridded (a19n − 1 a multiple of 8, so that a tile
-#             a regrid places at the outer faces is a whole lattice cell, whose
-#             line the limiter takes); `tiles` and `tilessub`: a blast in a 64²
+#             static and regridded (where a19n − 1 is not a multiple of 8 the
+#             lattice cells at the outer faces are partial, too short for the
+#             limiter, and a limited regrid leaves them to the root); `tiles`
+#             and `tilessub`: a blast in a 64²
 #             square with tiles of edge 8 over its centre, to t = 0.25. Not in
 #             `part=all`
 #   levelcost the wall time per step of the same cases' first steps, as

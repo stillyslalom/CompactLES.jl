@@ -227,6 +227,10 @@ include("capability_cases.jl")
                 C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)), limited())
         rejects("the face relation of the filter needs at least", closed,
                 Numerics(n_global=(20, 1, 1), positivity_limiter=true))
+        # The last cell of the tile lattice spans 7 of the 63 spacings.
+        rejects("positivity_limiter: a refined patch is too short", closed,
+                limited(amr=AMR(initial=BlockRegion((0, 0, 0), (64, 1, 1)), tile=8),
+                        patch_interfaces=:closure))
         rejects("the solver components carry different floating-point types", gas,
                 Numerics(n_global=(32, 1, 1), deriv=lele_d1_6(Float32)))
 

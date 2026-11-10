@@ -121,8 +121,11 @@ coarse-fine face is checked with the interface rows there and needs at most as
 many, 23 under the default derivative between two such ends; a tile of edge
 8 parent nodes has 25. Under the limiter a regridded box spans at least 9
 parent nodes along each dimension under the default derivative (11 and 14
-under the other two), and a refined patch whose lines are shorter raises an
-`ArgumentError` when its limiter is built.
+under the other two). A tile over a partial cell of the lattice, at a domain
+face where the root's node count less one is not a multiple of the edge or at
+the nesting margin, can have shorter lines: setup refuses a refined patch
+whose lines are too short, and a regrid does not create such a tile, so the
+cell stays at the parent's resolution.
 
 ## Checkpoints
 
@@ -188,6 +191,7 @@ text below.
 | `positivity_limiter` with implicit conduction | `positivity_limiter: does not combine with implicit conduction` |
 | `positivity_limiter` with a fold other than r = 0 of a radial grid or a symmetry plane at z = 0 of an r-z plane | `positivity_limiter: does not support folded ends other than r = 0` |
 | `positivity_limiter` on a closed line too short for the filter's face relation | `the face relation of the filter needs at least` |
+| `positivity_limiter` with a refined patch, such as a tile over a partial lattice cell, whose lines are too short for the face form | `positivity_limiter: a refined patch is too short` |
 | components of different floating-point types | `the solver components carry different floating-point types` |
 | a `patch_grid` checkpoint | `a same-level patch layout (patch_grid) has no checkpoint` |
 | a checkpoint loaded at another element type | `element type mismatch` |

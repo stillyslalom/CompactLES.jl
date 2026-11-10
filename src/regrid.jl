@@ -2183,8 +2183,12 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # `created` is derived from the reduced flags, so every rank holds it,
     # and so is the choice of lattice.
     period = _level_period(solver, 0)
-    wanted_sets = [_lattice_wanted(flagsets[i], Ks[i], chain[i], active, lo, hi, spec,
-                                   old_regions, i == current, period)
+    # Under the positivity limiter a tile too short for its face form, over
+    # a partial cell at a domain face or at the margin, is not created
+    # (`_limiter_tile_ok`), and the parent covers that cell.
+    wanted_sets = [filter!(t -> _limiter_tile_ok(solver, t, 1),
+                           _lattice_wanted(flagsets[i], Ks[i], chain[i], active, lo, hi,
+                                           spec, old_regions, i == current, period))
                    for i in eachindex(chain)]
     pick = _choose_lattice(solver, spec, 1, chain, wanted_sets, current, root_lc.size,
                            isempty(old_regions))
@@ -2635,7 +2639,7 @@ function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
             # The lattice's last node: across a seam the period's P + 1.
             t = _lattice_tile(k, active, a, lo, hi,
                               ntuple(d -> wrap[d] > 0 ? wrap[d] + 1 : N[d], 3))
-            t === nothing && continue
+            (t === nothing || !_limiter_tile_ok(solver, t, ℓ)) && continue
             _tile_wanted(t, get(flags, k, zero(Int8)), old) || continue
             box = _buffered(t, active, margin, _boundary_faces(t, span, reach))
             _covered_by(box, parent_valid[_candidates(parent_bins, box)], period) || continue

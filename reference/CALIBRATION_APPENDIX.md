@@ -2144,6 +2144,7 @@ julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,
 julia --project=. -t 1 bench/positivity.jl part=levels levels=noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
 julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
 julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33 reps=3
+julia --project=. -t 1 bench/positivity.jl part=levels levels=a19regrid a19n=32
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2383,10 +2384,12 @@ the same, regridded tiles              331 / 334        0, 321                 0
 regridded tiles, subcycled             121 / 199        0, 139                 0, 0
 ```
 
-At 32² the regridded tiles stop at the first regrid: the last lattice cell at the outer faces
-spans 7 of the 31 root spacings, its tile's line has 22 nodes, and the limiter's construction
-raises, as it does for any tile too short for the filter's face relation; a static level over
-part of a cell does the same. On the Noh rows, limited, the tiles give plateau 15.6808,
+At 32² the last lattice cell at the outer faces spans 7 of the 31 root spacings, and the line of
+a tile over it, 22 nodes between its interface and the wall, takes no face form. Under the limiter
+a regrid does not create that tile and the cell stays at the root's resolution (8 tiles at step
+60 against the unlimited run's 14), and setup refuses a level given over it. The regridded row at
+32² then takes 322 / 326 steps, with 0, 292 inadmissible point-steps unlimited, 0, 0 limited and
+32 unguaranteed sides. On the Noh rows, limited, the tiles give plateau 15.6808,
 deficit 50.4%, shock 0.2033 and mass +4.1e-4 (15.6833, 50.3%, 0.2033, +4.2e-4 subcycled;
 15.6816, 50.5%, 0.2033, +4.7e-4 regridded; 15.6986, 50.2%, 0.2033, +5.7e-4 regridded and
 subcycled) against the limited box's 15.6672, 50.8%, 0.2032 and

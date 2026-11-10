@@ -8,9 +8,10 @@
 # same-level patches and on refined levels, a run it never acts in and a
 # strong shock it keeps admissible, there with the shell's admissible
 # fallback on subcycled tiles, and on tiles at the cylindrical axis and the
-# r-z corner, a run it never acts in and the strong shocks. The rejected
-# configurations are in capability_tests.jl, the decomposed run in the MPI
-# suite's "positivity limiter" phase.
+# r-z corner, a run it never acts in and the strong shocks, and a tile too
+# short for its face form, refused at setup and left out by a regrid. The
+# rejected configurations are in capability_tests.jl, the decomposed run in
+# the MPI suite's "positivity limiter" phase.
 #
 # Serial. Included by runtests.jl, and runnable on its own:
 #
@@ -666,5 +667,33 @@ end
             report = state_report(s, Q)
             @test report.inadmissible == 0 && report.negative_density == 0
         end
+    end
+
+    @testset "a tile too short for the limiter is refused at setup, left out by a regrid" begin
+        # The converging shock of the r-z corner at 32²: the last lattice cell
+        # of edge 8 at the outer faces spans 7 of the 31 root spacings, and the
+        # line of a tile over it, 22 nodes between an interface and a wall,
+        # takes no face form. A regrid leaves that cell to the root; a level
+        # given over it is refused, static or regridded.
+        prob = Problem(eos=POS_GAS, metric=CylindricalMetric(),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2],
+                            (SymmetryPlaneBC(), SlipWallBC())),
+                       ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
+                                        Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
+        num(region; kw...) = Numerics(n_global=(32, 1, 32), patch_interfaces=:closure,
+                                      amr=AMR(; initial=region, tile=8, kw...),
+                                      control=StepControl(validity=:permissive),
+                                      positivity_limiter=true)
+        s, Q = setup(prob, num(BlockRegion((0, 0, 0), (25, 1, 25)); regrid_interval=10))
+        bad = pos_bad_points(s, Q; tfinal=0.165)
+        @test completed(s, 0.165)
+        @test bad == 0
+        @test all(r -> r.offset[1] + r.extent[1] <= 25 && r.offset[3] + r.extent[3] <= 25,
+                  level_regions(s, 1))
+        whole = BlockRegion((0, 0, 0), (32, 1, 32))
+        @test_throws "positivity_limiter: a refined patch is too short" setup(prob, num(whole))
+        @test_throws "positivity_limiter: a refined patch is too short" setup(
+            prob, num(whole; regrid_interval=10))
     end
 end

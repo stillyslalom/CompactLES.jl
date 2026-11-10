@@ -131,8 +131,9 @@
 # the shared node is the end node of both patches. Its end face, which carries
 # the point flux of the node, is limited as well, toward the point flux of the
 # node's state, by one θ on both patches (`_exchange_interface_theta!`). Under
-# `:ghost` the inviscid flux and the rest close with different rows, and the
-# setup rejects the limiter.
+# `:ghost` the inviscid flux and the rest close with different rows, so the
+# constructor closes the interfaces with the closure rows instead, with a
+# warning.
 #
 # Refined levels. A refined patch closes its lines at a coarse-fine face with
 # the same interface rows, so its weights there are a same-level patch's. The
@@ -147,7 +148,10 @@
 # injected restriction. Under
 # subcycling every level limits the stages of its own steps with its own
 # registers, and a refined level's filter passes, which it takes at its own
-# cadence, are limited there.
+# cadence, are limited there. A tile over a partial lattice cell, at a domain
+# face or at the nesting margin, can be too short for the face form: setup
+# refuses such a patch, and a regrid does not create it and leaves the cell
+# to the parent (`_limiter_tile_short`).
 #
 # Per-point work runs through `pointwise!` bodies over three index boxes: the
 # lines of a direction (the running sums and the θ passes, one sequential sweep
@@ -261,6 +265,8 @@ lines; the counts of a dropped patch's limiter are kept in `retired`.
 the shortest fine line between two coarse-fine faces that takes the face
 form and the filter's face relation. `separate` is set for the tiles of a
 radial grid, whose limiters hold the scratch of the radial pass themselves.
+`lines` holds, per node count and per end at an interface, whether a closed
+line takes the face form (`_limiter_tile_short`).
 """
 mutable struct PatchLimiters
     limiters::Vector{Any}
@@ -268,11 +274,13 @@ mutable struct PatchLimiters
     retired::Vector{Int}
     least::Int
     separate::Bool
+    lines::Dict{Tuple{Int,Bool,Bool},Bool}
 end
 
 PatchLimiters(limiters::Vector{Any}, patches::Vector{Any}, least::Int=4,
               separate::Bool=false) =
-    PatchLimiters(limiters, patches, zeros(Int, 6), least, separate)
+    PatchLimiters(limiters, patches, zeros(Int, 6), least, separate,
+                  Dict{Tuple{Int,Bool,Bool},Bool}())
 Base.getindex(pl::PatchLimiters, i::Int) = pl.limiters[i]
 
 # The fewest parent nodes along a dimension `tagged_region` gives a box: four,
@@ -443,9 +451,11 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
         end
         # A tile's line on a refined level: 3 tile + 1 nodes between two
         # interface ends at the level's spacing. A box's extent changes at a
-        # regrid; its patch is checked as its limiter is built. A regrid that
-        # subdivides the lattice stops at the edge this line needs
-        # (`_limiter_least_extent`).
+        # regrid, and a tile over a partial lattice cell is shorter: the
+        # constructed hierarchy is checked patch by patch, and a regrid
+        # creates no patch that fails the check (`_limiter_tile_short`). A
+        # regrid that subdivides the lattice stops at the edge this line
+        # needs (`_limiter_least_extent`).
         if nlev > 1 && _tiled(tile)
             hf = T(L_domain[d] / (periodic[d] ? n_global[d] : n_global[d] - 1) / 3)
             _check_limiter_line(fail, deriv, filt, d, 3tile[d] + 1, hf, n_halo, T,
@@ -463,6 +473,68 @@ function _limiter_least_box(deriv, filt, interface_rhs, interface_divergence,
     rows = _limiter_interface_rows(deriv, interface_rhs, interface_divergence)
     N = _limiter_least_line(deriv, filt, n_halo, T, rows, rows)
     return N == typemax(Int) ? 4 : max(4, cld(N - 1, 3) + 1)
+end
+
+# The first line of a level-ℓ patch over `region` (level ℓ − 1's node space)
+# that the limiter's construction would refuse, as `(d, N, least)`: the
+# dimension, the line's node count and the fewest nodes a line with the same
+# ends takes; `nothing` where every line passes or the solver has no limiter.
+# A line is tested as `PositivityLimiter` tests it: where an end lies at an
+# interface, closed there by the interface rows and at a domain face by that
+# face's own rows. A line folded at r = 0 and a line spanning the domain are
+# not tested. A partial lattice cell at a domain face or at the nesting margin
+# gives a tile shorter than the whole cell `_validate_positivity` checks.
+function _limiter_tile_short(solver, region::BlockRegion, ℓ::Int)
+    pl = getfield(solver, :positivity)
+    pl isa PatchLimiters || return nothing
+    boundary = only(_region_boundaries(solver, [region], ℓ))
+    folded = only(_region_folds(solver, [boundary]))
+    active = ntuple(d -> solver.n_global[d] > 1, 3)
+    extent = fine_extent(region, active, folded)
+    schemes = getfield(solver, :schemes)
+    deriv, filt = schemes.deriv, schemes.filt
+    rows = _limiter_interface_rows(deriv, schemes.interface_rhs,
+                                   schemes.interface_divergence)
+    n_halo = getfield(solver, :patches)[1].decomp.n_halo
+    T = eltype(getfield(solver, :h))
+    for d in 1:3
+        (active[d] && !folded[d][1] && !all(boundary[d])) || continue
+        lo_rows = boundary[d][1] ? nothing : rows
+        hi_rows = boundary[d][2] ? nothing : rows
+        ok = get!(pl.lines, (extent[d], !boundary[d][1], !boundary[d][2])) do
+            _limiter_line_ok(deriv, filt, extent[d], n_halo, T, lo_rows, hi_rows)
+        end
+        ok && continue
+        return (d, extent[d], _limiter_least_line(deriv, filt, n_halo, T, lo_rows, hi_rows))
+    end
+    return nothing
+end
+
+# Whether a regrid may create a level-ℓ tile over `region`: always without the
+# limiter, and under it where every line of the tile passes
+# `_limiter_tile_short`. The test reads the region and setup constants alone,
+# so every rank takes the same tiles.
+_limiter_tile_ok(solver, region::BlockRegion, ℓ::Int) =
+    _limiter_tile_short(solver, region, ℓ) === nothing
+
+# The setup check of a refined hierarchy under the limiter, whose patches'
+# limiters are built as `run!` starts: every patch of every level passes
+# `_limiter_tile_short`.
+function _check_limiter_tiles(solver)
+    getfield(solver, :positivity) isa PatchLimiters || return nothing
+    for ℓ in 1:length(getfield(solver, :levels))-1, region in level_regions(solver, ℓ)
+        short = _limiter_tile_short(solver, region, ℓ)
+        short === nothing && continue
+        d, N, least = short
+        throw(ArgumentError(
+            "positivity_limiter: a refined patch is too short: the level-$ℓ patch " *
+            "over $region has $N nodes along dimension $d, and a line between its " *
+            "faces takes at least $least for the face form of the divergence and the " *
+            "face relation of the filter; widen the region, or cover whole cells of " *
+            "the tile lattice and leave a partial cell at the edge of the domain or " *
+            "of the nesting margin unrefined"))
+    end
+    return nothing
 end
 
 # The rows that close the divergence at a patch interface end, as the patched

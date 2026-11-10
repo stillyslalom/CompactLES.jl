@@ -1230,6 +1230,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                               T),
                                            tiled && _limiter_radial_line(bcs, metric,
                                                                          n_global)))
+    # A static hierarchy is checked here; a regridded one where setup builds it
+    # from the caller's regions (`_setup_amr`), since the bootstrap of a tagged
+    # start passes through here with a seed that its first regrid replaces.
+    positivity_limiter && regrid === nothing && _check_limiter_tiles(solver)
     # Each held patch's covered mask from the regions of the level below,
     # which every rank of the patch's level holds (`_fill_covered!`).
     for ℓ in 1:length(levels)-1

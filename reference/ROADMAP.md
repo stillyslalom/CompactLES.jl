@@ -265,11 +265,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   inadmissible point. Refined levels carry it (commits `d3bd6af`,
   `af002dd`): boxes and tiles, static or regridded, nested, global step or
   subcycled, on the Cartesian grid, and one box per level on the radial
-  grids. Tiles on the radial grids carry it, on host storage: a face two
-  tiles share along r is limited by one θ on both, its end face toward the
-  node's area-weighted point flux and pressure, and the converging shocks
-  of A19 and Noh ν = 2 on tiles leave no inadmissible point.
-  Coarse-fine end nodes and the parent's overwritten nodes are not
+  grids. Tiles on the radial grids carry it, on host storage (commit
+  `bf47776`): a face two tiles share along r is limited by one θ on both,
+  its end face toward the node's area-weighted point flux and pressure, and
+  the converging shocks of A19 and Noh ν = 2 on tiles leave no inadmissible
+  point. A tile over a partial lattice cell too short for the face form is
+  refused by setup and not created by a regrid, which leaves the cell to
+  the parent. Coarse-fine end nodes and the parent's overwritten nodes are not
   held, and their inadmissible states are kept out of held cells'
   first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
   rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
