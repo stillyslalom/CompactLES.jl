@@ -30,8 +30,8 @@
 #      butterfly that does MPI.Sendrecv! of whole blocks (the e-keeper/o-keeper
 #      split), reached only when the pairing/reversed dimension is split, for
 #      the derivatives, the filters and the :delta4 detector.
-#   4. The discrete-GCL freestream identity with the θ-derivative of the area
-#      factor crossing a rank boundary.
+#   4. Freestream preservation with a fold's antipodal partner, or the θ line
+#      through the poles, split across ranks.
 #   5. Telescoping flux conservation across rank boundaries.
 #   6. Global synchronization — that every rank agrees on dt and on the
 #      simulation time after a real transient. A missing Allreduce leaves the
@@ -634,9 +634,9 @@ end
 
 # ---------------------------------------------------------------------------
 # 5. Freestream preservation (uniform state ⇒ dQ ≈ 0), decomposed. Divergence,
-#    metric sources, and the (fold-aware, discrete-GCL) geometry must stay
-#    consistent to machine zero even when the singular-axis θ-derivative of the
-#    area factor crosses a rank boundary.
+#    metric sources, and the fold-aware geometry must stay consistent to
+#    machine zero even when a fold's antipodal partner, or the θ line through
+#    the poles, lies on another rank.
 # ---------------------------------------------------------------------------
 function test_freestream()
     section("freestream preservation: uniform state ⇒ dQ ≈ 0, decomposed")

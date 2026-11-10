@@ -99,7 +99,7 @@ mpiexec -n 8 julia --project=. -t 1 test/mpi_tests.jl
 
 These tests change block ownership and interface patterns while comparing with
 serial behavior. They cover distributed tridiagonal and pentadiagonal solves,
-halo exchange, off-rank coordinate folds, discrete GCL construction, and
+halo exchange, off-rank coordinate folds, freestream preservation, and
 telescoping conservation.
 
 ## Shock validation battery

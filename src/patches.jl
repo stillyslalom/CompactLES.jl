@@ -80,7 +80,7 @@
 #       shared faces `_level_artificial!` writes them instead, holding each
 #       sensor in them before smoothing.
 #   sensed_fields   within one level's artificial-property pass.
-#   inv_J area_d inv_h inv_r cot_over_r cot_over_r_gcl   geometry, written once
+#   inv_J area_d inv_h inv_r cot_over_r   geometry, written once
 #       by `init_geometry!`.
 #   covered overwritten child_deep   `_fill_covered!` at setup and at every
 #       regrid.
@@ -512,8 +512,6 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     inv_h::NTuple{3,A}
     inv_r::A
     cot_over_r::A
-    # discrete-GCL cotθ/r (metric.jl gcl_cotr!): read by the momentum sources only
-    cot_over_r_gcl::A
     # The RHS scratch set (RHSWorkspace), shared with the rank's other patches
     # of the same padded extent. Its names reach callers through the property
     # forwarding below, so `solver.grad_u` and `solver.tmp_a` read as before.
@@ -594,7 +592,7 @@ Base.@nospecializeinfer function Patch(id, level, region, comm, decomp, h, faces
                deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
-               inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
+               inv_J, area_d, inv_h, inv_r, cot_over_r,
                rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
                sensed_fields=empty(Y),
                child_deep=isempty(rhs_workspace.child_mask) ?
@@ -608,7 +606,7 @@ Base.@nospecializeinfer function Patch(id, level, region, comm, decomp, h, faces
                   deriv_plans, div_plans, filter_plans, smooth_plans,
                   ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                   cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
-                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
+                  inv_J, area_d, inv_h, inv_r, cot_over_r,
                   rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
                   sensed_fields, child_deep, child_masked, field_tuples,
                   RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
@@ -862,7 +860,7 @@ end
     n === :p || n === :T_ion || n === :c || n === :cp_mix || n === :Y ||
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
-    n === :cot_over_r || n === :cot_over_r_gcl || n === :covered ||
+    n === :cot_over_r || n === :covered ||
     n === :overwritten || n === :child_deep || n === :child_masked ||
     n === :field_tuples || _is_workspace_prop(n)
 

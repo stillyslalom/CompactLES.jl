@@ -48,17 +48,27 @@ The amplitude must remain below one for monotonicity. A stretched dimension
 must be nonperiodic. Excessive clustering reduces the smallest physical spacing
 and hence the explicit timestep.
 
-## Discrete geometric conservation
+## Freestream preservation
 
-Analytic metric identities do not automatically cancel when each term is
-discretized. In spherical coordinates, for example, differentiating a sampled
-`sin(theta)` is not exactly the same as inserting an analytic `cos(theta)` in a
-separate source term.
+A uniform gas at rest must stay at rest, with no force from the metric factors
+alone. Analytic metric identities do not automatically cancel when each term
+is discretized: in spherical coordinates the discrete derivative of a sampled
+`sin(theta)` is not exactly a sampled `cos(theta)`, so an area-weighted
+pressure divergence and its curvature source would not cancel exactly.
 
-CompactLES constructs the spherical cotangent source with the same discrete
-operator and area factor used by flux divergence. This discrete geometric
-conservation law preserves a uniform state to roundoff. The test suite checks
-freestream preservation in every metric and across MPI boundaries.
+CompactLES therefore writes the pressure term of the spherical radial and
+polar momenta, and of the radial momentum on an axisymmetric ``(r, z)`` grid,
+as a gradient, ``\partial p/\partial r`` or
+``(1/r)\,\partial p/\partial\theta``, whose discrete value on a constant is
+zero to roundoff at every node. In the other momentum equations the face-area
+factor does not vary along the derivative, except in the radial momentum of a
+cylindrical grid with a resolved angle, where it is ``r``. A compact
+derivative of a linear function is exact, so there the divergence and the
+``p/r`` source cancel to roundoff on an unstretched radial grid; a stretched
+radial grid leaves a residual of the order of the scheme's truncation error
+on the mapping. The curvature terms that remain in the momentum sources use
+the analytic ``\cot\theta/r``. The test suite checks freestream preservation
+in every metric and across MPI boundaries.
 
 ## Coordinate singularities
 

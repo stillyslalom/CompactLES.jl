@@ -150,11 +150,6 @@ end
 Fill the geometric arrays of `solver` over the full padded extent, in place, and
 return `solver`. No halo exchange is needed, since every value is evaluated from
 the global index.
-
-Under `SphericalMetric` with a resolved θ the last step is `gcl_cotr!`, which
-runs a distributed compact solve along θ. Every rank must therefore reach this
-function in that configuration; the two conditions guarding the call are global
-properties, so no rank can take the other branch on its own.
 """
 function init_geometry!(solver)
     _share_uniform_geometry!(solver)
@@ -181,24 +176,17 @@ function init_geometry!(solver)
         _upload!(solver.inv_r, inv_r)
         _upload!(solver.cot_over_r, cot_over_r)
     end
-    # The momentum sources read the discrete-GCL cotθ/r; everything else
-    # (the velocity-gradient correction, the rate estimate) keeps the
-    # analytic value. Without a resolved θ the two coincide.
-    _assign!(solver.cot_over_r_gcl, solver.cot_over_r)
-    solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
     return solver
 end
 
 # Geometry that takes one value over the whole grid is held in one array. On an
 # unstretched Cartesian grid every scale factor is exactly 1, so the inverse
 # Jacobian, the three face areas and the three inverse scale factors are all
-# ones, and the fill below writes the same value through each alias. Off the
-# spherical metric cotθ/r is zero, as 1/r is on a Cartesian grid, and the
-# discrete-GCL cotθ/r equals the analytic one wherever `gcl_cotr!` does not
-# run. Nothing but this function writes these arrays, so pointing the
-# patch's fields at one of each before the fill changes no value; the arrays
-# they replace, allocated with the patch, are dropped. A stacked tile's views
-# and a stack's arrays keep their own storage.
+# ones, and the fill below writes the same value through each alias. On a
+# Cartesian grid cotθ/r is zero, as 1/r is. Nothing but this function writes
+# these arrays, so pointing the patch's fields at one of each before the fill
+# changes no value; the arrays they replace, allocated with the patch, are
+# dropped. A stacked tile's views and a stack's arrays keep their own storage.
 function _share_uniform_geometry!(solver)
     p = _patch_of(solver)
     ones_ = p.inv_J
@@ -209,8 +197,6 @@ function _share_uniform_geometry!(solver)
         p.inv_h = (ones_, ones_, ones_)
     end
     metric isa CartesianMetric && (p.cot_over_r = p.inv_r)
-    metric isa SphericalMetric && solver.decomp.active[2] ||
-        (p.cot_over_r_gcl = p.cot_over_r)
     return solver
 end
 
@@ -242,57 +228,6 @@ function _fill_geometry!(solver, inv_J, area_d, inv_h, inv_r, cot_over_r)
         end
     end
     return solver
-end
-
-# Discrete Geometric Conservation Law correction for the spherical θ-momentum
-# source. In the area form the θ-momentum balance for a uniform state pits the
-# flux divergence −inv_J·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ
-# (metric.jl below), where A₂ = r sinθ is the θ area factor and D_ξ2 is the
-# compact θ-derivative used in the divergence loop (rhs.jl). Analytically
-# inv_J·∂_ξ2(A₂) = cotθ/r and the two cancel; discretely D_ξ2(sinθ) ≠ cosθ, so
-# the analytically sampled cotθ/r leaves an O(h⁴) freestream residual (a GCL
-# truncation error, not a bug).
-#
-# Exact discrete freestream preservation uses cotθ/r defined as
-# inv_J·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
-# fold, same antipodal sign σ as the m2 flux) applied to the identical area
-# factor. By linearity the source then cancels the divergence node-by-node for
-# any uniform state, by construction. With θ resolved the θ-momentum takes
-# its pressure term as (1/r)∂p/∂θ (`_polar_pressure_gradient`), which a uniform
-# state leaves at zero without this cancellation, and the array weights the
-# rest of Π_φφ and Π_φθ in the sources.
-#
-# The result lives in `cot_over_r_gcl`, read by `add_metric_sources!` alone,
-# and not in `cot_over_r`, which `metric_correct_gradients!` reads for the
-# curvature terms of ∇u. The discrete value deviates from the analytic one at
-# the order of the θ closure, measured third order on a spherical shell both
-# at the walls and in the interior (the compact solve is global), so sharing
-# one array put a third-order error into `grad_u[3,2]`, `grad_u[3,3]` and
-# everything built from them at every scheme order.
-function gcl_cotr!(solver)
-    decomp = solver.decomp
-    # Same antipodal sign the flux-divergence loop uses for the θ-momentum
-    # (m2) pressure flux across the θ pole fold (ignored when there is no fold).
-    σ = solver.folds[2] === nothing ? 1 : solver.folds[2].sigflux[solver.equations.i_mom[2]]
-    # D_ξ2(A₂) with the m2 fold sign, through the divergence plans so the
-    # cancellation holds against the operator the divergence loop applies.
-    div_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    pointwise!(_gcl_cotr_point!, solver.cot_over_r_gcl, nx, ny, nz,
-               solver.cot_over_r_gcl, solver.inv_J, solver.tmp_a, o1, o2, o3)
-    return solver
-end
-
-# Interior only: the halo layers keep the analytic value copied in by
-# `init_geometry!`, and no consumer of `cot_over_r_gcl` reads a halo.
-@inline function _gcl_cotr_point!(cot_over_r_gcl, inv_J, tmp_a, o1, o2, o3,
-                                  i, j, k)
-    @inbounds begin
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        cot_over_r_gcl[I] = inv_J[I] * tmp_a[I]
-    end
-    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -354,6 +289,19 @@ end
 # Momentum sources from ∇·Π in curvilinear coordinates, added to dQ after the
 # metric divergence of the fluxes. Π_ab = ρ u_a u_b + p δ_ab − τ_ab is
 # reconstructed pointwise from the stored primitives and gradients.
+#
+# On the spherical metric a uniform state at rest leaves each momentum
+# component at zero on its own, with no cancellation between a flux divergence
+# and a source. The radial momentum takes its pressure as ∂p/∂r where r is
+# resolved and the θ-momentum takes it as (1/r)∂p/∂θ where θ is resolved (the
+# two rules below), each the compact derivative of a constant, and the sources
+# then carry Π without the pressure, which vanishes with the velocity; the
+# φ-momentum's flux A_φ p does not vary along φ. What the sources weight by
+# cotθ/r, the dynamic and viscous parts of Π_φφ and Π_φθ, are pointwise
+# products that balance no discrete divergence, so they take the analytic
+# `cot_over_r`, the array the curvature terms of ∇u read. A weight built from
+# the discrete θ derivative of A_θ differs from it at the order of the θ
+# closure rows and gives a steady rotating state no smaller truncation error.
 
 add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 
@@ -471,7 +419,7 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
                dQ, solver.field_tuples.grad_u, solver.transport, solver.eos,
                solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.inv_r, solver.cot_over_r_gcl, m[1], m[2], m[3],
+               solver.p, solver.inv_r, solver.cot_over_r, m[1], m[2], m[3],
                !_radial_pressure_gradient(solver), !_polar_pressure_gradient(solver),
                o1, o2, o3)
     return solver

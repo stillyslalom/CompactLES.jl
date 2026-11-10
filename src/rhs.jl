@@ -135,10 +135,8 @@ data that a flux array does not carry, so the divergence keeps one-sided
 closure rows there, the scheme's own or the cascade's for the neutral set
 (`interface_divergence_closures`, `solver.div_plans`). A folded dimension draws on the
 fold's own divergence plans instead, which are its derivative plans except on a
-refined patch whose folded dimension ends at an interface. The flux-divergence
-loop and the discrete-GCL construction `gcl_cotr!` go through here so the two
-apply the identical operator. Same collective, halo, and fold contract as
-[`deriv_along!`](@ref).
+refined patch whose folded dimension ends at an interface. Same collective,
+halo, and fold contract as [`deriv_along!`](@ref).
 """
 @noinline function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = _fold_at(solver, d)

@@ -322,9 +322,8 @@ phase after every patch of the level has evaluated its right-hand side
 (`_level_ghost_fluxes!`), so no cross-patch communication sits inside one
 patch's `compute_rhs!` (`src/rhs.jl`, "The flux divergence through interface
 ends"). `:closure` keeps the scheme's own one-sided closures
-(`Patch.div_plans`) for the whole flux. `gcl_cotr!` routes through the same
-divergence plans so the discrete GCL cancellation is preserved. A banded
-scheme takes `q` such rows per end
+(`Patch.div_plans`) for the whole flux. A banded scheme takes `q` such rows
+per end
 ([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
 
 The two-conforming-patch gates measure the entropy wave across the

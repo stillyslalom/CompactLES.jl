@@ -1,9 +1,9 @@
 # Seams between mechanisms that are each correct alone: the antipodal pairing
-# against the velocity-component parity, the GCL correction against the
-# velocity-gradient correction, the banded x sweep against the y/z sweeps, the
-# thermal diffusion limit against the EOS. Each case here is one that the
-# rest of the suite passed while the seam was wrong. Included from runtests.jl,
-# which supplies `CL`, `per3`, `fillf!` and `ferr`.
+# against the velocity-component parity, the spherical momentum sources against
+# the velocity-gradient correction (one cotθ/r serves both), the banded x sweep
+# against the y/z sweeps, the thermal diffusion limit against the EOS. Each case
+# here is one that the rest of the suite passed while the seam was wrong.
+# Included from runtests.jl, which supplies `CL`, `per3`, `fillf!` and `ferr`.
 
 using CompactLES: compute_rhs!, apply_bcs!, xcoord
 
@@ -46,10 +46,15 @@ using CompactLES: compute_rhs!, apply_bcs!, xcoord
     @test axis <= 2 * inner
 end
 
-@testset "spherical: analytic cotθ/r for ∇u, discrete-GCL cotθ/r for sources" begin
-    # The two live in separate arrays. The GCL value deviates from the analytic
-    # one at the order of the θ closure; sharing one array put that deviation
-    # into grad_u at every scheme order.
+@testset "spherical: analytic cotθ/r, and a walled θ-resolved shell at rest" begin
+    # The velocity-gradient correction and the momentum sources read one
+    # analytic cotθ/r. A discrete value in its place, the θ derivative of the
+    # area factor, deviates from it at the order of the θ closure rows, and in
+    # the shared array that deviation enters grad_u at every scheme order. With
+    # θ resolved and closed by walls, the radial and polar pressure terms are
+    # derivatives of a constant for a uniform state at rest, and the sources
+    # carry no pressure, so the right-hand side is at round-off without that
+    # discrete value.
     solver = Solver(n_global=(16, 32, 12), L_domain=(1.0, π/2, 2π),
                     origin=(1.0, π/4, 0.0), metric=SphericalMetric(),
                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
@@ -59,11 +64,7 @@ end
     ana(i, j) = cos(xcoord(solver, 2, j)) / (xcoord(solver, 1, i) * sin(xcoord(solver, 2, j)))
     e_an = maximum(abs(solver.cot_over_r[i+o1, j+o2, 1+o3] / ana(i, j) - 1)
                    for i in 1:nx, j in 1:ny)
-    e_gcl = maximum(abs(solver.cot_over_r_gcl[i+o1, j+o2, 1+o3] / ana(i, j) - 1)
-                    for i in 1:nx, j in 1:ny)
     @test e_an == 0
-    @test 1e-6 < e_gcl < 1e-4
-    # Freestream preservation still holds through the GCL array.
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)

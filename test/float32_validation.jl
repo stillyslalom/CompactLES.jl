@@ -64,9 +64,10 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
     # exact under the `:cascade3` rows, whose dyadic weights annihilate a
     # constant in floating point; the `:neutral3` rows carry thirds and
     # leave the round-off of their products, 2.2e-6 here, the constant
-    # annihilation residual of reference/CALIBRATION_APPENDIX.md. Curvilinear
-    # metric/source cancellation reaches the Float32 roundoff floor;
-    # spherical is the largest at 1.22e-4.
+    # annihilation residual of reference/CALIBRATION_APPENDIX.md. The
+    # curvilinear cases reach the Float32 roundoff floor: the spherical origin
+    # and poles case above (24 × 12 × 12, at rest, Float32) measured 2.4e-6,
+    # all of it in the radial momentum.
     @test residuals[1] == zero(T)
     @test residuals[2] < T(1e-5)
     @test maximum(residuals) < T(2e-4)

@@ -16,7 +16,7 @@ is intended to support modification and extension of the solver. For usage, see
 8. [Time integration](#time-integration)
 9. [The RHS: a walkthrough](#the-rhs-a-walkthrough)
 10. [Artificial fluid properties](#artificial-fluid-properties)
-11. [Curvilinear metrics and the discrete GCL](#curvilinear-metrics-and-the-discrete-gcl)
+11. [Curvilinear metrics and freestream preservation](#curvilinear-metrics-and-freestream-preservation)
 12. [Coordinate-singularity folds](#coordinate-singularity-folds)
 13. [Multicomponent thermodynamics](#multicomponent-thermodynamics)
 14. [Material and physics interfaces](#material-and-physics-interfaces)
@@ -101,7 +101,7 @@ validation cases are discussed, and never a viscosity.
 | `src/implicit.jl`         | `DiffusionStage`: the implicit stage `(I − γΔt L) T = r` on one patch, solved by conjugate gradients (GMRES at the axis and poles) preconditioned by a multigrid V-cycle on the second-order operator; `VariableLines`, its distributed tridiagonal lines with per-line coefficients |
 | `src/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
 | `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
-| `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |
+| `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the gradient form of the radial and polar pressure terms |
 | `src/folds.jl`            | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
 | `src/modes.jl`            | Azimuthal mode truncation near a cylindrical axis: the `mode_limit` table, the ring projection, the θ rate cap |
 | `src/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
@@ -949,7 +949,7 @@ columns of `grad_Q` past the partial densities, which caps it at three
 species. Measurements are in
 [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux).
 
-## Curvilinear metrics and the discrete GCL
+## Curvilinear metrics and freestream preservation
 
 `metric.jl` supports Cartesian, cylindrical (r, θ, z), and spherical (r, θ, φ)
 coordinates, uniformly spaced in the computational directions. Geometry enters
@@ -973,17 +973,46 @@ curvature corrections were refactored to be *additive* on top of a generic 1/h
 scaling. `sine_cluster` provides a closed-form interior-clustering map. Stretched
 dimensions must be non-periodic.
 
-**Discrete GCL.** The geometric conservation law is the requirement that the
-discretized metric terms cancel exactly for a uniform state, preserving a
-freestream without a residual from the geometry
-alone. For the spherical θ-momentum source, the flux
-divergence `−inv_J·D_ξ2(A₂·p)` and the analytic source `+(cotθ/r)·Π_φφ` cancel
-*analytically* for a uniform state, but `D_ξ2(sinθ) ≠ cosθ` *discretely*, leaving
-an O(h⁴) freestream residual. `gcl_cotr!` restores exact discrete freestream
-preservation by redefining `cotθ/r` as `inv_J·D_ξ2(A₂)`, the identical operator
-(same scheme, same fold, same antipodal sign) applied to the identical area
-factor, so the source cancels the divergence node-by-node by construction. The
-freestream-preservation test verifies this to machine zero in every metric.
+**Freestream preservation.** A uniform state at rest must give a right-hand
+side at round-off, so that the geometry alone drives no flow. At rest the only
+nonzero fluxes are the pressures in the momentum fluxes, and each momentum
+component takes its pressure in one of two forms (`_pressure_gradient` in
+`metric.jl` chooses):
+
+- *As a gradient*, `inv_h_d·D_ξd(p)`, with the metric sources carrying Π
+  without the pressure: the radial momentum wherever r is resolved, under
+  `SphericalMetric` and under `CylindricalMetric` with θ collapsed, and the
+  spherical θ-momentum with θ resolved. Every interior, closure and fold row
+  annihilates a constant to round-off, and Π without the pressure vanishes
+  with the velocity, so each term is zero on its own.
+- *Through the area-weighted divergence*, `inv_J·D_ξd(A_d·p)`, less the
+  pressure part of the source. In all but one case A_d does not vary along d:
+  on a Cartesian grid, stretched or not, A_d is the product of the other
+  directions' mapping Jacobians, and the same holds for the cylindrical θ-
+  and z-momenta and the spherical φ-momentum, which carry no pressure source.
+  The derivative is again that of a constant along the line. The exception is
+  the cylindrical radial momentum with θ resolved, where A₁ = r and the source
+  p/r balances `inv_J·D_ξ1(r)·p`. On an unstretched radial grid the balance
+  holds to round-off, since every row differentiates a linear function
+  exactly, the axis fold included (r is odd there, so its mirror continues the
+  line). On a stretched radial grid the compact derivative of the mapping
+  x(ξ) differs from x′(ξ) by the scheme's truncation error, and a residual of
+  that order remains in the radial momentum; no freestream test covers that
+  configuration.
+
+A collapsed dimension takes no derivative, so the pressure part of a source
+whose area factor varies along it has no partner: a collapsed θ under
+`SphericalMetric` leaves (cotθ/r) p on the θ-momentum, at round-off only at
+θ = π/2, where the radial cases place it, and a collapsed r leaves the
+radial momentum its source s p/r (s = 1 cylindrical, 2 spherical).
+
+The sources weight the remaining parts of Π_φφ and Π_φθ by the analytic cotθ/r,
+the array `metric_correct_gradients!` reads for the curvature terms of ∇u:
+they are pointwise products and balance no discrete divergence. The freestream
+testsets of `test/serial_suite.jl` (every metric and fold),
+`test/seam_tests.jl` (a θ-resolved shell closed by walls) and
+`test/mpi_tests.jl` (a fold's antipodal partner on another rank) check a
+uniform state to round-off.
 
 ## Coordinate-singularity folds
 

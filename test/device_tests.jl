@@ -210,9 +210,10 @@ end
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
 
-    # Spherical origin + poles freestream: gcl_cotr! through the device plans
-    # and both pair-fold parities. The discrete GCL cancels stored operator
-    # output node-by-node, so this is exact on either path.
+    # Spherical origin + poles freestream through the device plans: the radial
+    # and polar pressure gradients cross both paired folds, and every other
+    # flux of the state at rest is zero, so the right-hand side is the compact
+    # derivative of a constant on either path and the two agree bitwise.
     function sph(backend)
         s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
@@ -235,6 +236,7 @@ end
         CL.FORCE_KA[] = false
     end
     @test parent(dQ1) == parent(dQ2)
+    @test maximum(abs, parent(dQ1)) < 1e-12
 
     # The launch-path rate measurement agrees with the fused serial loop
     # bitwise: same candidates, exact max/min.
@@ -974,7 +976,7 @@ const POINTWISE_BODIES = (
     :_face_pick_point!,
     :_face_put_point!, :_face_save_point!,
     :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!, :_fold_fill_z_point!,
-    :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
+    :_gate_beta_point!, :_gated_beta_point!,
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
     :_internal_energy_point!, :_interp_point!, :_inviscid_flux_point!,
     :_kappa_point!, :_limiter_anchor_point!, :_limiter_correct_point!,

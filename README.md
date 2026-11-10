@@ -347,7 +347,7 @@ coordinate system, EOS round trips, discrete conservation, the NSCBC
 boundaries, and a Sod shock tube against the exact Riemann solution. The MPI
 suite covers the distributed compact solve, the halo exchange, reflections at
 axes, poles, and symmetry planes whose mirror points lie on another rank, and
-the geometric conservation law across rank boundaries. `convergence.jl`
+freestream preservation across rank boundaries. `convergence.jl`
 measures orders of accuracy (about 6, 8, and 10 in the interior for the three
 derivative operators, and 3 to 4 at wall closures and coordinate
 singularities) against recorded values, and `validation.jl` runs the Lax,

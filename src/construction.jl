@@ -988,7 +988,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   [f() for _ in 1:n_species],
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
-                  f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
+                  f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   ws_root, _covered_mask(decomp),
                   nlev > 1 ? f() : empty_field(backend, T),
                   _empty_level_scratch(empty_field(backend, T)),
@@ -1510,8 +1510,7 @@ function _patch_arrays(g::F, n_species::Int, n_sensed::Int=0) where {F}
     return (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
             Y=Y, mu_art=g(), beta_art=g(), kappa_art=g(),
             D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
-            inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g(),
-            overwritten=g(),
+            inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), overwritten=g(),
             sensed_fields=append!(empty(Y), (g() for _ in 1:n_sensed)))
 end
 
@@ -1525,7 +1524,7 @@ Base.@nospecializeinfer _assemble_patch(id::Int, level::Int, region, comm, decom
           plans.smooth, plans.ring, empty, empty,
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
-          a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
+          a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r,
           ws, covered, a.overwritten, scratch, gflux, a.sensed_fields)
 
 # --- Stacked tiles of a device level ------------------------------------------
@@ -1678,7 +1677,6 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        inv_J=v(arrays.inv_J), area_d=map(v, arrays.area_d),
                        inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
                        cot_over_r=v(arrays.cot_over_r),
-                       cot_over_r_gcl=v(arrays.cot_over_r_gcl),
                        overwritten=v(arrays.overwritten),
                        # Typed as `Y`'s views also when there is none.
                        sensed_fields=append!(empty(map(v, arrays.Y)),
@@ -1838,7 +1836,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               [g() for _ in 1:n_species],
               g(), g(), g(),
               [g() for _ in 1:n_species],
-              g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
+              g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
               ws, _covered_mask(dcp), empty3, _empty_level_scratch(empty3),
               _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
                                  similar(empty3, T, 0, 0, 0, 0),

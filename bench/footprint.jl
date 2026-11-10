@@ -89,7 +89,7 @@ end
 const PATCH_OWNERS = (
     primitives=(:rho, :u, :v, :w, :p, :T_ion, :c, :cp_mix, :Y),
     artificial=(:mu_art, :beta_art, :kappa_art, :D_art),
-    geometry=(:inv_J, :area_d, :inv_h, :inv_r, :cot_over_r, :cot_over_r_gcl),
+    geometry=(:inv_J, :area_d, :inv_h, :inv_r, :cot_over_r),
     workspace=(:rhs_workspace, :field_tuples),
     plans=(:folds, :deriv_plans, :div_plans, :filter_plans, :smooth_plans,
            :ring_plans, :pairbuf, :pairout),

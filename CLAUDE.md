@@ -7,7 +7,7 @@ the place to record a result.
 | file | what is in it |
 |---|---|
 | `README.md` | usage |
-| `reference/DESIGN.md` | the numerics — source map, compact solve, folds, GCL, NSCBC |
+| `reference/DESIGN.md` | the numerics — source map, compact solve, folds, freestream preservation, NSCBC |
 | `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
 | `reference/CALIBRATION.md` | the calibrated defaults and which setting to change for an instability or an over-dissipated solution |
 | `reference/CALIBRATION_APPENDIX.md` | every measurement, one section per instrument: the sweeps, dead ends and null results behind the defaults |
@@ -780,10 +780,10 @@ be revisited.
 - Keep source lines under ~95 characters. Four existing lines exceed it; don't
   add more.
 - Comments explain *why*, and several encode a measurement or a derivation
-  (`threading.jl` on the threading backend, `metric.jl` on the discrete GCL,
-  `folds.jl` on the antipodal butterfly, `decomposition.jl` on the
-  `Dims_create` signature). Move them with the code; don't delete the
-  reasoning.
+  (`threading.jl` on the threading backend, `metric.jl` on the gradient form
+  of the pressure terms, `folds.jl` on the antipodal butterfly,
+  `decomposition.jl` on the `Dims_create` signature). Move them with the
+  code; don't delete the reasoning.
 - Prose: avoid overuse of "Claudisms" including agency for inanimate things,
   setup-and-payoff, "what matters is/the thing that/is what makes/worth keeping",
   emphatic fragments, editorializing, and em-dash asides. Write clear academic

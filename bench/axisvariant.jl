@@ -13,8 +13,9 @@ on a resolved θ, s = 1/r under `CylindricalMetric` and 2/r under
 area form, the package's before it carried ∂p/∂r; under `:gradp` the
 resolved-θ axis takes ∂p/∂r; under `:areatheta` the spherical θ-momentum,
 which the package gives (1/r)∂p/∂θ, takes the area form (1/J)D(A₂ p) less
-(cotθ/r) p, the latter from the discrete-GCL array the package's source
-reads; under `:product` every divergence of the mass, radial momentum and
+(cotθ/r) p, the latter with cotθ/r taken as (1/J)D(A₂) through the same
+derivative and fold sign, so that a uniform state stays at rest; under
+`:product` every divergence of the mass, radial momentum and
 energy fluxes of a θ-collapsed r-z run becomes D(F) + F/r. Inviscid fluxes,
 one species, an unstretched radial dimension; a refined run takes the scratch
 of each patch extent from `cache`.
@@ -52,12 +53,18 @@ function CompactLES.add_source!(src::AxisVariant, solver, dQ, Q, t)
     if src.mode === :areatheta
         CL._polar_pressure_gradient(solver) && solver.folds[2] !== nothing ||
             error("variant areatheta is written for the spherical poles")
-        # Adds (1/r)D(p) − (1/J)D(A₂ p) + (cotθ/r) p to the θ-momentum.
+        # Adds (1/r)D(p) − (1/J)D(A₂ p) + (1/J)D(A₂) p to the θ-momentum.
         m2 = eq.i_mom[2]
-        f .= solver.area_d[2] .* p
-        CL.deriv_along!(g, f, solver, 2, solver.folds[2].sigflux[m2])
+        σ = solver.folds[2].sigflux[m2]
+        f .= solver.area_d[2]
+        CL.deriv_along!(g, f, solver, 2, σ)
         for I in _interior(solver)
-            dQ[I, m2] -= iJ[I] * g[I] - solver.cot_over_r_gcl[I] * p[I]
+            dQ[I, m2] += iJ[I] * g[I] * p[I]
+        end
+        f .= solver.area_d[2] .* p
+        CL.deriv_along!(g, f, solver, 2, σ)
+        for I in _interior(solver)
+            dQ[I, m2] -= iJ[I] * g[I]
         end
         copyto!(f, p)
         CL.deriv_along!(g, f, solver, 2, 1)
