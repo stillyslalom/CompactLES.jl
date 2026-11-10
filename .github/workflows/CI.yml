@@ -24,6 +24,14 @@ concurrency:
 # target is compiled once, as the native one is, and image code uses no
 # AVX-512 on the models that have it. Code compiled during a run is still
 # compiled for the runner's CPU.
+#
+# The depot cache's name carries the target (`cache-name` in each job). A
+# depot restored from before the target was set holds images compiled for a
+# runner's native CPU. The process that plans a precompile accepts such an
+# image where the runner can execute it, and the worker that compiles a
+# dependent package for this target refuses it and stops on "Precompiled
+# image ... not available with flags", so the first run under a new target
+# has to start from an empty depot.
 env:
   JULIA_CPU_TARGET: "haswell,-rdrnd"
 
@@ -49,6 +57,8 @@ jobs:
           version: ${{ matrix.version }}
           arch: x64
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       # The device testsets and the Float32 testsets run here, so the
       # workload's device and Float32 blocks earn their precompile cost in
       # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
@@ -102,6 +112,8 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       # The MPI suite's device phases and Float32 phases run here, so the
       # workload's device and Float32 blocks earn their precompile cost in
       # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
@@ -177,6 +189,8 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       # As in the numerics job: the MPI device and Float32 phases run here,
       # and neither this step nor buildpkg precompiles, so that the one image
       # build happens after the preferences are set.
@@ -258,6 +272,8 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       - name: Configure documentation environment
         shell: julia --project=docs --color=yes {0}
         run: |
