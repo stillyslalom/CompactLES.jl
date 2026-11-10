@@ -312,12 +312,14 @@ function test_positivity_limiter()
     # or along z crosses between ranks through the level's records, and each
     # tile's radial pass keeps its rates for its z faces. As for the Cartesian
     # tiles above, the limiter acts within the twenty steps of the subcycled
-    # run, whose root step is three of the global run's.
+    # run, whose root step is three of the global run's. The root has 36
+    # nodes a side so that its blocks at eight ranks, four along one
+    # dimension, keep the nine points the filter takes.
     for sub in (false, true)
         section("positivity limiter: r-z tiles across ranks against one rank" *
                 (sub ? ", subcycled" : ""))
         function rztiled(comm_here)
-            s = Solver(n_global=(32, 1, 32), L_domain=(1.0, 1.0, 1.0),
+            s = Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
                        metric=CylindricalMetric(),
                        bcs=((AxisBC(), SlipWallBC()), per3[2],
                             (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
