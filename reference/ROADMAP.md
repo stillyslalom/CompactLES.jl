@@ -203,10 +203,14 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   requirement are gone, and Noh's origin ceiling rises from 0.3 to 0.5.
   Remaining: a strong blast through the origin still has a CFL ceiling of
   0.2 to 0.3 in either form, where the axis and the plane take 0.5, and the
-  mechanism is open; the resolved-θ axis carries the defect unfiltered only:
-  the isentropic vortex of the Axis-crossing vortex tutorial
-  (`docs/literate/axis_crossing_vortex.jl`, 32 × 64) runs away at the axis
-  with the filter off and loses positivity near t = 0.9.
+  mechanism is open. The unstretched resolved-θ axis keeps the area form,
+  and with the filter off the isentropic vortex of the Axis-crossing vortex
+  tutorial (`docs/literate/axis_crossing_vortex.jl`, 32 × 64) runs away from
+  the first rings until its step collapses before t = 0.9. Under ∂p/∂r it
+  grows more slowly but still runs away, and filtered its largest error is 2%
+  larger; on a Cartesian square and on an annulus without the axis the same
+  vortex completes unfiltered, so the runaway belongs to the axis and its
+  mechanism is open (`bench/axisvortex.jl`).
   **Gate:** the origin blast at `cfl = 0.5` without retries.
 
 - [ ] **N26 — Keep the internal energy positive ahead of a strong shock.**

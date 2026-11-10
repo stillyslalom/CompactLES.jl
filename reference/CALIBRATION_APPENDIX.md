@@ -9683,6 +9683,39 @@ deviation at the origin saturates at 1e-2 to 4e-2. The consequences for runs at 
 are under [the CFL restriction](#the-cfl-restriction-and-the-symmetry-cell) and [fold order
 and geometry limits](#fold-order-and-geometry-limits).
 
+**The vortex across the resolved-θ axis.** `bench/axisvortex.jl`
+(`bench/results/axisvortex.txt`) runs the isentropic vortex of the
+Axis-crossing vortex tutorial on its 32 × 64 disk at cfl 0.5 with the
+artificial properties, in the package's area form and in ∂p/∂r (`gradp`),
+with the filter off and at the default, to t = 1.6 or 20000 steps. The
+controls carry the same vortex in the area form on two grids without the
+axis: the periodic square [−1, 1]² on 64² nodes (spacing 0.031 against the
+disk's Δr of 0.032), and the annulus r ∈ [0.15, 1.5] on 44 × 160 nodes with
+the vortex carried along y = 0.75. "Near" is within two spacings of the point
+the center crosses at t = 0.8, on the disk its first two rings.
+
+| grid, form, filter | end | near ρ error at t = 0.3 / 0.5 / 0.8 | largest ρ / u error |
+|---|---|---|---|
+| disk, area, off | 20000 steps, t = 0.864 | 1.07e-4 / 1.16e-3 / 0.117 | 0.193 / 0.084 |
+| disk, ∂p/∂r, off | 20000 steps, t = 0.896 | 3.54e-5 / 4.02e-4 / 0.019 | 0.064 / 0.102 |
+| disk, area, on | complete, 3747 steps | 3.18e-5 / 1.63e-4 / 2.09e-4 | 3.130e-4 / 1.335e-3 |
+| disk, ∂p/∂r, on | complete, 3747 steps | 3.04e-5 / 1.58e-4 / 2.12e-4 | 3.189e-4 / 1.341e-3 |
+| square, off | complete, 320 steps | 2.2e-6 / 8.0e-6 / 4.9e-6 | 4.50e-5 / 1.02e-3 |
+| square, on | complete, 320 steps | 6.6e-6 / 1.5e-5 / 1.7e-5 | 5.07e-5 / 1.06e-3 |
+| annulus, off | complete, 960 steps | 1.9e-6 / 7.8e-6 / 8.3e-6 | 3.68e-5 / 2.11e-4 |
+| annulus, on | complete, 960 steps | 9.9e-6 / 2.1e-5 / 4.2e-5 | 8.41e-5 / 4.74e-4 |
+
+Unfiltered, the disk's error grows from its first rings in both forms, at
+14.0 per unit time in the area form and 12.6 under ∂p/∂r between t = 0.3 and
+0.8, and the step collapses (a mean of 4.3e-5 against 4.3e-4 filtered) before
+t = 0.9. ∂p/∂r lowers the amplitude at t = 0.8 sixfold and does not remove
+the growth. The same vortex without the axis completes unfiltered on both
+controls with a density error below 5e-5, so the runaway belongs to the
+resolved-θ axis, not to the cylindrical metric or to the unfiltered scheme;
+the disk's step, set by its first ring, is a twelfth of the square's.
+Filtered, ∂p/∂r raises the largest density error by 1.9% and the velocity
+error by 0.4%, and lowers the density error at t = 1.4 by 1.0%.
+
 ## The outflow face on a radial grid
 
 ```text
