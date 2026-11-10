@@ -57,24 +57,26 @@ Qb = allocate_state(sb); dQb = zero(Qb)
 initialize!(sb, Qb, (x, y, z) -> Prim(Y=(0.5 + 0.4tanh(4sin(x)), 0.5 - 0.4tanh(4sin(x))),
                                        u=(0.1sin(x), 0, 0), p=1.0, rho=1 + 0.5cos(x)))
 
-# A report is dropped when its stack passes through a call site that is itself
-# reported as a runtime dispatch. JET follows such a call into the callee and
-# infers it at the call's abstract argument types, but at run time the callee
-# is compiled for the concrete types it receives, so what JET finds in that
-# abstract instance is code that never runs. The dispatch site itself is still
-# reported, in its concrete caller. This matters for the dispatches the solver
-# makes on purpose (the plan-operator handle of `compute_artificial!`, the
-# `_cold` barriers of timestep.jl): the callees are probed at concrete types
-# below instead.
-_frame_key(vf) = (vf.linfo, vf.file, vf.line)
+# JET follows a call into its callee and infers the callee at the call's
+# argument types. A report is dropped when its stack passes through an
+# instance inferred at an abstract type in an argument Julia specializes on
+# (`is_compileable_mi` is false): at run time that callee is compiled for the
+# concrete types it receives, so the abstract instance never runs. The
+# dispatch into it is still reported, in its concrete caller. An argument
+# declared `@nospecialize` is compiled at its declared type whatever is
+# inferred there, so an instance inferred at an abstract type in it is kept
+# and the dispatches inside it are counted (`sensor_mirror` in `_face_mirror`,
+# the calls in `_build_reflux!`). Since Julia 1.12 a call whose one matching
+# method is compiled for the call's abstract argument type is a type test and
+# a static call, with `Core.throw_methoderror` in the fallback branch, so the
+# call into such a callee is not itself a dispatch. Where the solver
+# dispatches on purpose into a specialized callee (through the plan-operator
+# handle of `compute_artificial!` or a `_cold` barrier of timestep.jl), the
+# callee is probed at concrete types below.
+_runs(vf) = JET.is_compileable_mi(vf.linfo)
 
 function summarize(name, res)
-    all_reports = JET.get_reports(res)
-    sites = Set(Tuple(map(_frame_key, r.vst)) for r in all_reports
-                if r isa JET.RuntimeDispatchReport)
-    beyond(r) = any(i -> Tuple(map(_frame_key, r.vst[1:i])) in sites,
-                    1:length(r.vst)-1)
-    reports = filter(!beyond, all_reports)
+    reports = filter(r -> all(_runs, r.vst[2:end]), JET.get_reports(res))
     @printf("\n%-24s %4d runtime-dispatch reports\n", name, length(reports))
     # one line per distinct dispatch site, deduplicated
     seen = Set{String}()

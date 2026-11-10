@@ -282,27 +282,34 @@ add a case there, not in either consumer.
 them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the intended ones, so *any* report elsewhere is a regression. The
-baseline is one site in `apply_bcs!` (`enforce!`) and six in
-`compute_rhs!`, and eight in `step!`: those seven and the `_cold` barrier in
-front of `_build_reflux!`, which rebuilds the coarse-fine captures after a
-layout change. Both `compute_dt` probes report one: the `_cold` barrier in
-front of `_local_max_rate_launch`, which host storage takes only under the
+baseline is one site in `apply_bcs!` (`enforce!`), six in `compute_rhs!`,
+and 70 in `step!`: those seven and 63 inside `_build_reflux!`, which rebuilds
+the coarse-fine captures after a layout change, not per step. It takes the
+solver `@nospecialize`, so it is compiled once for the abstract `Solver` and
+its calls on the solver's fields dispatch. From Julia 1.12 the call through
+its `_cold` barrier is a type test and a static call, which is not reported
+as a site. Both `compute_dt` probes report one: the `_cold` barrier in front
+of `_local_max_rate_launch`, which host storage takes only under the
 `FORCE_KA` test toggle. Of the six in `compute_rhs!`, three are the boundary hooks
 (`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through the detector's
-`_face_mirror`): face conditions are stored abstractly on the `Patch` so that a
-combination of them does not recompile the right-hand-side tree, and the
+`_face_mirror`): face conditions are stored abstractly on the `Patch` so that
+a combination of them does not recompile the right-hand-side tree, and the
 docstring there has the measurement. Two are `_cold` barriers
 (`_cold_bulk_gradients!`, `_cold_ghost_flux_divergence!`), which keep paths a
 configuration never takes out of every solver type's compile; the note on
 `_cold` in timestep.jl has the rule. One is `_launch_fluxes!` on `Val` of the
 species count, taken once per whole-array flux assembly so that the per-point
 species sums unroll without the species count entering the solver type. The
-script drops reports from inside a dispatched callee, which JET infers at
-abstract types that never run, and probes those callees at concrete types
-instead. The plan-operator handle of
-`compute_artificial!` is `@nospecialize`, which JET's inference does not see,
-so its dispatches do not appear here. The counts overlap between entry points
-(`step!` contains `compute_rhs!`), so compare like with like and never sum them.
+script drops a report whose stack passes through a callee JET inferred at an
+abstract type in an argument Julia specializes on, an instance that never
+runs, and probes those callees at concrete types instead. A `@nospecialize`
+argument is compiled at its declared type whatever JET infers there. Where
+JET infers it abstract, the dispatches inside the callee are counted
+(`_face_mirror`, `_build_reflux!`); where JET infers it concrete, as for the
+plan-operator handle of `compute_artificial!`, the dispatches the callee
+makes at run time do not appear here. The counts overlap between entry
+points (`step!` contains `compute_rhs!`), so compare like with like and never
+sum them.
 
 `audit.jl`'s inference probe reads `code_typed` at a spelled-out signature. A
 **keyword argument on a probed entry point, or an optional trailing argument the
