@@ -172,20 +172,20 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as one testset.
 
-The `321 testsets` and the `242/242` are counted by different mechanisms and are
-not comparable. `runtests.jl` runs everything inside one top-level
-`@testset` and prints one summary tree at the end: the top row totals the
-`@test`s, and each row one indent beneath it is one top-level `@testset` of
-`serial_suite.jl` or of a file it includes; the `321` counts those rows from
-the package environment, where HDF5 does not load, and the count is 331 under
-`Pkg.test`, whose test target carries HDF5. A failure is
-recorded and the suite runs on, so one run reports every failure, and the
-outer testset raises at the end. `mpi_tests.jl` uses `Test` not
-at all and counts individual `check(name, val, tol)` assertions, printing
-`passed/total` and exiting nonzero on any failure. Adding a testset moves the
-first number, adding one assertion moves the second, and neither is a fraction
-of the other, so treat both as figures to record before a change and compare
-after.
+The `321 testsets` and the `809/809` of the full `mpi_tests.jl` at two ranks
+are counted by different mechanisms and are not comparable. `runtests.jl`
+runs everything inside one top-level `@testset` and prints one summary tree
+at the end: the top row totals the `@test`s, and each row one indent
+beneath it is one top-level `@testset` of `serial_suite.jl` or of a file it
+includes; the `321` counts those rows from the package environment, where
+HDF5 does not load, and the count is 331 under `Pkg.test`, whose test target
+carries HDF5. A failure is recorded and the suite runs on, so one run
+reports every failure, and the outer testset raises at the end.
+`mpi_tests.jl` uses `Test` not at all and counts individual
+`check(name, val, tol)` assertions, printing `passed/total` and exiting
+nonzero on any failure. Adding a testset moves the first number, adding one
+assertion moves the second, and neither is a fraction of the other, so treat
+both as figures to record before a change and compare after.
 
 `test/hdf5_tests.jl` covers the HDF5 extension and is skipped by the gate above:
 HDF5 is a `[weakdeps]` entry, so it is not loadable from the package

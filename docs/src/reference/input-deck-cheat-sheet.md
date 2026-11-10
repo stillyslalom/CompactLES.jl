@@ -216,7 +216,7 @@ between materials.
 
 | Field | Meaning | Default |
 |---|---|---|
-| `flux` | `:ghost` differentiates the inviscid and molecular fluxes across an interface using ghost values from the neighbouring patch. `:closure` uses one-sided boundary rows at each patch end; it is required on a curvilinear or stretched grid, with `rhs = :onesided`, and for a user-defined EOS on a viscous refined level | `:ghost` |
+| `flux` | `:ghost` differentiates the inviscid and molecular fluxes across an interface using ghost values from the neighbouring patch. `:closure` uses one-sided boundary rows at each patch end; it is required on a stretched grid, a cylindrical grid with θ resolved and a spherical grid, with `rhs = :onesided`, and for a user-defined EOS on a viscous refined level | `:ghost` |
 | `rhs` | How the gradient and divergence rows are closed at an interface: `:extended` or `:onesided` | `:extended` |
 | `divergence` | Scheme whose boundary rows give the flux divergence at interface ends; experimental, Float64 only | `nothing` |
 

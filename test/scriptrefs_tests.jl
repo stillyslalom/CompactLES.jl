@@ -1,10 +1,10 @@
 # Script reference guard. No testset runs the scripts under bench/, examples/,
 # probes/ and docs/literate/, so an API change that removes or renames a
-# binding or a keyword would leave them broken with no failing test. This
-# file parses every script without running it, since the scripts load
-# JET, CairoMakie, AMDGPU, HDF5 and other packages the package environment
-# does not carry, and checks its references to CompactLES against the loaded
-# package:
+# binding or a keyword, or changes the arguments of a per-point body, would
+# leave them broken with no failing test. This file parses every script
+# without running it, since the scripts load JET, CairoMakie, AMDGPU, HDF5 and
+# other packages the package environment does not carry, and checks its
+# references to CompactLES against the loaded package:
 #   1. every qualified reference `CompactLES.name`, through an alias bound by
 #      `const CL = CompactLES` or `import CompactLES as CL` and through the
 #      submodules (`CompactLES.Regions.Sphere`), names a binding that exists;
@@ -13,14 +13,21 @@
 #   3. every keyword in a call whose callee resolves statically to a function
 #      or constructor of CompactLES is accepted by some method of it. A callee
 #      resolves when it is qualified, or when it is an unqualified name the
-#      script brings in from CompactLES and does not bind itself.
+#      script brings in from CompactLES and does not bind itself;
+#   4. every per-point body `_name_point!` of CompactLES that a script calls,
+#      or launches through `pointwise!` or `pointwise_ka!` (which append the
+#      indices i, j, k to the arguments after the index box), receives a
+#      number of positional arguments some method of it takes. A splat counts
+#      only when its length is static: a tuple literal, `x[a:b]` with literal
+#      bounds, or a name the module binds once, to a tuple literal.
 #
 # A reference that cannot be resolved with certainty is left unchecked rather
 # than reported, so that every failure is a real breakage. A name guarded by
 # `isdefined` or `hasproperty` anywhere in a script is not checked, an alias
 # bound more than once is not followed, unqualified callees are not checked in
 # a module whose `include` paths do not resolve statically, and a callable
-# that a script extends with methods of its own is not checked for keywords.
+# that a script extends with methods of its own is not checked for keywords
+# or arity.
 #
 # A method that collects keywords as `kw...` accepts any keyword at its own
 # signature. Such a callable is checked only when the destination of those
@@ -127,10 +134,12 @@ mutable struct Scope
     extended::Set{Symbol}
     complete::Bool
     nested::Vector{Tuple{String,Expr}}
+    tuples::Dict{Symbol,Expr}
 end
 Scope() = Scope(Tuple{String,Vector{Any}}[], Dict{Symbol,Module}(), Dict{Symbol,Int}(),
                 Set{Symbol}(), Dict{Symbol,Any}(), Module[], Dict{Symbol,Int}(),
-                Set{Symbol}(), Set{Symbol}(), true, Tuple{String,Expr}[])
+                Set{Symbol}(), Set{Symbol}(), true, Tuple{String,Expr}[],
+                Dict{Symbol,Expr}())
 
 function alias!(scope, name, m::Module; assigned::Bool)
     get(scope.aliases, name, m) === m || push!(scope.conflicts, name)
@@ -367,6 +376,7 @@ function collect!(scope, ex, file, seen)
     elseif h === :(=)
         lhs, rhs = ex.args
         bind_target!(scope, lhs)
+        lhs isa Symbol && rhs isa Expr && rhs.head === :tuple && (scope.tuples[lhs] = rhs)
         if lhs isa Symbol
             r = resolve(scope, rhs)
             r isa Resolved && r.value isa Module && in_package(r.value) &&
@@ -659,6 +669,65 @@ function check_call!(c::Checker, ex)
     end
 end
 
+# --- Positional arity of per-point bodies -----------------------------------
+
+# The arity check reads `nargs`, which counts the function itself, and `isva`
+# of `Method`, fields no public function reports. They are probed as the
+# keyword internals are.
+_probe_va(x, rest...) = x
+takes(f, n) = any(m -> m.isva ? n >= m.nargs - 2 : n == m.nargs - 1, methods(f))
+const ARITY_SUPPORT = try
+    takes(_probe, 1) && takes(_probe, 2) && !takes(_probe, 3) &&
+        takes(_probe_va, 1) && takes(_probe_va, 4) && !takes(_probe_va, 0) ? nothing :
+        "`Method.nargs` and `Method.isva` count arguments differently"
+catch err
+    "the arity internals raise $(sprint(showerror, err))"
+end
+
+# The positional arguments `ex` contributes to a call: one, or the length of
+# a splat whose length is static, or `nothing`.
+function positional_length(scope, ex)
+    ex isa Expr && ex.head === :... || return 1
+    x = ex.args[1]
+    x isa Symbol && get(scope.bound, x, 0) == 1 && (x = get(scope.tuples, x, x))
+    if x isa Expr && x.head === :tuple
+        any(a -> a isa Expr && a.head in (:..., :parameters, :(=)), x.args) &&
+            return nothing
+        return length(x.args)
+    elseif x isa Expr && x.head === :ref && length(x.args) == 2
+        r = x.args[2]
+        r isa Expr && r.head === :call && r.args[1] === :(:) && length(r.args) == 3 &&
+            all(a -> a isa Int, r.args[2:3]) && return r.args[3] - r.args[2] + 1
+    end
+    return nothing
+end
+
+# A CompactLES `_point!` body called directly, or launched through
+# `pointwise!(body, route, n1, n2, n3, args...)` or `pointwise_ka!(body,
+# backend, n1, n2, n3, args...)`, which call `body(args..., i, j, k)`.
+function check_arity!(c::Checker, ex)
+    any(a -> a isa Expr && a.head in (:parameters, :kw), ex.args) && return
+    v = callee_value(c, ex.args[1])
+    v isa Function && owned(v) || return
+    launch = v === CompactLES.pointwise! || v === CompactLES.pointwise_ka!
+    body, args = launch ? (length(ex.args) >= 2 ? callee_value(c, ex.args[2]) : nothing,
+                           ex.args[3:end]) : (v, ex.args[2:end])
+    body isa Function && owned(body) && endswith(String(nameof(body)), "_point!") ||
+        return
+    nameof(body) in c.scope.extended && return
+    lengths = [positional_length(c.scope, a) for a in args]
+    if ARITY_SUPPORT !== nothing || any(isnothing, lengths)
+        c.stats[:unsized] += 1
+        return
+    end
+    n = sum(lengths; init=0) + (launch ? 3 - 4 : 0)
+    launch && n < 3 && return
+    c.stats[:launches] += 1
+    takes(body, n) || fail!(c, nameof(body), "no method of `$(nameof(body))` takes " *
+                            "$n positional arguments" *
+                            (launch ? " (with the indices `$(nameof(v))` appends)" : ""))
+end
+
 # The default values and type annotations of a signature, without treating the
 # signature itself as a call.
 function visit_signature!(c::Checker, sig)
@@ -698,6 +767,7 @@ function visit!(c::Checker, ex)
         return
     elseif h === :call
         check_call!(c, ex)
+        check_arity!(c, ex)
     end
     foreach(a -> visit!(c, a), ex.args)
 end
@@ -733,15 +803,16 @@ end
 
 Check every `.jl` file in `paths`, files or directories searched recursively.
 `failures` is a vector of `Failure`, `stats` counts the references, imports
-and keyword calls checked and the keyword calls not checked, and `skipped`
-names the callables whose keywords were not checked.
+and keyword calls checked, the keyword calls not checked, and the body calls
+and launches whose arity was and was not checked, and `skipped` names the
+callables whose keywords were not checked.
 """
 function check(paths=SCRIPT_DIRS)
     files = script_files(paths)
     targets = Set(files)
     failures = Failure[]
     stats = Dict(:files => length(files), :references => 0, :imports => 0,
-                 :calls => 0, :skipped => 0)
+                 :calls => 0, :skipped => 0, :launches => 0, :unsized => 0)
     skipped = Set{String}()
     for file in files
         parsed = parse_file(file)
@@ -784,11 +855,17 @@ const SCRIPT_BREAKAGES = Tuple{String,String}[
         @test isempty(unexpected)
         @info "script references: $(stats[:files]) files, $(stats[:references]) " *
               "qualified references, $(stats[:imports]) imported names, " *
-              "$(stats[:calls]) keyword calls checked, $(stats[:skipped]) not checked"
+              "$(stats[:calls]) keyword calls checked, $(stats[:skipped]) not checked, " *
+              "$(stats[:launches]) body arities checked, $(stats[:unsized]) not checked"
         if ScriptRefs.KEYWORD_SUPPORT !== nothing
             @info "script keywords not checked in Julia $VERSION: " *
                   ScriptRefs.KEYWORD_SUPPORT
             @test_skip ScriptRefs.KEYWORD_SUPPORT === nothing
+        end
+        if ScriptRefs.ARITY_SUPPORT !== nothing
+            @info "body arities not checked in Julia $VERSION: " *
+                  ScriptRefs.ARITY_SUPPORT
+            @test_skip ScriptRefs.ARITY_SUPPORT === nothing
         end
     end
 end

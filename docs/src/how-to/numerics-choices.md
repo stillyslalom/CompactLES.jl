@@ -146,17 +146,22 @@ Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
 - Float32 runs, whose interface error reaches the precision floor under
   either choice, so the ghost fluxes add cost without lowering the error;
 - configurations the ghost fluxes do not support, which setup rejects with
-  an `ArgumentError` naming `interface_flux = :closure`: a patch interface on a
-  cylindrical, spherical or stretched grid, `rhs = :onesided`, and a
-  user equation of state at a refined level with molecular transport;
+  an `ArgumentError` naming `interface_flux = :closure`: a patch or level
+  interface on a stretched grid, a cylindrical grid with θ resolved or a
+  spherical grid, `rhs = :onesided`, and a user equation of state at a
+  refined level with molecular transport;
 - runs where the step cost matters more than the interface error. The ghost
   fluxes add about 17% to the step of two same-level patches without
   molecular transport and 17 to 53% with it, the most on a refined level of
   small tiles.
 
-On a curvilinear grid the ghost fluxes would need ghost face areas and a
-matching discrete geometric conservation law at the interface; neither is
-implemented.
+The ghost fluxes are implemented on two grids: the unstretched Cartesian
+grid and the r-z plane of an unstretched `CylindricalMetric` with θ
+collapsed. On the r-z plane the ghost-differenced flux carries the area
+factor and the Jacobian, the radial momentum's pressure term is the gradient
+∂p/∂r taken from the pressure's own ghost layers, and the molecular flux at
+a coarse-fine face includes the curvature terms of the velocity gradient.
+No other metric's terms are carried.
 
 Under `flux = :closure`, patch and level interfaces take the
 cascade rows regardless of the selected wall closures. An interface imposes

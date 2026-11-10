@@ -13,10 +13,12 @@
 #
 # Do not pass a bare `Vector{<:AbstractArray}` or `Matrix{<:AbstractArray}`
 # kernel argument to a device launch: it does not raise an error, it hangs
-# in kernel-argument adaptation (measured on AMDGPU). The FieldVector /
-# FieldMatrix wrappers (src/pointwise.jl) are the supported route — zero-cost
-# on the host, adapted to isbits tuples at launch — and the section below
-# runs the full flux-assembly body through them, Adapt-mirrored EOS included.
+# in kernel-argument adaptation (measured on AMDGPU). The supported routes are
+# the FieldVector / FieldMatrix wrappers (src/pointwise.jl), zero-cost on the
+# host and adapted to isbits tuples at launch, and tuples of arrays, which
+# adapt element by element. The section below runs the full flux-assembly
+# body with its collections as tuples, the form the package launches it with,
+# and with the EOS through its Adapt mirror.
 
 using CompactLES
 import CompactLES: Decomp, device_plan
@@ -65,7 +67,11 @@ function main(opt, device_array)
 
     # δ⁴ detector body, clamped edges, all three directions. The sensor weight
     # is the local physical spacing h/inv_h, so the body takes the geometry
-    # array; a flat one stands in for an unstretched Cartesian grid.
+    # array; a flat one stands in for an unstretched Cartesian grid. After the
+    # clamp bounds come the two folded-end flags and their sign, the two wall
+    # flags and their sign (no fold and no wall here), the `:sum` reduction,
+    # the padded extent along the third dimension, the halo offsets and the
+    # shift of the launch box (none).
     f0 = randn(dims[1:3]...)
     outc = zeros(dims[1:3]...)
     ih1 = ones(dims[1:3]...)
@@ -75,11 +81,11 @@ function main(opt, device_array)
     outg = device_array(zeros(dims[1:3]...))
     for dd in 1:3
         CL.pointwise_ka!(CL._delta4_point!, KA.CPU(), n..., outc, f0, 1.0, ih1,
-                         1, dd, n[dd], 1, n[dd], false, false, false, n3p,
-                         pad, pad, pad)
+                         1, dd, n[dd], 1, n[dd], false, false, 1, false, false, 1,
+                         false, n3p, pad, pad, pad, (0, 0, 0))
         CL.pointwise_ka!(CL._delta4_point!, gpu, n..., outg, fg, 1.0, ihg1,
-                         1, dd, n[dd], 1, n[dd], false, false, false, n3p,
-                         pad, pad, pad)
+                         1, dd, n[dd], 1, n[dd], false, false, 1, false, false, 1,
+                         false, n3p, pad, pad, pad, (0, 0, 0))
     end
     d = maximum(abs.(Array(outg) .- outc))
     println("delta4 sensor  max |gpu - cpu| = ", d, d == 0 ? "  (bitwise)" : "")
@@ -96,11 +102,11 @@ function main(opt, device_array)
     # Timing: one stencil-shaped single launch, and the launch-bound RK
     # update (five launches, each synchronized — the G3 batching case).
     t_gpu = best(() -> CL.pointwise_ka!(CL._delta4_point!, gpu, n...,
-                 outg, fg, 1.0, ihg1, 1, 1, n[1], 1, n[1], false, false, false,
-                 n3p, pad, pad, pad))
+                 outg, fg, 1.0, ihg1, 1, 1, n[1], 1, n[1], false, false, 1,
+                 false, false, 1, false, n3p, pad, pad, pad, (0, 0, 0)))
     t_thr = best(() -> CL.pointwise!(CL._delta4_point!, outc, n...,
-                 outc, f0, 1.0, ih1, 1, 1, n[1], 1, n[1], false, false, false,
-                 n3p, pad, pad, pad))
+                 outc, f0, 1.0, ih1, 1, 1, n[1], 1, n[1], false, false, 1,
+                 false, false, 1, false, n3p, pad, pad, pad, (0, 0, 0)))
     @printf("delta4 (one dir) %d^3:  device %.3f ms   @threaded(%d) %.3f ms\n",
             opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
     t_gpu = best(() -> for c in 1:nc
@@ -114,13 +120,16 @@ function main(opt, device_array)
     @printf("rk update x%d launches: device %.3f ms   @threaded(%d) %.3f ms\n",
             nc, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
 
-    # --- Collection-argument bodies through the FieldVector/FieldMatrix
-    # wrappers and the Adapt EOS mirror: the full flux assembly, two species.
+    # --- The full flux assembly: two species, constant molecular transport
+    # and the per-species Fickian channel, launched as `_launch_fluxes!`
+    # launches it, with the field collections as tuples of arrays whose
+    # lengths carry the species count and the EOS through its Adapt mirror.
     nsp = 2
     ncons2 = nsp + 4
     pdims = n .+ 2pad
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    transport = ConstantTransport(mu0=1e-3, Pr=0.7, Sc=0.7)
     mkp() = abs.(randn(pdims...)) .+ 1.0
     Qc2 = randn(pdims..., ncons2)
     prims = [mkp() for _ in 1:7]                 # rho,u,v,w,p,T_ion,cp_mix
@@ -132,11 +141,15 @@ function main(opt, device_array)
     gY_c = [randn(pdims...) for _ in 1:3, _ in 1:nsp]
     fl_c = [zeros(pdims...) for _ in 1:3, _ in 1:ncons2]
     m1, m2, m3, ie = nsp + 1, nsp + 2, nsp + 3, nsp + 4
+    # Per dimension, the species fluxes and then the momentum and energy
+    # fluxes, the column order of the body's `flux` argument.
+    columns = (ntuple(identity, nsp)..., m1, m2, m3, ie)
     fluxargs(Q, pr, ar, D, Y, gu, gT, gY, fl) =
         (Q, eos, pr[1], pr[2], pr[3], pr[4], pr[5], pr[6], pr[7],
-         ar[1], ar[2], ar[3], CL.FieldVector(D), CL.FieldVector(Y),
-         CL.FieldMatrix(gu), gT, CL.FieldMatrix(gY), CL.FieldMatrix(fl),
-         1e-3, 0.7, 0.7, nsp, m1, m2, m3, ie, (true, true, true), pad, pad, pad)
+         ar[1], ar[2], ar[3], CL._species_tuple(D, Val(nsp)),
+         CL._species_tuple(Y, Val(nsp)), CL._dims_tuple(gu, Val(3)), gT,
+         CL._dims_tuple(gY, Val(nsp)), ntuple(d -> map(c -> fl[d, c], columns), 3),
+         transport, ie, (true, true, true), false, pad, pad, pad)
     ac = fluxargs(Qc2, prims, arts, D_c, Y_c, gu_c, gT_c, gY_c, fl_c)
     CL.pointwise!(CL._fluxes_point!, Qc2, n..., ac...)
     Qg2 = device_array(Qc2)

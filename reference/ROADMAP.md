@@ -346,8 +346,8 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   A restored image was rejected whenever the runner's CPU model differed
   from the one that built it, in every cached job; the images are now
   compiled for the system image's AVX2 target (`JULIA_CPU_TARGET` in
-  `CI.yml`). A new Julia release and a cache unused for seven days are
-  still followed by a rebuild.
+  `CI.yml`) (commit `eed8aad`). A new Julia release and a cache unused for
+  seven days are still followed by a rebuild.
   Remaining: trim the step-bound eight-rank phases and the serial Julia 1
   and pre jobs.
   **Gate:** the measured wall of the core gate before and after, and the
