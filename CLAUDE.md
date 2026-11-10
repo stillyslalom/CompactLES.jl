@@ -100,9 +100,10 @@ required coverage that remains unavailable.
   `test/reference_tests.jl` when `reference/`, `README.md` or this file
   changed. Build the documentation when changing Documenter configuration,
   page generation, or executable documentation examples.
-- **Benchmarks, examples, and standalone tooling:** run the affected scripts
-  with a small representative workload. Changes to shared package code also
-  require the checks below.
+- **Benchmarks, examples, and standalone tooling:** run
+  `test/scriptrefs_tests.jl`, then the affected scripts with a small
+  representative workload. Changes to shared package code also require the
+  checks below.
 - **Tests only:** run the affected suite, including its enclosing runner when
   the file is not standalone. Changes to numerical guards or stored references
   require the corresponding numerical suite and an explanation of the new
@@ -317,8 +318,12 @@ Julia's `.cov` output omits methods that were never compiled, so the percentage
 overstates coverage; watch the executable-line count too.
 
 **The test suite does not import `bench/` or `examples/`.** They stay green
-while broken. After a cross-cutting API change, identify and run the affected
-consumers with small representative workloads.
+while broken. After a cross-cutting API change, run `test/scriptrefs_tests.jl`:
+it parses every script under `bench/`, `examples/`, `probes/` and
+`docs/literate/` without running it, and fails on a CompactLES name, imported
+name or keyword that no longer exists. A script that resolves can still
+compute the wrong thing, so also identify and run the affected consumers with
+small representative workloads.
 
 ## Naming
 
