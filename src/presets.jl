@@ -40,7 +40,7 @@ strengthens to `compact_filter(0.45)`, under which a shock through a
 coarse–fine interface carries forty times less noise ahead of it than under
 the default, and the interfaces take the closure rows
 (`patch_interfaces = :closure`), which reach the same shock minima as the
-ghost fluxes at 11 to 50% less cost per step. Refinement itself is still
+ghost fluxes, whose step costs 17 to 53% more. Refinement itself is still
 selected with `amr`.
 """
 refined_shock() = (; filter=StateFilter(compact_filter(0.45)), patch_interfaces=:closure)

@@ -506,4 +506,14 @@ end
         e = extents(mk(; interface_flux=:ghost, kw...))
         @test all(==(5), e[:, 1]) && all(==(0), e[:, 2:3])
     end
+    # The shell's gradient ring exists where a coarse-fine face reads it: with
+    # molecular transport and the artificial properties off, and not under the
+    # artificial properties, whose extrapolated remainder carries the molecular
+    # flux on those ghost layers.
+    ring(; kw...) = getfield(Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                    bcs=per3, transport=ConstantTransport(mu0=1e-2),
+                                    refine=BlockRegion((20, 0, 0), (9, 1, 1)); kw...),
+                             :levels)[2].transfers[1].gradients
+    @test ring(art=off) isa CL.ShellGradients
+    @test ring() === nothing
 end

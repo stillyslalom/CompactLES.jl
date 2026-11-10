@@ -318,8 +318,9 @@ end
 
 @testset "device-resident refinement: the shell's admissible fallback" begin
     # A blast whose shock crosses the coarse-fine faces of a box, at the
-    # global step and subcycled, inviscid and with molecular transport (the
-    # ghost fluxes' gradient ring): shell nodes the Lagrange chain or the
+    # global step and subcycled, inviscid and with molecular transport (whose
+    # coarse-fine ghost fluxes the extrapolated remainder carries under the
+    # artificial properties): shell nodes the Lagrange chain or the
     # Hermite blend leave with ρe < 0 take the multilinear interpolant, two in
     # the last step of the global run and 346 and 100 by the end of the
     # subcycled ones. Bitwise against the CPUBackend under FORCE_KA and
@@ -367,7 +368,8 @@ end
     # and the two tiles beside it share a stack along the active z, the
     # plane's own dimension, so its mirror fill reads the stacked launch's
     # third index modulo the tile's extent. It is viscous under the default
-    # ghost fluxes, so the gradient ring of the folded box runs through the
+    # ghost fluxes with the artificial properties off, so the coarse-fine
+    # ghost fluxes read the gradient ring, whose folded box runs through the
     # scratch's device plans.
     # Bitwise against the CPUBackend under FORCE_KA and
     # FORCE_DEVICE_EXCHANGE, as every device gate is.
@@ -393,6 +395,7 @@ end
                    bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
                    metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
                    transport=ConstantTransport(mu0=1e-3),
+                   art=ArtificialProperties(enabled=false),
                    refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
         q = allocate_state(s)
         initialize!(s, q, (r, θ, z) -> begin

@@ -150,9 +150,9 @@ Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
   cylindrical, spherical or stretched grid, `rhs = :onesided`, and a
   user equation of state at a refined level with molecular transport;
 - runs where the step cost matters more than the interface error. The ghost
-  fluxes add 11 to 16% to the step without molecular transport and 17 to 50%
-  with it, the most on a refined level of small tiles, where the gradients
-  taken on the interpolated parent state dominate.
+  fluxes add about 17% to the step of two same-level patches without
+  molecular transport and 17 to 53% with it, the most on a refined level of
+  small tiles.
 
 On a curvilinear grid the ghost fluxes would need ghost face areas and a
 matching discrete geometric conservation law at the interface; neither is

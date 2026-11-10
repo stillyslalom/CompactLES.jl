@@ -1105,6 +1105,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  ghost_viscous=
                                                      _ghost_viscous(interface_flux,
                                                                     transport),
+                                                 gradient_ring=
+                                                     _gradient_ring_built(interface_flux,
+                                                                          transport, art),
                                                  ring=_ring_detector(art, n_species),
                                                  boundaries, bcs, root_folds=folds,
                                                  n_sensed=_sensed_field_count(art, tile,
@@ -1126,7 +1129,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                     subcycle, decomp_at(local_of[ti]), parent_lc.comm,
                     length(owners[ti]), faces[ti];
                     interpolation_order=level_interpolation_order,
-                    gradient_deriv=_ghost_viscous(interface_flux, transport) ?
+                    gradient_deriv=_gradient_ring_built(interface_flux, transport, art) ?
                                    deriv : nothing,
                     parent_h=parent_h, boundary=boundaries[ti],
                     folded=folded_all[ti], period))
@@ -1254,6 +1257,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
                            ghost_viscous::Bool=false,
+                           gradient_ring::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, root_folds=nothing,
@@ -1281,7 +1285,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     n_sensed > 0 && (ws = _own_gradients(ws, g))
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm);
-                             gradient_deriv=ghost_viscous ? deriv : nothing,
+                             gradient_deriv=gradient_ring ? deriv : nothing,
                              backend, fine_decomp=decomp_f, hf, boundary, folded)
     # Every face of a refined patch but one on the domain boundary is an
     # interface end, a coarse-fine or a same-level one, so each dimension
@@ -1562,6 +1566,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               tile::NTuple{3,Int};
                               interface_divergence=nothing,
                               ghost_viscous::Bool=false,
+                              gradient_ring::Bool=false,
                               ring::Bool=false,
                               boundaries=fill(_NO_BOUNDARY, length(tregions)),
                               bcs=nothing, root_folds=nothing,
@@ -1575,7 +1580,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, grad_Q_columns, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             ghost_viscous, ring,
+                                             ghost_viscous, gradient_ring, ring,
                                              boundary=boundaries[ti], bcs,
                                              root_folds, n_sensed, slot=k))
         end
@@ -1593,7 +1598,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         grad_Q_columns, level; interface_divergence,
-                                        ghost_viscous, ring, boundary=key[2], bcs,
+                                        ghost_viscous, gradient_ring, ring,
+                                        boundary=key[2], bcs,
                                         smoother, root_folds, n_sensed)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
@@ -1612,6 +1618,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            grad_Q_columns::Int, level::Int;
                            interface_divergence=nothing,
                            ghost_viscous::Bool=false,
+                           gradient_ring::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, smoother::Symbol=:gaussian,
@@ -1686,7 +1693,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                               gaussian=smoother === :gaussian, folded, root_folds)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
-                                 gradient_deriv=ghost_viscous ? deriv : nothing,
+                                 gradient_deriv=gradient_ring ? deriv : nothing,
                                  backend, fine_decomp=decomp_t, hf, boundary, folded)
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
                                      faces[slot],

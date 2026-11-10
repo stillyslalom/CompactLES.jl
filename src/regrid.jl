@@ -795,6 +795,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           _grad_Q_columns(solver), fi, 1;
                           interface_divergence=spec.interface_divergence,
                           ghost_viscous=_ghost_viscous(solver),
+                          gradient_ring=_gradient_ring_built(solver),
                           ring=_ring_detector(solver),
                           boundary=bnd, bcs=patches[1].bcs,
                           root_folds=patches[1].folds) : nothing
@@ -805,7 +806,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  newfine === nothing ? nothing : newfine.decomp,
                                  root_lc.comm, length(owners[1]);
                                  interpolation_order=spec.interpolation_order,
-                                 gradient_deriv=_ghost_viscous(solver) ?
+                                 gradient_deriv=_gradient_ring_built(solver) ?
                                                 spec.deriv : nothing,
                                  parent_h=getfield(solver, :h), boundary=bnd, folded,
                                  period)
@@ -2326,6 +2327,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              interface_divergence=
                                                  spec.interface_divergence,
                                              ghost_viscous=_ghost_viscous(solver),
+                                             gradient_ring=_gradient_ring_built(solver),
                                              ring=_ring_detector(solver),
                                              boundaries, bcs=root.bcs,
                                              root_folds=root.folds,
@@ -2371,6 +2373,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       idx, 1, faces[ti];
                                       interface_divergence=spec.interface_divergence,
                                       ghost_viscous=_ghost_viscous(solver),
+                                      gradient_ring=_gradient_ring_built(solver),
                                       ring=_ring_detector(solver),
                                       boundary=boundaries[ti], bcs=root.bcs,
                                       root_folds=root.folds,
@@ -2391,7 +2394,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         spec.restriction, n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
-        gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+        gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(wanted)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
@@ -2902,6 +2905,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                   faces[ti];
                                   interface_divergence=spec.interface_divergence,
                                   ghost_viscous=_ghost_viscous(solver),
+                                  gradient_ring=_gradient_ring_built(solver),
                                   ring=_ring_detector(solver),
                                   boundary=boundaries[ti], bcs=rbcs,
                                   root_folds=patches[1].folds,
@@ -2935,7 +2939,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                 spec.restriction, n_cons, getfield(solver, :subcycle), fdecomp(ti),
                 parent_lc.comm, length(owners[ti]), faces[ti];
                 interpolation_order=spec.interpolation_order,
-                gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+                gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
                 parent_h=ph, boundary=boundaries[ti], folded=folds[ti], period))
         end
         pdecomps = Union{Nothing,Decomp{T}}[pdecomp(li) for li in plocal]

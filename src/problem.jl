@@ -823,7 +823,7 @@ and `interface_divergence`.
 - `flux`: `:ghost` (default) differentiates the inviscid and molecular fluxes
   through the interface from ghost values with the interior stencil;
   `:closure` takes one-sided closure rows there. Choose `:closure` for
-  shock-dominated runs and Float32 runs, where the ghost fluxes add 11 to 50%
+  shock-dominated runs and Float32 runs, where the ghost fluxes add 17 to 53%
   to the step without lowering the error, and wherever `:ghost` is not
   supported: a curvilinear or stretched grid, `rhs = :onesided`, or a user EOS
   at a refined level with molecular transport, each of which setup rejects

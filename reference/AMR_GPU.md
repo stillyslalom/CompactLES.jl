@@ -1633,8 +1633,10 @@ the scratch's component width. On a one-rank tile the packed ring stays on
 the device and the shell writes from it directly. Under `interface_flux =
 :ghost` with molecular transport the scratch also holds device plans on the
 chain's fine box and the gradient ring, which the chain fills beside the
-shell ring and the coarse-fine ghost fluxes read in place; only a
-decomposed tile's Allgatherv stages the rings through the host.
+shell ring and the coarse-fine ghost fluxes read in place, on a tile whose
+coarse-fine faces read it (the artificial properties off,
+`_reads_gradient_ring` in `src/rhs.jl`); only a decomposed tile's
+Allgatherv stages the rings through the host.
 
 ### Communication
 

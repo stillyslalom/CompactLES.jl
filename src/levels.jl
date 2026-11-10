@@ -857,7 +857,12 @@ dimension (`3(c − 1) + j` holds ∂Q_c/∂x_j), laid out as the shell ring is
 and holding data where the ghost fluxes read it, on the ghost layers of the
 parent-fed faces.
 `_impose_shell!` refreshes the ring with the shell itself, so the two
-describe the same interpolated state. A device patch holds the backend's
+describe the same interpolated state, on a patch with a coarse-fine face
+that reads it (`_reads_gradient_ring`): with the artificial properties off,
+or with the remainder of the flux left to the divergence plans. With the
+artificial properties on, the default, the extrapolated remainder carries
+the molecular flux on those ghost layers, and no transfer is built with the
+ring (`_gradient_ring_built`). A device patch holds the backend's
 form of the plans, the scratch field and the ring in its `LevelScratch`
 instead, and the host fields here go unused on it. `decomps[d]` is the
 decomposition the plan along `d` applies over (`_box_gradient_plans`).
@@ -2038,13 +2043,14 @@ _padded_extent(e::NTuple{3,Int}, active::NTuple{3,Bool}, n_halo::Int) =
 # four Hermite boxes once per parent step and the blend runs as a kernel),
 # the tensor-product Lagrange chain runs as one kernel per stage over this
 # rank's components, and the shell ring packs on the device ahead of its
-# Allgatherv. Under `interface_flux = :ghost` with molecular transport the
-# conserved gradients of the ring are taken there too, through device plans
-# on the chain's fine box, and the gradient ring stays on the device for the
-# right-hand side that reads it. The scratch below is the storage that
-# takes: it lives on the fine `Patch` (typed by the patch's array type, so
-# `LevelTransfer`, `Level` and `Solver` keep their types) and is empty on the
-# host backend, whose chain runs on the transfer's own host stages.
+# Allgatherv. Where a coarse-fine face reads the gradient ring
+# (`ShellGradients`), the conserved gradients of the ring are taken there
+# too, through device plans on the chain's fine box, and the gradient ring
+# stays on the device for the right-hand side that reads it. The scratch
+# below is the storage that takes: it lives on the fine `Patch` (typed by the
+# patch's array type, so `LevelTransfer`, `Level` and `Solver` keep their
+# types) and is empty on the host backend, whose chain runs on the transfer's
+# own host stages.
 
 """
     LevelScratch
@@ -2053,8 +2059,8 @@ Device storage of one refined patch's level transfer: the four Hermite
 boxes (uploaded by `save_level_boxes!`, which fills this rank's own
 components), the interpolation
 chain's stages 0 .. K over this rank's own components (the
-component-distributed chain of `_impose_shell!`) and, under
-`interface_flux = :ghost` with molecular transport, the backend's form of
+component-distributed chain of `_impose_shell!`) and, where the gradient
+ring is built (`_gradient_ring_built`), the backend's form of
 the `ShellGradients` plans with their decompositions, its box-sized scratch
 field and its gradient ring. Empty on the host backend and on a patch without a parent.
 """
@@ -3193,17 +3199,23 @@ end
 # communicator. A device patch runs the chain on its `LevelScratch`; the
 # host patch on the transfer's host stages.
 #
-# Under `lt.gradients` each component's ring is followed by the rings of its
-# derivatives along the three dimensions (zero along a collapsed one), taken
-# on the fine box the chain produced, and the unpack fills the gradient ring
-# beside the shell ring. A device patch takes the derivatives through its
-# scratch's device plans and packs and unpacks both rings on the device, so
-# the box stays there; only the Allgatherv of a decomposed patch stages the
-# packed rings through the host. A tile with no parent-fed face reads no
-# gradient ring and takes none.
+# Where `ring` is true (`_fills_gradient_ring`), each component's ring is
+# followed by the rings of its derivatives along the three dimensions (zero
+# along a collapsed one), taken on the fine box the chain produced, and the
+# unpack fills the gradient ring beside the shell ring. A device patch takes
+# the derivatives through its scratch's device plans and packs and unpacks
+# both rings on the device, so the box stays there; only the Allgatherv of a
+# decomposed patch stages the packed rings through the host. Elsewhere the
+# chain fills only the boxes the shell slots read, whose values are the full
+# chain's bit for bit (`interpolate!`), so the shell does not depend on `ring`.
+# This form for one transfer is `hermite_level_shell!`'s; the drivers call
+# `_impose_shell_at!`.
 _impose_shell!(solver, states, lt::LevelTransfer, fill) =
-    _impose_shell!(solver, states, lt, fill,
-                   getfield(solver, :patches)[lt.fine_index].decomp)
+    _impose_shell_on!(solver, states, lt, fill,
+                      _cold(getfield(solver, :patches)[lt.fine_index]))
+_impose_shell_on!(solver, states, lt::LevelTransfer, fill, fine) =
+    _impose_shell!(solver, states, lt, fill, fine.decomp,
+                   _fills_gradient_ring(solver, fine, lt))
 
 # `_impose_shell!` for `transfers[t]` on its tile `fine`, which the caller
 # passes through `_cold`. This barrier, compiled for the tile's concrete type
@@ -3213,7 +3225,17 @@ _impose_shell!(solver, states, lt::LevelTransfer, fill) =
 # and so is the transfer at each dynamic call taking it; the transfer crosses
 # this dynamic call as its vector and index for the same reason.
 _impose_shell_at!(solver, states, transfers, t::Int, fill, fine) =
-    _impose_shell!(solver, states, transfers[t], fill, fine.decomp)
+    _impose_shell!(solver, states, transfers[t], fill, fine.decomp,
+                   _fills_gradient_ring(solver, fine, transfers[t]))
+
+# Whether the imposition on the tile `fine` fills the gradient ring of `lt`:
+# where the transfer carries one (`_gradient_ring_built`) and a coarse-fine
+# face of the tile reads it (`_reads_gradient_ring`). The test is the
+# reader's own, on setup constants of the tile and the solver-wide toggles,
+# so every rank of the tile's communicator, which the fill's gather spans,
+# reaches the same value.
+_fills_gradient_ring(solver, fine, lt::LevelTransfer) =
+    lt.gradients !== nothing && _reads_gradient_ring(PatchSolver(solver, fine))
 
 # The shell of the tile held as patch `pi` of `lev`, the form `_foreach_tile`
 # calls.
@@ -3232,15 +3254,15 @@ function _shell_ranks(fdcp::Decomp)
     return np, np == 1 ? 0 : MPI.Comm_rank(fdcp.comm)
 end
 
-function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp)
+function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp,
+                        ring::Bool)
     # A tile whose every face is shared with a same-level tile or lies on the
     # domain boundary has no shell slot to write (`_in_shell`), and no reader
     # of the ring, so the chain is skipped. `imposed` is a property of the
     # transfer, the same on every rank of the tile's communicator, so the
     # ranks skip the ring gather together.
     _imposes_shell(lt) || return states
-    lt.gradients === nothing ||
-        return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
+    ring && return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
     Qf = states[lt.fine_index]
     comm = fdcp.comm
     np, me = _shell_ranks(fdcp)

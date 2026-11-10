@@ -68,8 +68,8 @@ function test_composite_budgets()
     check("ledger: telescoping residual", maximum(abs, r.residual), 1e-12)
 
     # An r-z level with molecular transport: the r-weighted budget after four
-    # steps, through the ghost fluxes' area factors and the gradient ring's
-    # curvature terms, matches the undecomposed run.
+    # steps, through the ghost fluxes' area factors, matches the undecomposed
+    # run.
     function rz(comm_here, dims_here)
         kw = dims_here === nothing ? (;) : (; dims=dims_here)
         s = Solver(; n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),

@@ -1,0 +1,18 @@
+=== julia --project=. -t 1 bench/interfacecost.jl 
+    DESKTOP-2NI21F8, alderlake, 24 logical CPUs, Julia 1.13.3
+patches         ghost    158.53 ms  closure    135.47 ms  ghost/closure 1.170  (3-step chunks)
+                per-round ghost/closure: 1.138 1.180 1.362 1.173 1.176 1.147 1.187 1.164 1.167
+patches_mu      ghost    171.62 ms  closure    137.31 ms  ghost/closure 1.250  (3-step chunks)
+                per-round ghost/closure: 1.271 1.297 1.122 1.238 1.275 1.253 1.242 1.246 1.243
+box2d           ghost      9.62 ms  closure      8.26 ms  ghost/closure 1.165  (10-step chunks)
+                per-round ghost/closure: 1.163 1.174 1.187 1.154 1.244 1.159 1.147 1.213 1.167
+                one shell imposition: 0.063 ms with the gradient ring, 0.063 ms without (0 of 1 transfers carry one)
+tiles2d         ghost     85.96 ms  closure     56.38 ms  ghost/closure 1.525  (4-step chunks)
+                per-round ghost/closure: 1.422 1.463 1.514 1.558 1.437 1.539 1.507 1.145 1.530
+                one shell imposition: 0.330 ms with the gradient ring, 0.332 ms without (0 of 16 transfers carry one)
+tiles2d_artoff  ghost     88.30 ms  closure     41.97 ms  ghost/closure 2.104  (4-step chunks)
+                per-round ghost/closure: 2.100 1.939 2.096 2.189 2.104 1.464 2.122 2.146 2.114
+                one shell imposition: 1.447 ms with the gradient ring, 0.329 ms without (16 of 16 transfers carry one)
+box3d           ghost    204.38 ms  closure    151.30 ms  ghost/closure 1.351  (3-step chunks)
+                per-round ghost/closure: 1.469 1.342 1.336 1.343 1.322 1.362 1.357 1.351 1.352
+                one shell imposition: 4.012 ms with the gradient ring, 3.904 ms without (0 of 1 transfers carry one)

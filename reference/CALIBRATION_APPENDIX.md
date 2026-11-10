@@ -6068,6 +6068,7 @@ julia --project=. -t 1 bench/boundaryorder.jl study=gflux
 julia --project=. -t 1 bench/interfacesensor.jl crossing
 julia --project=. -t 1 bench/interfacesensor.jl startup
 julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost [mu=1e-3]
+julia --project=. -t 1 bench/interfacecost.jl
 ```
 
 `interface_flux = :ghost` evaluates the inviscid flux on the padded block, the interface ghosts
@@ -6259,23 +6260,21 @@ and every nest and regrid history agrees with the closure rows to the third digi
 2.2e-10 under the closure rows, the nests drift 6.75e-5 to 6.92e-5 against 6.76e-5 to 6.93e-5,
 the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 
-**Cost.** Serial, one thread, median step over nine interleaved chunks of ten steps per
-configuration in one process, ghost over closure, periodic, with the artificial properties and
-the filter on, at the default level interpolation order of each path (Core i9-12900K, Julia
-1.11.4), with the remainder on the divergence plans' one-sided rows, as under
-`GHOST_FLUX_REMAINDER = false`. Float64: (64, 48, 48) in two patches 1.11 inviscid and 1.24
-with `mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles on N = 96 1.16 inviscid. With
-`mu = 1e-3`, Float32 / Float64: a 2-D static 17² box on N = 96, global step, 1.21 / 1.17; the
-sixteen-tile level 1.50 / 1.50; a 3-D static 13³ box on N = 40, global step, 1.46 / 1.44. The
-overhead is the same fraction of the step in both precisions, and Float32 gains no accuracy
-from it (the floor above). The interpolation order is not part of it: the closure path at order
-8 costs what it does at 6. On the 3-D box (288 ms against 199 per step) a profile places the
-overhead in the gradient ring of each shell imposition (38 ms, the compact derivatives of every
-component along every dimension over the lines of the interpolated box that cross the ring),
-the molecular, remainder and ghost-differenced flux passes (32 ms), the one line solve per
-component and interface dimension beyond the closure path's one (11 ms) and the coarse-fine
-ghost fluxes (11 ms). A tile with no parent-fed face takes no gradient ring. The `ghost_flux`
-arrays add one state-sized array per interface dimension of a patch.
+**Cost.** `bench/interfacecost.jl`: serial, one thread, Float64, the median step over nine
+rounds of a few steps per configuration, the ghost and closure solvers of a round stepping in
+alternating order in one process, periodic, with the artificial properties and the filter on,
+at the default level interpolation order of each path. Package at the commit that builds the
+shell's gradient ring only where a coarse-fine face reads it, Julia 1.13.3, Core i9-12900K;
+the transcript is `bench/results/interfacecost.txt`. Ghost over closure: (64, 48, 48) in two
+patches 1.170 inviscid and 1.250 with `mu = 1e-3`; with `mu = 1e-3`, a 2-D static 17² box on
+N = 96 at the global step 1.165, a 2-D subcycled level of sixteen 37-node tiles on N = 96
+1.525, and a 3-D static 13³ box on N = 40 at the global step 1.351. With the artificial
+properties on, the extrapolated remainder carries the molecular flux at a coarse-fine face and
+no gradient ring is built. With them off the ring is built and filled at every shell
+imposition (the compact derivatives of every component along every dimension over the lines of
+the interpolated box that cross the ring): on the sixteen-tile level the ratio is then 2.104,
+and one imposition of the level's sixteen shells takes 1.447 ms against 0.329 ms without the
+ring. The `ghost_flux` arrays add one state-sized array per interface dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every

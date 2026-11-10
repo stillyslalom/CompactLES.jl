@@ -369,6 +369,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                interface_divergence=
                                                    spec.interface_divergence,
                                                ghost_viscous=_ghost_viscous(solver),
+                                               gradient_ring=_gradient_ring_built(solver),
                                                ring=_ring_detector(solver),
                                                boundaries, bcs=root.bcs,
                                                root_folds=root.folds,
@@ -381,7 +382,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
-        gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+        gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
