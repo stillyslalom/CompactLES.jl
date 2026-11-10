@@ -1923,7 +1923,7 @@ Configurations rejected at setup, and the reason:
 
 The open items are in [ROADMAP.md](ROADMAP.md): A10 for a level reaching
 every domain boundary, A13 for the remaining metrics and layouts, S15 for a
-refined run across many nodes, S8 for rebalancing, migration and the device
+refined run across many nodes, S8 for the measured rebalance and the device
 backend below level 1 and for multiblock geometry beyond the slab layout, and
 S1–S4 for the target-machine device campaign, the compact-solve and transfer
 scaling limits, the production tile and ownership cost studies and the
@@ -1937,10 +1937,11 @@ fine substeps one root rate measurement covers; the refreshed-rate guard is
 opt-in because its absolute ceiling requires case-specific qualification.
 The measured rebalance weights include each rank's root-level work,
 which overstates the cost of a tile on a rank holding few. A deeper
-regridded hierarchy moves a survivor through a replicated carry rather than
-point-to-point migration, and cannot rebalance. The box regrid's replicated
-carry (`tile = 0`) is not on that list: the tiled level is the production
-path, and the box path serves the one-patch configurations that need no
+regridded hierarchy migrates a moved survivor point to point, as the first
+refined level does, but it cannot rebalance on measured load and its regrid
+is refused on the device backend. The box regrid's replicated carry
+(`tile = 0`) is not on that list: the tiled level is the production path,
+and the box path serves the one-patch configurations that need no
 rank-partitioned carry. A tile's chain runs over its whole buffered box on
 each of up to `n_cons` of its ranks, and its shell ring is replicated over
 all of them, so one tile's coupling does not divide beyond `n_cons` ranks: a

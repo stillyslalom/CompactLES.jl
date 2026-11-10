@@ -86,11 +86,11 @@ subject to one heavy run at a time.
 
    4. **A7** draws the material boundary and the per-component field
       declaration before H3 adds the first new evolved field.
-   5. **H5**'s adapters follow A7 (its table readers are delivered), for
-      **A22** items 1 and 2: the ablation pressure tied to the ablation
-      rate by the rocket relation, and a real carbon equation of state,
-      both of which A22 places before a measured rate replaces its fitted
-      one.
+   5. **H5**'s adapters follow A7 (its table readers are delivered), with
+      **H5b**'s qualification of carbon, for **A22** items 1 and 2: the
+      ablation pressure tied to the ablation rate by the rocket relation,
+      and a real carbon equation of state, both of which A22 places before
+      a measured rate replaces its fitted one.
    6. **H3** adds two temperatures with an ionization closure and the
       electron–ion exchange, after A7, on whose contracts it depends.
    7. **H10**, then **H4**: H4's electron and ion conduction run through
@@ -103,9 +103,10 @@ subject to one heavy run at a time.
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
-laser- or burn-dominated case; H4a, H5a and H5b for cold DT and the ablator;
-M1–M3 for an immiscible interface; S10 for a body that is not a coordinate
-surface; H8 for a magnetized target; I2–I5 for a low-Mach mixing case.
+laser- or burn-dominated case; H4a and H5a for cold DT, and the rest of H5b
+(CH, CD and their mixtures) for the ablator; M1–M3 for an immiscible
+interface; S10 for a body that is not a coordinate surface; H8 for a
+magnetized target; I2–I5 for a low-Mach mixing case.
 
 ## Numerics and calibration
 
@@ -381,8 +382,12 @@ surface; H8 for a magnetized target; I2–I5 for a low-Mach mixing case.
   once-per-step level restriction retained (commits `9370da5`, `e7dc4ca`;
   [temporal order](CALIBRATION_APPENDIX.md#temporal-order)); the R1–R4
   regressions and the skip accounting of the serial suite (commit `26ae691`);
-  the Makie checks in CI's documentation job; and the scheduled validation
-  battery (`.github/workflows/validation.yml`). Remaining: parallel-HDF5
+  the Makie checks in CI's documentation job; the scheduled validation
+  battery (`.github/workflows/validation.yml`); and the script reference
+  check, which parses every script under `bench/`, `examples/`, `probes/`
+  and `docs/literate/` and checks its CompactLES names, imported names and
+  keywords against the package without running it
+  (`test/scriptrefs_tests.jl`, commit `743fdb4`). Remaining: parallel-HDF5
   execution in CI where the required stack exists (verified locally under
   S6); each instrument's current transcript under `bench/results/<script>.txt`,
   so that an appendix table is a quoted output and never a retyped one, each
@@ -419,9 +424,11 @@ promotion.
      only, interface tags number the messages of one rank pair, and owner
      sizing starts at the count a tile admits; `bench/amr_scaling.jl` measures
      the weak scaling ([table](CALIBRATION_APPENDIX.md#benchamr_scalingjl-weak-scaling-of-the-level-coupling)).
-  2. A nested hierarchy at scale, which needs S8's deep-regrid items
-     (point-to-point migration of a moved survivor in place of the replicated
-     gather over the run, rebalancing, the device backend).
+  2. A nested hierarchy at scale, which needs S8's deep-regrid items: the
+     measured rebalance and the device backend on the levels below the first
+     refined level, which has both (commits `603af33`, `602002c`). A moved
+     survivor migrates point to point on every regridded level (commits
+     `3980639`, `c88e93f`).
   3. Decide the one-box path at scale. A tile's chain runs over its whole box
      on each of up to `n_cons` of its ranks, so a one-box level (`tile = 0`)
      over many ranks holds a box-sized chain per rank. Either partition the
@@ -449,7 +456,9 @@ promotion.
   children couple on one rank. The tile lattice already nests children in
   one parent cell; the one-box path splits at parent tile boundaries. Level
   1 keeps the root coupling, since the root is one patch over many ranks.
-  **Depends on:** S15 stage 2 and S8's migration, which it reshapes.
+  **Depends on:** the point-to-point migration of every regridded level
+  (commits `3980639`, `c88e93f`), which it reshapes, and S15 stage 2's
+  nested hierarchy at scale.
   **Gate:** the level rows of `test/convergence.jl` unchanged, the migration
   audit bitwise, the coupling's point-to-point traffic per rank falling in
   `bench/amr_scaling.jl` when children are placed with their parents.
@@ -470,11 +479,17 @@ promotion.
   uniformly fine run; the vortex-ring case with the ring formed at the face.
 
 - [ ] **S8 — Extend deep regridding and multiblock geometry when a target needs them.**
-  Tiled regridding below level 1 landed with A12; add rebalancing,
-  point-to-point migration and the device backend to it, which S15 stage 2
-  and a nested capsule under N23 need. For geometric multiblock use, extend
-  beyond the current slab layout with explicit adjacency and compatible
-  geometry, and give a same-level patched run a checkpoint.
+  Tiled regridding below level 1 landed with A12, and a moved survivor there
+  migrates point to point (commit `c88e93f`). The first refined level
+  rebalances on measured busy time (commit `603af33`), migrates point to
+  point (commit `3980639`) and regrids on the device backend (commit
+  `602002c`). With more than one regridded level the constructor refuses
+  the measured rebalance and the device backend
+  ([several levels](AMR_GPU.md#regridding-several-levels)); add those two
+  below level 1, which S15 stage 2 and a nested capsule under N23 need. For
+  geometric multiblock use, extend beyond the current slab layout with
+  explicit adjacency and compatible geometry, and give a same-level patched
+  run a checkpoint.
   **Depends on:** a concrete case.
   **Gate:** interface accuracy, conservation budgets, restart, and distributed
   consistency. Refinement across a fold stays forbidden pending a separate
@@ -602,28 +617,28 @@ promotion.
   to grid error for a spherical drive, at a wall below the uniform 2 µm grid's.
 
 - [ ] **A22 — Replace the effective ablation rate of the Briareus-driven shell.**
-  Stage 0's `AblationDrive` takes ṁ = A T³ with A = 2.85e5 g cm⁻² s⁻¹, an
-  effective rate fitted to the ablator remaining at peak velocity (5–6.6 %,
-  PRE 109 Table I and HYDRA; Briareus research notes, "Capsule drive
-  hand-over and CompactLES stage 0"); peak velocity, kinetic energy and bang
-  time are the checks it leaves. The measured planar HDC rates (Olson 2011,
-  A ≈ 4.15–5.2e5) over-ablate this shell: 4.15e5 leaves nothing and 5.0e5
-  fails at 7.33 ns with 0.11 % left. With the fitted rate the shell peaks at
-  340 km/s against 380–400 and stagnates 0.6–0.7 ns after bang. Remaining:
+  Stage 0's `AblationDrive` takes ṁ = A T³ with an effective A fitted to the
+  ablator remaining at peak velocity (5–6.6 %, PRE 109 Table I and HYDRA;
+  Briareus research notes, "Capsule drive hand-over and CompactLES
+  stage 0"); peak velocity, kinetic energy and bang time are the checks it
+  leaves. With the fitted rate the shell peaks below 380–400 km/s and
+  stagnates after bang, and the measured planar HDC rates (Olson 2011)
+  over-ablate it
+  ([runs](CALIBRATION_APPENDIX.md#the-ablation-rate-of-the-briareus-driven-capsule)).
+  Remaining:
   1. The ablation pressure tied to ṁ by the rocket relation (P/ṁ), not
      calibrated separately as P₀ (145 Mbar).
   2. A real carbon EOS for the ablator (H5, H5b) in place of the ideal-gas
      adiabat that sets P/ṁ.
-  3. Grid robustness: at A = 2.85e5, nx 700 and 2000 fail on `dt_collapse`
-     and only nx 1400 completes, so v is read to ±10 %.
+  3. Grid robustness: at the fitted rate two of three grids fail on
+     `dt_collapse`, so the velocity is not grid-converged.
   4. The stagnation lag (Briareus research notes, "Where the stagnation lag
-     comes from", 2026-10-27): of eight one-closure variants, a stronger foot
-     or stiff carbon (γ = 3) brings the first shock to the keyhole timing
-     (3.4–3.7 ns against 3.86–3.91) but slows the shell (301 km/s, 7–9 %
-     left) and stagnates later (10.4–10.5 ns); only more ablation closes the
-     late lag (A = 3.5e5: 386 km/s, lag +0.16 ns, 1.45 % left). No fitted A
-     gives v, remaining mass and timing together with ideal-gas carbon, so
-     items 1–2 come first; the drive is not the cause.
+     comes from", 2026-10-27): of eight one-closure variants, those that
+     bring the first shock to the keyhole timing slow the shell, leave more
+     ablator and stagnate later, and only more ablation closes the late lag,
+     leaving less ablator than the 5–6.6 % band. No fitted A gives v,
+     remaining mass and timing together with ideal-gas carbon, so items 1–2
+     come first; the drive is not the cause.
   **Gate:** a measured HDC rate (no fitted A) reaching 5–6.6 % remaining and
   380–400 km/s on a converged grid, with stagnation timing explained.
 

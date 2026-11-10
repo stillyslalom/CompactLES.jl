@@ -6,9 +6,11 @@
 # five places, because nothing checked the layout. This file does, in the
 # form Documenter's cross-reference guard takes in docrefs_tests.jl: it
 # fails the serial suite on
-#   1. an exponent-formatted number (`4.8e-16`) in any prose file other than
-#      the appendix, since a digit of that shape is a measurement and a
-#      measurement is recorded once;
+#   1. an exponent-formatted number with a decimal mantissa (`4.8e-16`,
+#      `2.85e5`) in any prose file other than the appendix, since a digit of
+#      that shape is a measurement and a measurement is recorded once. A
+#      one-digit mantissa (`1e-3`) is not matched, since in the prose files
+#      that form is mostly an order of magnitude, a tolerance or a default;
 #   2. CALIBRATION.md over the line cap its header states;
 #   3. a closed ROADMAP entry (`- [x]`) longer than five lines: one sentence
 #      and a commit hash is the record, the commit message is the account;
@@ -74,14 +76,25 @@ function linked_files()
     return sort(out)
 end
 
-const EXPONENT = r"\d\.\d+e[-+]\d+"
+const EXPONENT = r"\d\.\d+e[-+]?\d+"
+
+# Occurrences of that shape that are not measurements, each named with its
+# file: a parameter default written as the source writes it.
+const EXPONENT_EXEMPT = [
+    ("docs/src/reference/input-deck-cheat-sheet.md", "p_inf=6.0e8"),
+]
 
 function exponent_numbers()
     out = String[]
     for f in prose_files()
+        exempt = [s for (file, s) in EXPONENT_EXEMPT if file == rel(f)]
         for (i, line) in enumerate(eachline(f))
-            m = match(EXPONENT, line)
-            m === nothing || push!(out, "$(rel(f)):$i: $(m.match)")
+            for s in exempt
+                line = replace(line, s => "")
+            end
+            for m in eachmatch(EXPONENT, line)
+                push!(out, "$(rel(f)):$i: $(m.match)")
+            end
         end
     end
     return out

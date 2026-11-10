@@ -73,6 +73,8 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/annuluswall.jl`, `test/convergence.jl`)
 35. [The incompressible prototype](#the-incompressible-prototype)
     (`bench/incompressible_checks.jl`, `bench/incompressible_tgv.jl`)
+36. [The ablation rate of the Briareus-driven capsule](#the-ablation-rate-of-the-briareus-driven-capsule)
+    (`examples/briareus_capsule.jl`)
 
 ## The shock battery
 
@@ -9767,3 +9769,41 @@ it at 64³, where the resolved gradients overshoot before the cascade is complet
 run to t = 10 without a filter at both grids; the compressible solver at 32³ needs its filter
 (see [Taylor-Green](#taylor-green)). The conjugate-gradient count per stage is flat in the
 grid: 6–8 on the periodic plane, 10–11 between slip walls and 11–14 in three dimensions.
+
+## The ablation rate of the Briareus-driven capsule
+
+```text
+julia --project=<env> -t 4 examples/briareus_capsule.jl nx=1400 tfinal=10.5 rate=<A>
+```
+
+`<env>` is an environment with both CompactLES and Briareus (the script's header). In the
+one-dimensional stage-0 capsule of the example, ṁ = A T³ (A in g cm⁻² s⁻¹), the ablation
+pressure is calibrated separately to the 145 Mbar peak, and the carbon is an ideal gas. The
+HYBRID-E targets are a peak velocity of 380–400 km/s and 5–6.6 % of the ablator remaining at
+it (PRE 109 Table I and HYDRA). The rows and the grid runs are those of the Briareus research
+notes, "Capsule drive hand-over and CompactLES stage 0", and the variants those of "Where the
+stagnation lag comes from" (2026-10-27); they entered roadmap item A22 in commits `0911282`
+and `df8b336`. The calibration table on the
+[ablation-drive page](../docs/src/explanation/ablation-drive.md) is the run of 2026-10-24
+against Briareus `785684d`.
+
+| A | origin of A | peak velocity | ablator remaining | stagnation after bang |
+|---|---|---|---|---|
+| 2.85e5 | fitted to the remaining mass | 340 km/s | in the 5–6.6 % band | 0.6–0.7 ns |
+| 3.5e5 | | 386 km/s | 1.45 % | 0.16 ns |
+| 4.15e5 | Olson 2011 planar HDC, low end | | none | |
+| 5.0e5 | Olson 2011 planar HDC | run fails at 7.33 ns | 0.11 % | |
+
+The planar HDC rates of Olson 2011 span A ≈ 4.15–5.2e5, and both measured rates in the table
+over-ablate this shell. At A = 2.85e5, nx = 700 and 2000 fail on `dt_collapse` and only
+nx = 1400 completes, so the velocity is read to ±10 %.
+
+Of eight variants each changing one closure, a stronger foot or stiff carbon (γ = 3) brings
+the first shock to the keyhole timing (3.4–3.7 ns against 3.86–3.91), but slows the shell to
+301 km/s with 7–9 % of the ablator left, and the shell stagnates later, at 10.4–10.5 ns. Only
+more ablation closes the late lag (the 3.5e5 row). No fitted A gives the velocity, the
+remaining mass and the timing together with ideal-gas carbon.
+
+The example has no keyword for the variants. Its run is stopped once the velocity has fallen
+below four fifths of its peak, so no stagnation time is printed; the stagnation column and the
+variants' timings come from the runs of the notes.
