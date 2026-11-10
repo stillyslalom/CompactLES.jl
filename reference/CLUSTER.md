@@ -326,18 +326,21 @@ Windows, Julia 1.11.4) on the 768×48 two-species tube of
 Net of both, the 768×48 case at eight P-cores costs 24 ms/step pinned at `-t 8`
 and 12 ms/step at `-n 8 -t 1`, so ranks beat threads 2x on a 37k-point planar
 grid, with every phase of the RHS scaling about 3x at eight threads (pointwise
-passes 4x, line solves 2.5x). The loss is region granularity rather than
-bandwidth at this size: that configuration enters 195 threaded regions per RHS
+passes 4x, line solves 2.5x). The loss was region granularity rather than
+bandwidth at this size: that configuration entered 195 threaded regions per RHS
 evaluation of about 54 µs serial work each, against a 3–5 µs spawn/join floor
 at eight threads (`probes/spawnfloor.jl`, 1 ms per RHS of a 3.5 ms total) and a
-join barrier per region, and the line-solve path pays three regions per solve
-(fill, solve, scatter) with the solved block crossing cores in between. A
-prototype that fills, solves and scatters each thread's own lines in one region
-ran the x-direction filter solve 1.86x faster at `-t 8` (36.9 to 19.8 µs), at
-parity serially once the 16-wide column blocking was kept inside each chunk,
-and bitwise identical; the work item is in `ROADMAP.md`. Static scheduling for
-`Threads.@threads` and a narrower column block for the 48-line x solve were
-both measured inside the 10–20% spread and not adopted.
+join barrier per region, and the line-solve path then took three regions per
+solve (fill, solve, scatter) with the solved block crossing cores in between.
+A prototype that filled, solved and scattered each thread's own lines in one
+region ran the x-direction filter solve 1.86x faster at `-t 8` (36.9 to
+19.8 µs), at parity serially once the 16-wide column blocking was kept inside
+each chunk, and bitwise identical. The fusion is now in the code (commits
+`8613edb`, `17cdd9f`): a host-plan solve takes one region, or two with an
+interface stage. The 768×48 figures above were measured on the three-region
+path and not on the fused one; their re-measurement is roadmap item S11.
+Static scheduling for `Threads.@threads` and a narrower column block for the
+48-line x solve were both measured inside the 10–20% spread and not adopted.
 
 **`--cpu-bind=threads` distributes CPUs non-uniformly below full packing** (3–5
 cores per rank at half, 7–14 at a quarter), and an explicit `-c` does not repair

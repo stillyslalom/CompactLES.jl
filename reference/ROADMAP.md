@@ -932,17 +932,19 @@ Detailed mechanisms and measurements remain in [AMR_GPU.md](AMR_GPU.md) and
 opt-in Float32 already exist; the tasks below extend or validate them. S15 is
 under [the refinement track](#refinement-for-the-production-geometry).
 
-- [ ] **S12 — Remove the O(P²) replicated interface solve for many-rank scaling.**
-  The reduced interface matrix is dense of order 2qP and every rank applies
-  its LU to its own lines, about 8q²P² operations per line against 9qn for
-  the local sweep. Per rank on a uniform 3-D grid that is a fixed 8q²N² per
-  solve while the local work shrinks as N³/P³: an Amdahl term whose
-  operation-count crossover is P ≈ 6.6 (q = 1) or 5.2 (q = 2) per direction
-  at N = 256 and 10.4 / 8.3 at N = 1024, a few hundred to a thousand ranks.
-  The 224-rank rzhound run with dims (8,7,4) was at that crossover along x.
-  Per-step collective latency is not the limit: Allgathers span one direction's
-  P ranks and the measured node scaling holds to four nodes
-  ([CLUSTER.md](CLUSTER.md)).
+- [ ] **S12 — Measure the replicated interface solve at many ranks.**
+  The reduced interface matrix of a line decomposed over P ranks is
+  block-tridiagonal of order 2qP (block-cyclic on a periodic line); every
+  rank holds it and solves it for its own lines through a pivoted band LU,
+  O(q²P) operations per line against 9qn for the local sweep, where a dense
+  LU would cost 8q²P² and is kept only at P = 1 (stage 2;
+  [DESIGN.md](DESIGN.md#the-distributed-compact-solve)). On a uniform 3-D
+  grid of N³ points with P ranks per direction, the reduced stage's share
+  of a solve therefore grows as P²/N. Per-step collective latency is not
+  the limit: Allgathers span one direction's P ranks and the measured node
+  scaling holds to four nodes ([CLUSTER.md](CLUSTER.md)). What remains is
+  stage 1's run on rzhound, and stage 3 only if that run shows the
+  Allgather volume.
   Stages, in order:
   1. Instrument first: `bench/reducedsolve.jl` (commit `3fb37a9`) times the
      local sweep, the Allgather and the reduced solve separately for both
@@ -956,10 +958,15 @@ under [the refinement track](#refinement-for-the-production-geometry).
   3. Only if the Allgather volume (2qP lines' worth per rank) then shows in
      the probe: a distributed reduced solve in which only neighbors exchange,
      the SPIKE recursion, which also removes the replicated factorization.
-  Process-grid guidance follows from the same count: for a fixed rank count
-  the per-rank reduced cost is proportional to the sum of the cubes of the
-  per-direction rank counts, so near-uniform grids minimize it and slabs
-  maximize it. **Depends on:** system-MPI cluster time for stage 1. **Gate:**
+  Process-grid guidance follows from the band count. A rank holds
+  N²P_d/P_tot lines along direction d, for P_tot = P_x P_y P_z ranks, each
+  costing O(q²P_d), so for a fixed rank count the per-rank reduced cost is
+  proportional to the sum of the squares of the per-direction rank counts:
+  near-uniform grids minimize it and slabs maximize it, by a smaller margin
+  than under the dense solve's sum of cubes. No cluster measurement yet
+  places a crossover against the local sweep under the band solve, since
+  stage 1's run is the open part. **Depends on:** system-MPI cluster time
+  for stage 1. **Gate:**
   the MPI suite at 2, 4 and 8 ranks, `bench/tgv_energy.jl` reproducing serial
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
@@ -981,13 +988,14 @@ under [the refinement track](#refinement-for-the-production-geometry).
   bitwise claims. Validate other advertised backends on their own hardware.
 
 - [ ] **S2 — Measure and address compact-solve and transfer scaling limits.**
-  Profile replicated dense interface solves, host/device fences and transfers,
+  Profile the replicated band interface solves, host/device fences and transfers,
   and the level coupling's point-to-point exchanges (S15) as line-rank count and
   region size grow. Compare gather-solve-scatter, on-device reduced solves and
   GPU-aware MPI only where profiles justify them.
   Measure stacked `max_rate` reductions before adding another launch optimization;
   revisit extra streams only if batching still leaves useful concurrency.
-  The replicated interface solve has a cost model and a planned fix in S12.
+  The replicated interface solve's cost model, its cluster measurement and
+  the conditional distributed reduced solve are S12's.
   **Depends on:** reliable S1 timing. **Gate:** crossover data and preserved
   distributed accuracy, not a workstation-only speedup claim.
 
@@ -1037,29 +1045,25 @@ under [the refinement track](#refinement-for-the-production-geometry).
   **Gate:** the core gate with explained baseline updates; time the inversion
   before and after at four species in the same session.
 
-- [ ] **S11 — Fuse each compact line solve into one threaded region.** Low
-  priority: on the 2-D case that motivated it, `mpiexec -n 8 -t 1` already
-  beats what fused threads would reach, so this waits for a setting in which
-  threads are the only parallelism, such as the host-side interface stage of
-  a device plan.
-  A line solve is three regions today (fill, solve, scatter) and each carries
-  a spawn/join floor and a barrier, with the solved block crossing cores
-  between them. On a 37k-point planar case at eight threads that granularity,
-  not bandwidth, is the loss against ranks: many short regions per RHS, and
-  ranks faster per step than pinned threads ([CLUSTER.md](CLUSTER.md),
-  hybrid-desktop paragraph). A prototype in which each thread fills, solves
-  and scatters its own chunk of lines in one region sped up the x-direction
-  filter solve at `-t 8`, at parity serially and bitwise identical, provided
-  the 16-wide column blocking of `solve_cols!` is kept inside each chunk. The transposed y/z path fuses the same way over
-  chunks of x-columns, since a chunk's fill, row-sweep solve and scatter are
-  all contiguous in it. Where the dimension is decomposed the reduced
-  interface stage is a collective between the local solve and the spike
-  correction, so the fusion there is two regions, not one, and the collective
-  stays outside both. The `@threaded` docstring names this reorganization as
-  the condition for re-measuring the threading backend; do that after, not
-  before. **Gate:** the core gate, `bench/jetcheck.jl` and `bench/audit.jl`
-  before and after, bitwise agreement of the serial suite, the MPI suite at
-  2, 4 and 8 ranks, and the 768×48 thread table re-measured pinned.
+- [ ] **S11 — Re-measure threads and the threading backend on the fused line
+  solves.** `apply_along!` and its scaled and subtracting forms on a host
+  plan fill, solve and scatter each thread's lines in one threaded region,
+  the x sweep by column blocks and the y and z sweeps by chunks of the
+  transposed buffer, with the staged form's per-line arithmetic and a
+  bitwise identical result (commit `8613edb`). Where the dimension has an
+  interface stage, the correction and the scatter take a second region, and
+  the reduced solve's collective runs between the two. A derivative along a
+  self-paired fold takes the same scaled and subtracting scatters (commit
+  `17cdd9f`). Remaining: the 768×48 thread table of
+  [CLUSTER.md](CLUSTER.md) (hybrid-desktop paragraph), measured when a solve
+  took three regions, re-measured pinned; then the threading backend, whose
+  `@threaded` docstring names this reorganization as the condition for
+  re-measuring it. Low priority: on that 2-D case `mpiexec -n 8 -t 1` beat
+  eight threads, so the result matters where threads are the only
+  parallelism, such as the host-side interface stage of a device plan.
+  **Gate:** the 768×48 table at `-t 8` pinned and at `-n 8 -t 1`, and the
+  `@threaded` backend comparison repeated on the fused path, with the
+  backend retained or changed and the decision recorded.
 
 ## Geometry
 
@@ -1341,21 +1345,21 @@ and the production configuration they lead to are in
   tagged on its parent; a three-level shock–contact run lands an order of
   magnitude closer to the uniform-fine reference than the root (commit
   `737550c`).
-- [x] **A14** — `Hydrostatic` sets the pressure of an initial condition in
-  discrete balance with the run's derivative operator, and an unfiltered
-  two-fluid column stays at rest to round-off (commit `acfe5cb`).
 - [x] **A14** — Coarse-fine junction lines holding an unresolved feature
   take the step's difference of the two grids' face fluxes, less a high-order
   quadrature correction's change, on the parent; a Noh tile passing its shock
   out conserves mass to 4e-7 against 1e-3 (commit `3e35ff3`).
-- [x] **A15** — `CompositeBC` divides a face among member conditions by a
-  coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
-  on it (commit `9574aea`).
 - [x] **A18** — The parent's derivatives drop the source of a restricted
   feature they cannot resolve, by default, and the coupling's gate tests the
   parent's uncovered nodes alone; a level ahead of a converging shock carries
   1.05 times the uniform fine grid's disturbance, and the two-level Sod
   crossings conserve mass to 1e-5 (commit `8dac5a8`).
+- [x] **A23** — `Hydrostatic` sets the pressure of an initial condition in
+  discrete balance with the run's derivative operator, and an unfiltered
+  two-fluid column stays at rest to round-off (commit `acfe5cb`).
+- [x] **A24** — `CompositeBC` divides a face among member conditions by a
+  coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
+  on it (commit `9574aea`).
 
 ### Scale, devices and I/O
 
@@ -1379,3 +1383,11 @@ and the production configuration they lead to are in
   the implicit half of ARK4(3)6L[2]SA on one host-storage patch, decomposed
   or not, with collective rollback of a failed stage; a `cfl` chosen for the
   default integrator carries over (commits `9fd6365`, `9c2edd8`).
+
+### Incompressible flow
+
+- [x] **I1** — A constant-density incompressible solver on the staggered
+  compact operators, projected exactly through the implicit stage's pressure
+  solve with a skew-symmetric convective term, runs on one host-storage patch,
+  decomposed or not, with periodic, slip-wall and first-order no-slip
+  dimensions (commit `593f673`).
