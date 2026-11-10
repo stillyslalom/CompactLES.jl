@@ -140,12 +140,12 @@ cost. The link is to the section holding the evidence.
   ([symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
 - **A run with same-level patches fails within its first steps.** The initial
   data has a discontinuity within one node of a shared patch plane, which the
-  default ghost-reading interface rows do not survive; a shock arriving from
+  default ghost fluxes survive only with the artificial properties on, and
+  `interface_flux = :closure` only with one-sided gradient rows; a shock from
   the interior crosses the plane without incident. Move the plane, resolve the
-  discontinuity over a few cells, set `interface_flux = :ghost` with the
-  artificial properties on, or set `interface_rhs = :onesided` with
-  `interface_divergence = nothing`; a divergence source defeats the one-sided
-  workaround ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
+  discontinuity over a few cells, keep the artificial properties on, or set
+  `interface_rhs = :onesided` with `interface_divergence = nothing` under the
+  closure rows; a divergence source defeats the one-sided workaround ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
   [interface divergence rows](CALIBRATION_APPENDIX.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
   [interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 - **A smooth patched or refined run is limited by its interfaces.** The

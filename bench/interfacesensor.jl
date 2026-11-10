@@ -732,6 +732,8 @@ function crossing_rows()
                                 subcycle=false)))
     push!(species, merge(base, (; label="gflux two species", species=2,
                                 iflux=:ghost)))
+    push!(species, merge(base, (; label="gflux two species rem-extrap", species=2,
+                                iflux=:ghost, gradrem=true, extrap=true)))
     if args.crossing_variants != "all"
         wanted = split(args.crossing_variants, ',')
         keep(row) = any(w -> occursin(w, row.label), wanted)

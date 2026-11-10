@@ -123,8 +123,8 @@ end
         orders = [log2(ext[i] / ext[i+1]) for i in 1:2]
         @info "two-patch viscous wave, $label" ext osd orders
         # Measured C6 6.1e-5 / 3.0e-6 / 1.9e-7 (orders 4.34 / 4.00) against
-        # one-sided 8.4e-5 / 2.0e-5 / 5.9e-6 (2.09 / 1.73); C10 6.0e-5 /
-        # 4.0e-6 / 2.6e-7 (3.93 / 3.92) against 7.5e-5 / 1.9e-5 / 5.9e-6.
+        # one-sided 1.3e-4 / 3.4e-5 / 8.6e-6 (1.92 / 1.97); C10 6.0e-5 /
+        # 4.0e-6 / 2.6e-7 (3.93 / 3.92) against 1.4e-4 / 3.1e-5 / 8.2e-6.
         @test all(>(3.0), orders)
         @test ext[3] < 1e-6
         @test osd[3] > 10 * ext[3]

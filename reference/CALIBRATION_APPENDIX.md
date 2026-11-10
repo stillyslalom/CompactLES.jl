@@ -5778,7 +5778,10 @@ the default artificial properties and filter, the level-1 box over
 [0.6, 0.8], run to t = 0.2 so that the shock enters through the low face
 near t = 0.057 and leaves through the high face near t = 0.17. The base
 row is C6, subcycled, one tile, `filter_cfl = 0.35`, the default rows,
-ghost taps; each other row changes one setting. The columns are the
+ghost taps, `interface_flux = :closure`; each other row changes one
+setting. Package at `743fdb4b`, Julia 1.13.3, from
+`julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
+transcript is `bench/results/interfacesensor.txt`. The columns are the
 momentum ahead of the shock at t = 0.1 (x > 0.85, the level suite's gate
 quantity), the minimum density and pressure over every patch on any
 step, the artificial diffusivity number ((μ\* + β\*)/ρ + κ\*/(ρc_p) +
@@ -5789,34 +5792,39 @@ counted an inadmissible point on any step.
 
 | row | noise | ρ_min | p_min | shell number, t = 0.03 | t = 0.1 | shell error, t = 0.2 |
 |---|---|---|---|---|---|---|
-| base | 7.4e-11 | 0.061 | 0.040 | 9.8e-5 | 2.5e-3 | 7.7e-3 |
-| clamped taps | 7.4e-11 | 0.061 | 0.040 | 9.7e-5 | 2.5e-3 | 7.7e-3 |
-| C10 | 6.4e-10 | 0.067 | 0.045 | 2.6e-4 | 6.3e-3 | 7.7e-3 |
-| global step | 3.5e-10 | 0.062 | 0.038 | 1.3e-4 | 2.3e-3 | 8.9e-3 |
-| tile 8 | 7.0e-11 | 0.061 | 0.040 | 9.8e-5 | 4.4e-1 | 8.3e-2 |
-| three levels | 2.9e-10 | 0.061 | 0.040 | 9.4e-5 | 1.2e-2 | 6.3e-3 |
-| `filter_cfl = 0` | 1.0e-10 | 0.054 | 0.033 | 1.6e-4 | 4.1e-3 | 8.6e-3 |
-| `:cascade4` rows | 7.1e-11 | 0.061 | 0.040 | 1.2e-4 | 2.7e-3 | 7.9e-3 |
-| `:brady_livescu` rows | 7.6e-11 | 0.061 | 0.040 | 4.1e-5 | 4.8e-2 | 8.2e-3 |
-| artificial properties off | 3.9e-11 | 0.090 | 0.050 | 0 | 0 | 1.4e-3 |
+| base | 5.1e-12 | 0.061 | 0.040 | 7.7e-5 | 2.4e-2 | 9.8e-3 |
+| clamped taps | 5.1e-12 | 0.061 | 0.040 | 7.6e-5 | 2.4e-2 | 9.8e-3 |
+| C10 | 1.5e-10 | 0.067 | 0.043 | 2.0e-4 | 3.6e-2 | 1.2e-2 |
+| global step | 6.7e-12 | 0.062 | 0.038 | 1.6e-4 | 1.9e-2 | 1.0e-2 |
+| tile 8 | 5.2e-12 | 0.061 | 0.035 | 7.7e-5 | 4.4e-1 | 7.5e-2 |
+| three levels | 5.0e-12 | 0.061 | 0.039 | 7.3e-5 | 3.4e-2 | 9.7e-3 |
+| `filter_cfl = 0` | 7.4e-12 | 0.054 | 0.033 | 1.7e-4 | 2.6e-2 | 9.1e-3 |
+| `:cascade4` rows | 4.9e-12 | 0.061 | 0.040 | 9.7e-5 | 2.3e-2 | 8.4e-3 |
+| `:brady_livescu` rows | 5.0e-12 | 0.061 | 0.040 | 4.6e-5 | 5.8e-2 | 7.8e-3 |
+| artificial properties off | 2.6e-12 | 0.090 | 0.054 | 0 | 0 | 3.3e-3 |
 | three same-level patches | 3.6e-10 | 0.062 | 0.041 | 1.8e-5 | 4.5e-1 | 7.4e-2 |
-| two species, ghost taps | 7.2e-11 | 0.061 | 0.041 | 7.1e-5 | 2.7e-2 | 7.7e-3 |
-| two species, clamped taps | 7.2e-11 | 0.061 | 0.041 | 7.0e-5 | 2.7e-2 | 7.7e-3 |
+| two species, ghost taps | 5.3e-12 | 0.084 | 0.036 | 2.1e-4 | 3.0e-2 | 9.3e-3 |
+| two species, clamped taps | 5.3e-12 | 0.084 | 0.036 | 2.0e-4 | 1.0e-1 | 9.3e-3 |
 
 The minimum density is the step data's start-up transient at step 3, and
 the uniform run reads the same 0.062 at both spacings. Under the tiled
 level and the three-patch layout the shell window includes the tile and
 patch faces the shock is crossing at t = 0.1, so those two rows read the
 shock itself. The tap policy moves nothing past the third digit on a
-shock, whose own δ⁴ signal is orders above the clamp's error; the
-two-species contact carries the composition through both faces with a
-mass-fraction excursion of 1.4e-8 over the shell against 4.0e-4 at the
-contact itself, under either policy. The `:brady_livescu` rows put
-twenty times the base row's sensor on the shell during the crossing and
+single-species shock, whose own δ⁴ signal is orders above the clamp's
+error. On the two-species contact the clamped taps raise the shell
+number at t = 0.1 3.5-fold and move the shell error in the third digit;
+the contact carries the composition through both faces with a
+mass-fraction excursion of 2.7e-10 over the shell against 1.4e-4
+elsewhere (2.1e-10 and 1.5e-4 clamped). The `:brady_livescu` rows put
+2.4 times the base row's sensor on the shell during the crossing and
 complete it; no closure candidate fails this gate and none is promoted
 by it.
 
-A discontinuity initialized on a same-level plane is the one failure.
+Under `interface_flux = :closure` a discontinuity initialized on a
+same-level plane is the one failure; the default ghost fluxes complete
+that run
+([ghost fluxes](#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
 With two patches the shared plane is node 101, the Sod diaphragm, and
 the run fails on negative density at step 2 with ρ = −50 at the plane;
 the artificial properties off (step 10) and the filter off (step 2) fail
@@ -5951,10 +5959,10 @@ filter keeps the extended interface rows; the cascade rows are the worst
 set at either kind of face. `detector = :d8` stays rejected in patched and
 refined runs, since no interface rows exist for its pentadiagonal
 operator. The closure candidates all pass the crossing gate, which
-therefore promotes none of them. The step-on-a-plane failure and the
-three-level undershoot under global stepping are recorded as limitations:
-the first is an initial-data restriction with a stated workaround, the
-second is removed by subcycling.
+therefore promotes none of them. The step-on-a-plane failure under the
+closure rows and the three-level undershoot under global stepping are
+recorded as limitations: the first is an initial-data restriction with a
+stated workaround, the second is removed by subcycling.
 
 ### bench/boundaryorder.jl idiv: the interface divergence rows
 
@@ -6057,23 +6065,29 @@ excursion thirteenfold. The option stays experimental, a Float64 smooth-flow set
 
 ```text
 julia --project=. -t 1 bench/boundaryorder.jl study=gflux
-julia --project=. -t 1 bench/interfacesensor.jl crossing "crossing_variants=base,gflux,two patches,three patches"
+julia --project=. -t 1 bench/interfacesensor.jl crossing
 julia --project=. -t 1 bench/interfacesensor.jl startup
 julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost [mu=1e-3]
 ```
 
 `interface_flux = :ghost` evaluates the inviscid flux on the padded block, the interface ghosts
-included, and differences it through the gradient plans' interface rows. The molecular flux
-joins it: its ghost values at a same-level face are the neighbouring patch's own interior
-flux, exchanged after every patch of the level has evaluated, and at a coarse-fine face they
-are evaluated from the conserved gradients of the interpolated fine box, taken with explicit
-seventh-order rows at the box ends. The artificial fluxes and the wall corrections take the
-one-sided rows of `div_plans`, the cascade rows or an `interface_divergence` source's. The
-ghost column runs at the ghost path's default level interpolation order, 8. Serial Float64,
-`cfl = 0.25`, the matrix's interface window, root N = 48, 96, 192 (49, 97, 193 for the wall
-rows), beside the closure-row and Brady–Livescu (BL) columns of the section above, which this
-study reproduces to every digit. The polynomial row is `polynomial_case(96)`, every inviscid
-flux component of degree at most five, at the interface window:
+included, and differences it through the gradient plans' interface rows. With the artificial
+properties off, as in every smooth row of this section, the molecular flux joins it: its ghost
+values at a same-level face are the neighbouring patch's own interior flux, exchanged after
+every patch of the level has evaluated, and at a coarse-fine face they are evaluated from the
+conserved gradients of the interpolated fine box, taken with explicit seventh-order rows at
+the box ends. The wall corrections then take the one-sided rows of `div_plans`, the cascade
+rows or an `interface_divergence` source's. With the artificial properties on, the remainder
+F − f (the molecular and artificial fluxes and the wall corrections) is carried in
+`ghost_flux` as well, exchanged at a same-level face and extrapolated at a coarse-fine face,
+and the whole flux takes the gradient rows (the remainder paragraph below). The ghost column
+runs at the ghost path's default level interpolation order, 8. Serial Float64, `cfl = 0.25`,
+the matrix's interface window, root N = 48, 96, 192 (49, 97, 193 for the wall rows), beside
+the closure-row and Brady–Livescu (BL) columns of the section above, which this study
+reproduces to every digit. Package at `743fdb4b`, Julia 1.13.3; the transcript of the
+first command is `bench/results/boundaryorder.txt`. The polynomial row is
+`polynomial_case(96)`, every inviscid flux component of degree at most five, at the interface
+window:
 
 ```
                                             closure                BL                     ghost
@@ -6097,9 +6111,9 @@ two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  4.196e-11 5.9
 2 levels subcycled, standing wave           9.640e-10 3.37 / 3.47  1.519e-11 4.70 / time  1.938e-11 4.84 / time
 walls and an interface, two patches         4.234e-10 5.04 / 5.66  2.375e-9  4.56 / 5.19  1.525e-10 4.27 / 4.98
 walls and an interface, filtered            1.860e-10 4.26 / 4.86  1.211e-10 5.20 / 4.03  1.316e-10 4.89 / 4.12
-viscous, two patches                        2.469e-8  3.62 / 3.87  6.850e-11 4.92 / 5.66  3.151e-13 6.75 / 6.43
-viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.57 / 5.34  1.060e-13 6.29 / 6.06
-viscous, 2 levels subcycled                 8.529e-10 3.61 / 3.64  3.400e-13 5.53 / 5.39  1.054e-13 6.28 / 6.06
+viscous, two patches                        2.469e-8  3.62 / 3.87  6.850e-11 4.92 / 5.66  3.164e-13 6.75 / 6.43
+viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.57 / 5.34  1.070e-13 6.29 / 6.04
+viscous, 2 levels subcycled                 8.529e-10 3.61 / 3.64  3.400e-13 5.53 / 5.39  1.057e-13 6.28 / 6.06
 ```
 
 At a same-level face the interface window's error equals the interior's on every ghost row,
@@ -6129,81 +6143,92 @@ The acoustic pulse of the reflection tests, left-running characteristic over the
                       closure   BL        ghost        closure   BL        ghost        closure   BL        ghost
 two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049e-8     2.685e-7  2.477e-8  5.775e-10
 2 levels              1.182e-6  1.189e-6  9.773e-7     1.188e-8  1.240e-9  9.675e-10    8.427e-10 6.066e-11 2.031e-11
-2 levels subcycled    8.314e-7  8.933e-7  4.824e-7     1.051e-8  1.099e-9  1.417e-9     7.058e-10 5.242e-11 5.227e-11
+2 levels subcycled    8.314e-7  8.933e-7  4.824e-7     1.051e-8  1.099e-9  1.417e-9     7.070e-10 5.213e-11 5.072e-11
 ```
 
 **Shocks.** The Sod crossing, root N = 201, `cfl = 0.4`, the artificial properties and the
-filter live (their fluxes on the one-sided remainder), inviscid, at the ghost path's default
-order 8; every ghost figure repeats the order-6 measurement to the printed digit but the
-three-level global-step shell (7.0e-3) and the two-species excursions (3.1e-8, 4.1e-4):
+filter live, inviscid, at the ghost path's default order 8. Package at `743fdb4b`, Julia
+1.13.3; the transcript of the `crossing` and `startup` commands is
+`bench/results/interfacesensor.txt`. Shell and root are the density errors against the
+uniform run at the fine spacing at t = 0.2, p_min the smallest pressure on any step. In the
+default ghost column the remainder goes through the gradient rows (the transcript's
+`rem-extrap` rows on a nest, `grad-rem` on patches); in the middle column it takes the
+one-sided rows, both toggles off (the transcript's `gflux` rows):
 
-| row | closure | ghost |
-|---|---|---|
-| two levels subcycled: steps, p_min, shell, root | 373, 0.0405, 7.7e-3, 2.4e-2 | 373, 0.0405, 7.3e-3, 2.4e-2 |
-| global dt: steps, p_min, shell | — | 708, 0.0382, 8.4e-3 |
-| three levels: p_min, shell | — | 0.0405, 5.8e-3 |
-| three levels global dt: p_min, shell | 0.0252, 5.9e-3 | 0.0251, 7.1e-3 |
-| tile 8: p_min, shell | — | 0.0405, 8.3e-2 |
-| three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.8e-2 |
-| diaphragm on the shared plane | negative density, step 2 | completes: 303 steps, p_min 0.072, shell 1.0e-2, root 1.0e-1 |
-| the same, art off | — | negative density, step 20 |
-| two species: shell Y excursion, elsewhere | — | 2.8e-8, 3.5e-4 |
+| row | closure | ghost, one-sided remainder | ghost (default) |
+|---|---|---|---|
+| two levels subcycled: steps, p_min, shell, root | 326, 0.0405, 9.8e-3, 2.8e-2 | 326, 0.0405, 9.5e-3, 2.8e-2 | 326, 0.0405, 8.4e-3, 2.8e-2 |
+| global dt: steps, p_min, shell | — | 708, 0.0382, 9.1e-3 | 707, 0.0382, 8.7e-3 |
+| three levels: p_min, shell | — | 0.0348, 8.9e-3 | 0.0348, 7.9e-3 |
+| three levels global dt: p_min, shell | 0.0253, 7.4e-3 | 0.0253, 7.9e-3 | 0.0253, 7.7e-3 |
+| tile 8: p_min, shell | — | 0.0405, 7.6e-2 | 0.0391, 7.6e-2 |
+| three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.8e-2 | 0.0412, 7.9e-2, 2.7e-2 |
+| diaphragm on the shared plane | negative density, step 2 | completes: 303 steps, p_min 0.072, shell 1.0e-2, root 1.0e-1 | completes: 305 steps, p_min 0.080, shell 8.3e-3, root 8.6e-2 |
+| the same, art off (the toggles inert) | — | negative density, step 20 | negative density, step 20 |
+| two species: shell Y excursion, elsewhere | — | 1.1e-9, 1.6e-4 | 1.3e-9, 1.6e-4 |
 
-The reversed tube reproduces every printed digit of the forward ghost row. On the shared plane the
-one-sided gradient workaround reads p_min 0.097, shell 4.6e-2 and root 2.4e-1 in the same run.
+The reversed tube reproduces every printed digit of the forward ghost rows under either
+remainder. On the shared plane the one-sided gradient workaround reads p_min 0.097, shell
+4.6e-2 and root 2.35e-1 in the same run.
 
 The positivity failsafe's case in `test/level_tests.jl` (root N = 81, level-1 tiles of 8 over
 root nodes 24–56, `cfl = 0.2`, 20 steps, `floor_ratio = 0.999`) places the Sod diaphragm on the
-plane between two tiles. There the failsafe saw 102 cells below the internal-energy floor on 20
-steps and repaired 123 under the ghost fluxes, against 39 on 17 steps and 49 repaired under the
-closure rows. The repaired cells lie 1–11 fine nodes into the low-density tile, and density
-triggers four in five of them. Interpolation order 6 or 8 leaves the tallies unchanged on both
-paths. The `startup` part counts the same criterion without repairing (cells below 0.999 of the
-initial minimum density or total energy over density, summed over steps) and gives the level-1
-density error against the uniform run at the fine spacing. Package at the commit that adds the
-gradient-row remainder; the last two paths take its toggles (below):
+plane between two tiles. At `743fdb4b` the failsafe saw 116 cells below the internal-energy
+floor on 20 steps and repaired 113 under the default ghost fluxes (133 and 141 with the
+remainder on the one-sided rows, 116 and 113 with the coarse-fine ends not extrapolated),
+against 63 on 18 steps and 70 repaired under the closure rows. At `aa5757b`, with the
+remainder on the one-sided rows, the repaired cells lay 1–11 fine nodes into the low-density
+tile, density triggered four in five of them, and interpolation order 6 or 8 left the tallies
+unchanged on both paths. The `startup` part counts the same criterion without repairing
+(cells below 0.999 of the initial minimum density or total energy over density, summed over
+steps) and gives the level-1 density error against the uniform run at the fine spacing. In
+the table, `ghost` is the ghost path with both remainder toggles off and the last two paths
+run with them on, the second of the two being the default:
 
 | diaphragm | path | 20 steps: flagged, min ρ/ρ0, L1(ρ) | t = 0.12: flagged, min ρ/ρ0, L1(ρ) |
 |---|---|---|---|
 | none (uniform, fine spacing) | — | 173, 0.671, — | 890, 0.671, — |
-| on the tile plane | ghost | 164, 0.697, 2.85e-3 | 1786, 0.697, 2.46e-3 |
-| | closure | 122, 0.934, 9.20e-4 | 1480, 0.897, 2.79e-3 |
+| on the tile plane | ghost | 164, 0.697, 2.85e-3 | 2006, 0.697, 2.33e-3 |
+| | closure | 122, 0.934, 9.20e-4 | 1727, 0.762, 2.52e-3 |
 | | ghost, BL remainder rows | negative density, step 3 | — |
-| | ghost, gradient-row remainder | 152, 0.942, 2.61e-3 | 1664, 0.897, 2.73e-3 |
-| | the same, coarse-fine ends extrapolated | 152, 0.942, 2.61e-3 | 1661, 0.897, 2.70e-3 |
-| mid-tile | ghost | 144, 0.671, 4.96e-5 | 1956, 0.671, 8.56e-4 |
-| | closure | 151, 0.671, 8.04e-5 | 2028, 0.671, 1.65e-3 |
-| | ghost, gradient-row remainder | 144, 0.671, 4.96e-5 | 1931, 0.671, 8.82e-4 |
-| | the same, coarse-fine ends extrapolated | 144, 0.671, 4.96e-5 | 1911, 0.671, 8.62e-4 |
-| on a coarse-fine face | ghost | 168, 0.519, 9.55e-3 | 2249, 0.519, 1.01e-2 |
-| | closure | 100, 0.518, 7.95e-3 | 2059, 0.518, 9.98e-3 |
-| | ghost, remainder, coarse-fine ends extrapolated | 167, 0.518, 9.31e-3 | 2222, 0.518, 1.03e-2 |
+| | ghost, gradient-row remainder | 152, 0.942, 2.61e-3 | 1906, 0.760, 2.72e-3 |
+| | the same, coarse-fine ends extrapolated | 152, 0.942, 2.61e-3 | 1899, 0.760, 2.70e-3 |
+| mid-tile | ghost | 144, 0.671, 4.96e-5 | 2270, 0.671, 6.02e-4 |
+| | closure | 151, 0.671, 8.04e-5 | 2350, 0.671, 1.42e-3 |
+| | ghost, gradient-row remainder | 144, 0.671, 4.96e-5 | 2232, 0.671, 6.25e-4 |
+| | the same, coarse-fine ends extrapolated | 144, 0.671, 4.96e-5 | 2236, 0.671, 5.73e-4 |
+| on a coarse-fine face | ghost | 176, 0.556, 9.93e-3 | 2903, 0.556, 1.39e-2 |
+| | closure | 106, 0.556, 8.20e-3 | 2804, 0.556, 1.46e-2 |
+| | ghost, remainder, coarse-fine ends extrapolated | 173, 0.556, 9.67e-3 | 2893, 0.556, 1.40e-2 |
 
 The count measures the start-up undershoot of an ideal jump, which the scheme produces without
 an interface (0.671 on the uniform grid, at step 8). A jump on a tile plane under the closure rows
 starts through the one-sided inviscid and remainder rows, whose dissipation damps that transient
-to 0.934; the ghost fluxes difference the inviscid flux there with interior accuracy and read
-0.697, which they keep to t = 0.12. With the remainder through the gradient rows as well the
-transient reads 0.942, and at t = 0.12 the minimum is the closure rows' later one, 0.897 on the
-root. The Brady–Livescu rows on the remainder have failed at step 3 since `1fc1fdb`, which
+to 0.934; the ghost fluxes with the remainder on the one-sided rows difference the inviscid
+flux there with interior accuracy and read 0.697, which they keep to t = 0.12. With the
+remainder through the gradient rows as well, the default, the transient reads 0.942, and at
+t = 0.12 the minimum is a later one on the root, 0.760 against the closure rows' 0.762. The
+Brady–Livescu rows on the remainder have failed at step 3 since `1fc1fdb`, which
 computes a tiled level's artificial coefficients over the whole level; at `c78eee8` they read
 0.664 and 7.39e-3, and the ghost path 0.770 and 2.89e-3. A diaphragm inside a tile or on a
 coarse-fine face gives the same minima under every path. Taken at `aa5757b`: at root N = 161
 and t = 0.0045 the flagged counts rise 1.8-fold (ghost) and 1.4-fold (closure) over N = 81 and
-the minima are unchanged. On
-the three regridded levels of `test/level_tests.jl` (shock and contact, subcycled, t = 0.25)
-the same count is 8706 under the ghost fluxes against 9908 under the closure rows, min ρ/ρ0
-0.637 against 0.633.
+the minima are unchanged. On the three regridded levels of `test/level_tests.jl` (shock and
+contact, subcycled, run to t = 0.25 in the test's four calls) the same count is 3750 under the
+default ghost fluxes against 3744 under the closure rows, min ρ/ρ0 0.663 against 0.675, at
+`743fdb4b`.
 
-**The remainder through the gradient rows.** With the artificial properties on, the remainder
-F − f of the ghost-differenced flux (their fluxes and the wall rewrite) takes the divergence
-plans' one-sided rows at an interface end, a second line solve. `GHOST_FLUX_REMAINDER` instead
-carries it in `ghost_flux` on dimensions whose interface ends are same-level, the level's
-records filling the ghost layers, and differences the whole flux through the gradient plans in
-one solve; `GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take
-a degree-5 Lagrange extrapolation of the interior remainder. Both are the default, the
-extrapolation applied per tile, so a stacked device level takes it too. On exact data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with
-`coefficients_current`), interface window, N = 48, 96, 192:
+**The remainder through the gradient rows.** With the artificial properties on and
+`GHOST_FLUX_REMAINDER` off, the remainder F − f of the ghost-differenced flux (the molecular
+and artificial fluxes and the wall rewrite) takes the divergence plans' one-sided rows at an
+interface end, a second line solve. `GHOST_FLUX_REMAINDER` instead carries it in `ghost_flux`
+on dimensions whose interface ends are same-level, the level's records filling the ghost
+layers, and differences the whole flux through the gradient plans in one solve;
+`GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take a
+degree-5 Lagrange extrapolation of the interior remainder. Both are the default, the
+extrapolation applied per tile, so a stacked device level takes it too. On exact data with
+prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with `coefficients_current`), interface
+window, N = 48, 96, 192:
 
 | layout | plain | same-level ends | and coarse-fine ends |
 |---|---|---|---|
@@ -6212,11 +6237,13 @@ extrapolation applied per tile, so a stacked device level takes it too. On exact
 | two levels, inviscid | (2.76, 2.97) | the same as plain | (5.99, 5.93), 1.28e-10 at N = 192 |
 | two levels, μ = 2e-2 | (2.79, 2.97) | the same as plain | (5.96, 5.99) |
 
-On the `crossing` rows, np = 1, with both toggles: the gflux nest rows' shell, fine and root
-errors at t = 0.2 move by under 2% (base 5.57e-3 / 8.302e-2 / 2.730e-2 to 5.64e-3 / 8.300e-2 /
-2.755e-2; three levels 4.59e-3 to 4.52e-3; tile 8 fine 1.530e-2 to 1.564e-2), the two-patch
-row falls from 1.02e-2 to 8.25e-3 (shell) and 1.00e-1 to 8.60e-2 (root), the three-patch row
-from 7.95e-2 to 7.87e-2, and no row has an inadmissible step. On `test/validation.jl`'s Noh
+On the `crossing` rows of the transcript above, np = 1, both toggles against neither: on the
+untiled nests the fine and root errors at t = 0.2 move by under 0.3% and the shell error
+falls by 2 to 12% (base 9.50e-3 to 8.42e-3, fine 7.571e-2 in both, root 2.768e-2 to
+2.761e-2; three levels 8.90e-3 to 7.88e-3; global step 9.07e-3 to 8.66e-3), the level-1
+error of tile 8, its `fine` column, falls from 9.70e-3 to 9.07e-3, the two-patch row from
+1.02e-2 to 8.25e-3 (shell) and 1.00e-1 to 8.60e-2 (root), the three-patch row from 7.95e-2 to
+7.87e-2, and no row has an inadmissible step. At `d346d35`, on `test/validation.jl`'s Noh
 with a level at the axis, the coarse-fine correction on, the run holding the shock is
 unchanged in plateau (15.6523) and mass drift (−9.7e-7), its steps 6641 to 6639 and its tile
 error against the uniform run 5.693e-3 to 5.658e-3; the run passing the shock out reads
@@ -6235,19 +6262,20 @@ the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 **Cost.** Serial, one thread, median step over nine interleaved chunks of ten steps per
 configuration in one process, ghost over closure, periodic, with the artificial properties and
 the filter on, at the default level interpolation order of each path (Core i9-12900K, Julia
-1.11.4). Float64: (64, 48, 48) in two patches 1.11 inviscid and 1.24 with `mu = 1e-3`; a 2-D
-subcycled level of sixteen 37-node tiles on N = 96 1.16 inviscid. With `mu = 1e-3`, Float32 /
-Float64: a 2-D static 17² box on N = 96, global step, 1.21 / 1.17; the sixteen-tile level
-1.50 / 1.50; a 3-D static 13³ box on N = 40, global step, 1.46 / 1.44. The overhead is the same
-fraction of the step in both precisions, and Float32 gains no accuracy from it (the floor
-above). The interpolation order is not part of it: the closure path at order 8 costs what it
-does at 6. On the 3-D box (288 ms against 199 per step) a profile places the overhead in the
-gradient ring of each shell imposition (38 ms, the compact derivatives of every component
-along every dimension over the lines of the interpolated box that cross the ring), the
-molecular, remainder and ghost-differenced flux passes (32 ms), the one line solve per
-component and interface dimension beyond the closure path's one (11 ms) and the coarse-fine ghost
-fluxes (11 ms). A tile with no parent-fed face takes no gradient ring. The `ghost_flux` arrays
-add one state-sized array per interface dimension of a patch.
+1.11.4), with the remainder on the divergence plans' one-sided rows, as under
+`GHOST_FLUX_REMAINDER = false`. Float64: (64, 48, 48) in two patches 1.11 inviscid and 1.24
+with `mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles on N = 96 1.16 inviscid. With
+`mu = 1e-3`, Float32 / Float64: a 2-D static 17² box on N = 96, global step, 1.21 / 1.17; the
+sixteen-tile level 1.50 / 1.50; a 3-D static 13³ box on N = 40, global step, 1.46 / 1.44. The
+overhead is the same fraction of the step in both precisions, and Float32 gains no accuracy
+from it (the floor above). The interpolation order is not part of it: the closure path at order
+8 costs what it does at 6. On the 3-D box (288 ms against 199 per step) a profile places the
+overhead in the gradient ring of each shell imposition (38 ms, the compact derivatives of every
+component along every dimension over the lines of the interpolated box that cross the ring),
+the molecular, remainder and ghost-differenced flux passes (32 ms), the one line solve per
+component and interface dimension beyond the closure path's one (11 ms) and the coarse-fine
+ghost fluxes (11 ms). A tile with no parent-fed face takes no gradient ring. The `ghost_flux`
+arrays add one state-sized array per interface dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every
@@ -6690,31 +6718,39 @@ choice.
 
 ### test/patch_tests.jl: same-level patch interfaces
 
-`julia --project=. test/runtests.jl` (the patch testsets; `8eda454`, C10 rows
-`8271bd7` and `433f2ef`).
+`julia --project=. test/runtests.jl` (the patch testsets). The rows under the
+default ghost fluxes, the viscous rows and the drift are the testsets' output
+at `743fdb4b`, Julia 1.13.3; the two rows reading "the same under `:closure`"
+are the closure-row figures the test file records and no longer runs (the C6
+entropy orders are the `gflux` table's), and the degree-9 row is
+`test/serial_suite.jl`'s.
 
 Two conforming patches, manufactured smooth solutions across the interface,
 since the bit-exact oracle does not survive it.
 
 | gate | C6 | C10 |
 |---|---|---|
-| entropy-wave order across the interface | 3.09 / 3.53 | 3.06 / 3.52 |
-| entropy-wave error, 48 / 96 / 192 | — | 8.2e-7, 9.8e-8, 8.5e-9 |
-| acoustic pulse reflected amplitude at 192 | 2.3e-3 | 4.1e-3 (7.5e-2 at 96, 7.7e-5 at 384) |
-| pulse reflection order | ≈ 5 | — |
-| viscous wave through the interface rows, `:extended` | 4.3 / 4.0 | 3.93 / 3.92 |
+| entropy-wave order across the interface | 6.72 / 5.89 | 4.00 / 3.97 |
+| entropy-wave error, 48 / 96 / 192 | 8.7e-10, 8.2e-12, 1.4e-13 | 1.7e-11, 1.1e-12, 6.8e-14 |
+| the same under `:closure` | 3.09 / 3.53 | 3.06 / 3.52 (8.2e-7, 9.8e-8, 8.5e-9) |
+| acoustic pulse, reflected over incident amplitude at 192 | 8.2e-6 | 3.8e-7 |
+| the same under `:closure` | 2.3e-3, order ≈ 5 | 4.1e-3 (7.5e-2 at 96, 7.7e-5 at 384) |
+| viscous wave under `:closure`, `interface_rhs = :extended` | 4.34 / 4.00 | 3.93 / 3.92 |
 | viscous errors at 48 / 96 / 192 | 6.1e-5, 3.0e-6, 1.9e-7 | 6.0e-5, 4.0e-6, 2.6e-7 |
-| the same with `:onesided` | 2.1 / 1.7 (8.4e-5, 2.0e-5, 5.9e-6) | 2.00 / 1.67 |
+| the same with `:onesided` | 1.92 / 1.97 (1.3e-4, 3.4e-5, 8.6e-6) | 2.14 / 1.93 (1.4e-4, 3.1e-5, 8.2e-6) |
 | degree-9 polynomial through both closed ends | — | 2e-12, against 1e-4 for the cascade rows |
-| conservation drift, long periodic run | 1.2e-8 relative (single patch 4.5e-15) | — |
+| conservation drift, long periodic run | 1.6e-11 relative (single patch 4.2e-15) | — |
 
 Rank partitioning reproduces the serial two-patch answer bitwise at one rank
 per patch; once a patch itself decomposes, agreement is round-off, 3.1e-15 at
 np = 4 against a 9.5e-8 signal, with identical step counts.
 
-Settled: the divergence's one-sided rows bind the inviscid orders, so
+Settled: under the default ghost fluxes the inviscid orders through the
+interface are the interior's (C6) or the time integrator's (C10), and
+`interface_rhs = :onesided` is refused. Under `interface_flux = :closure` the
+divergence's one-sided rows bind the inviscid orders, so
 `interface_rhs = :extended` is measurable only through the gradients, where it
-is worth two orders; C10 interface rows are the default halo's, no wider.
+is worth two orders. C10 interface rows are the default halo's, no wider.
 
 ### test/level_tests.jl: the level hierarchy
 
