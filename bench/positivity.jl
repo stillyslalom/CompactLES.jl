@@ -14,6 +14,8 @@
 #   julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,blast N=80 patches=2
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,noh43
 #   julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
+#   julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles a19n=33
+#   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -104,13 +106,24 @@
 #             tags, the tiles also subcycled; `noh85`, `noh43` (and `noh85sub`,
 #             `noh43sub`): the cylindrical Noh of test/validation.jl's level
 #             rows on a box at the axis over that many root nodes, and
-#             `nohuniform`, the uniform run at the level's spacing; `a19`: the
-#             converging shock of the r-z plane, 64² nodes, with a box at the
-#             corner of the axis and the plane, to t = 0.165; `tiles` and
-#             `tilessub`: a blast in a 64² square with tiles of edge 8 over its
-#             centre, to t = 0.25. Not in `part=all`
+#             `nohuniform`, the uniform run at the level's spacing; `noh81`
+#             and `noh81tiles`, `noh81regrid` (each also with `sub`): a box
+#             over 81 nodes, ten lattice cells of edge 8, and the same as
+#             static tiles of edge 8 and as tiles regridded every 10 steps;
+#             `a19`: the converging shock of the r-z plane, `a19n`² nodes
+#             (64), with a box at the corner of the axis and the plane, to
+#             t = 0.165, and `a19tiles`, `a19regrid` (each also with `sub`)
+#             with tiles of edge 8 over the lattice cells within that box,
+#             static and regridded (a19n − 1 a multiple of 8, so that a tile
+#             a regrid places at the outer faces is a whole lattice cell, whose
+#             line the limiter takes); `tiles` and `tilessub`: a blast in a 64²
+#             square with tiles of edge 8 over its centre, to t = 0.25. Not in
+#             `part=all`
 #   levelcost the wall time per step of the same cases' first steps, as
 #             `cost` takes it. Not in `part=all`
+#   tilecost  the same for two cases of `levels`, a box and then tiles, the
+#             four runs alternated in one process: the limited tiled step over
+#             the unlimited one and over the limited box. Not in `part=all`
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -1221,11 +1234,33 @@ level_numerics(n, amr, on; kw...) =
              positivity_limiter=on, kw...)
 
 const LEVEL_CASES = ("wc", "wcsub", "wcregrid", "noh85", "noh43", "noh85sub", "noh43sub",
-                     "nohuniform", "a19", "tiles", "tilessub")
+                     "nohuniform", "noh81", "noh81tiles", "noh81tilessub", "noh81regrid",
+                     "noh81regridsub", "a19", "a19tiles", "a19tilessub", "a19regrid",
+                     "a19regridsub", "tiles", "tilessub")
+
+# The refinement of a Noh level case named noh<m>, then `tiles` for static tiles
+# of edge 8 and `regrid` for tiles of edge 8 regridded every 10 steps from the
+# box, and `sub` for subcycling.
+function noh_level(name)
+    rest = name[4:end]
+    m = parse(Int, rest[1:2])
+    rest = rest[3:end]
+    sub = endswith(rest, "sub")
+    tiles = startswith(rest, "tiles")
+    regrid = startswith(rest, "regrid")
+    box = BlockRegion((0, 0, 0), (m, 1, 1))
+    amr = tiles ? AMR(initial=box, tile=8, subcycle=sub) :
+          regrid ? AMR(initial=box, tile=8, regrid_interval=10, subcycle=sub) :
+                   AMR(initial=box, subcycle=sub)
+    label = (tiles ? "tiles of 8" : regrid ? "regridded tiles" : "box") * " over $m nodes" *
+            (sub ? ", sub" : "")
+    return amr, label
+end
 
 # The runs of a level case: (label, problem, numerics from the limiter switch,
-# end time, metric of the final state or `nothing`).
-function level_runs(name)
+# end time, metric of the final state or `nothing`). `a19n` is the root's nodes
+# per direction of the r-z converging shock.
+function level_runs(name; a19n=64)
     per = (PeriodicBC(), PeriodicBC())
     if name in ("wc", "wcsub", "wcregrid")
         wc = woodward_problem(200)
@@ -1242,8 +1277,7 @@ function level_runs(name)
     elseif startswith(name, "noh")
         N = Dict(NOH_N)[2]
         uniform = name == "nohuniform"
-        m = uniform ? 0 : parse(Int, name[4:5])
-        sub = endswith(name, "sub")
+        amr, label = uniform ? (nothing, "uniform, $(3N - 1) nodes") : noh_level(name)
         metric = (s, Q) -> begin
             x, ρ = level_profile(s, Q)
             plat, deficit, shock, _ = noh_metrics(x, ρ, 2)
@@ -1254,21 +1288,28 @@ function level_runs(name)
         noh_num(on) = Numerics(n_global=(uniform ? 3N - 1 : N, 1, 1),
                                art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
                                positivity_limiter=on, patch_interfaces=:closure,
-                               control=StepControl(validity=:permissive),
-                               amr=uniform ? nothing :
-                                   AMR(initial=BlockRegion((0, 0, 0), (m, 1, 1)),
-                                       subcycle=sub))
-        return [(uniform ? "uniform, $(3N - 1) nodes" : "box over $m nodes",
-                 noh_problem(2; N, t0=0.0), noh_num, NOH_T, metric)]
-    elseif name == "a19"
+                               control=StepControl(validity=:permissive), amr=amr)
+        return [(label, noh_problem(2; N, t0=0.0), noh_num, NOH_T, metric)]
+    elseif startswith(name, "a19")
         rz = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=1.4), metric=CylindricalMetric(),
                      domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                      bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
                      ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
                                       Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
         corner = CL.Regions.Box((0.0, 0.0, 0.0), (0.8, 1.0, 0.8))
-        return [("box at the corner", rz,
-                 on -> Numerics(n_global=(64, 1, 64), amr=AMR(initial=corner),
+        # The tiles cover whole lattice cells of edge 8 within the box's 0.8.
+        m = 8 * floor(Int, 0.8 * (a19n - 1) / 8) + 1
+        cells = BlockRegion((0, 0, 0), (m, 1, m))
+        sub = endswith(name, "sub")
+        tiles = startswith(name, "a19tiles")
+        regrid = startswith(name, "a19regrid")
+        amr = tiles ? AMR(initial=cells, tile=8, subcycle=sub) :
+              regrid ? AMR(initial=cells, tile=8, regrid_interval=10, subcycle=sub) :
+                       AMR(initial=corner)
+        label = (tiles ? "tiles of 8 at the corner" :
+                 regrid ? "regridded tiles of 8" : "box at the corner") * (sub ? ", sub" : "")
+        return [(label, rz,
+                 on -> Numerics(n_global=(a19n, 1, a19n), amr=amr,
                                 positivity_limiter=on, patch_interfaces=:closure,
                                 control=StepControl(validity=:permissive)), 0.165, nothing)]
     end
@@ -1286,9 +1327,9 @@ function level_runs(name)
              0.25, nothing)]
 end
 
-function levels_part(names)
+function levels_part(names, a19n)
     println("\n=== levels: refined levels, limiter off and on ===")
-    for name in names, (label, prob, num, tfinal, metric) in level_runs(name),
+    for name in names, (label, prob, num, tfinal, metric) in level_runs(name; a19n),
         on in (false, true)
         s, Q = setup(prob, num(on))
         bad = [0, 0]
@@ -1308,12 +1349,12 @@ function levels_part(names)
     end
 end
 
-function level_cost_part(names, reps)
+function level_cost_part(names, reps, a19n)
     println("\n=== levelcost: wall time per step of refined runs, limiter off and on ===")
     steps = Dict("wc" => 600, "wcsub" => 300, "noh85" => 1000, "noh43" => 1000,
-                 "noh85sub" => 400, "noh43sub" => 400, "a19" => 150, "tiles" => 60,
-                 "tilessub" => 30)
-    for name in names, (label, prob, num, tfinal, _) in level_runs(name)
+                 "noh85sub" => 400, "noh43sub" => 400, "a19" => 150, "a19tiles" => 150,
+                 "tiles" => 60, "tilessub" => 30)
+    for name in names, (label, prob, num, tfinal, _) in level_runs(name; a19n)
         nmax = get(steps, name, 300)
         for on in (false, true)
             s, Q = setup(prob, num(on))
@@ -1333,18 +1374,47 @@ function level_cost_part(names, reps)
     end
 end
 
+# The step of the second level case of `names` (tiles) against the first (a
+# box), limiter off and on, the four runs alternated `reps` times in one
+# process: the medians per step and the medians of the ratios of tiles on to
+# tiles off and to the box on.
+function tile_cost_part(names, reps, a19n)
+    println("\n=== tilecost: the limited tiled step against the unlimited one and the box ===")
+    length(names) == 2 || throw(ArgumentError("part=tilecost takes two level cases"))
+    nmax = 150
+    runs = [only(level_runs(name; a19n)) for name in names]
+    for (_, prob, num, tfinal, _) in runs, on in (false, true)
+        s, Q = setup(prob, num(on))
+        run!(s, Q; tfinal, nmax=2)
+    end
+    per_step = Dict((k, on) => Float64[] for k in 1:2, on in (false, true))
+    for _ in 1:reps, (k, (_, prob, num, tfinal, _)) in enumerate(runs), on in (false, true)
+        s, Q = setup(prob, num(on))
+        wall = @elapsed run!(s, Q; tfinal, nmax)
+        push!(per_step[(k, on)], wall / s.step)
+    end
+    for (k, (label, _, _, _, _)) in enumerate(runs)
+        @printf("  %-28s off %.3f ms, on %.3f ms per step\n", label,
+                1e3 * median(per_step[(k, false)]), 1e3 * median(per_step[(k, true)]))
+    end
+    @printf("  tiles on / tiles off %.2f, tiles on / box on %.2f\n",
+            median(per_step[(2, true)] ./ per_step[(2, false)]),
+            median(per_step[(2, true)] ./ per_step[(1, true)]))
+    return nothing
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
-                                patches="1", levels="wc,wcsub,noh43"))
+                                patches="1", levels="wc,wcsub,noh43", a19n=64))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     counts = parse.(Int, split(opt.patches, ','))
     for p in parts
-        p in PARTS || p in ("rz", "cost", "patches", "levels", "levelcost") ||
+        p in PARTS || p in ("rz", "cost", "patches", "levels", "levelcost", "tilecost") ||
             throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")), \
-                                 rz, cost, patches, levels or levelcost"))
+                                 rz, cost, patches, levels, levelcost or tilecost"))
     end
     level_names = split(opt.levels, ',')
     for l in level_names
@@ -1366,8 +1436,9 @@ function main(args)
     "rz" in parts && rz_part(opt.N)
     "cost" in parts && cost_part(cases, opt.N, opt.steps, opt.reps, first(counts))
     "patches" in parts && patches_part(counts)
-    "levels" in parts && levels_part(level_names)
-    "levelcost" in parts && level_cost_part(level_names, opt.reps)
+    "levels" in parts && levels_part(level_names, opt.a19n)
+    "levelcost" in parts && level_cost_part(level_names, opt.reps, opt.a19n)
+    "tilecost" in parts && tile_cost_part(level_names, opt.reps, opt.a19n)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []

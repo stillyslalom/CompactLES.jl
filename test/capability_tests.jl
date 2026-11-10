@@ -205,11 +205,6 @@ include("capability_cases.jl")
                 closed, limited(amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)),
                                         level_restriction=:filter),
                                 patch_interfaces=:closure))
-        rejects("positivity_limiter: on a radial grid supports a refined level as one box",
-                C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),
-                          ic=C.ic_radial),
-                limited(amr=AMR(initial=Box((0.0, 0, 0), (0.5, 2π, 1)), tile=8),
-                        patch_interfaces=:closure))
         rejects("the face relation of the filter needs at least", closed,
                 Numerics(n_global=(40, 1, 1), positivity_limiter=true,
                          execution=Execution(patch_grid=(2, 1, 1)),

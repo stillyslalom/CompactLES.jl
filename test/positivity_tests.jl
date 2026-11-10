@@ -7,7 +7,8 @@
 # while conserving, and the Noh implosions under strict validity; on
 # same-level patches and on refined levels, a run it never acts in and a
 # strong shock it keeps admissible, there with the shell's admissible
-# fallback on subcycled tiles. The rejected
+# fallback on subcycled tiles, and on tiles at the cylindrical axis and the
+# r-z corner, a run it never acts in and the strong shocks. The rejected
 # configurations are in capability_tests.jl, the decomposed run in the MPI
 # suite's "positivity limiter" phase.
 #
@@ -593,5 +594,77 @@ end
         @test completed(s, NOH_T)
         report = state_report(s, Q)
         @test report.inadmissible == 0 && report.negative_density == 0
+    end
+
+    @testset "tiles of the r-z plane it never acts in are the unlimited tiled run" begin
+        # Tiles over a quiet pulse at the corner of the axis and the plane at
+        # z = 0, at the global step and subcycled: each tile's radial pass
+        # keeps its own rates and θ, and a stage exchanges θ at the tiles'
+        # shared faces along r and along z.
+        pulse(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                              p=1 + 1e-2 * exp(-20 * (r^2 + (z - 0.2)^2)))
+        CL.REFLUX[] = false
+        for sub in (false, true)
+            runs = map((false, true)) do on
+                s, Q = pos_rz(; N=40, ic=pulse, art=ArtificialProperties(enabled=true),
+                              filter=StateFilter(compact_filter(); cfl=0.35),
+                              patch_interfaces=:closure, positivity_limiter=on,
+                              amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
+                                      subcycle=sub))
+                run!(s, Q; tfinal=1.0, nmax=6)
+                (s, Q)
+            end
+            (s0, Q0), (s1, Q1) = runs
+            @test length(Q1) == 5
+            counts = CL.positivity_counts(s1)
+            @test counts.stage_faces > 0 && counts.filter_faces > 0
+            @test counts.stage_limited == 0 && counts.filter_limited == 0
+            @test s0.step == s1.step && s0.t == s1.t
+            @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+        end
+        CL.REFLUX[] = true
+    end
+
+    @testset "a converging shock through r-z tiles at the corner stays admissible" begin
+        # The converging shock of the corner reproducer on tiles over the
+        # corner of the axis and the plane at z = 0, whose shared faces it
+        # crosses, at the global step and subcycled: three by three tiles over
+        # the first 25 root nodes along r and z.
+        prob = Problem(eos=POS_GAS, metric=CylindricalMetric(),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2],
+                            (SymmetryPlaneBC(), SlipWallBC())),
+                       ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
+                                        Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
+        corner = BlockRegion((0, 0, 0), (25, 1, 25))
+        for sub in (false, true)
+            s, Q = setup(prob, Numerics(n_global=(32, 1, 32), patch_interfaces=:closure,
+                                        amr=AMR(initial=corner, tile=8, subcycle=sub),
+                                        control=StepControl(validity=:permissive),
+                                        positivity_limiter=true))
+            bad = pos_bad_points(s, Q; tfinal=0.165)
+            @test completed(s, 0.165)
+            @test CL.positivity_counts(s).stage_limited > 0
+            @test bad == 0
+        end
+    end
+
+    @testset "Noh through the axis on tiles under strict validity" begin
+        # The cylindrical implosion on tiles of edge 8 at the axis over the
+        # first 25 root nodes, whose shared faces the shock crosses on its way
+        # out, at the global step and subcycled.
+        for sub in (false, true)
+            s, Q = setup(noh_problem(2; N=96, t0=0.0),
+                         Numerics(n_global=(96, 1, 1), cfl=NOH_CFL,
+                                  art=ArtificialProperties(enabled=true),
+                                  patch_interfaces=:closure, positivity_limiter=true,
+                                  amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
+                                          tile=8, subcycle=sub)))
+            run!(s, Q; tfinal=NOH_T)
+            @test completed(s, NOH_T)
+            @test CL.positivity_counts(s).stage_limited > 0
+            report = state_report(s, Q)
+            @test report.inadmissible == 0 && report.negative_density == 0
+        end
     end
 end

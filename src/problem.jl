@@ -1071,8 +1071,8 @@ keywords the ones given after it override.
   replaces `PatchInterfaces(flux = :ghost)`, the default, by `:closure` and
   warns, since the limiter's face form takes lines the closure rows close,
   which can lower the order of accuracy at an interface. Refined levels take
-  the injected restriction, and on the radial grids or a `DeviceBackend` a
-  refined level is one box (`tile = 0`). A refined level's nodes at a
+  the injected restriction, and on a `DeviceBackend` a refined level is one
+  box (`tile = 0`). A refined level's nodes at a
   coarse-fine face, which the parent's values overwrite, and a parent's nodes
   the child's restriction overwrites are not held. Setup rejects any other
   configuration.

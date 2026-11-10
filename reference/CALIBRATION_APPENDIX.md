@@ -2141,6 +2141,9 @@ julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
 julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
 julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,nohuniform,a19,tiles,tilessub
 julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
+julia --project=. -t 1 bench/positivity.jl part=levels levels=noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33 reps=3
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -2358,6 +2361,41 @@ Noh ν = 2, box over 85 nodes           0.928          1.180         1.28
 blast 64², tiles of 8                  16.0           21.9          1.37
 r-z converging shock 64², corner box   31.2           51.0          1.59
 ```
+
+Tiles on the radial grids limit a face two tiles share along r as a same-level interface is
+limited: the end cell takes both its faces and its geometric part in one part, its end face
+blended toward the node's area-weighted point flux and pressure by the θ of the face beside it,
+and the exchange gives both tiles the smaller θ. On the cylindrical Noh of the level rows, the
+level over the first 81 root nodes (ten lattice cells of edge 8), and on the A19 converging
+shock at 33², tiles over the three by three cells within the corner box:
+
+```
+case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
+Noh ν = 2, box over 81 nodes           6641 / 9217      0, 56681               0, 0
+Noh ν = 2, tiles of 8                  6837 / 10094     0, 76672               0, 0
+Noh ν = 2, tiles of 8, subcycled       2277 / 3265      0, 25627               0, 0
+Noh ν = 2, regridded tiles             6836 / 10265     0, 76655               0, 0
+Noh ν = 2, regridded tiles, subcycled  2282 / 3403      10, 25771              0, 0
+r-z converging shock 33², corner box   322 / 322        0, 105                 0, 0
+r-z converging shock 33², tiles of 8   330 / 330        0, 339                 0, 0
+the same, subcycled                    131 / 201        0, 119                 0, 0
+the same, regridded tiles              331 / 334        0, 321                 0, 0
+regridded tiles, subcycled             121 / 199        0, 139                 0, 0
+```
+
+At 32² the regridded tiles stop at the first regrid: the last lattice cell at the outer faces
+spans 7 of the 31 root spacings, its tile's line has 22 nodes, and the limiter's construction
+raises, as it does for any tile too short for the filter's face relation; a static level over
+part of a cell does the same. On the Noh rows, limited, the tiles give plateau 15.6808,
+deficit 50.4%, shock 0.2033 and mass +4.1e-4 (15.6833, 50.3%, 0.2033, +4.2e-4 subcycled;
+15.6816, 50.5%, 0.2033, +4.7e-4 regridded; 15.6986, 50.2%, 0.2033, +5.7e-4 regridded and
+subcycled) against the limited box's 15.6672, 50.8%, 0.2032 and
+−5.2e-7. Unlimited, the tiles give 15.8915, 49.6%, 0.2024 and +1.73e-3 against the box's
+15.6523, 50.9%, 0.2033 and −9.7e-7: the tiled level's own mass drift, which the limited runs
+reduce to a quarter. The limited tiled runs leave 4 to 50 unguaranteed sides. `part=tilecost`
+over 150 steps of the converging shock, three alternations of the four runs in one process:
+the box takes 5.35 ms per step unlimited and 9.18 limited, the tiles 6.87 and 11.43, so the
+limited tiled step costs 1.67 times the unlimited tiled one and 1.25 times the limited box's.
 
 ## Directional bulk viscosity
 

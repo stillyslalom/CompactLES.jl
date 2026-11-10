@@ -72,9 +72,9 @@ subject to one heavy run at a time.
    refined run, each recorded in the text of one of the first three items
    below:
    1. **N32**'s remaining configurations, in its own order, for the
-      positivity limiter on the capsule's levels: stacked device tiles and
-      tiles on the radial grids, then the remaining metrics and the
-      tabulated and NASA-9 equations of state.
+      positivity limiter on the capsule's levels: stacked device tiles,
+      then the remaining metrics and the tabulated and NASA-9 equations of
+      state.
    2. **A20**, the conservative coarse-fine correction under the limiter
       and on device storage; it runs today on host storage without the
       limiter.
@@ -265,7 +265,11 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   inadmissible point. Refined levels carry it (commits `d3bd6af`,
   `af002dd`): boxes and tiles, static or regridded, nested, global step or
   subcycled, on the Cartesian grid, and one box per level on the radial
-  grids. Coarse-fine end nodes and the parent's overwritten nodes are not
+  grids. Tiles on the radial grids carry it, on host storage: a face two
+  tiles share along r is limited by one θ on both, its end face toward the
+  node's area-weighted point flux and pressure, and the converging shocks
+  of A19 and Noh ν = 2 on tiles leave no inadmissible point.
+  Coarse-fine end nodes and the parent's overwritten nodes are not
   held, and their inadmissible states are kept out of held cells'
   first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
   rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
@@ -293,8 +297,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   a decomposed line's offsets around the Allgather, the interface θ
   exchange and the ε minima stage through the host. In order: stacked
   device tiles, whose batched right-hand side holds no per-tile registers
-  (setup rejects a tiled device level), and tiles on the radial grids;
-  then the remaining metrics and the
+  (setup rejects a tiled device level); then the remaining metrics and the
   tabulated and NASA-9 equations of state, whose admissibility test is not
   linear. Each extension's face weights come from its own rows: the metric's
   face areas, the fold's mirrored rows, the interface rows. The parent's

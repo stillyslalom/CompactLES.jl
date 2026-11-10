@@ -306,6 +306,62 @@ function test_positivity_limiter()
                      crref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
     end
 
+    # Tiles at the corner of the r-z axis and the plane at z = 0, the level's
+    # tiles held by the ranks of the level, at the global step and subcycled,
+    # against every patch on one rank: the θ of a face two tiles share along r
+    # or along z crosses between ranks through the level's records, and each
+    # tile's radial pass keeps its rates for its z faces. As for the Cartesian
+    # tiles above, the limiter acts within the twenty steps of the subcycled
+    # run, whose root step is three of the global run's.
+    for sub in (false, true)
+        section("positivity limiter: r-z tiles across ranks against one rank" *
+                (sub ? ", subcycled" : ""))
+        function rztiled(comm_here)
+            s = Solver(n_global=(32, 1, 32), L_domain=(1.0, 1.0, 1.0),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2],
+                            (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.3,
+                       control=StepControl(validity=:permissive), positivity_limiter=true,
+                       refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8, subcycle=sub,
+                       interface_flux=:closure, comm=comm_here)
+            Q = allocate_state(s)
+            initialize!(s, Q, corner)
+            run!(s, Q; tfinal=1.0, nmax=20)
+            return s, Q
+        end
+        zref, Qzref = rztiled(MPI.COMM_SELF)
+        czref = CL.positivity_counts(zref)
+        s, Q = rztiled(comm)
+        c = CL.positivity_counts(s)
+        zpatches = getfield(zref, :patches)
+        worst = 0.0
+        for (ps, q) in CL.eachpatch(s, Q)
+            k = findfirst(p -> p.level == ps.patch.level && p.region == ps.patch.region,
+                          zpatches)
+            pr = CL.PatchSolver(zref, zpatches[k])
+            off = ps.decomp.offset
+            n = ps.decomp.n_local
+            for kk in 1:n[3], i in 1:n[1], m in 1:s.equations.n_cons
+                a = q[padded_index(ps, i, 1, kk), m]
+                b = Qzref[k][padded_index(pr, i + off[1], 1, kk + off[3]), m]
+                worst = max(worst, abs(a - b))
+            end
+        end
+        scale = maximum(q -> maximum(abs, parent(q)), Qzref)
+        tag = sub ? "subcycled r-z tiles" : "r-z tiles"
+        check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
+        check("$tag: clock against one rank", abs(s.t - zref.t) / zref.t, 1e-8)
+        check("$tag: stage faces limited (relative difference)",
+              abs(c.stage_limited - czref.stage_limited) / max(czref.stage_limited, 1),
+              1e-2)
+        report = state_report(s, Q)
+        check("$tag: inadmissible points at the end",
+              report.inadmissible + report.negative_density, 0.5)
+        sub && check("$tag, one rank: the limiter acted (expect > 0)",
+                     czref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
+    end
+
     # The shell's admissible fallback on a box decomposed over its level's
     # ranks, limiter off, subcycled: each rank gathers the multilinear rings of
     # the others' components beside the chain's, against one rank, which reads

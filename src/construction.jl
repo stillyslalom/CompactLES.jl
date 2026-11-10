@@ -1227,7 +1227,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         (solver.positivity = PatchLimiters(Any[], Any[],
                                            _limiter_least_box(deriv, filt, interface_rhs,
                                                               interface_divergence, n_halo,
-                                                              T)))
+                                                              T),
+                                           tiled && _limiter_radial_line(bcs, metric,
+                                                                         n_global)))
     # Each held patch's covered mask from the regions of the level below,
     # which every rank of the patch's level holds (`_fill_covered!`).
     for ℓ in 1:length(levels)-1

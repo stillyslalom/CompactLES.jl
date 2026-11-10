@@ -108,8 +108,8 @@ include("capability_cases.jl")
         # Refined levels, whose interfaces setup closes with the closure rows in
         # place of the default :ghost: a box at the global step and subcycled, a
         # regridded box, static and regridded tiles, and two nested boxes on the
-        # Cartesian grid; a box on the radial line at the axis and on the r-z
-        # plane at the corner of the axis and the plane at z = 0.
+        # Cartesian grid; a box and tiles on the radial line at the axis and on
+        # the r-z plane at the corner of the axis and the plane at z = 0.
         refined(n, amr) = Numerics(n_global=n, positivity_limiter=true, amr=amr)
         box2 = Box((0.3, 0.3, 0), (0.7, 0.7, 1))
         spot = (x, y, z, t) -> abs(x - 0.5) < 0.1 && abs(y - 0.5) < 0.1
@@ -120,14 +120,18 @@ include("capability_cases.jl")
                     AMR(initial=[box2, Box((0.4, 0.4, 0), (0.6, 0.6, 1))]))
             @test C.advances(C.problem(bcs=(C.wall, C.wall, C.per)), refined((48, 48, 1), amr))
         end
-        for (prob, n, region) in
+        # The tiles cover three lattice cells of edge 8 along r and z.
+        for (prob, n, region, cells) in
             ((C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),
-                        ic=C.ic_radial), (64, 1, 1), Box((0.0, 0, 0), (0.4, 2π, 1))),
+                        ic=C.ic_radial), (64, 1, 1), Box((0.0, 0, 0), (0.4, 2π, 1)),
+              BlockRegion((0, 0, 0), (25, 1, 1))),
              (C.problem(bcs=((AxisBC(), SlipWallBC()), C.per,
                              (SymmetryPlaneBC(), SlipWallBC())),
                         domain=C.cyl_domain, metric=CylindricalMetric(), ic=C.ic_radial),
-              (48, 1, 48), Box((0.0, 0, 0), (0.5, 2π, 0.5))))
+              (48, 1, 48), Box((0.0, 0, 0), (0.5, 2π, 0.5)),
+              BlockRegion((0, 0, 0), (25, 1, 25))))
             @test C.advances(prob, refined(n, AMR(initial=region)))
+            @test C.advances(prob, refined(n, AMR(initial=cells, tile=8)))
         end
         # On a device backend: one patch, two patches, the spherical radial
         # line, the r-z plane with a plane at z = 0, and a subcycled box.

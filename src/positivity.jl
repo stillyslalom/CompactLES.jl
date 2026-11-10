@@ -97,6 +97,24 @@
 # coarse-fine faces: its dual areas start at its first node's radius, and its
 # filter passes keep W and the face relation's constant for every component.
 #
+# A tile's radial line closes at a face it shares with another tile as a
+# Cartesian line does (see Same-level patches), and folds at r = 0 only on the
+# tiles holding the axis. Its dual areas start at the first
+# node's radius and add the weights, whose sum over a closed line is its
+# length, so at the end face they reach the shared node's own area A_N on
+# both tiles. The end face carries the node's point flux, A_N G(q_N) and p_N,
+# so its first-order counterpart is τ A_N G(q_N) and τ p_N, and the end cell's
+# first-order update is the Lax–Friedrichs part of its interior face and the
+# geometric part −τ (A_N − Ā) G(q_N)/V: the end face adds nothing at first
+# order. The end cell takes both its faces and its geometric part in one part,
+# as a cell on a closed far end does, its end face blended toward that point
+# flux by the θ of the face beside it, and the exchange of θ gives both tiles
+# the smaller of their two. The end faces' corrections enter the face
+# registers at both ends, so the two tiles keep one value there. Their θ is
+# exchanged between the θ pass and the correction, so a tile of a radial grid
+# holds its rates, face speeds, face values and θ itself, as a patch with a
+# same-level interface holds its face values and θ.
+#
 # The r-z plane. Along z the divergence is D(r F) with r constant on a line,
 # so the z faces take the Cartesian form with the face values divided by J = r
 # and the first-order flux multiplied by it, and each cell's rate is the one
@@ -123,9 +141,10 @@
 # it alone as it does a Dirichlet node: the face beside it is limited from the
 # interior cell alone and the end face not at all, and composite conservation
 # there is the coarse-fine coupling's own. Tiles share their faces as
-# same-level patches do, through the level's records and communicator. The
-# parent's nodes a child covers are limited as any other node and then take
-# the child's coincident values from the injected restriction. Under
+# same-level patches do, through the level's records and communicator, on the
+# radial grids as well (above). The parent's nodes a child covers are limited
+# as any other node and then take the child's coincident values from the
+# injected restriction. Under
 # subcycling every level limits the stages of its own steps with its own
 # registers, and a refined level's filter passes, which it takes at its own
 # cadence, are limited there.
@@ -240,17 +259,20 @@ built as `run!` starts and rebuilt for the patches a regrid replaces
 lines; the counts of a dropped patch's limiter are kept in `retired`.
 `least` is the fewest parent nodes along a dimension a regridded box spans,
 the shortest fine line between two coarse-fine faces that takes the face
-form and the filter's face relation.
+form and the filter's face relation. `separate` is set for the tiles of a
+radial grid, whose limiters hold the scratch of the radial pass themselves.
 """
 mutable struct PatchLimiters
     limiters::Vector{Any}
     patches::Vector{Any}
     retired::Vector{Int}
     least::Int
+    separate::Bool
 end
 
-PatchLimiters(limiters::Vector{Any}, patches::Vector{Any}, least::Int=4) =
-    PatchLimiters(limiters, patches, zeros(Int, 6), least)
+PatchLimiters(limiters::Vector{Any}, patches::Vector{Any}, least::Int=4,
+              separate::Bool=false) =
+    PatchLimiters(limiters, patches, zeros(Int, 6), least, separate)
 Base.getindex(pl::PatchLimiters, i::Int) = pl.limiters[i]
 
 # The fewest parent nodes along a dimension `tagged_region` gives a box: four,
@@ -346,9 +368,9 @@ end
 # r = 0 (`_limiter_radial_line`), on the r-z plane with a symmetry plane
 # allowed at the low end of z; refined levels on either, under the same
 # interface rows (the constructor switches `:ghost` to them, with a warning)
-# and the injected restriction, tiled on the Cartesian grid of the host
-# backend only; without the implicit integrator, an ideal-gas mixture, and
-# closed lines long enough for the face relation of the filter.
+# and the injected restriction, tiled on the host backend only; without the
+# implicit integrator, an ideal-gas mixture, and closed lines long enough for
+# the face relation of the filter.
 function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, eos,
                               implicit, equations, deriv, filt, filter_weighting,
                               n_global, n_halo, L_domain, ::Type{T};
@@ -366,16 +388,10 @@ function _validate_positivity(bcs, metric, stretch, patch_grid, nlev, backend, e
     all(isnothing, stretch) || fail("supports an unstretched grid only")
     radial && filter_weighting !== :none &&
         fail("on a radial grid takes the filter weighting :none")
-    if nlev > 1
-        level_restriction === :inject ||
-            fail("on refined levels takes level_restriction = :inject: the " *
-                 "filtered restriction writes values the limiter does not bound " *
-                 "onto the parent")
-        radial && _tiled(tile) &&
-            fail("on a radial grid supports a refined level as one box (tile = 0): " *
-                 "a tile's radial line closes at a shared face, which the radial " *
-                 "limiter does not take")
-    end
+    nlev > 1 && level_restriction !== :inject &&
+        fail("on refined levels takes level_restriction = :inject: the " *
+             "filtered restriction writes values the limiter does not bound " *
+             "onto the parent")
     npatch = prod(patch_grid)
     # Under `:ghost` the inviscid flux of an interface dimension takes the
     # gradient's interface rows, whose composite weight at the shared node is
@@ -536,7 +552,11 @@ end
 # padded position this rank holds, the registers, and the local faces where a
 # periodic anchor and the filter relation are measured. A patch interface is a
 # closed end of the patch's lines, whose weights come from the interface rows.
-function PositivityLimiter(solver)
+# A tile of a radial grid (`separate`) holds the radial pass's rates, face
+# speeds and pressure face values: the z faces of every tile read the rates
+# after the radial passes of all of them, and a radial correction waits for the
+# θ exchange.
+function PositivityLimiter(solver; separate::Bool=false)
     decomp = solver.decomp
     T = eltype(solver.h)
     n_cons = solver.equations.n_cons
@@ -673,12 +693,16 @@ function PositivityLimiter(solver)
                             (shared(solver.bcs[d][1]), shared(solver.bcs[d][2])) :
                             (false, false), 3)
     # The patches of a rank share the workspace by extent, and a stage takes
-    # every patch's θ before any patch's correction (`_limit_patched_stage!`),
-    # so a patch holds its face values and θ itself.
-    own = any(any, interface)
+    # every patch's θ before any patch's correction (`_limit_level_stage!`),
+    # so a patch with a same-level interface, and a tile of a radial grid,
+    # holds its face values and θ itself.
+    separate = separate && any(radial)
+    own = any(any, interface) || separate
     faces = own ? [zero(solver.tmp_a) for c in 1:n_cons] : [ws[1, c] for c in 1:n_cons]
     theta = own ? zero(solver.tmp_a) : solver.tmp_b
-    any(radial) && push!(faces, ws[3, 1])
+    any(radial) && push!(faces, separate ? zero(solver.tmp_a) : ws[3, 1])
+    rates = separate ? zero(solver.tmp_a) : ws[2, 1]
+    speeds = separate ? zero(solver.tmp_a) : ws[2, 2]
     # On a radial line folded at r = 0 a limited filter pass weights the
     # components even at the fold by J, so that its corrections telescope in
     # Σ W J q, the sum the spherical filter conserves (its correction
@@ -696,7 +720,7 @@ function PositivityLimiter(solver)
     # The bodies index every field by the linear index of a padded node.
     shape = size(solver.tmp_a)
     fields = (solver.tmp_b, solver.rho, solver.u, solver.v, solver.w, solver.p, solver.c,
-              solver.inv_J, solver.inv_h..., faces..., ws[2, 1], ws[2, 2])
+              solver.inv_J, solver.inv_h..., faces..., rates, speeds)
     all(f -> size(f) == shape, fields) ||
         error("positivity limiter: the solver's fields do not share one padded extent")
     # The vectors the bodies read, formed on the host and uploaded once.
@@ -709,7 +733,7 @@ function PositivityLimiter(solver)
                              typeof(free_s[1]),typeof(planes[1]),eltype(line_counts)}(
         weights_s, map(w -> up(one(T) ./ w), weights), (free_s..., _limiter_exempt(solver)),
         registers, register_fields,
-        FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), ws[2, 1], ws[2, 2],
+        FieldVector(faces), FieldVector([ws[2, c] for c in 1:n_cons]), rates, speeds,
         theta, map(up, areas), radial, fold_lo, n_comp, up(volume), volume_state, areal,
         interface,
         copies(), copies(), copies(), copies(), copies(), copies(), copies(), copies(),
@@ -847,7 +871,7 @@ function _rebuild_limiters!(solver, pl::PatchLimiters)
     for p in patches
         lim = pop!(held, p, nothing)
         if lim === nothing
-            lim = PositivityLimiter(PatchSolver(solver, p))
+            lim = PositivityLimiter(PatchSolver(solver, p); separate=pl.separate)
             if template !== nothing
                 lim.eps_rho = template.eps_rho
                 lim.eps_e = template.eps_e
@@ -1159,8 +1183,8 @@ function _limit_level_stage!(lims::Vector{Any}, solver, lev, states, dQs, dus,
 end
 
 # The face values and θ of direction d at a stage, and whether a face is
-# limited where this rank's nodes take its correction; a radial line takes its
-# whole pass here.
+# limited where this rank's nodes take its correction; a radial line of a
+# patch without a same-level interface takes its whole pass here.
 function _stage_theta!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt, d::Int)
     T = eltype(lim.eps_rho)
     B = T(RKB[stage])
@@ -1174,6 +1198,10 @@ function _stage_theta!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt
                    decomp.n_halo_d...)
     end
     if lim.radial[d]
+        # A tile's correction waits for the exchange of θ at its shared faces.
+        any(any, lim.interface) &&
+            return _radial_theta!(lim, solver, Q, dQ, du, d, T(RKA[stage]), B, T(dt), τ,
+                                  lim.theta)
         _limit_radial!(lim, solver, Q, dQ, du, d, T(RKA[stage]), B, T(dt), τ)
         return false
     end
@@ -1187,6 +1215,7 @@ function _stage_correct!(lim::PositivityLimiter, solver, Q, dQ, stage::Int, dt, 
     T = eltype(lim.eps_rho)
     B = T(RKB[stage])
     τ = T(_stage_advance(stage) * dt)
+    lim.radial[d] && return _radial_correct!(lim, solver, Q, dQ, d, B, T(dt), τ, lim.theta)
     o1, o2, o3 = decomp.n_halo_d
     inv_B = one(T) / B
     inv_Bdt = one(T) / (B * T(dt))
@@ -1574,12 +1603,22 @@ end
 # the corrections, which a limited fold face also takes into the face
 # register at the fold. `A` and `B` are the stage's low-storage coefficients.
 function _limit_radial!(lim::PositivityLimiter, solver, Q, dQ, du, d::Int, A, B, dt, τ)
+    _radial_theta!(lim, solver, Q, dQ, du, d, A, B, dt, τ, solver.tmp_b) || return nothing
+    _radial_correct!(lim, solver, Q, dQ, d, B, dt, τ, solver.tmp_b)
+    return nothing
+end
+
+# The rates and θ of a radial line d into `theta`, the tallies counted, and
+# whether a face is limited where this rank's nodes take its correction. A
+# line's end at a face shared with another tile (`_limiter_ends`) takes its
+# end face's speed from its end node alone, as a closed far end does.
+function _radial_theta!(lim::PositivityLimiter, solver, Q, dQ, du, d::Int, A, B, dt, τ,
+                        theta)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     n = decomp.n_local[d]
     nA, nB = _transverse(decomp.n_local, d)
-    closed_lo, closed_hi = _limiter_closed(lim, decomp, d)
-    fold = _limiter_fold(lim, decomp, d)
+    closed_lo, closed_hi, fold, end_lo, end_hi = _limiter_ends(lim, decomp, d)
     uvw = (solver.u, solver.v, solver.w)
     lay = _limiter_layout(solver)
     bounds = _limiter_bounds(lim)
@@ -1590,26 +1629,36 @@ function _limit_radial!(lim::PositivityLimiter, solver, Q, dQ, du, d::Int, A, B,
     pointwise!(_limiter_radial_rate_point!, lim.rates, 1, nA, nB,
                lim.rates, speeds, Ql, dQl, _LinearState(du), regs, uvw, solver.c,
                solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights,
-               lim.areas[d], decomp.active, d, (fold, closed_hi, n), (A, B, dt), bounds,
-               lay, lim.free, o1, o2, o3)
+               lim.areas[d], decomp.active, d, (fold, closed_hi, n, end_lo), (A, B, dt),
+               bounds, lay, lim.free, o1, o2, o3)
     # The face two ranks share takes the same θ on both, from both cells'
     # rates, along r here and along z in the pass that follows.
     for e in 1:3
         decomp.active[e] && decomp.dims[e] > 1 && exchange_dim!(lim.rates, decomp, e)
     end
     pointwise!(_limiter_radial_theta_point!, solver.tmp_a, 1, nA, nB,
-               solver.tmp_b, lim.line_counts[d], Ql, lim.faces, lim.rates, uvw, solver.c,
+               theta, lim.line_counts[d], Ql, lim.faces, lim.rates, uvw, solver.c,
                solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights[d],
-               lim.areas[d], speeds, lim.free, d, (fold, closed_lo, closed_hi, n), τ,
-               bounds, lay, o1, o2, o3)
-    limited, shared = _limiter_tally!(lim, decomp, d, closed_hi, 1, fold)
+               lim.areas[d], speeds, lim.free, d,
+               (fold, closed_lo, closed_hi, n, end_lo, end_hi), τ, bounds, lay, o1, o2, o3)
+    limited, shared = _limiter_tally!(lim, decomp, d, closed_hi, 1, fold, end_hi)
     lim.counts[2] += limited
-    limited + shared > 0 || return nothing
+    return limited + shared > 0
+end
+
+# The corrections of a radial line d from the θ in `theta`.
+function _radial_correct!(lim::PositivityLimiter, solver, Q, dQ, d::Int, B, dt, τ, theta)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    n = decomp.n_local[d]
+    nA, nB = _transverse(decomp.n_local, d)
+    _, _, fold, end_lo, end_hi = _limiter_ends(lim, decomp, d)
     pointwise!(_limiter_radial_correct_point!, solver.tmp_a, n, nA, nB,
-               dQl, lim.register_fields[d], lim.faces, solver.tmp_b, Ql, uvw, solver.p,
-               solver.inv_J, solver.inv_h[d], lim.weights[d], lim.areas[d], speeds,
-               lim.anchor[d], d, τ, (one(B) / B, one(B) / (B * dt)), lay, fold, lim.free,
-               o1, o2, o3)
+               _LinearState(dQ), lim.register_fields[d], lim.faces, theta, _LinearState(Q),
+               (solver.u, solver.v, solver.w), solver.p, solver.inv_J, solver.inv_h[d],
+               lim.weights[d], lim.areas[d], lim.speeds, (lim.anchor[d], lim.anchor_hi[d]),
+               d, τ, (one(B) / B, one(B) / (B * dt)), _limiter_layout(solver),
+               (fold, end_lo, end_hi, n), lim.free, o1, o2, o3)
     return nothing
 end
 
@@ -1715,14 +1764,15 @@ end
 # at the fold), γ u⁺ ΔĀ inv_J/W of its geometric part and 2(|u_e| + c)/W_e of
 # every other active direction, and β_n the node part's share; Inf where the
 # node part alone needs the whole cell. The face at a closed far end takes its
-# one state; the fold's face takes none. The θ and correction passes read the
-# speeds, and the sweep carries a node's part of them to its next face.
+# one state, and so does the end face at a low end shared with another tile;
+# the fold's face takes none. The θ and correction passes read the speeds, and
+# the sweep carries a node's part of them to its next face.
 @inline function _limiter_radial_rate_point!(rates, speeds, Q, dQ, du, regs, uvw, c, p, ρ,
                                              inv_J, inv_h, W, areas, act, d, ends, coeffs,
                                              bounds, lay, free, o1, o2, o3, _, a, b)
     @inbounds begin
         T = eltype(rates)
-        fold, closed_hi, n = ends
+        fold, closed_hi, n, end_lo = ends
         A, B, dt = coeffs
         o = d == 1 ? o1 : d == 2 ? o2 : o3
         n1, n2 = size(rates, 1), size(rates, 2)
@@ -1742,6 +1792,7 @@ end
             # leaves the face the speed of the other.
             a_hi = fold && pp == 0 ? zero(T) :
                    closed_hi && pp == n ? _radial_face_speed(lo, lo, Āp) :
+                   end_lo && pp == 0 ? _radial_face_speed(hi, hi, Āp) :
                    lo_bad ? _radial_face_speed(hi, hi, Āp) :
                    hi_bad ? _radial_face_speed(lo, lo, Āp) :
                    _radial_face_speed(lo, hi, Āp)
@@ -1786,14 +1837,17 @@ Base.@propagate_inbounds _limiter_unheld_bad(Q, free, L, I, lay) =
 # the fold takes the fold face with the axis share, whose first-order values
 # are 0 and τ p_1, and the cell on a closed far end takes its boundary face,
 # never limited, in one part with its interior face, as on a Cartesian line.
-# A side is guaranteed when τ times its cell's rate is below one; a cell
-# whose node part needs the whole cell takes the first-order flux.
+# The end cell at a face shared with another tile takes its end face in one
+# part with its interior face too, the end face blended toward τ times the
+# node's point flux (`_radial_end_flux`), and the end face takes the θ of the
+# face beside it. A side is guaranteed when τ times its cell's rate is below
+# one; a cell whose node part needs the whole cell takes the first-order flux.
 @inline function _limiter_radial_theta_point!(theta, counts, Q, faces, rates, uvw, c, p,
                                               ρ, inv_J, inv_h, W, areas, speeds, free, d,
                                               ends, τ, bounds, lay, o1, o2, o3, _, a, b)
     @inbounds begin
         T = eltype(theta)
-        fold, closed_lo, closed_hi, n = ends
+        fold, closed_lo, closed_hi, n, end_lo, end_hi = ends
         o = d == 1 ? o1 : d == 2 ? o2 : o3
         n1, n2 = size(theta, 1), size(theta, 2)
         sd = _line_stride(d, n1, n2)
@@ -1816,6 +1870,7 @@ Base.@propagate_inbounds _limiter_unheld_bad(Q, free, L, I, lay) =
             if !((closed_lo && f == 0) || (closed_hi && f == n))
                 fold_face = fold && f == 0
                 wall_r = closed_hi && f == n - 1
+                wall_l = end_lo && f == 1
                 Ā = areas[f+o]
                 G = _limiter_face_state(faces, Ll, lay)
                 Π = faces[np][Ll]
@@ -1824,12 +1879,23 @@ Base.@propagate_inbounds _limiter_unheld_bad(Q, free, L, I, lay) =
                 a_face = fold_face ? zero(T) : speeds[Ll]
                 ql, εl, sJl, shl = lo.q, lo.ε, lo.sJ, lo.sh
                 qr, εr, sJr, shr = hi.q, hi.ε, hi.sJ, hi.sh
-                # The low cell's part for its outer face.
-                kl = rates[Ll] / (sJl * Ā * a_face)
-                bl = _limiter_axpy(ql, kl * τ,
-                                   _radial_vector(map(x -> Ā * x,
-                                                      _radial_flux(ql, ud[Ll], p[Ll])),
-                                                  p[Ll], sJl, shl, d))
+                # The low cell's part for its outer face, and for the end cell at
+                # a shared low end its part for both faces, q + k (H_0 − H_1).
+                if wall_l
+                    Ā0 = areas[f-1+o]
+                    γ = _limiter_gamma(ρ[Ll], c[Ll], p[Ll])
+                    kl = rates[Ll] / (sJl * (Ā * a_face + Ā0 * speeds[Ll-sd] +
+                                             γ * max(ud[Ll], zero(T)) * (Ā - Ā0)))
+                    bl = _limiter_axpy(ql, kl, _radial_vector(
+                                       _limiter_face_state(faces, Ll - sd, lay),
+                                       faces[np][Ll-sd], sJl, shl, d))
+                else
+                    kl = rates[Ll] / (sJl * Ā * a_face)
+                    bl = _limiter_axpy(ql, kl * τ,
+                                       _radial_vector(map(x -> Ā * x,
+                                                          _radial_flux(ql, ud[Ll], p[Ll])),
+                                                      p[Ll], sJl, shl, d))
+                end
                 Hl = _radial_vector(G, Π, sJl, shl, d)
                 # The high cell's part for its inner face.
                 if fold_face
@@ -1881,15 +1947,25 @@ Base.@propagate_inbounds _limiter_unheld_bad(Q, free, L, I, lay) =
                         ΠL = τ * (pa + pb) / 2
                     end
                     if cl
+                        GLl, ΠLl = wall_l ?
+                                   _radial_end_flux(GL, ΠL,
+                                                    _limiter_face_state(faces, Ll - sd, lay),
+                                                    faces[np][Ll-sd], ql, ud[Ll], p[Ll],
+                                                    areas[f-1+o], τ) : (GL, ΠL)
                         t, ok = okl ?
-                                _limiter_side(bl, Hl, _radial_vector(GL, ΠL, sJl, shl, d),
+                                _limiter_side(bl, Hl, _radial_vector(GLl, ΠLl, sJl, shl, d),
                                               -kl, εl) : (zero(T), false)
                         θ = min(θ, t)
                         (ok && τ * rates[Ll] < 1) || (flag |= 1)
                     end
                     if cr
+                        GLr, ΠLr = wall_r && end_hi ?
+                                   _radial_end_flux(GL, ΠL,
+                                                    _limiter_face_state(faces, Lr, lay),
+                                                    faces[np][Lr], qr, ud[Lr], p[Lr],
+                                                    areas[f+1+o], τ) : (GL, ΠL)
                         t, ok = okr ?
-                                _limiter_side(br, Hr, _radial_vector(GL, ΠL, sJr, shr, d),
+                                _limiter_side(br, Hr, _radial_vector(GLr, ΠLr, sJr, shr, d),
                                               kr, εr) : (zero(T), false)
                         θ = min(θ, t)
                         (ok && τ * rates[Lr] < 1) || (flag |= 2)
@@ -1905,12 +1981,34 @@ Base.@propagate_inbounds _limiter_unheld_bad(Q, free, L, I, lay) =
             f <= n - 1 && (flag & 2) != 0 && (sides += 1)
             lo = hi
         end
+        # An end face at a shared node takes the θ of the face beside it; the
+        # tile whose high end it is counts it.
+        if end_hi
+            θe = theta[L0+(n-1)*sd]
+            theta[L0+n*sd] = θe
+            θe < 1 && (limited += 1)
+        end
+        if end_lo
+            θe = theta[L0+sd]
+            theta[L0] = θe
+            θe < 1 && (shared += 1)
+        end
         counts[1, a, b] = limited
         counts[2, a, b] = shared
         counts[3, a, b] = sides
         counts[4, a, b] = axis
     end
     return nothing
+end
+
+# The first-order face values toward which the end cell at a shared node
+# blends, as the face beside it sees them: that face's Rusanov flux GL and
+# pressure ΠL, plus the end face's own values Ge and Πe, which the cell's part
+# has already taken out, less τ times the node's point flux on the end face's
+# area Āe. At θ = 0 the end face then carries the point flux.
+@inline function _radial_end_flux(GL, ΠL, Ge, Πe, q, u, p, Āe, τ)
+    F = _radial_flux(q, u, p)
+    return (map((x, g, f) -> x + g - τ * Āe * f, GL, Ge, F), ΠL + Πe - τ * p)
 end
 
 # A radial cell's state and bound, its inverse Jacobian and inverse spacing
@@ -1928,11 +2026,14 @@ end
 # for the pressure, the node changing by inv_J (δ_{p−½} − δ_{p+½})/W_p and,
 # on the radial momentum, by inv_h times the pressure's. Each enters dQ / (B dt)
 # and leaves its register, and a limited fold face enters the face register at
-# the fold, whose running sum the next stage starts from.
+# the fold, whose running sum the next stage starts from. An end face at a
+# node shared with another tile takes the node's point flux as its first-order
+# value and enters the face register at its end, `anchors[1]` at the low end
+# and `anchors[2]` at the high end, as on a Cartesian line.
 @inline function _limiter_radial_correct_point!(dQ, regs, faces, theta, Q, uvw, p,
-                                                inv_J, inv_h, W, areas, speeds, anchor, d,
-                                                τ, scales, lay, fold, free, o1, o2, o3, pp,
-                                                a, b)
+                                                inv_J, inv_h, W, areas, speeds, anchors,
+                                                d, τ, scales, lay, ends, free, o1, o2, o3,
+                                                pp, a, b)
     @inbounds begin
         T = eltype(theta)
         n1, n2 = size(theta, 1), size(theta, 2)
@@ -1947,7 +2048,11 @@ end
         ns, m1, m2, m3, ie, nc = lay
         md = d == 1 ? m1 : d == 2 ? m2 : m3
         inv_B, inv_Bdt = scales
+        fold, end_lo, end_hi, n = ends
+        anchor, anchor_hi = anchors
         fold_face = fold && pp == 1
+        end_l = end_lo && pp == 1
+        end_r = end_hi && pp == n
         ud = uvw[d]
         Ām = areas[pp-1+o]
         Āp = areas[pp+o]
@@ -1957,15 +2062,17 @@ end
         # them: a neighbour the limiter does not hold whose state is not
         # admissible by this node, and this node, if it is one, by the
         # neighbour, so both nodes of a face take one flux (see
-        # `_limiter_correct_point!`).
-        Jm = !fold_face && _limiter_unheld_bad(Q, free, Im,
-                                               _line_node(d, pp - 1, a, b, o1, o2, o3),
-                                               lay) ? I : Im
-        Jp = _limiter_unheld_bad(Q, free, Ip, _line_node(d, pp + 1, a, b, o1, o2, o3),
-                                 lay) ? I : Ip
+        # `_limiter_correct_point!`). An end face's two nodes are this one.
+        bad_m = !fold_face && _limiter_unheld_bad(Q, free, Im,
+                                                  _line_node(d, pp - 1, a, b, o1, o2, o3),
+                                                  lay)
+        bad_p = _limiter_unheld_bad(Q, free, Ip, _line_node(d, pp + 1, a, b, o1, o2, o3),
+                                    lay)
+        Jm = bad_m | end_l ? I : Im
+        Jp = bad_p | end_r ? I : Ip
         own = _limiter_unheld_bad(Q, free, I, _line_node(d, pp, a, b, o1, o2, o3), lay)
-        Km = own ? Im : I
-        Kp = own ? Ip : I
+        Km = own & !end_l ? Im : I
+        Kp = own & !end_r ? Ip : I
         inv_W = one(T) / W[pp+o]
         for cc in 0:nc
             # cc = 0 is the pressure, kept in register nc + 1.
@@ -1977,12 +2084,14 @@ end
                      τ * Ām * _radial_lf_component(Q, ud, p, cc, Jm, Km, am, ie)
                 δ = (θm - 1) * (faces[slot][Im] - gl)
                 change += δ
-                fold_face && (anchor[slot, a, b] += δ * inv_B)
+                (fold_face | end_l) && (anchor[slot, a, b] += δ * inv_B)
             end
             if θp < 1
                 gl = cc == 0 ? τ * (p[Kp] + p[Jp]) / 2 :
                      τ * Āp * _radial_lf_component(Q, ud, p, cc, Kp, Jp, ap, ie)
-                change -= (θp - 1) * (faces[slot][I] - gl)
+                δp = (θp - 1) * (faces[slot][I] - gl)
+                change -= δp
+                end_r && (anchor_hi[slot, a, b] += δp * inv_B)
             end
             change *= inv_W
             if cc == 0
