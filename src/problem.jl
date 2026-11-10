@@ -840,8 +840,8 @@ and `interface_divergence`.
   coefficients and element type of `deriv` whose closure rows replace the
   flux divergence's rows at interface ends only, such as
   `lele_d1_6(closures = :brady_livescu)`. Under `flux = :ghost` it affects
-  only the artificial fluxes and the wall corrections. Experimental and
-  Float64 only.
+  only the wall corrections of a run with the artificial properties off.
+  Experimental and Float64 only.
 """
 struct PatchInterfaces
     flux::Symbol

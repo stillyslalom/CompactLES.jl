@@ -466,9 +466,12 @@ node and which term set the limit, and returns `(dt, rank, index, coords, dim,
 kind)` with `kind ∈ (:acoustic, :diffusive, :curvature)`. See the CFL section of
 the README for what the answers mean on polar grids.
 
-`Workspace` owns the two low-storage arrays (`dQ`, `du`). Passing a retained
-workspace to `step!` or `run!` lets splitting, subcycling, and future IMEX
-schemes own stage storage.
+`Workspace` owns the two low-storage arrays (`dQ`, `du`), one pair per patch
+on a multi-patch solver, which the subcycled step uses as well. Passing a
+retained workspace to `step!` or `run!` reuses them across calls. A solver
+built with `ImplicitConduction` advances by an additive Runge–Kutta pair
+instead (`imex_step.jl`); its stage registers are fields of the
+`ImexIntegrator` at `solver.implicit`, and the workspace arrays are unused.
 
 `run!` is the outer loop: step, advance time, and every `filter_interval` steps
 call `filter_state!`, which applies the compact filter to every conserved
@@ -477,8 +480,11 @@ correct axis parity per component). `filter_weighting = :volume` selects the
 volume-weighted form of the reference implementation instead, F(Jq)/F(J) per
 pass with the fold parity of the product; the unweighted default is the better
 of the two by measurement (`reference/CALIBRATION.md`, walls, folds and
-metrics). An optional `callback(solver, Q)` runs after each
-step for diagnostics or output.
+metrics). The `callback` keyword takes a bare `callback(solver, Q)` run after
+every step, a `Callback` pairing a trigger (`AtTime`, `EveryTime`,
+`EveryStep`, `WhenState`) with an effect, or a tuple of these
+(`callbacks.jl`); a scheduled instant is landed on by shortening the steps
+before it, and an effect returning `true` ends the run.
 
 ### The clock
 
@@ -594,8 +600,9 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
 11. **Explicit sources.** `add_sources!` walks the concrete source tuple at the
     RK stage time; tuple recursion compiles away.
 
-Every loop over the interior is threaded over the outermost index; every MPI
-call sits in a serial section between threaded regions.
+Every pointwise loop over the interior is launched through `pointwise!` and
+iterates `outer_indices`, the flattened pair of its two outer indices; every
+MPI call sits in a serial section between threaded regions.
 
 ## Artificial fluid properties
 
@@ -1002,8 +1009,14 @@ then gives the slip wall's flux contract without a `correct_flux!` method,
 `enforce!` does nothing, and `sensor_mirror` stays false so the sensor
 operators take the fold branch. The spacing rule is
 `h = L/(N − 1 + ½·n_folded)`, so a plane at the high end alone is
-admitted. Patched, refined and stretched runs reject it, as they do every
-fold. Only a paired fold allocates `pairbuf`/`pairout`.
+admitted. A folded dimension, of any fold, cannot be stretched, and a
+same-level patched run (`patch_grid`) rejects every fold. A refined run
+(unstretched, Cartesian or θ-collapsed r-z) takes the plane and the r-z axis
+at every level reaching them, each refined patch holding a self-paired fold
+of its own (an inactive one, `_idle_fold`, along a dimension the root folds
+and the patch does not reach). The paired folds are rejected under
+refinement with the metrics that carry them, spherical and resolved-θ
+cylindrical. Only a paired fold allocates `pairbuf`/`pairout`.
 
 **The resolved cases**, resolved-θ cylindrical axis, spherical origin and
 spherical poles, all reduce to one structure: a fold whose partner is
@@ -1031,11 +1044,14 @@ along that dimension), and the reversed dimension likewise (reflected
 partner). On-rank pairing runs both parity plans and selects per half; off-rank
 pairing costs two full-block exchanges per application.
 
-This is the newest and least-exercised machinery in the package. The MPI suite
-has detected two defects in the antipodal sign tables and off-rank e/o
-bookkeeping: an odd-combination mirror sign and a reversed-dimension slot flip
-that appeared only when the reversed dimension was split. The full-ball
-origin-plus-poles combination has received the least testing.
+The defects found in the antipodal sign tables and the off-rank e/o
+bookkeeping, an odd-combination mirror sign and a reversed-dimension slot
+flip, appeared only with the paired or reversed dimension split across ranks,
+and the serial suite always pairs on-rank. The MPI suite's off-rank fold
+phase splits θ under the resolved-θ axis and under the full-ball
+origin-plus-poles grid and checks the derivatives, the volume-weighted filter
+and the `:delta4` detector through the butterfly, so a change to `folds.jl`
+is checked there as well as serially.
 
 ## Multicomponent thermodynamics
 
@@ -1670,9 +1686,16 @@ inflow is the right tool there.
 The solver runs with `MPI.Init(threadlevel=:funneled)`: **all MPI calls are made
 from serial sections**, never from inside a `Threads.@threads` region. The
 pattern throughout is threaded compute → serial communication → threaded
-compute. Shared-memory parallelism is over grid lines (in the operators) and over
-the outermost array index (in the pointwise loops). Halo buffers are typed
-concretely as `Float64`, so the code is currently Float64-only.
+compute. Shared-memory parallelism is over grid lines in the operators and, in
+the pointwise loops, over `outer_indices`, one flattened index over a nest's
+two outer dimensions, so a planar run with a collapsed third dimension still
+divides over the second. Each pointwise loop is launched through
+`pointwise!`, which takes `@threaded` on `Array` storage and a
+KernelAbstractions kernel on device storage (`threading.jl`, `pointwise.jl`).
+The element type `T` is set once at setup, by `Solver`'s `precision` keyword,
+by `Execution`'s `storage`, or from the components' common type
+(`precision.jl`), and `Decomp{T}` types the halo send and receive buffers by
+it, so Float64 and Float32 runs take the same exchange.
 
 ## Extension points
 

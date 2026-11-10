@@ -121,16 +121,20 @@ interface between two fluids.
 By default (`flux = :ghost`) a patch or level interface uses no
 closure rows for the inviscid and molecular parts of the flux divergence. The
 inviscid flux is evaluated on the interface ghost layers and differentiated
-through the interface with the interior stencil. The viscous, conductive and
-diffusive flux on the ghost layers of a same-level interface is the
+through the interface with the interior stencil. With the artificial
+properties on, as by default, the rest of the flux (viscous, conductive,
+diffusive and artificial, with the wall corrections) is differentiated with it
+in the same solve. On the ghost layers of a same-level interface it is the
 neighbouring patch's own, exchanged once every patch has evaluated its
 right-hand side, so a same-level interface has the interior's error with or
-without viscosity. At a coarse-fine interface the ghost values are
-interpolated from the parent and the molecular flux there is evaluated from
-the gradients of the interpolated state, so the level interpolation order sets
-the error; its default is two above the derivative operator's order, which
-gives sixth order with C6. The artificial fluxes and the wall corrections keep
-the closure rows, which `divergence` selects. A discontinuity placed
+without viscosity; at a coarse-fine interface it is extrapolated from the
+fine interior along the line. The inviscid ghost values at a coarse-fine
+interface are interpolated from the parent, so the level interpolation order
+sets the error; its default is two above the derivative operator's order,
+which gives sixth order with C6. With the artificial properties off, the
+molecular flux on those ghost layers is evaluated from the gradients of the
+interpolated state, and the wall corrections keep the closure rows, which
+`divergence` selects. A discontinuity placed
 on a shared patch plane runs under the ghost fluxes and fails under the
 closure rows. Without a patch or level interface the setting has no effect.
 
@@ -161,7 +165,8 @@ constants there.
 
 The `divergence` field replaces the flux divergence's rows at
 interface ends only, leaving walls and the gradient rows unchanged; under the
-ghost fluxes it affects only the artificial fluxes and the wall corrections.
+ghost fluxes it affects only the wall corrections of a run with the
+artificial properties off.
 Pass a scheme with the same interior coefficients and element type as
 `deriv`, such as
 `PatchInterfaces(divergence = lele_d1_6(closures = :brady_livescu))`

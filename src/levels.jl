@@ -12,8 +12,10 @@
 # no temporal interpolation arises anywhere. Under `subcycle = true` each
 # level instead takes three steps of dt/3 per step of its parent, recursively
 # (`_advance_level!`, timestep.jl), and the temporal interpolation this
-# needs is the Hermite box at the end of this file; a two-level region can
-# also move under `regrid_interval` (src/regrid.jl).
+# needs is the Hermite box at the end of this file. Under `regrid_interval`
+# the refined level of a two-level hierarchy moves as one box or as tiles,
+# and a tiled hierarchy of more refined levels, up to `max_levels`, is
+# regridded level by level on the host backend (src/regrid.jl).
 #
 # A patch and its parent are coupled on two schedules, both by default
 # through the point-sample halves of the transfer machinery (transfer.jl):
@@ -67,13 +69,18 @@
 #
 # Scope, enforced by `Solver`: the Cartesian or axisymmetric (θ-collapsed)
 # cylindrical metric, no stretching, no fold on a refined level but a symmetry
-# plane or the r-z axis where the first level reaches it (see "Levels on the
-# domain boundary" below), and no same-level patch decomposition alongside
-# refinement. The transfers move the
-# conserved variables themselves on either metric; each tile evaluates its own
-# geometry at its nodes. The fine patch's
-# line solves close at the coarse–fine boundary with the same-level interface
-# rows (extended-data gradients and filters, one-sided divergence); a
+# plane or the r-z axis, which is folded on every level reaching it (see
+# "Levels on the domain boundary" below), and no same-level patch
+# decomposition alongside refinement. The transfers move the conserved
+# variables themselves on either metric; each tile evaluates its own geometry
+# at its nodes. The fine patch's line solves close at the coarse–fine
+# boundary with the same-level interface rows (extended-data gradients and
+# filters). Under `interface_flux = :ghost`, the default, the whole flux is
+# differenced through the face with the gradient rows, the ghost values of
+# all but its inviscid part extrapolated from the tile's interior; with the
+# artificial properties off, the molecular ghost values come from the
+# gradient ring and the one-sided divergence rows (`div_plans`) take any
+# remainder. Under `:closure` those rows close the whole flux. A
 # pentadiagonal scheme, the C10 derivative or a banded filter, takes two such
 # rows per end (kernels_banded.jl). The `:d8` detector closes there with rows
 # of its own that read the imposed ghosts (`_ring_interface_rows`).
@@ -98,26 +105,28 @@
 # level's. The rate reduction is a single Allreduce over the whole run at the
 # step boundary: each rank reduces the maximum over the patches it holds, and
 # the maximum is exact and order-independent, so the grouping is immaterial.
-# Cross-level coupling runs on the parent level's communicator, which
-# contains the child's: the buffered-box gathers read parent state that a
-# child's owner need not hold, and the covered nodes of the restriction
-# write-back lie on parent ranks outside the child's subset, so every rank
-# owning the parent level enters both, contributing nothing for a parent
-# tile it does not hold.
+# Cross-level coupling moves point to point over the parent level's
+# communicator, which contains the child's (`LevelCoupling`; the section
+# "Point-to-point level coupling" below). The parent ranks holding a tile's
+# buffered box send their part of it to the tile's owners
+# (`_exchange_boxes!`), each owner receiving the components whose chains it
+# runs, and the tile's owners send the coincident samples of `:inject`
+# restriction to the parent ranks owning the covered nodes
+# (`_exchange_restriction!`). Both sides derive the same pieces from two
+# block tables Allgathered once per level build (`build_level_coupling`).
+# Every rank of the parent's subset enters both exchanges and posts messages
+# only to the peers of its own pieces, so a rank's coupling traffic and memory
+# follow the tiles it holds and the parent blocks beneath them.
 #
-# The coupling data are replicated: every rank gathers the buffered coarse box
-# (and, for restriction, the coincident-node samples of the fine patch) with
-# one Allgatherv and writes only the shell or covered nodes it owns. The
-# interpolation chains distribute by conserved component, with each rank
-# running the serial chain (COMM_SELF Decomps) for its own components and
-# sharing only the thin shell ring; see the section comment above
-# `_impose_shell!` for the measurement that forced that split. No halo
-# machinery enters the transfer, and the serial path is the same code with
-# one-rank communicators. The costs that grow with this choice are the
-# gather volume (region-sized messages, several per step) and one replicated
-# region-sized array per rank; a rank-partitioned transfer is the recorded
-# follow-up if a measured case outgrows them. `level_restriction = :filter`
-# remains serial-only, since its restriction is a whole-patch line solve.
+# The interpolation chains distribute by conserved component over a tile's
+# ranks, each rank running the serial chain (COMM_SELF Decomps) for its own
+# components, and the thin shell ring is shared over the tile's communicator;
+# see the section comment above `_impose_shell!` for the measurement that
+# forced that split. No halo machinery enters the transfer, and the serial
+# path is the same code with one-rank communicators. `gather_region!`, the
+# replicated gather, remains for the regrid carries.
+# `level_restriction = :filter` remains serial-only, since its restriction is
+# a whole-patch line solve.
 
 "Coarse nodes of prolongation buffer beyond the refined region, per side."
 const LEVEL_BUFFER = 4

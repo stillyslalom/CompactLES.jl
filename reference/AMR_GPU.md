@@ -39,11 +39,12 @@ One solver runs on four axes of configuration, combinable except where
   (`src/patches.jl`).
 - **Nested refinement**: a chain of levels, each covering a region of its
   parent at ratio 3 with one patch or with the tiles of a global lattice,
-  at a global timestep or Berger–Oliger subcycled recursively; a two-level
-  hierarchy can move under sensor-driven tagging and regridding, tiles
-  entering and leaving the set, on the Cartesian metric and on the
-  axisymmetric (θ-collapsed) cylindrical one (`src/levels.jl`,
-  `src/regrid.jl`).
+  at a global timestep or Berger–Oliger subcycled recursively; the
+  hierarchy can move under sensor-driven tagging and regridding, one box on
+  a two-level hierarchy or tiles entering and leaving the set on every
+  level of a tiled one up to `max_levels` ("Regridding several levels"), on
+  the Cartesian metric and on the axisymmetric (θ-collapsed) cylindrical one
+  (`src/levels.jl`, `src/regrid.jl`).
 - **Distribution**: each level is owned by its own rank subset, a prefix
   of its parent's, and within it each tile of a tiled level is held whole
   by one rank, the tiles dealt out along a Morton curve, while a box level's
@@ -149,7 +150,7 @@ numbering.
    one). Refinement across a fold's singular region or its antipodal partner
    is forbidden and rejected at setup. The singular region keeps uniform
    resolution. The θ-collapsed axis and a symmetry plane are self-paired
-   mirrors with no partner, which the first refined level reaches (see
+   mirrors with no partner, which every refined level may reach (see
    "Levels on the domain boundary" and "Levels on the axisymmetric metric").
 5. **The bit-exact oracle survives only within a patch.** The
    spike/reduced-interface solve reproduces the single-domain answer at any
@@ -313,21 +314,30 @@ cross-patch communication may sit inside `compute_rhs!`.
 The interface closure rows follow the public Pyranda precedent: gradient and filter
 plans take `interface_closures` rows whose LHS couples no ghost unknown
 while the RHS reads exchanged ghost layers (`interface_rhs = :extended`, the
-default) or stays one-sided (`:onesided`). The flux divergence always keeps
-the scheme's own one-sided closures (`Patch.div_plans`): ghost *fluxes*
-would require a second communication phase inside the RHS, which the
-sequential-patch order forbids. `gcl_cotr!` routes through the same
+default) or stays one-sided (`:onesided`). The flux divergence follows
+`interface_flux`. Under `:ghost`, the default, the flux is differenced
+through the face with the gradient plans' interface rows, its inviscid part
+from the exchanged ghost state; the ghost values of the rest move in a second
+phase after every patch of the level has evaluated its right-hand side
+(`_level_ghost_fluxes!`), so no cross-patch communication sits inside one
+patch's `compute_rhs!` (`src/rhs.jl`, "The flux divergence through interface
+ends"). `:closure` keeps the scheme's own one-sided closures
+(`Patch.div_plans`) for the whole flux. `gcl_cotr!` routes through the same
 divergence plans so the discrete GCL cancellation is preserved. A banded
 scheme takes `q` such rows per end
 ([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
 
 The two-conforming-patch gates measure the entropy wave across the
 interface, the reflected amplitude of an acoustic pulse, the conservation
-drift over a long periodic run, and a viscous wave. The divergence's
-one-sided rows bind the inviscid orders, so the inviscid gates cannot tell
-`:extended` from `:onesided`; the viscous gate reaches the interface rows
-through the gradients, and there the extended-data rows are worth about two
-orders over the one-sided ones. Rank partitioning reproduces the serial
+drift over a long periodic run, and a viscous wave. Under the default ghost
+fluxes, which take `:extended` only, the inviscid and viscous rows converge
+at the interior's order through the interface
+([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
+Under `:closure` the divergence's one-sided rows bind the inviscid orders, so
+the inviscid gates cannot tell `:extended` from `:onesided`; the viscous
+gate, run under the closure rows, reaches the interface rows through the
+gradients, and there the extended-data rows are worth about two orders over
+the one-sided ones. Rank partitioning reproduces the serial
 two-patch answer bitwise at one rank per patch, and to round-off with
 identical step counts once a patch itself decomposes
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
@@ -482,7 +492,7 @@ the deep regrid's moved tile and the migration audit's reference.
 
 A region may reach a non-periodic domain face whose root condition a tile
 can carry (`_level_boundary_condition`: `SlipWallBC`, `NoSlipWallBC`, the
-two NSCBC conditions, and `SymmetryPlaneBC` and the r-z `AxisBC` on the first
+two NSCBC conditions, and `SymmetryPlaneBC` and the r-z `AxisBC` on every
 refined level, below and in "Levels on the axisymmetric metric").
 The tile's face there is not parent-fed: it carries the root's condition
 object itself (`_fine_bcs`), so the wall's `enforce!` and `correct_flux!`
@@ -714,18 +724,19 @@ rejected.
 **A level on the axis.** With θ collapsed, `AxisBC` is a self-paired parity
 mirror in r: each radial line continues into itself through r = 0, with no
 antipodal partner, so the prohibition of constraint 4 does not apply to it.
-The first refined level reaches the axis as it reaches a symmetry plane
-(`_level_fold_condition`). The root's node nearest the axis lies at h/2, so
-the tile takes the extra node at h/6 and its nodes are those of a uniform
-axis run at h/3; `_fine_region`, the box shift, the shell, the ring and the
-restriction's coincident samples are the plane's. The tile's fold, the box
-mirror and the ghost-flux divergence read the root fold's parities, which
-at the axis make the radial velocity, the swirl and the area factor A₁ = r
-odd. The metric takes nothing beyond the per-tile geometry: r, 1/r and the
-face areas at h/6 are the uniform run's. The radial momentum takes its
-pressure term as ∂p/∂r, on the tile as on the root: through the divergence
-plans under `:closure` and through the gradient plans, from the pressure's
-ghosts, under `:ghost`, with p even across the fold, so a uniform state
+A refined level, at any depth, reaches the axis as it reaches a symmetry
+plane (`_level_fold_condition`). The root's node nearest the axis lies at
+h/2, so a first-level tile takes the extra node at h/6 and its nodes are
+those of a uniform axis run at h/3; `_fine_region`, the box shift, the
+shell, the ring and the restriction's coincident samples are the plane's.
+The tile's fold, the box mirror and the ghost-flux divergence read the root
+fold's parities, which at the axis make the radial velocity, the swirl and
+the area factor A₁ = r odd. The metric takes nothing beyond the per-tile
+geometry: r, 1/r and the face areas at h/6 are the uniform run's. The
+radial momentum takes its pressure term as ∂p/∂r, on the tile as on the
+root: through the divergence plans under `:closure` and through the gradient
+plans, from the pressure's ghosts, under `:ghost`, with p even across the
+fold, so a uniform state
 stays uniform without a cancellation between the divergence and the
 metric source. The curvature terms
 of the gradient ring are evaluated only at ring slots inside the domain,
@@ -1869,11 +1880,13 @@ guarded somewhere; none should be re-derived.
 
 Configurations rejected at setup, and the reason:
 
-- **Patched runs** (same-level `patch_grid`) reject folds (constraint 4),
-  the `:d8` detector on every sensor, stretching along the patched dimension, and an
-  explicit `dims`. The layout tiles slabs along
-  one dimension, so corner-coupled adjacency does not arise. Field output
-  takes the multiblock form; a slab layout has no checkpoint.
+- **Patched runs** (same-level `patch_grid`) reject every fold, the paired
+  ones under constraint 4 and the self-paired θ-collapsed axis and symmetry
+  plane as unsupported (the setup error names `SlipWallBC` for a plane's
+  face), and they reject the `:d8` detector on every sensor, stretching
+  along the patched dimension, and an explicit `dims`. The layout tiles
+  slabs along one dimension, so corner-coupled adjacency does not arise.
+  Field output takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require the Cartesian or the θ-collapsed cylindrical
   metric, no stretching, no fold on a refined level but a symmetry plane or
   the r-z axis, one region per level, and no same-level
@@ -1909,12 +1922,11 @@ Configurations rejected at setup, and the reason:
 
 ## Open work
 
-The open items are in [ROADMAP.md](ROADMAP.md): N23 for refinement of an
-r-z run onto its axis and symmetry plane, A10 for a level reaching every
-domain boundary, A13 for the remaining metrics and layouts, S15 for a refined
-run across many nodes, S8 for rebalancing, migration and the device backend
-below level 1 and for multiblock geometry beyond the slab layout, and S1–S4
-for the target-machine device campaign, the compact-solve and transfer
+The open items are in [ROADMAP.md](ROADMAP.md): A10 for a level reaching
+every domain boundary, A13 for the remaining metrics and layouts, S15 for a
+refined run across many nodes, S8 for rebalancing, migration and the device
+backend below level 1 and for multiblock geometry beyond the slab layout, and
+S1–S4 for the target-machine device campaign, the compact-solve and transfer
 scaling limits, the production tile and ownership cost studies and the
 mixed-precision policy.
 

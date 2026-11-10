@@ -23,11 +23,10 @@ _ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
 # Under `interface_flux = :ghost` with the artificial properties on, an
 # interface dimension carries the remainder F − f in `ghost_flux` and
 # differences the whole flux through the gradient plans in one solve; the
-# level's records fill its ghost layers at a same-level end. The divergence
-# plans' one-sided rows, a second solve, took the remainder before, at an
-# interface order near 3 against 6 here. Test/bench toggle, read at
-# construction (allocation) and at every right-hand side; `false` restores
-# the second solve.
+# level's records fill its ghost layers at a same-level end. Test/bench
+# toggle, read at construction (allocation) and at every right-hand side;
+# `false` differences the remainder through the divergence plans' one-sided
+# rows instead, a second solve, at an interface order near 3 against 6 here.
 const GHOST_FLUX_REMAINDER = Ref(true)
 
 # With `GHOST_FLUX_REMAINDER` on, the dimensions with a coarse-fine end too,
@@ -1156,31 +1155,38 @@ end
 # primitives: at an interface end those ghosts hold the neighbour's state as
 # of the current stage (the same-level ghost refill, or the coarse-fine shell
 # imposed at the stage time), so the gradient plans' interface rows, which
-# read ghost layers, apply to it. The molecular flux (viscous stress,
-# conduction and species diffusion) needs gradients beyond the block. Its
-# interior values go into the patch's `ghost_flux` array here, and its ghost
-# values enter afterwards, once every patch of the level has evaluated
-# (`_level_ghost_fluxes!`): at a same-level face the neighbour's own interior
-# values arrive through the level's flux records, and at a coarse-fine face
-# they are evaluated from the shell's gradient ring. The ghost-differenced
-# flux of a viscous run is therefore assembled and solved there, once, over
-# the whole block; the right-hand side here takes only the remainder. What
-# the ghost fluxes do not cover (the artificial fluxes and the wall
-# corrections) keeps the one-sided rows of `div_plans`. Without molecular
-# transport both solves run here. The split costs one pointwise pass per
-# component and interface dimension and, where a remainder exists, a second
-# line solve; the molecular part adds one pass over all interface dimensions
-# and one halo exchange per dimension. It allocates nothing beyond the
-# `ghost_flux` arrays sized at construction; `tmp_b`, `tmp_a` and `sensor_sp`
-# are its scratch.
+# read ghost layers, apply to it. The rest of the assembled flux has no
+# ghost values of its own. With the artificial properties on, the default
+# (`_remainder_ghosted`), its interior values, the remainder F − f of the
+# molecular and artificial fluxes and the wall corrections, go into the
+# patch's `ghost_flux` array here, and its ghost values enter afterwards,
+# once every patch of the level has evaluated (`_level_ghost_fluxes!`): at a
+# same-level face the neighbour's own interior values arrive through the
+# level's flux records, and at a coarse-fine face they are extrapolated from
+# the interior along the line (`_extrapolate_coarse_fine!`). The whole flux
+# is then differenced through the gradient plans there, in one line solve
+# per component and interface dimension, and the right-hand side here takes
+# at most the pressure gradient (`_pressure_gradient`). With the artificial
+# properties off (or `GHOST_FLUX_REMAINDER` off), `ghost_flux` holds the
+# molecular flux alone, its coarse-fine ghost values evaluated from the
+# shell's gradient ring, and a remainder left beside it (the wall
+# corrections) keeps the one-sided rows of `div_plans` in a second line
+# solve here; without molecular transport as well, every solve runs here.
+# The remainder costs one pointwise pass per component and interface
+# dimension and the halo exchange, records and extrapolation of `ghost_flux`;
+# the molecular part adds one pass over all interface dimensions. It
+# allocates nothing beyond the `ghost_flux` arrays sized at construction;
+# `tmp_b`, `tmp_a` and `sensor_sp` are its scratch.
 #
 # On the axisymmetric cylindrical metric the divergence along `d` is
-# inv_J·D(A_d F_d), and both parts carry the product: A_d(F − P) through the
-# divergence plans and A_d P through the gradient plans, each scaled by inv_J
-# at the interior points. The geometry arrays are analytic over the padded
-# extent, so A_d is exact on the ghost layers of an interface end. The radial
-# momentum's pressure term is ∂p/∂r through the gradient plans, from the
-# pressure's own ghosts, and the flux it leaves carries no pressure.
+# inv_J·D(A_d F_d), and every part carries the product: A_d P through the
+# gradient plans and, where the divergence plans take a remainder, A_d(F − P)
+# through them, each scaled by inv_J at the interior points; with the
+# remainder in `ghost_flux`, the whole A_d F goes through the gradient plans.
+# The geometry arrays are analytic over the padded extent, so A_d is exact on
+# the ghost layers of an interface end. The radial momentum's pressure term
+# is ∂p/∂r through the gradient plans, from the pressure's own ghosts, and the
+# flux it leaves carries no pressure.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline function _interface_dim(solver::SolverLike, d::Int)
@@ -1529,7 +1535,8 @@ end
 
 # Whether dimension `d` takes its whole flux through the gradient plans, the
 # remainder F − f carried in `ghost_flux` (`GHOST_FLUX_REMAINDER`): an
-# interface dimension whose interface ends are all same-level.
+# interface dimension, one with a coarse-fine end only under
+# `GHOST_REMAINDER_EXTRAPOLATE`.
 function _remainder_ghosted(solver::SolverLike, d::Int)
     _ghost_remainder(solver) || return false
     solver.decomp.active[d] && _interface_dim(solver, d) || return false
@@ -1622,7 +1629,10 @@ end
 # molecular flux of every component along every interface dimension
 # (`_molecular_ghost_flux!`), which the conserved-component loop of
 # `compute_rhs!` reaches before any other. With molecular transport the
-# second solve waits for phase two, whose ghost layers of `G` it reads.
+# second solve waits for phase two, whose ghost layers of `G` it reads. On a
+# dimension whose remainder `G` carries (`_remainder_ghosted`, the default
+# with the artificial properties on) neither runs here: only the pressure
+# gradient is taken, and the whole flux waits for phase two.
 function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     decomp = solver.decomp
     eq = solver.equations
@@ -1928,7 +1938,8 @@ function _coarse_fine_ghost_fluxes!(solver::SolverLike, lt, scratch, Q)
 end
 
 # dQ[:, c] -= D_ext(P) along every interface dimension, P the ghost-differenced
-# flux with the molecular part read from `ghost_flux`, ghost layers included.
+# flux with the molecular part, or the whole remainder, read from `ghost_flux`,
+# ghost layers included.
 # Collective over the patch's communicator.
 function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
     eq = solver.equations

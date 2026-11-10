@@ -98,7 +98,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # with one-sided rows (`div_plans`); `:ghost` differences the inviscid
     # flux through the end with the gradient plans' interface rows, reading
     # inviscid fluxes evaluated on the exchanged or imposed ghost state, and
-    # the remainder of the flux through `div_plans`.
+    # with the artificial properties on the remainder of the flux with it,
+    # from its ghost values in `ghost_flux` (rhs.jl); with them off the
+    # remainder beside the molecular flux goes through `div_plans`.
     interface_flux::Symbol
     schemes::SchemeSettings                 # construction record; see above
     # The azimuthal mode truncation table (modes.jl): read by `max_rate` and

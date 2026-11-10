@@ -18,10 +18,10 @@
 # each rank to exactly one patch's communicator, ranks in proportion to patch
 # volume, except in a serial run where the one rank advances every patch in
 # sequence. Patch interfaces are node-coincident (abutting patches share the
-# interface plane) and are coupled by three mechanisms, all between stages and
-# never inside a per-patch RHS evaluation (a shared rank advances its patches
-# sequentially, so cross-patch communication inside compute_rhs! would wait on
-# work that has not run yet):
+# interface plane) and are coupled by three mechanisms, none of which
+# communicates inside one patch's RHS evaluation (a shared rank advances its
+# patches sequentially, so cross-patch communication inside compute_rhs! would
+# wait on work that has not run yet):
 #
 #   1. `exchange_patch_ghosts!` copies each patch's interface ghost layers from
 #      the abutting patch's interior. The ghosts carry conserved state; every
@@ -31,20 +31,33 @@
 #      couples no ghost unknown (`interface_closures` in kernels.jl); whether
 #      their right-hand sides read the exchanged ghosts (`:extended`) or stay
 #      one-sided (`:onesided`) is the Solver's `interface_rhs` setting. The
-#      flux divergence always keeps the scheme's own one-sided closures: ghost
-#      FLUXES would require a second communication phase inside the RHS, which
-#      the sequential-patch constraint above forbids.
+#      flux divergence through the face follows `interface_flux`. Under
+#      `:ghost`, the default, the inviscid flux is evaluated on the exchanged
+#      ghost state and differenced through the face with the gradient plans'
+#      interface rows. The rest of the flux (the molecular and, with the
+#      artificial properties on, the artificial part and the wall
+#      corrections) takes as ghost values the neighbour's interior fluxes,
+#      which move in a second phase that runs once every patch of the level
+#      has evaluated its right-hand side (`_level_ghost_fluxes!`, over the
+#      level's flux records); the ghost-differenced solve is taken there.
+#      With the artificial properties off, a remainder beside the molecular
+#      flux keeps the one-sided divergence rows (`div_plans`), and a run with
+#      no molecular transport either takes every solve inside its right-hand
+#      side. `:closure` keeps those rows for the whole flux.
+#      The split is described in rhs.jl under "The flux divergence through
+#      interface ends".
 #   3. `average_shared_planes!` replaces both patches' copies of each shared
 #      interface-plane node by their mean after every RK stage, removing the
 #      drift mode between the two solves.
 #
-# The current layout generator tiles the domain into slabs along a single
-# dimension (`patch_grid` with one entry > 1). That keeps every interface's
-# transverse extent equal to the full domain width, so diagonal patch
-# adjacency does not arise; general patch grids extend the same record
-# machinery with corner exchanges and are future work, as is patching across a
-# coordinate fold (constraint 4 of reference/AMR_GPU.md; `Solver` rejects
-# both).
+# The layout generator tiles the domain into slabs along a single dimension
+# (`patch_grid` with one entry > 1). That keeps every interface's transverse
+# extent equal to the full domain width, so diagonal patch adjacency does not
+# arise. `Solver` rejects a `patch_grid` splitting more than one dimension and
+# a patched run with any fold, a coordinate fold or a symmetry plane (a
+# patched run takes `SlipWallBC` at the plane's face). A tiled refined level
+# has full 3-D adjacency, its same-level records applied in dimension order
+# so that edges and corners are reached (`Level` in levels.jl).
 
 # --- Ownership and freshness --------------------------------------------------
 #
@@ -147,9 +160,11 @@ pass may belong to another patch of the same extent. `gradients_filled_by` and
 `save_vtk` and `field_snapshot` recompute the fields of each patch before
 reading them. A direct property read such as `ps.sensor` is not checked.
 
-`pairbuf`/`pairout` stay on the patch instead: their allocation follows that
-patch's coordinate folds, and a fold is rejected on every patched and refined
-run, so they are never duplicated across a rank's patches.
+`pairbuf`/`pairout` stay on the patch instead: they are allocated only for a
+paired fold (the resolved-θ axis, the spherical origin and poles), which is
+accepted only on a run of one patch, so they are never duplicated across a
+rank's patches. Neither is used by the self-paired folds of a refined patch,
+at a symmetry plane or the r-z axis, and such a patch holds both empty.
 """
 struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     grad_u::Matrix{A}
