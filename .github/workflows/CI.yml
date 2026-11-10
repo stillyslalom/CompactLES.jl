@@ -12,6 +12,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+# Every job restores a depot from julia-actions/cache, and the hosted runners
+# are of several CPU models (Zen 3, 4 and 5, Ice Lake, Emerald Rapids and
+# Granite Rapids). A package image compiled for the native CPU uses features
+# the other models lack, so a restored image was rejected whenever a job ran
+# on a different model from the one that built it, and the job rebuilt the
+# package and its dependencies, on the documentation job the whole Makie
+# stack. With JULIA_CPU_TARGET set, the images are compiled instead for the
+# AVX2 target of Julia's own system image, which each of those models
+# supports; Julia detects no rdrnd on any of them, hence `-rdrnd`. A single
+# target is compiled once, as the native one is, and image code uses no
+# AVX-512 on the models that have it. Code compiled during a run is still
+# compiled for the runner's CPU.
+env:
+  JULIA_CPU_TARGET: "haswell,-rdrnd"
+
 jobs:
   test:
     name: Julia ${{ matrix.version }} - serial
@@ -109,12 +124,9 @@ jobs:
               force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # Whether the restored depot holds a loadable image of this source, with
-      # the CPU name and the loader's reason for each CompactLES image it
-      # rejects. On runs whose source had not changed, the eight-rank job
-      # reused its cached image every time and this job rebuilt its own in
-      # four of six, at 7 min each. The image limit does not account for it:
-      # an eviction removes the least recently loaded image, and the image the
-      # previous run built is the most recently loaded one.
+      # the runner's CPU name and the loader's reason for each CompactLES
+      # image it rejects. No step before this one builds an image, so the
+      # report describes what the cache restored.
       - name: Report the restored package image
         env:
           JULIA_DEBUG: loading

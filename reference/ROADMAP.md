@@ -343,15 +343,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   `RANK_SHAPE_PHASES` in `test/mpi_tests.jl` (`rank_shape=true`), and the
   uniform half of the phase change at eight ranks, the C10 two-slab device
   layout and the Float32 NASA-9 device run are cut (commit `14c4c15`).
-  Remaining:
-  1. The two-rank job rebuilt its image on 4 of 6 runs with unchanged
-     source, about 7 min each, while the eight-rank job reused its own.
-     Read the "Report the restored package image" step and fix the cause;
-     if it is the runner CPU, the fix is `JULIA_CPU_TARGET`. The image
-     limit stays at Julia's default of 10, least-recently-used, one image
-     per source tree.
-  2. Trim the step-bound eight-rank phases and the serial Julia 1 and pre
-     jobs.
+  A restored image was rejected whenever the runner's CPU model differed
+  from the one that built it, in every cached job; the images are now
+  compiled for the system image's AVX2 target (`JULIA_CPU_TARGET` in
+  `CI.yml`). A new Julia release and a cache unused for seven days are
+  still followed by a rebuild.
+  Remaining: trim the step-bound eight-rank phases and the serial Julia 1
+  and pre jobs.
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
 
