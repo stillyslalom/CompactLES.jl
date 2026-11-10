@@ -46,7 +46,7 @@ using CompactLES: compute_rhs!, apply_bcs!, xcoord
     @test axis <= 2 * inner
 end
 
-@testset "spherical: analytic cotθ/r, and a walled θ-resolved shell at rest" begin
+@testset "spherical: analytic cotθ/r, and a state at rest with θ walled or collapsed" begin
     # The velocity-gradient correction and the momentum sources read one
     # analytic cotθ/r. A discrete value in its place, the θ derivative of the
     # area factor, deviates from it at the order of the θ closure rows, and in
@@ -65,6 +65,18 @@ end
     e_an = maximum(abs(solver.cot_over_r[i+o1, j+o2, 1+o3] / ana(i, j) - 1)
                    for i in 1:nx, j in 1:ny)
     @test e_an == 0
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+    apply_bcs!(solver, Q)
+    dQ = zero(Q); compute_rhs!(solver, Q, dQ)
+    @test maximum(abs, dQ) < 1e-12
+    # θ collapsed off the equator, where cotθ/r is of order one: no θ
+    # divergence is taken, so the θ-momentum's source (cotθ/r)Π_φφ carries no
+    # pressure, and the state at rest holds as it does at θ = π/2.
+    solver = Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    origin=(0.2, π/2 - 0.5, 0.0), metric=SphericalMetric(),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)

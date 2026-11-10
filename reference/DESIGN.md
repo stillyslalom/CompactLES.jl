@@ -590,11 +590,14 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
    difference amplifies a grid-scale acoustic mode at the axis and the
    origin (`_radial_pressure_gradient`). The spherical θ-momentum takes
    `inv_h₂ · ∂p` along θ for the same reason at the poles
-   (`_polar_pressure_gradient`).
+   (`_polar_pressure_gradient`). A stretched cylindrical radial grid with θ
+   resolved also takes `inv_h₁ · ∂p`, since there the area form does not
+   preserve a uniform state.
 9. **Momentum sources** (`add_metric_sources!`) add the algebraic ∇·Π terms that
-   appear in curvilinear coordinates (e.g. +Π_θθ/r in cylindrical), without the
-   pressure where the momentum they enter takes its pressure term as a
-   gradient.
+   appear in curvilinear coordinates (e.g. +Π_θθ/r in cylindrical). A source
+   carries the pressure only where the momentum it enters takes the area form
+   along a resolved dimension, which leaves the cylindrical Π_θθ/r with θ
+   resolved on an unstretched radial grid.
 10. **Boundary corrections.** For every face, `correct_rhs!` applies any
     characteristic (NSCBC) correction to the RHS.
 11. **Explicit sources.** `add_sources!` walks the concrete source tuple at the
@@ -980,39 +983,66 @@ component takes its pressure in one of two forms (`_pressure_gradient` in
 `metric.jl` chooses):
 
 - *As a gradient*, `inv_h_d·D_ξd(p)`, with the metric sources carrying Π
-  without the pressure: the radial momentum wherever r is resolved, under
-  `SphericalMetric` and under `CylindricalMetric` with θ collapsed, and the
-  spherical θ-momentum with θ resolved. Every interior, closure and fold row
-  annihilates a constant to round-off, and Π without the pressure vanishes
-  with the velocity, so each term is zero on its own.
+  without the pressure: the radial momentum wherever r is resolved under
+  `SphericalMetric`, and under `CylindricalMetric` with θ collapsed or with
+  the radial grid stretched, and the spherical θ-momentum with θ resolved.
+  Every interior, closure and fold row annihilates a constant to round-off,
+  and Π without the pressure vanishes with the velocity, so each term is zero
+  on its own.
 - *Through the area-weighted divergence*, `inv_J·D_ξd(A_d·p)`, less the
   pressure part of the source. In all but one case A_d does not vary along d:
   on a Cartesian grid, stretched or not, A_d is the product of the other
   directions' mapping Jacobians, and the same holds for the cylindrical θ-
   and z-momenta and the spherical φ-momentum, which carry no pressure source.
   The derivative is again that of a constant along the line. The exception is
-  the cylindrical radial momentum with θ resolved, where A₁ = r and the source
-  p/r balances `inv_J·D_ξ1(r)·p`. On an unstretched radial grid the balance
-  holds to round-off, since every row differentiates a linear function
-  exactly, the axis fold included (r is odd there, so its mirror continues the
-  line). On a stretched radial grid the compact derivative of the mapping
-  x(ξ) differs from x′(ξ) by the scheme's truncation error, and a residual of
-  that order remains in the radial momentum; no freestream test covers that
-  configuration.
+  the cylindrical radial momentum with θ resolved on an unstretched radial
+  grid, where A₁ = r and the source p/r balances `inv_J·D_ξ1(r)·p` to
+  round-off, since every row differentiates a linear function exactly, the
+  axis fold included (r is odd there, so its mirror continues the line). On a
+  stretched radial grid the compact derivative of the mapping r(ξ) differs
+  from the r′(ξ) in `inv_J` by the scheme's truncation error, and the
+  balance would leave a residual of that order in the radial momentum; that
+  configuration takes the gradient form instead
+  (`_radial_pressure_gradient`).
 
-A collapsed dimension takes no derivative, so the pressure part of a source
-whose area factor varies along it has no partner: a collapsed θ under
-`SphericalMetric` leaves (cotθ/r) p on the θ-momentum, at round-off only at
-θ = π/2, where the radial cases place it, and a collapsed r leaves the
-radial momentum its source s p/r (s = 1 cylindrical, 2 spherical).
+A collapsed dimension takes no derivative. For fields constant along it, the
+divergence along it reduces to its area term (1/J)(∂A_d/∂ξ_d)·F_d, which is
+nonzero for a collapsed r (s/r times the flux, s = 1 cylindrical and 2
+spherical) and for a collapsed spherical θ (cotθ/r times the flux), and zero
+for a collapsed cylindrical θ or spherical φ, whose area factors do not vary
+along them. The solver omits that term for every flux. Its pressure part and
+the pressure part of the source cancel analytically, so a source on a
+collapsed dimension carries Π without the pressure and the two are omitted
+together; on the spherical metric no source carries the pressure. A uniform
+state at rest then gives a right-hand side at round-off in every metric,
+whichever dimensions are collapsed.
+
+A collapsed r or a collapsed spherical θ does not carry the rest of that
+term: the mass and energy fluxes along d, and the dynamic and viscous parts
+of the momentum fluxes through d, Π_dd − p on the d-momentum and Π_da on the
+others. Such a run is consistent only while those fluxes vanish, which
+requires an inviscid flow with no velocity along d. The sources keep the
+dynamic and viscous parts of Π_θθ, Π_φφ and Π_φθ, and they drive a velocity
+along d from a velocity across it: ρ(u_θ² + u_φ²)/r on the radial momentum
+with r collapsed, (cotθ/r)ρu_φ² on the θ-momentum with θ collapsed, and the
+viscous stresses in either. The artificial viscosities count as viscous
+stresses here, so a radial shock on a θ-collapsed line off the equator drives
+u_θ through (cotθ/r)·τ_φφ. A collapsed r is therefore consistent at rest
+and, inviscid, to first order about rest in perturbations with no radial
+velocity; a spherical θ collapsed off the equator is consistent for an
+inviscid radial flow, which is the flow the same grid carries at θ = π/2.
+The cylindrical r-z and r-θ planes, the spherical r-θ plane and the spherical
+radial line at θ = π/2, where cotθ is zero to round-off, omit nothing.
 
 The sources weight the remaining parts of Π_φφ and Π_φθ by the analytic cotθ/r,
 the array `metric_correct_gradients!` reads for the curvature terms of ∇u:
 they are pointwise products and balance no discrete divergence. The freestream
-testsets of `test/serial_suite.jl` (every metric and fold),
-`test/seam_tests.jl` (a θ-resolved shell closed by walls) and
-`test/mpi_tests.jl` (a fold's antipodal partner on another rank) check a
-uniform state to round-off.
+testsets of `test/serial_suite.jl` (every metric and fold, the stretched
+annulus, and r collapsed on both curvilinear metrics), `test/seam_tests.jl`
+(a θ-resolved shell closed by walls, and θ collapsed off the equator),
+`test/float32_validation.jl`, `test/device_tests.jl` and `test/mpi_tests.jl`
+(a fold's antipodal partner on another rank, and the four collapsed and
+stretched configurations decomposed) check a uniform state to round-off.
 
 ## Coordinate-singularity folds
 

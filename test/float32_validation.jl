@@ -39,6 +39,27 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
            metric=SphericalMetric(),
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
            extra=(;)),
+        (; n_global=(16, 12, 1),
+           L_domain=(one(T), T(2π), one(T)),
+           metric=CylindricalMetric(),
+           bcs=((SlipWallBC(), SlipWallBC()), per, per),
+           extra=(; origin=(T(0.2), zero(T), zero(T)),
+                    stretch=(sine_cluster(T(0.2), T(1.2), T(0.5), T(0.4)),
+                             nothing, nothing))),
+        (; n_global=(1, 12, 1),
+           L_domain=(one(T), T(2π), one(T)),
+           metric=CylindricalMetric(),
+           bcs=(per, per, per), extra=(; origin=(one(T), zero(T), zero(T)))),
+        (; n_global=(1, 12, 1),
+           L_domain=(one(T), T(π / 2), one(T)),
+           metric=SphericalMetric(),
+           bcs=(per, (SlipWallBC(), SlipWallBC()), per),
+           extra=(; origin=(one(T), T(π / 4), zero(T)))),
+        (; n_global=(16, 1, 1),
+           L_domain=(one(T), one(T), one(T)),
+           metric=SphericalMetric(),
+           bcs=((SlipWallBC(), SlipWallBC()), per, per),
+           extra=(; origin=(T(0.2), T(π / 2 - 0.5), zero(T)))),
     ]
     residuals = T[]
     for cs in cases
@@ -65,12 +86,13 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
     # constant in floating point; the `:neutral3` rows carry thirds and
     # leave the round-off of their products, 2.2e-6 here, the constant
     # annihilation residual of reference/CALIBRATION_APPENDIX.md. The
-    # curvilinear cases reach the Float32 roundoff floor: the spherical origin
-    # and poles case above (24 × 12 × 12, at rest, Float32) measured 2.4e-6,
-    # all of it in the radial momentum.
+    # curvilinear cases reach the Float32 roundoff floor, all of it in one
+    # momentum component: the largest residual of the matrix, 8.6e-6, is the
+    # walled annulus with θ resolved (24 × 12 × 12), and the bound is about
+    # five times that.
     @test residuals[1] == zero(T)
     @test residuals[2] < T(1e-5)
-    @test maximum(residuals) < T(2e-4)
+    @test maximum(residuals) < T(4e-5)
 end
 
 function _f32_closed_derivative_error(N; spherical=false, T=Float32,

@@ -17,8 +17,9 @@
 # ω = π for the C6 rows. The divergence of the mass and energy fluxes then
 # pairs with a gradient that is not its adjoint, and the axis can feed energy
 # into grid-scale acoustics at a rate of order c/r. The package takes D(p) on
-# θ-collapsed r-z and under the spherical metric, and the area form on a
-# resolved cylindrical θ; at the spherical origin that form is
+# θ-collapsed r-z, on a stretched cylindrical radial grid and under the
+# spherical metric, and the area form only on a resolved cylindrical θ over an
+# unstretched radial grid. At the spherical origin the area form would be
 # (1/r²)D(r² p) − 2p/r, and the spherical θ-momentum takes (1/r)D(p) in
 # place of the same form about the poles. This script linearizes the
 # map from the state after one step to the state `nmap` steps later by central

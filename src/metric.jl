@@ -290,18 +290,30 @@ end
 # metric divergence of the fluxes. Π_ab = ρ u_a u_b + p δ_ab − τ_ab is
 # reconstructed pointwise from the stored primitives and gradients.
 #
-# On the spherical metric a uniform state at rest leaves each momentum
-# component at zero on its own, with no cancellation between a flux divergence
-# and a source. The radial momentum takes its pressure as ∂p/∂r where r is
-# resolved and the θ-momentum takes it as (1/r)∂p/∂θ where θ is resolved (the
-# two rules below), each the compact derivative of a constant, and the sources
-# then carry Π without the pressure, which vanishes with the velocity; the
-# φ-momentum's flux A_φ p does not vary along φ. What the sources weight by
-# cotθ/r, the dynamic and viscous parts of Π_φφ and Π_φθ, are pointwise
-# products that balance no discrete divergence, so they take the analytic
-# `cot_over_r`, the array the curvature terms of ∇u read. A weight built from
-# the discrete θ derivative of A_θ differs from it at the order of the θ
-# closure rows and gives a steady rotating state no smaller truncation error.
+# A source carries the pressure only where the area-weighted divergence of the
+# same momentum along the same dimension carries it as well, since for a
+# uniform state the two pressure terms cancel each other and neither vanishes
+# alone. The one such source is the cylindrical Π_θθ/r on the radial momentum
+# where that momentum takes the area form (`_cylindrical_source_pressure`);
+# every other source carries Π without the pressure. Where a momentum takes
+# its pressure as a gradient (the rules below), the compact derivative of a
+# constant pressure is zero to round-off with no source to balance it. Along a
+# collapsed dimension no derivative is taken, so the divergence's area term,
+# (1/J)(∂A_d/∂ξ_d) F_d for a flux constant along the dimension, is absent for
+# every flux. Its pressure part, s p/r for a collapsed r (s = 1 cylindrical,
+# 2 spherical) and (cotθ/r) p for a collapsed spherical θ, equals the
+# pressure part of the source, and the two are left out together. A uniform
+# state at rest therefore leaves each momentum component at zero in every
+# metric, whichever dimensions are collapsed.
+#
+# On the spherical metric r and θ each take the gradient form or are
+# collapsed, so no spherical source carries the pressure; the φ-momentum's
+# flux A_φ p does not vary along φ. What the sources weight by cotθ/r, the
+# dynamic and viscous parts of Π_φφ and Π_φθ, are pointwise products that
+# balance no discrete divergence, so they take the analytic `cot_over_r`, the
+# array the curvature terms of ∇u read. A weight built from the discrete θ
+# derivative of A_θ differs from it at the order of the θ closure rows and
+# gives a steady rotating state no smaller truncation error.
 
 add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 
@@ -321,9 +333,10 @@ end
 
 # Whether the radial momentum carries its pressure term as the radial
 # derivative ∂p/∂r rather than as the area-weighted divergence
-# (1/r^s)∂(r^s p)/∂r less the source s p/r: on `CylindricalMetric` with θ
-# collapsed (s = 1) and on `SphericalMetric` with r resolved (s = 2). The two
-# agree analytically. Discretely, on a mode of wavenumber ω they differ by
+# (1/r^s)∂(r^s p)/∂r less the source s p/r: on `SphericalMetric` with r
+# resolved (s = 2), and on `CylindricalMetric` with r resolved and either θ
+# collapsed or the radial grid stretched (s = 1). The two agree analytically.
+# Discretely, on a mode of wavenumber ω they differ by
 # (1 − k'(ω)) s p/r, k' the derivative of the scheme's modified wavenumber,
 # which vanishes on resolved modes and is 16/3 at ω = π for the sixth-order
 # rows. The divergence of the mass and energy fluxes is then not the negative
@@ -335,10 +348,27 @@ end
 # conservation; mass and energy keep the divergence form. The measurements are
 # in reference/CALIBRATION_APPENDIX.md under "Grid-scale growth at the r-z
 # axis". A setup constant, identical on every rank.
+#
+# A stretched radial grid with θ resolved takes the gradient form because the
+# area form does not hold a uniform state at rest there: inv_J ∂(r p)/∂ξ is
+# p D_ξ(r)/(r r′(ξ)), with the analytic mapping Jacobian r′(ξ) in inv_J, and
+# the compact derivative of a nonlinear mapping r(ξ) differs from r′(ξ) by the
+# scheme's truncation error, so the divergence does not cancel the source p/r.
+# An unstretched r is linear in ξ, which every row differentiates exactly, the
+# axis fold included (r is odd there), and the θ-resolved cylindrical grid
+# keeps the area form in that case.
 _radial_pressure_gradient(solver) =
     solver.decomp.active[1] &&
     (solver.metric isa SphericalMetric ||
-     solver.metric isa CylindricalMetric && !solver.decomp.active[2])
+     solver.metric isa CylindricalMetric &&
+     (!solver.decomp.active[2] || solver.stretch[1] !== nothing))
+
+# Whether the cylindrical source Π_θθ/r on the radial momentum carries the
+# pressure: where r is resolved and the radial momentum takes the area form,
+# whose pressure term inv_J ∂(r p)/∂ξ₁ the source's p/r balances. With r
+# collapsed neither term is present (the note above the momentum sources).
+_cylindrical_source_pressure(solver) =
+    solver.decomp.active[1] && !_radial_pressure_gradient(solver)
 
 # Whether the spherical θ-momentum carries its pressure term as (1/r)∂p/∂θ
 # rather than as (1/(r sinθ))∂(sinθ p)/∂θ less the source (cotθ/r) p: on
@@ -366,7 +396,8 @@ _polar_pressure_gradient(solver) =
         mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir = inv_r[I]
         # +Π_θθ / r on radial momentum, −Π_θr / r on the azimuthal one; Π_θθ
-        # without the pressure where the radial momentum takes ∂p/∂r.
+        # without the pressure where the radial momentum takes ∂p/∂r or r is
+        # collapsed.
         dQ[I, m1] += ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2,
                               with_p)
         dQ[I, m2] -= ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1)
@@ -382,29 +413,26 @@ function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
                dQ, solver.field_tuples.grad_u, solver.transport, solver.eos,
                solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.inv_r, m[1], m[2], !_radial_pressure_gradient(solver),
+               solver.p, solver.inv_r, m[1], m[2], _cylindrical_source_pressure(solver),
                o1, o2, o3)
     return solver
 end
 
 @inline function _metric_src_sph_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
                                         rho, u, v, w, p, inv_r, cot_over_r,
-                                        m1, m2, m3, with_pr, with_pθ, o1, o2, o3,
-                                        i, j, k)
+                                        m1, m2, m3, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir  = inv_r[I]
         ctr = cot_over_r[I]
-        # Π_θθ and Π_φφ on the radial momentum without the pressure where it
-        # takes ∂p/∂r, and Π_φφ on the θ-momentum without it where that takes
-        # (1/r)∂p/∂θ.
-        Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2, with_pr)
-        Pφφ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3, with_pr)
-        Pφφθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3, with_pθ)
+        # Π_θθ and Π_φφ without the pressure, on the radial momentum and on
+        # the θ-momentum alike (the note above the momentum sources).
+        Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2, false)
+        Pφφ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3, false)
         dQ[I, m1] += ir * (Pθθ + Pφφ)
         dQ[I, m2] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1) +
-                     ctr * Pφφθ
+                     ctr * Pφφ
         dQ[I, m3] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 1) -
                      ctr * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 2)
     end
@@ -420,7 +448,6 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
                solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, solver.cot_over_r, m[1], m[2], m[3],
-               !_radial_pressure_gradient(solver), !_polar_pressure_gradient(solver),
                o1, o2, o3)
     return solver
 end

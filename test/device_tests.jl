@@ -210,33 +210,50 @@ end
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
 
-    # Spherical origin + poles freestream through the device plans: the radial
-    # and polar pressure gradients cross both paired folds, and every other
-    # flux of the state at rest is zero, so the right-hand side is the compact
-    # derivative of a constant on either path and the two agree bitwise.
-    function sph(backend)
-        s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
-                   bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-                   metric=SphericalMetric(), backend=backend,
+    # Freestream through the device plans. On the spherical origin and poles
+    # the radial and polar pressure gradients cross both paired folds; on a
+    # stretched annulus the radial momentum takes its pressure gradient along
+    # the stretched line; with θ collapsed off the equator the θ-momentum's
+    # source carries no pressure. Every other flux of the state at rest is
+    # zero, so the right-hand side is the compact derivative of a constant on
+    # either path and the two agree bitwise.
+    walls = (SlipWallBC(), SlipWallBC())
+    configs = [
+        (; n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
+           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+           metric=SphericalMetric()),
+        (; n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0), origin=(0.2, 0.0, 0.0),
+           bcs=(walls, per, per), metric=CylindricalMetric(),
+           stretch=(sine_cluster(0.2, 1.2, 0.5, 0.4), nothing, nothing)),
+        (; n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=(0.2, π/2 - 0.5, 0.0),
+           bcs=(walls, per, per), metric=SphericalMetric()),
+    ]
+    function rest(backend, config)
+        s = Solver(; config..., backend=backend,
                    art=ArtificialProperties(enabled=false),
                    transport=ConstantTransport(mu0=0.0))
         Q = allocate_state(s)
-        initialize!(s, Q, (r, θ, φ) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
         return s, Q
     end
-    s1, Q1 = sph(CPUBackend())
-    dQ1 = zero(Q1)
-    compute_rhs!(s1, Q1, dQ1)
-    s2, Q2 = sph(DeviceBackend(cpu_ka))
-    dQ2 = zero(Q2)
-    CL.FORCE_KA[] = true
-    try
-        compute_rhs!(s2, Q2, dQ2)
-    finally
-        CL.FORCE_KA[] = false
+    function compare_rest(config)
+        s1, Q1 = rest(CPUBackend(), config)
+        dQ1 = zero(Q1)
+        compute_rhs!(s1, Q1, dQ1)
+        s2, Q2 = rest(DeviceBackend(cpu_ka), config)
+        dQ2 = zero(Q2)
+        CL.FORCE_KA[] = true
+        try
+            compute_rhs!(s2, Q2, dQ2)
+        finally
+            CL.FORCE_KA[] = false
+        end
+        @test parent(dQ1) == parent(dQ2)
+        @test maximum(abs, parent(dQ1)) < 1e-12
+        return s1, Q1, s2, Q2
     end
-    @test parent(dQ1) == parent(dQ2)
-    @test maximum(abs, parent(dQ1)) < 1e-12
+    s1, Q1, s2, Q2 = compare_rest(configs[1])
+    foreach(compare_rest, configs[2:end])
 
     # The launch-path rate measurement agrees with the fused serial loop
     # bitwise: same candidates, exact max/min.

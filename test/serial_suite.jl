@@ -2210,6 +2210,21 @@ end
         (; n_global=(24, 12, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
            kw=(;)),
+        # A stretched annulus with θ resolved, where the radial momentum takes
+        # its pressure as a gradient because the compact derivative of a
+        # nonlinear r(ξ) would not balance the source p/r.
+        (; n_global=(16, 12, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+           kw=(; origin=(0.2, 0.0, 0.0),
+                 stretch=(sine_cluster(0.2, 1.2, 0.5, 0.4), nothing, nothing))),
+        # r collapsed at r = 1: no radial divergence is taken, so the radial
+        # momentum's source carries Π_θθ, and on the sphere Π_φφ, without the
+        # pressure.
+        (; n_global=(1, 12, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           bcs=per3, kw=(; origin=(1.0, 0.0, 0.0))),
+        (; n_global=(1, 12, 1), L_domain=(1.0, π/2, 1.0), metric=SphericalMetric(),
+           bcs=(per3[1], (SlipWallBC(), SlipWallBC()), per3[3]),
+           kw=(; origin=(1.0, π/4, 0.0))),
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,

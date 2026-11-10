@@ -57,18 +57,33 @@ is discretized: in spherical coordinates the discrete derivative of a sampled
 pressure divergence and its curvature source would not cancel exactly.
 
 CompactLES therefore writes the pressure term of the spherical radial and
-polar momenta, and of the radial momentum on an axisymmetric ``(r, z)`` grid,
-as a gradient, ``\partial p/\partial r`` or
-``(1/r)\,\partial p/\partial\theta``, whose discrete value on a constant is
-zero to roundoff at every node. In the other momentum equations the face-area
-factor does not vary along the derivative, except in the radial momentum of a
-cylindrical grid with a resolved angle, where it is ``r``. A compact
-derivative of a linear function is exact, so there the divergence and the
-``p/r`` source cancel to roundoff on an unstretched radial grid; a stretched
-radial grid leaves a residual of the order of the scheme's truncation error
-on the mapping. The curvature terms that remain in the momentum sources use
-the analytic ``\cot\theta/r``. The test suite checks freestream preservation
-in every metric and across MPI boundaries.
+polar momenta, and of the radial momentum on an axisymmetric ``(r, z)`` grid
+or a stretched cylindrical radial grid, as a gradient,
+``\partial p/\partial r`` or ``(1/r)\,\partial p/\partial\theta``, whose
+discrete value on a constant is zero to roundoff at every node. In the other
+momentum equations the face-area factor does not vary along the derivative,
+except in the radial momentum of an unstretched cylindrical grid with a
+resolved angle, where it is ``r``. A compact derivative of a linear function
+is exact, so there the divergence and the ``p/r`` source cancel to roundoff.
+On a stretched radial grid ``r`` is not linear in the computational
+coordinate, the cancellation would leave a residual of the order of the
+scheme's truncation error, and the gradient form is taken instead. The
+curvature terms that remain in the momentum sources use the analytic
+``\cot\theta/r``.
+
+A collapsed dimension takes no derivative. For a collapsed ``r``, and for a
+collapsed spherical ``\theta`` away from ``\pi/2``, the divergence of a flux
+through it would still contribute a curvature term, ``s/r`` (``s = 1``
+cylindrical, ``2`` spherical) or ``\cot\theta/r`` times the flux. The
+pressure parts of that term and of the momentum source cancel exactly, and
+both are left out, so a gas at rest stays at rest. The rest of the term is
+not carried, so such a grid is consistent only while the flow through the
+collapsed direction vanishes: a spherical radial line belongs at
+``\theta = \pi/2``, where the term is zero, and a collapsed ``r`` is
+consistent only at or near rest. The cylindrical ``(r, z)`` and
+``(r, \theta)`` grids and the spherical ``(r, \theta)`` grid omit nothing.
+The test suite checks freestream preservation in every metric, on these
+collapsed and stretched grids, and across MPI boundaries.
 
 ## Coordinate singularities
 

@@ -6,11 +6,13 @@
 """
 The radial momentum's pressure term, or every radial divergence, rewritten as
 a source added to the right-hand side. The package writes the pressure term of
-the radial momentum as ∂p/∂r on θ-collapsed r-z and under `SphericalMetric`,
-and as the area-weighted divergence (1/J)D(A p) less the metric source s p
-on a resolved θ, s = 1/r under `CylindricalMetric` and 2/r under
-`SphericalMetric`. Under `:areap` a run the package gives ∂p/∂r takes the
-area form, the package's before it carried ∂p/∂r; under `:gradp` the
+the radial momentum as ∂p/∂r on θ-collapsed r-z, on a stretched radial grid
+and under `SphericalMetric`, and as the area-weighted divergence (1/J)D(A p)
+less the metric source p/r only on a resolved cylindrical θ over an
+unstretched radial grid. The variants' area form subtracts s p/r, s = 1 under
+`CylindricalMetric` and 2 under `SphericalMetric`. Under `:areap` a run the
+package gives ∂p/∂r takes the area form, the package's before it carried
+∂p/∂r; under `:gradp` the
 resolved-θ axis takes ∂p/∂r; under `:areatheta` the spherical θ-momentum,
 which the package gives (1/r)∂p/∂θ, takes the area form (1/J)D(A₂ p) less
 (cotθ/r) p, the latter with cotθ/r taken as (1/J)D(A₂) through the same

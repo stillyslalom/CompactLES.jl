@@ -664,6 +664,25 @@ function test_freestream()
            n_global=(40, 16, SPLITN), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
            dims=splitdims(3), kw=(;)),
+        # The radial pressure gradient of a stretched annulus solved across
+        # ranks, and the sources of the collapsed dimensions, which carry no
+        # pressure.
+        (; name="cylindrical stretched annulus, r split",
+           n_global=(SPLITN, 12, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(1),
+           kw=(; origin=(0.2, 0.0, 0.0),
+                 stretch=(sine_cluster(0.2, 1.2, 0.5, 0.4), nothing, nothing))),
+        (; name="cylindrical r collapsed, θ split",
+           n_global=(1, SPLITN, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           bcs=per3, dims=splitdims(2), kw=(; origin=(1.0, 0.0, 0.0))),
+        (; name="spherical r collapsed, θ split",
+           n_global=(1, SPLITN, 1), L_domain=(1.0, π/2, 1.0), metric=SphericalMetric(),
+           bcs=(per3[1], (SlipWallBC(), SlipWallBC()), per3[3]), dims=splitdims(2),
+           kw=(; origin=(1.0, π/4, 0.0))),
+        (; name="spherical θ collapsed off the equator, r split",
+           n_global=(SPLITN, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=SphericalMetric(),
+           bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(1),
+           kw=(; origin=(0.2, π/2 - 0.5, 0.0))),
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
