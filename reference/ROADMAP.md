@@ -44,25 +44,62 @@ example they block is held until the item closes.
 
 ## Order of work
 
-V4 comes first: it sets the cost of every later commit. The next three are
-independent and may proceed together, subject to one heavy run at a time.
+V4 comes first: it sets the cost of every later commit. The work after it
+is ordered by the two target problems of
+[AMR_GPU.md](AMR_GPU.md#target-problems), the shock tube with a mixing
+layer and the ICF implosion, and work on the two may proceed together,
+subject to one heavy run at a time.
 
 1. **V4** trims the gate and the test suite, so that a commit pays only for
    the checks its change can affect.
-2. **N4** settles `C_mu` before any external comparison: the filter fits
-   behind the α = 0.47 default were made at `C_mu = 0.002`, and V1 compares
-   the defaults.
-3. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov experiment.
-   It supplies N18's remaining reference and V2's use case.
-4. **A7** draws the material boundary and the per-component field declaration
-   before H3 adds the first new evolved field.
-5. **H3**, then **H4**: two temperatures with an ionization closure and the
-   electron–ion exchange, then electron and ion conduction through the implicit
-   stage. H5's table readers are delivered; its adapters follow A7.
-6. **N22** sharpens the species channel's interfaces. The flux is delivered
+2. The shock tube with a mixing layer:
+   1. **N4** settles `C_mu` on the cases its own text names: the
+      one-dimensional battery and a shocked three-dimensional case, for
+      which a reshocked interface is a candidate, since after reshock the
+      mixing layer's growth depends on the small scales; or the
+      decaying-turbulence case rerun under the default filter and
+      `pyranda_filter()`. The filter fits behind the α = 0.47 default were
+      made at `C_mu = 0.002`, so a change to `C_mu` reopens them.
+   2. **V1** runs the Pyranda comparisons and one Richtmyer–Meshkov
+      experiment on the defaults as N4 sets them. Its experiment
+      comparison lies in the single-shock window, where the growth does
+      not depend on `C_mu`, so V1 compares the defaults but cannot decide
+      N4.
+   3. **N18**'s remaining reference and **V2**'s use case, both taken
+      from V1.
+3. The indirect-drive capsule, to A21's gate. A capsule run combines
+   mechanisms that exclude one another today and meets two defects of a
+   refined run, each recorded in the text of one of the first three items
+   below:
+   1. **N32**'s remaining configurations, in its own order, for the
+      positivity limiter on the capsule's levels: stacked device tiles and
+      tiles on the radial grids, then the remaining metrics and the
+      tabulated and NASA-9 equations of state.
+   2. **A20**, the conservative coarse-fine correction under the limiter
+      and on device storage; it runs today on host storage without the
+      limiter.
+   3. **A17** items 1 and 4, the root step set by covered nodes and the
+      tiles near the r-z axis, which A21 items 1 and 2 cite as its
+      blockers.
+
+   Then the physics:
+
+   4. **A7** draws the material boundary and the per-component field
+      declaration before H3 adds the first new evolved field.
+   5. **H5**'s adapters follow A7 (its table readers are delivered), for
+      **A22** items 1 and 2: the ablation pressure tied to the ablation
+      rate by the rocket relation, and a real carbon equation of state,
+      both of which A22 places before a measured rate replaces its fitted
+      one.
+   6. **H3** adds two temperatures with an ionization closure and the
+      electron–ion exchange, after A7, on whose contracts it depends.
+   7. **H10**, then **H4**: H4's electron and ion conduction run through
+      the implicit stage, and by H10's text the refined, decomposed
+      capsule run cannot use that stage until H10 carries it there.
+4. **N22** sharpens the species channel's interfaces. The flux is delivered
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
-7. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+5. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
@@ -518,10 +555,18 @@ promotion.
   4. Robustness: the tiled shock ends with negative internal energy at the
      axis, and the box leaves the species band after regrid checks when
      the root under-resolves the edge (A18).
-  **Gate:** on the Sod tube, the blob case and the 3-D case, the refined wall
-  below the uniform fine wall at a composite error no larger than the
-  tiles' recorded in the appendix; bit-identical numerics for any change
-  that claims to touch cost only.
+  **Gate:** the cost per point-step and the level's step count are
+  properties of the code, and the level's share of the fine grid's points
+  is set by the problem and the tagging, so the two are gated apart. On the
+  Sod tube, the blob case and the 3-D case: the level's step count at the
+  uniform fine run's, which the Sod level already takes, and the cost per
+  point-step against the fine run's below the ratio recorded in
+  [the table](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid);
+  the refined wall below the uniform fine wall only on runs whose level
+  holds a small fraction of the fine grid's points (the table's level
+  points column), as on the Sod tube and the 3-D box; a composite error no
+  larger than the tiles' recorded in the appendix; and bit-identical
+  numerics for any change that claims to touch cost only.
 
 - [ ] **A13 — Refinement on the remaining metrics and layouts.**
   N23 takes the cylindrical metric and the symmetry plane. Refinement still
