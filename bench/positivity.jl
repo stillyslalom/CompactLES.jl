@@ -16,6 +16,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
+#   julia --project=. -t 1 bench/positivity.jl part=tiledrift
 #
 # The collocated compact divergence on a closed line is a difference of face
 # fluxes under node weights W with Σ_i W_i (D f)_i = f_N − f_1: the face flux is
@@ -125,6 +126,17 @@
 #   tilecost  the same for two cases of `levels`, a box and then tiles, the
 #             four runs alternated in one process: the limited tiled step over
 #             the unlimited one and over the limited box. Not in `part=all`
+#   tiledrift the cylindrical Noh of `noh81`, unlimited, under each variant of
+#             `drift`: a layout (`box`, `tiles8`, `tiles16`, `tiles80`,
+#             `regrid8`, `uniform`), optionally followed after a hyphen by one
+#             change (`sub`, `ghost`, `noreflux`, `clamp`, `nofilter`; see
+#             `drift_variant`). Each run prints the metrics of `levels`, the
+#             composite mass drift beside two forms that use no mask, the L1
+#             density error over the level's region against the exact solution
+#             and the uniform run, and the drift's history; then the planar
+#             Noh (ν = 1) on the same layouts under each variant of `planar`,
+#             and a smooth pulse at rest on the cylindrical line under each
+#             variant of `pulse`. Not in `part=all`
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -1404,19 +1416,246 @@ function tile_cost_part(names, reps, a19n)
     return nothing
 end
 
+# --- the tiled level's mass drift ---------------------------------------------
+
+# A drift variant is a layout and an optional change after a hyphen
+# (`tiles8-ghost`): `box`, the level over root nodes 1:DRIFT_M as one patch;
+# `tilesE`, static tiles of edge E (80 is one tile); `regrid8`, tiles of edge 8
+# regridded every 10 steps; `uniform`, the run at the level's spacing. The
+# changes are `sub` (subcycled), `ghost` (`interface_flux = :ghost`),
+# `noreflux` (`REFLUX` off), `clamp` (`SENSOR_INTERFACE_GHOSTS` off) and
+# `nofilter` (no filter pass).
+const DRIFT_LAYOUTS = ("box", "tiles8", "tiles16", "tiles80", "regrid8", "uniform")
+const DRIFT_CHANGES = ("", "sub", "ghost", "noreflux", "clamp", "nofilter")
+const DRIFT_M = 81
+# The drift history's sample times.
+const DRIFT_MARKS = collect(0.02:0.02:NOH_T)
+
+function drift_variant(name)
+    layout, change = occursin('-', name) ? split(name, '-'; limit=2) : (name, "")
+    layout in DRIFT_LAYOUTS && change in DRIFT_CHANGES ||
+        throw(ArgumentError("unknown drift variant '$name', want a layout of " *
+                            "$(join(DRIFT_LAYOUTS, ", ")) and a change of " *
+                            join(DRIFT_CHANGES[2:end], ", ")))
+    return String(layout), String(change)
+end
+
+function drift_numerics(layout, change, N, ν=2)
+    sub = change == "sub"
+    box = BlockRegion((0, 0, 0), (DRIFT_M, 1, 1))
+    amr = layout == "uniform" ? nothing :
+          layout == "box" ? AMR(initial=box, subcycle=sub) :
+          layout == "regrid8" ? AMR(initial=box, tile=8, regrid_interval=10, subcycle=sub) :
+          AMR(initial=box, tile=parse(Int, layout[6:end]), subcycle=sub)
+    # The level's spacing on the cylinder's half-offset axis is R/(3N − 3/2),
+    # on the planar wall's node-centred line R/(3N − 3).
+    n_uniform = ν == 2 ? 3N - 1 : 3N - 2
+    return Numerics(n_global=(layout == "uniform" ? n_uniform : N, 1, 1),
+                    art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
+                    filter=change == "nofilter" ? nothing : StateFilter(),
+                    patch_interfaces=change == "ghost" ? :ghost : :closure,
+                    control=StepControl(validity=:permissive), amr=amr)
+end
+
+# Run `f` with the toggles of `change` set, and restore them.
+function with_drift_toggles(f, change)
+    saved = (CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[])
+    CL.REFLUX[] = change != "noreflux"
+    CL.SENSOR_INTERFACE_GHOSTS[] = change != "clamp"
+    try
+        return f()
+    finally
+        CL.REFLUX[], CL.SENSOR_INTERFACE_GHOSTS[] = saved
+    end
+end
+
+function density_array(ps, q)
+    f = zeros(size(ps.rho))
+    for I in CartesianIndices(f)
+        f[I] = sum(q[I, c] for c in 1:ps.equations.n_species)
+    end
+    return f
+end
+
+# The mass two ways that use neither the covered masks nor the junction
+# weights: the single-patch quadrature of every refined patch plus the root's
+# over the nodes from DRIFT_M out, half weight at DRIFT_M (`split`); and the
+# root's over the whole line, holding the restriction of the level (`root`).
+# Also the largest difference between a covered root node and the level's
+# node at the same position, relative to the density there.
+function unmasked_masses(s, Q)
+    split_mass = 0.0
+    root = nothing
+    fine = Dict{Float64,Float64}()
+    for (ps, q) in units(s, Q)
+        f = density_array(ps, q)
+        if level_of(ps) == 0
+            root = (ps, f)
+            continue
+        end
+        split_mass += CL._local_volume_integral(ps, f, false)
+        for i in 1:ps.decomp.n_local[1]
+            fine[round(xcoord(ps, 1, i), digits=12)] = f[padded_index(ps, i, 1, 1)]
+        end
+    end
+    ps, f = root
+    whole = CL._local_volume_integral(ps, f, false)
+    restricted = 0.0
+    for i in 1:ps.decomp.n_local[1]
+        I = padded_index(ps, i, 1, 1)
+        g = ps.decomp.offset[1] + i
+        x = round(xcoord(ps, 1, i), digits=12)
+        haskey(fine, x) && (restricted = max(restricted, abs(f[I] - fine[x]) / f[I]))
+        g < DRIFT_M ? (f[I] = 0.0) : g == DRIFT_M ? (f[I] *= 0.5) : nothing
+    end
+    return split_mass + CL._local_volume_integral(ps, f, false), whole, restricted
+end
+
+const DRIFT_UNIFORM = Ref{Any}(nothing)
+
+# The Noh of the level rows (`noh81`, unlimited; ν = 1 the planar line of
+# test/cases.jl, whose exact mass is 1 + t) under one drift variant: the
+# steps, the metrics of the level rows, the composite mass drift and the two
+# unmasked ones, the density L1 error ∫|ρ − ρ_ref| r^(ν−1) dr over the
+# level's region [0, x_M] against the exact solution and against the uniform
+# run at the level's spacing (when `uniform` ran first), the mean |ρ − 4^ν|
+# over the plateau core, and the composite drift at the times of DRIFT_MARKS.
+# The unmasked masses assume the level over root nodes 1:DRIFT_M, so a
+# regridded layout prints none.
+function noh_drift_run(name, ν=2)
+    layout, change = drift_variant(name)
+    N = Dict(NOH_N)[ν]
+    exact_mass = ν == 2 ? noh_cylinder_mass : t -> 1 + t
+    history = Float64[]
+    s, Q, wall = with_drift_toggles(change) do
+        solver, states = setup(noh_problem(ν; N, t0=0.0),
+                               drift_numerics(layout, change, N, ν))
+        record = (sv, q) -> begin
+            while length(history) < length(DRIFT_MARKS) &&
+                  sv.t >= DRIFT_MARKS[length(history)+1] - 1e-12
+                push!(history, volume_integral(sv, q, :rho) / exact_mass(sv.t) - 1)
+            end
+            nothing
+        end
+        elapsed = @elapsed try
+            run!(solver, states; tfinal=NOH_T, callback=record)
+        catch err
+            err isa SolverFailure || rethrow()
+        end
+        solver, states, elapsed
+    end
+    if s.t < NOH_T - 1e-12
+        @printf("  %-17s %5d steps %6.1f s  stopped at t = %.4f\n", name, s.step, wall, s.t)
+        return nothing
+    end
+    x, ρ = level_profile(s, Q)
+    plat, deficit, shock, _ = noh_metrics(x, ρ, ν)
+    composite = volume_integral(s, Q, :rho) / exact_mass(s.t) - 1
+    @printf("  %-17s %5d steps %6.1f s  plateau %.4f  deficit %4.1f%%  shock %.4f\n", name,
+            s.step, wall, plat, 100deficit, shock)
+    if layout in ("uniform", "regrid8")
+        @printf("  %-17s mass %+.2e\n", "", composite)
+    else
+        split_mass, root, restricted = unmasked_masses(s, Q)
+        @printf("  %-17s mass %+.2e  split %+.2e  root %+.2e  restricted %.1e\n", "",
+                composite, split_mass / exact_mass(s.t) - 1, root / exact_mass(s.t) - 1,
+                restricted)
+    end
+    # The level's spacing and the station of root node DRIFT_M.
+    hf, xM = ν == 2 ? (1 / (3 * (N - 0.5)), (DRIFT_M - 0.5) / (N - 0.5)) :
+                      (1 / (3 * (N - 1)), (DRIFT_M - 1) / (N - 1))
+    level = [i for i in eachindex(x) if x[i] <= xM + 1e-9]
+    l1_exact = sum(abs(ρ[i] - noh_exact(x[i], NOH_T, ν, NOH_G)[1]) * x[i]^(ν - 1) * hf
+                   for i in level)
+    Rs = (NOH_G - 1) / 2 * NOH_T
+    core = [i for i in eachindex(x) if 0.3Rs <= x[i] <= 0.7Rs]
+    l1_plateau = sum(abs(ρ[i] - 4.0^ν) for i in core) / length(core)
+    layout == "uniform" && change == "" &&
+        (DRIFT_UNIFORM[] = Dict(zip(round.(x, digits=12), ρ)))
+    ref = DRIFT_UNIFORM[]
+    l1_uniform = ref === nothing ? NaN :
+                 sum(abs(ρ[i] - ref[round(x[i], digits=12)]) * x[i]^(ν - 1) * hf
+                     for i in level)
+    @printf("  %-17s L1 exact %.3e  L1 uniform %.3e  plateau |ρ - 4^ν| %.4f\n", "", l1_exact,
+            l1_uniform, l1_plateau)
+    @printf("  %-17s history %s\n", "", join((@sprintf("%+.1e", d) for d in history), " "))
+    flush(stdout)
+    return nothing
+end
+
+# A smooth density pulse at rest, ρ = 1 + 0.05 exp(−((r − 0.12)/0.03)²) under
+# p ∝ ρ^γ, on the same line closed by a slip wall at r = 1: the composite mass
+# at t = 0 against the first variant's and the drift of the composite mass
+# over t = 0.3, in which the outgoing half crosses every tile face beyond
+# r = 0.12 and leaves the level at r = 0.313.
+function pulse_drift_run(name, mass0)
+    layout, change = drift_variant(name)
+    N = Dict(NOH_N)[2]
+    prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
+                   transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                   ic=(r, y, z) -> (ρ = 1 + 0.05 * exp(-((r - 0.12) / 0.03)^2);
+                                    Prim(rho=ρ, u=(0.0, 0.0, 0.0), p=ρ^NOH_G / NOH_G)))
+    s, m0, m1 = with_drift_toggles(change) do
+        solver, states = setup(prob, drift_numerics(layout, change, N))
+        before = volume_integral(solver, states, :rho)
+        run!(solver, states; tfinal=0.3)
+        solver, before, volume_integral(solver, states, :rho)
+    end
+    mass0[] === nothing && (mass0[] = m0)
+    @printf("  %-17s %5d steps  mass at t = 0 against the first %+.2e, drift %+.2e\n", name,
+            s.step, m0 / mass0[] - 1, m1 / m0 - 1)
+    flush(stdout)
+    return nothing
+end
+
+function tile_drift_part(names, pulse_names, planar_names)
+    println("\n=== tiledrift: the cylindrical Noh level over 81 nodes, unlimited ===")
+    DRIFT_UNIFORM[] = nothing
+    for name in names
+        noh_drift_run(name)
+    end
+    if !isempty(planar_names)
+        println("\n=== tiledrift: the planar Noh level over 81 nodes, unlimited ===")
+        DRIFT_UNIFORM[] = nothing
+        for name in planar_names
+            noh_drift_run(name, 1)
+        end
+    end
+    isempty(pulse_names) && return nothing
+    println("\n=== tiledrift: a smooth pulse at rest on the same line, to t = 0.3 ===")
+    mass0 = Ref{Any}(nothing)
+    for name in pulse_names
+        pulse_drift_run(name, mass0)
+    end
+    return nothing
+end
+
 function main(args)
     opt = CL.script_args(args, (part="all", cases="woodward,noh",
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
-                                patches="1", levels="wc,wcsub,noh43", a19n=64))
+                                patches="1", levels="wc,wcsub,noh43", a19n=64,
+                                drift="uniform,box,tiles8,tiles16,tiles80,box-sub," *
+                                      "tiles8-sub,regrid8,tiles8-ghost,box-ghost," *
+                                      "tiles8-noreflux,tiles8-clamp,tiles8-nofilter," *
+                                      "box-nofilter",
+                                pulse="box,tiles8,tiles8-ghost,box-nofilter,tiles8-nofilter",
+                                planar="uniform,box,tiles8,tiles8-ghost"))
     parts = opt.part == "all" ? collect(PARTS) : split(opt.part, ',')
     cases = Symbol.(split(opt.cases, ','))
     counts = parse.(Int, split(opt.patches, ','))
     for p in parts
-        p in PARTS || p in ("rz", "cost", "patches", "levels", "levelcost", "tilecost") ||
+        p in PARTS ||
+            p in ("rz", "cost", "patches", "levels", "levelcost", "tilecost", "tiledrift") ||
             throw(ArgumentError("unknown part '$p', want one of $(join(PARTS, ", ")), \
-                                 rz, cost, patches, levels, levelcost or tilecost"))
+                                 rz, cost, patches, levels, levelcost, tilecost or tiledrift"))
     end
+    drift_names = split(opt.drift, ',')
+    pulse_names = filter(!isempty, split(opt.pulse, ','))
+    planar_names = filter(!isempty, split(opt.planar, ','))
+    foreach(drift_variant, [drift_names; pulse_names; planar_names])
     level_names = split(opt.levels, ',')
     for l in level_names
         l in LEVEL_CASES ||
@@ -1440,6 +1679,7 @@ function main(args)
     "levels" in parts && levels_part(level_names, opt.a19n)
     "levelcost" in parts && level_cost_part(level_names, opt.reps, opt.a19n)
     "tilecost" in parts && tile_cost_part(level_names, opt.reps, opt.a19n)
+    "tiledrift" in parts && tile_drift_part(drift_names, pulse_names, planar_names)
     "variants" in parts || return nothing
     println("\n=== variants ===")
     rows = []

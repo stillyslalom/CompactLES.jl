@@ -1,0 +1,95 @@
+=== julia --project=. -t 1 bench/positivity.jl part=tiledrift
+    package commit d1529b85, Julia 1.13.3, one thread
+
+=== tiledrift: the cylindrical Noh level over 81 nodes, unlimited ===
+  uniform            6640 steps    4.2 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+                    mass -4.45e-07
+                    L1 exact 1.456e-02  L1 uniform 0.000e+00  plateau |ρ - 4^ν| 0.3477
+                    history -4.2e-08 -2.3e-07 -3.6e-07 -4.1e-07 -4.5e-07 -4.7e-07 -4.9e-07 -5.0e-07 -5.1e-07 -5.1e-07 -5.2e-07 -5.2e-07 -5.2e-07 -5.2e-07 -5.1e-07 -5.1e-07 -5.1e-07 -5.0e-07 -5.0e-07 -5.0e-07 -4.9e-07 -4.9e-07 -4.8e-07 -4.8e-07 -4.7e-07 -4.7e-07 -4.6e-07 -4.6e-07 -4.5e-07 -4.4e-07
+  box                6641 steps   10.7 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+                    mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 8.1e-08
+                    L1 exact 1.456e-02  L1 uniform 1.105e-05  plateau |ρ - 4^ν| 0.3477
+                    history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
+  tiles8             6837 steps    5.6 s  plateau 15.8915  deficit 49.6%  shock 0.2024
+                    mass +1.73e-03  split +1.73e-03  root +2.55e-03  restricted 9.1e-07
+                    L1 exact 1.398e-02  L1 uniform 8.474e-03  plateau |ρ - 4^ν| 0.3769
+                    history +3.6e-08 -5.0e-06 -1.2e-05 -2.8e-05 +3.4e-06 +1.8e-05 +2.2e-05 +9.9e-07 +5.5e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.1e-04 +3.9e-04 +4.5e-04 +5.0e-04 +5.3e-04 +6.0e-04 +7.7e-04 +8.6e-04 +8.6e-04 +9.0e-04 +8.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.5e-03 +1.7e-03 +1.7e-03
+  tiles16            6737 steps    4.0 s  plateau 15.7918  deficit 51.0%  shock 0.2028
+                    mass +9.16e-04  split +9.15e-04  root +1.96e-03  restricted 5.5e-07
+                    L1 exact 1.409e-02  L1 uniform 4.630e-03  plateau |ρ - 4^ν| 0.3474
+                    history -8.3e-08 -2.8e-07 -4.6e-07 -6.2e-07 -1.1e-06 -4.7e-06 -1.1e-05 -2.6e-05 +8.4e-06 +1.6e-04 +1.7e-04 +1.8e-04 +1.9e-04 +1.9e-04 +1.9e-04 +1.9e-04 +1.9e-04 +2.6e-04 +4.2e-04 +5.3e-04 +5.4e-04 +5.5e-04 +5.6e-04 +5.6e-04 +5.7e-04 +5.6e-04 +5.4e-04 +6.6e-04 +8.9e-04 +9.2e-04
+  tiles80            6641 steps    3.2 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+                    mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 8.1e-08
+                    L1 exact 1.456e-02  L1 uniform 1.105e-05  plateau |ρ - 4^ν| 0.3477
+                    history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
+  box-sub            2213 steps    2.3 s  plateau 15.6524  deficit 50.8%  shock 0.2033
+                    mass -9.28e-07  split -1.81e-06  root +5.49e-04  restricted 9.3e-08
+                    L1 exact 1.455e-02  L1 uniform 1.985e-05  plateau |ρ - 4^ν| 0.3476
+                    history -6.9e-08 -2.8e-07 -4.3e-07 -5.1e-07 -5.7e-07 -6.3e-07 -6.7e-07 -7.1e-07 -7.4e-07 -7.6e-07 -7.9e-07 -8.1e-07 -8.3e-07 -8.4e-07 -8.6e-07 -8.7e-07 -8.8e-07 -8.9e-07 -9.0e-07 -9.0e-07 -9.1e-07 -9.1e-07 -9.2e-07 -9.2e-07 -9.2e-07 -9.3e-07 -9.3e-07 -9.3e-07 -9.3e-07 -9.3e-07
+  tiles8-sub         2277 steps    3.4 s  plateau 15.8828  deficit 49.4%  shock 0.2024
+                    mass +1.56e-03  split +1.56e-03  root +2.33e-03  restricted 2.3e-07
+                    L1 exact 1.371e-02  L1 uniform 8.243e-03  plateau |ρ - 4^ν| 0.3693
+                    history -3.9e-07 -6.5e-06 -1.3e-05 -2.8e-05 +1.9e-05 +4.1e-05 +4.7e-05 +2.7e-05 +8.8e-05 +2.3e-04 +2.7e-04 +2.6e-04 +2.4e-04 +3.8e-04 +3.9e-04 +4.2e-04 +4.4e-04 +5.0e-04 +6.8e-04 +7.7e-04 +7.8e-04 +8.2e-04 +7.9e-04 +1.0e-03 +1.2e-03 +1.2e-03 +1.4e-03 +1.3e-03 +1.5e-03 +1.6e-03
+  regrid8            6836 steps    4.4 s  plateau 15.9152  deficit 49.5%  shock 0.2023
+                    mass +1.73e-03
+                    L1 exact 1.394e-02  L1 uniform 8.700e-03  plateau |ρ - 4^ν| 0.3968
+                    history -1.7e-06 -9.2e-06 -2.0e-05 -2.5e-05 +7.5e-06 +2.4e-05 +2.5e-05 +6.6e-06 +8.9e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.0e-04 +3.9e-04 +4.8e-04 +5.3e-04 +5.6e-04 +6.4e-04 +8.2e-04 +9.1e-04 +9.2e-04 +9.6e-04 +9.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.4e-03 +1.7e-03 +1.7e-03
+  tiles8-ghost       6634 steps    6.0 s  plateau 15.6554  deficit 50.8%  shock 0.2033
+                    mass +1.87e-05  split +1.79e-05  root +5.74e-04  restricted 2.2e-07
+                    L1 exact 1.452e-02  L1 uniform 6.396e-04  plateau |ρ - 4^ν| 0.3446
+                    history -1.3e-07 -2.2e-07 +2.9e-07 +9.4e-07 +3.4e-06 +1.8e-06 +1.4e-06 +2.0e-06 +4.9e-06 -1.8e-06 +2.8e-06 +4.0e-06 +5.8e-06 +1.8e-06 +8.2e-06 +6.2e-06 +8.0e-06 +1.6e-05 +9.5e-06 +1.1e-05 +1.0e-05 +1.0e-05 +6.9e-06 +8.5e-06 +1.2e-05 +1.3e-05 +1.6e-05 +2.6e-05 +2.1e-05 +1.9e-05
+  box-ghost          6640 steps    3.4 s  plateau 15.6523  deficit 50.9%  shock 0.2033
+                    mass -9.71e-07  split -1.86e-06  root +5.53e-04  restricted 7.4e-08
+                    L1 exact 1.456e-02  L1 uniform 9.047e-06  plateau |ρ - 4^ν| 0.3477
+                    history -8.4e-08 -3.1e-07 -4.8e-07 -5.7e-07 -6.3e-07 -6.9e-07 -7.3e-07 -7.7e-07 -8.0e-07 -8.3e-07 -8.5e-07 -8.7e-07 -8.9e-07 -9.0e-07 -9.1e-07 -9.3e-07 -9.3e-07 -9.4e-07 -9.5e-07 -9.6e-07 -9.6e-07 -9.6e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07 -9.7e-07
+  tiles8-noreflux    6837 steps    4.7 s  plateau 15.8915  deficit 49.6%  shock 0.2024
+                    mass +1.73e-03  split +1.73e-03  root +2.55e-03  restricted 9.1e-07
+                    L1 exact 1.398e-02  L1 uniform 8.474e-03  plateau |ρ - 4^ν| 0.3769
+                    history +1.1e-06 -3.9e-06 -1.1e-05 -2.7e-05 +4.3e-06 +1.9e-05 +2.3e-05 +1.8e-06 +5.6e-05 +1.9e-04 +2.3e-04 +2.2e-04 +2.1e-04 +4.0e-04 +4.5e-04 +5.0e-04 +5.3e-04 +6.0e-04 +7.7e-04 +8.6e-04 +8.6e-04 +9.1e-04 +8.5e-04 +1.2e-03 +1.3e-03 +1.4e-03 +1.5e-03 +1.5e-03 +1.7e-03 +1.7e-03
+  tiles8-clamp       6827 steps    4.8 s  plateau 15.8429  deficit 49.9%  shock 0.2026
+                    mass +1.05e-03  split +1.05e-03  root +1.84e-03  restricted 1.1e-06
+                    L1 exact 1.437e-02  L1 uniform 6.895e-03  plateau |ρ - 4^ν| 0.3487
+                    history +3.5e-08 -5.1e-06 -1.3e-05 -2.9e-05 -4.1e-06 +6.1e-06 +7.8e-06 -8.7e-06 +3.9e-05 +1.4e-04 +1.4e-04 +1.4e-04 +1.5e-04 +3.9e-04 +3.8e-04 +4.5e-04 +4.7e-04 +5.1e-04 +6.6e-04 +6.6e-04 +6.5e-04 +6.9e-04 +6.9e-04 +8.0e-04 +9.1e-04 +9.4e-04 +1.0e-03 +1.0e-03 +1.1e-03 +1.1e-03
+  tiles8-nofilter     224 steps    0.2 s  stopped at t = 0.0212
+  box-nofilter       1108 steps    0.5 s  stopped at t = 0.1036
+
+=== tiledrift: the planar Noh level over 81 nodes, unlimited ===
+  uniform           10484 steps    7.5 s  plateau 3.9989  deficit 20.2%  shock 0.2008
+                    mass -4.95e-06
+                    L1 exact 3.325e-03  L1 uniform 0.000e+00  plateau |ρ - 4^ν| 0.0011
+                    history -1.4e-04 -8.9e-05 -7.4e-05 -6.0e-05 -5.1e-05 -4.3e-05 -3.8e-05 -3.3e-05 -2.9e-05 -2.6e-05 -2.4e-05 -2.1e-05 -1.9e-05 -1.7e-05 -1.6e-05 -1.5e-05 -1.3e-05 -1.2e-05 -1.1e-05 -1.0e-05 -9.6e-06 -8.9e-06 -8.3e-06 -7.7e-06 -7.1e-06 -6.6e-06 -6.1e-06 -5.7e-06 -5.3e-06 -4.9e-06
+  box               10487 steps    6.3 s  plateau 3.9989  deficit 20.2%  shock 0.2033
+                    mass -1.42e-05  split +3.03e-03  root +2.90e-03  restricted 3.2e-01
+                    L1 exact 2.257e-02  L1 uniform 1.990e-02  plateau |ρ - 4^ν| 0.0012
+                    history -1.4e-04 -8.9e-05 -7.4e-05 -6.0e-05 -5.0e-05 -4.3e-05 -3.8e-05 -3.3e-05 -2.9e-05 -2.6e-05 -2.4e-05 -2.1e-05 -1.9e-05 -1.8e-05 -1.6e-05 -1.5e-05 -1.3e-05 -1.2e-05 -1.1e-05 -1.0e-05 -9.7e-06 -8.9e-06 -8.3e-06 -7.7e-06 -7.0e-06 -8.3e-06 +2.0e-06 -1.2e-05 -1.2e-04 -1.4e-05
+  tiles8            10812 steps    8.3 s  plateau 4.0508  deficit 19.6%  shock 0.2039
+                    mass +4.33e-03  split +6.74e-03  root +6.34e-03  restricted 4.4e-01
+                    L1 exact 3.234e-02  L1 uniform 2.999e-02  plateau |ρ - 4^ν| 0.0771
+                    history -1.4e-04 -4.3e-05 +2.7e-04 +4.8e-04 +5.3e-04 +8.7e-04 +1.0e-03 +1.1e-03 +1.4e-03 +1.5e-03 +1.6e-03 +1.8e-03 +2.0e-03 +2.1e-03 +2.3e-03 +2.5e-03 +2.6e-03 +2.7e-03 +2.9e-03 +3.0e-03 +3.1e-03 +3.4e-03 +3.5e-03 +3.6e-03 +3.9e-03 +4.0e-03 +4.0e-03 +4.3e-03 +3.6e-03 +4.3e-03
+  tiles8-ghost      10461 steps    8.6 s  plateau 3.9992  deficit 20.4%  shock 0.2029
+                    mass +4.54e-04  split +2.20e-03  root +2.46e-03  restricted 1.2e-01
+                    L1 exact 2.088e-02  L1 uniform 1.837e-02  plateau |ρ - 4^ν| 0.0084
+                    history -1.4e-04 -9.0e-05 -8.6e-05 -5.4e-05 -4.6e-05 -4.5e-05 -2.7e-05 -2.1e-05 -2.3e-05 -1.0e-05 -5.1e-06 -7.5e-06 +2.8e-06 +6.2e-06 +6.1e-06 +1.3e-05 +1.6e-05 +1.7e-05 +2.1e-05 +2.5e-05 +2.6e-05 +2.8e-05 +3.2e-05 +3.4e-05 +3.6e-05 +3.7e-05 +4.1e-05 +3.5e-05 -6.6e-04 +4.5e-04
+
+=== tiledrift: a smooth pulse at rest on the same line, to t = 0.3 ===
+  box                1584 steps  mass at t = 0 against the first +0.00e+00, drift +1.12e-10
+  tiles8             1584 steps  mass at t = 0 against the first +0.00e+00, drift -1.91e-09
+  tiles8-ghost       1584 steps  mass at t = 0 against the first +0.00e+00, drift +1.05e-10
+  box-nofilter       1584 steps  mass at t = 0 against the first +0.00e+00, drift +2.78e-10
+  tiles8-nofilter    1589 steps  mass at t = 0 against the first +0.00e+00, drift +8.59e-07
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(767 points, 6 inadmissible; rho_min = 1.6000000000000003, e_min = -0.008656512781479308)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(498 points, 8 inadmissible; rho_min = 1.6, e_min = -0.008674067685784359)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(507 points, 12 inadmissible; rho_min = 1.6, e_min = -0.0224202557887906)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(502 points, 9 inadmissible; rho_min = 1.6, e_min = -0.030205478149303907)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(498 points, 8 inadmissible; rho_min = 1.6, e_min = -0.008674067685784359)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(498 points, 10 inadmissible; rho_min = 1.6, e_min = -0.007697961135857601)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(507 points, 13 inadmissible; rho_min = 1.6, e_min = -0.0226739520251662)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(457 points, 14 inadmissible; rho_min = 1.6, e_min = -0.02005679918875848)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(507 points, 9 inadmissible; rho_min = 1.6, e_min = -0.008384113649542762)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(498 points, 8 inadmissible; rho_min = 1.6, e_min = -0.008720925137045742)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(507 points, 12 inadmissible; rho_min = 1.6, e_min = -0.0224202557887906)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(507 points, 9 inadmissible; rho_min = 1.6, e_min = -0.03015851165149708)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(1198 points, 9 inadmissible; rho_min = 0.9894819494536001, e_min = -0.010289258421549938)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(641 points, 8 inadmissible; rho_min = 0.7217898976556391, e_min = -0.10400560685514573)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(650 points, 7 inadmissible; rho_min = 0.920729260492891, e_min = -0.05011960816380865)
+┌ Warning: validate_state!: the state run! returns accepted under validity = :permissive. StateReport(650 points, 9 inadmissible; rho_min = 0.7616373324925396, e_min = -0.1055860035095179)

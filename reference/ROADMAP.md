@@ -271,7 +271,8 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   the converging shocks of A19 and Noh ν = 2 on tiles leave no inadmissible
   point. A tile over a partial lattice cell too short for the face form is
   refused by setup and not created by a regrid, which leaves the cell to
-  the parent. Coarse-fine end nodes and the parent's overwritten nodes are not
+  the parent (commit `b5e245b`). Coarse-fine end nodes and the parent's
+  overwritten nodes are not
   held, and their inadmissible states are kept out of held cells'
   first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
   rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
@@ -285,7 +286,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   now does by default, which leaves one face form with weight h up to an
   interface end; under it the limiter needs a register for the gradient-plan
   solves and open-end anchors. Either is measured before it replaces
-  `:closure`, which lowers the interface's order. The parent's shell falls back to the
+  `:closure`, which lowers the interface's order and, on a tiled level,
+  gains mass each time a shock crosses a face two tiles share: on the
+  cylindrical and the planar Noh about a hundred times the drift of the same
+  tiles under `:ghost`
+  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)), so the
+  mass budget of A21's limited, tiled band waits on one of the two routes.
+  The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the
   fallback is admissible, on host and device storage, limiter on or off

@@ -2395,10 +2395,68 @@ deficit 50.4%, shock 0.2033 and mass +4.1e-4 (15.6833, 50.3%, 0.2033, +4.2e-4 su
 subcycled) against the limited box's 15.6672, 50.8%, 0.2032 and
 −5.2e-7. Unlimited, the tiles give 15.8915, 49.6%, 0.2024 and +1.73e-3 against the box's
 15.6523, 50.9%, 0.2033 and −9.7e-7: the tiled level's own mass drift, which the limited runs
-reduce to a quarter. The limited tiled runs leave 4 to 50 unguaranteed sides. `part=tilecost`
-over 150 steps of the converging shock, three alternations of the four runs in one process:
-the box takes 5.35 ms per step unlimited and 9.18 limited, the tiles 6.87 and 11.43, so the
-limited tiled step costs 1.67 times the unlimited tiled one and 1.25 times the limited box's.
+reduce to a quarter and `part=tiledrift` below attributes. The limited tiled runs leave 4 to 50
+unguaranteed sides. `part=tilecost` over 150 steps of the converging shock, three alternations
+of the four runs in one process: the box takes 5.35 ms per step unlimited and 9.18 limited, the
+tiles 6.87 and 11.43, so the limited tiled step costs 1.67 times the unlimited tiled one and
+1.25 times the limited box's.
+
+`part=tiledrift` (package commit `d1529b85`, Julia 1.13.3; transcript
+`bench/results/tiledrift.txt`) runs the same cylindrical Noh unlimited, the level over root
+nodes 1:81 under `patch_interfaces = :closure`, on one layout and with one change at a time.
+Beside the composite mass it prints two that use no covered mask and no junction weight: each
+refined patch's single-patch quadrature plus the root's from node 81 out (split), and the
+root's alone over the whole line, which holds the restricted level (root). Drift is against
+the exact mass at t = 0.6:
+
+```
+layout, change                 steps  plateau  deficit  shock   mass      split     root
+uniform at the level's spacing 6640   15.6523  50.9%    0.2033  −4.5e-7
+box                            6641   15.6523  50.9%    0.2033  −9.7e-7   −1.9e-6   +5.5e-4
+one tile of edge 80            the box in every printed digit
+box, subcycled                 2213   15.6524  50.8%    0.2033  −9.3e-7   −1.8e-6   +5.5e-4
+box, interface_flux = :ghost   6640   15.6523  50.9%    0.2033  −9.7e-7   −1.9e-6   +5.5e-4
+tiles of 8                     6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e-3  +2.55e-3
+tiles of 16                    6737   15.7918  51.0%    0.2028  +9.2e-4   +9.2e-4   +1.96e-3
+tiles of 8, subcycled          2277   15.8828  49.4%    0.2024  +1.56e-3  +1.56e-3  +2.33e-3
+regridded tiles of 8           6836   15.9152  49.5%    0.2023  +1.73e-3
+tiles of 8, REFLUX off         6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e-3  +2.55e-3
+tiles of 8, sensor clamped     6827   15.8429  49.9%    0.2026  +1.05e-3  +1.05e-3  +1.84e-3
+tiles of 8, :ghost             6634   15.6554  50.8%    0.2033  +1.9e-5   +1.8e-5   +5.7e-4
+```
+
+The drift is in the solution. The split mass agrees with the composite to 1e-6 on every static
+layout, and the root's mass, +5.5e-4 on the box from its quadrature of the shock, is 2.0e-3
+higher on the tiles. The mass enters at the faces two tiles share, where each tile's divergence
+closes with the closure rows of `:closure`, as the shock crosses one. A single tile reproduces
+the box in every printed digit. The composite drift's history rises in steps at the times the
+shock reaches a tile face (t ≈ 0.188, 0.28, 0.375, 0.47 and 0.56 for edge 8; 0.188, 0.375 and
+0.56 for edge 16), by about 2e-4 at each, and more slowly between them, so doubling the edge
+halves the drift. Up to t = 0.16 it stays within 3e-5. The coarse-fine face at r = 0.313 is not
+involved: the shock does not reach it, and with `REFLUX` off every printed digit of the final
+state is unchanged. Subcycling and regridding change the drift by a tenth or less, and clamping
+the sensor at the faces (`SENSOR_INTERFACE_GHOSTS` off) lowers it by two fifths. Under
+`interface_flux = :ghost`, where the flux through the face is differentiated from ghost values
+with the interior stencil, the drift is 1% of its value under `:closure`. A smooth density
+pulse at rest crossing the same faces to t = 0.3 drifts by −1.9e-9 on the tiles under
+`:closure` against 1.1e-10 on the box, so the closure-row faces conserve mass on resolved data.
+The filter's share could not be separated on Noh: without the filter the tiles stop at
+t = 0.021 and the box at 0.104. Under the positivity limiter setup takes `:closure`, so the
+limited tiled rows above cannot use `:ghost`.
+
+On the planar Noh (ν = 1, 400 root nodes, the level over the first 81) the mass drift at
+t = 0.5, before the shock reaches the level's outer face at x = 0.2005, is −7.0e-6 on the box,
++3.9e-3 on tiles of 8 and +3.6e-5 on tiles of 8 under `:ghost`. At t = 0.6 the shock lies on
+that face, so the planar runs' final metrics and unmasked masses there measure the coarse-fine
+face and not the tiles.
+
+Against the exact solution the tiles are closer in two metrics and in the plateau's mean, and
+further in its flatness. Over the level's region the L1 error ∫|ρ − ρ_exact| r dr is 1.398e-2
+for the tiles against 1.456e-2 for the box, and the shock lies at 0.2024 against 0.2033 (exact
+0.2), but the mean |ρ − 16| over the plateau core is 0.377 against 0.348: the core's mean rises
+by 0.24 and its spread grows, with the mass gained at the faces. Against the uniform run at the
+level's spacing, which the box matches to 1.1e-5 in the same norm, the tiles differ by 8.5e-3,
+61% of their own error against the exact solution; under `:ghost` by 6.4e-4.
 
 ## Directional bulk viscosity
 
