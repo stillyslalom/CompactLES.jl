@@ -255,6 +255,10 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
     wrap::Vector{P}                 # the value at the global low face
     cstar::Vector{P}                # the constant removed from a filter flux
     zero_plane::Vector{P}
+    dropped::Vector{P}              # a masked pass's dropped residual, summed
+                                    # over this rank's part of each line, and
+    dropped_mid::Vector{P}          # over that part's nodes up to the line's
+                                    # middle face
     line_counts::Vector{C}          # per d: (4, n_a, n_b) each line's tallies
                                     # of a θ pass, summed into `counts`
     # Host copies of `offset`, `wrap` and `cstar` per d, which `_line_offsets!`
@@ -850,7 +854,7 @@ function PositivityLimiter(solver; separate::Bool=false)
     planes = [_limiter_zeros(like, T, (n_comp[d], _transverse(decomp.n_local, d)...))
               for d in 1:3]
     copies() = [_limiter_zeros(like, T, size(p)) for p in planes]
-    send = [zeros(T, 2 * length(planes[d]) + 1) for d in 1:3]
+    send = [zeros(T, 4 * length(planes[d]) + 1) for d in 1:3]
     recv = [zeros(T, decomp.dims[d] * length(send[d])) for d in 1:3]
     filter_lhs = _band_lhs(filt)
     q = length(filter_lhs)
@@ -924,6 +928,7 @@ function PositivityLimiter(solver; separate::Bool=false)
         theta, map(up, areas), radial, fold_lo, n_comp, up(volume), volume_state, areal,
         interface, open,
         copies(), copies(), copies(), copies(), copies(), copies(), copies(), copies(),
+        copies(), copies(),
         line_counts, NTuple{3,Array{T,3}}[], send, recv, up(T.(_band_lhs(deriv))),
         up(T.(deriv.coeffs)), up(T.(filter_lhs)), up(_filter_face_stencil(filt, T)),
         decomp.periodic, measure, anchor_face, zero(T), zero(T), false, zeros(Int, 6))
@@ -1625,7 +1630,7 @@ _limiter_layout(solver) =
 # weight `wf`, its constant removed through the filter's face relation. A
 # patch interface anchors a line here as a wall does.
 function _line_faces!(lim::PositivityLimiter, solver, Q, d::Int, mode::Int, scale,
-                      wf)
+                      wf, cmask=nothing, drop=nothing)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     n = decomp.n_local[d]
@@ -1642,10 +1647,10 @@ function _line_faces!(lim::PositivityLimiter, solver, Q, d::Int, mode::Int, scal
                lim.faces, lim.register_fields[d], _LinearState(Q), lim.base, lim.weights[d],
                solver.h[d], lim.totals[d], lim.aux[d], lim.anchor[d], n_comp, n, d, mode,
                mode == 2 ? lim.measure[d] : 0, lim.filter_lhs, lim.filter_psi, wf,
-               volume, lim.volume, solver.inv_J, (whole, lim.periodic[d], scale),
-               o1, o2, o3)
+               volume, lim.volume, solver.inv_J, cmask, drop, lim.dropped[d],
+               lim.dropped_mid[d], (whole, lim.periodic[d], scale), o1, o2, o3)
     whole && return nothing
-    _line_offsets!(lim, decomp, d, mode)
+    _line_offsets!(lim, decomp, d, mode, cmask === nothing ? zero(wf) : wf)
     last_rank = decomp.coords[d] == decomp.dims[d] - 1
     pointwise!(_limiter_offset_point!, solver.tmp_a, n + 1, nA, nB,
                lim.faces, lim.offset[d], lim.wrap[d],
@@ -1660,7 +1665,7 @@ end
 # relation's measurement) over the direction's sub-communicator, entered by
 # every rank of it; the prefix sums are formed in rank order on every rank, so
 # the face two ranks share carries the same value on both.
-function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
+function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int, wd=0)
     tot = lim.totals[d]
     # The stage's anchor is the face register at the global low face.
     aux = mode == 1 ? lim.anchor[d] : lim.aux[d]
@@ -1670,16 +1675,20 @@ function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
     # on the host are uploaded after: one copy of each plane per pass.
     copyto!(send, 1, vec(tot), 1, L)
     copyto!(send, L + 1, vec(aux), 1, L)
-    _device_path(tot) ? _staged_offsets!(lim, decomp, d, mode) :
+    if !iszero(wd)
+        copyto!(send, 2L + 1, vec(lim.dropped[d]), 1, L)
+        copyto!(send, 3L + 1, vec(lim.dropped_mid[d]), 1, L)
+    end
+    _device_path(tot) ? _staged_offsets!(lim, decomp, d, mode, wd) :
                         _form_offsets!(lim.offset[d], lim.wrap[d], lim.cstar[d], lim, decomp,
-                                       d, mode)
+                                       d, mode, wd)
     return nothing
 end
 
 # The offsets formed in the host copies of the planes and uploaded.
-function _staged_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int)
+function _staged_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int, wd)
     planes = _staged_planes!(lim, d)
-    _form_offsets!(planes..., lim, decomp, d, mode)
+    _form_offsets!(planes..., lim, decomp, d, mode, wd)
     copyto!(lim.offset[d], planes[1])
     copyto!(lim.wrap[d], planes[2])
     copyto!(lim.cstar[d], planes[3])
@@ -1699,9 +1708,12 @@ end
 
 # The Allgather of the message `send` holds, and the offsets of this rank's
 # running sums, the global low face's value and the filter's constant formed
-# from it into `off`, `wrap` and `cstar`, host arrays.
+# from it into `off`, `wrap` and `cstar`, host arrays. A pass that dropped a
+# child's residual (`wd`, its weight, nonzero) also gathers each rank's sums of
+# the dropped residual, and the constant takes the parts between the middle
+# face and the measuring rank's face that the other ranks hold.
 function _form_offsets!(off, wrap, cstar, lim::PositivityLimiter, decomp, d::Int,
-                        mode::Int)
+                        mode::Int, wd=0)
     L = length(off)
     P = decomp.dims[d]
     send, recv = lim.send[d], lim.recv[d]
@@ -1727,6 +1739,21 @@ function _form_offsets!(off, wrap, cstar, lim::PositivityLimiter, decomp, d::Int
             O += recv[r*stride+e]
         end
         cstar[e] = mode == 2 ? Ov + recv[v*stride+L+e] : zero(eltype(recv))
+    end
+    if mode == 2 && !iszero(wd)
+        lhs = Array(lim.filter_lhs)
+        sum_l = one(eltype(recv))
+        for s in eachindex(lhs)
+            sum_l += 2 * lhs[s]
+        end
+        for e in 1:L
+            χ = zero(eltype(recv))
+            for r in 0:P-1
+                r < v && (χ += recv[r*stride+2L+e])
+                r != v && (χ -= recv[r*stride+3L+e])
+            end
+            cstar[e] -= wd * χ / sum_l
+        end
     end
     return nothing
 end
@@ -2386,6 +2413,35 @@ function _limited_level_filter!(lims::Vector{Any}, solver, lev, states)
     return states
 end
 
+# A pass that drops a child's residual (`_drop_child_residual!`) keeps the
+# filter's face relation only up to the dropped residual summed along the
+# line, so the constant the relation measures depends on the face it is
+# measured at. A line one rank holds measures it at its middle face; split
+# across ranks it is measured at another face, and measured there as the
+# unmasked relation the constant differed, and a limited face with it, on
+# another rank count. The scan measures it relative to the middle face,
+# through the dropped residual summed between the two faces
+# (`_limiter_scan_point!`, `_form_offsets!`), which leaves a line one rank
+# holds as it was. Returns the mask and the rows, residual stencil and local
+# middle face the drop takes, or `nothing` twice where the pass drops
+# nothing, a pair fold's included; a self-paired fold active on the line is
+# left out as well, its base state's mirrored halos being filled only inside
+# the pass.
+_dropped_rows(solver, d::Int, ::Nothing) = (nothing, nothing)
+function _dropped_rows(solver, d::Int, mask)
+    fold = _fold_at(solver, d)
+    fold === nothing || !_fold_active(fold) && fold.pair === nothing ||
+        return (nothing, nothing)
+    plan = fold === nothing ? _operator_plan(solver.filter_plans, d) :
+                              _fold_plan(fold, 1, Val(:filter), 1, false)
+    r = _residual_stencil(plan)
+    M = something(findlast(m -> !iszero(r[m + 1]), 1:4), 0)
+    nlo, nhi = _rows_closed(plan)
+    decomp = solver.decomp
+    return mask, (r, M, nlo + 1, decomp.n_local[d] - nhi,
+                  decomp.n_global[d] ÷ 2 - decomp.offset[d])
+end
+
 # The passes of `filter_state!` under the weighting `:none`, the residual a
 # child level covers dropped as there (`_child_mask!`), each followed by the
 # filter limiter.
@@ -2414,7 +2470,8 @@ function _limited_filter_pass!(lim::PositivityLimiter, solver, Q)
                 blend_interior!(comps[c], solver.tmp_a, w, decomp)
             end
         end
-        _line_faces!(lim, solver, Q, d, 2, one(w), w)
+        cmask, drop = _dropped_rows(solver, d, mask)
+        _line_faces!(lim, solver, Q, d, 2, one(w), w, cmask, drop)
         # The half states are read from the state before the pass.
         limited, shared = _limit_faces!(lim, solver, _BaseState(lim.base), d,
                                         zero(w), 2)
@@ -2576,10 +2633,16 @@ end
 # finished here as `_limiter_offset_point!` finishes them on a decomposed one,
 # scaled by `ends[3]`, the global low face's value at the high face of a
 # periodic line (`ends[2]`): a stage's in the same sweep as the sums, a
-# filter pass's after its measurement.
+# filter pass's after its measurement. A pass that dropped a child's residual
+# at the nodes `cmask` marks (`_child_mask!`; `nothing` otherwise) measures the
+# relation relative to the line's middle face, ψ_j less χ_j, the dropped
+# residual summed from the middle face to face j, and leaves this rank's sums
+# of it, over its part of the line and up to the middle face, in `dropped` and
+# `dropped_mid` for the offsets of a decomposed line (`_dropped_rows`).
 @inline function _limiter_scan_point!(faces, regs, Q, base, W, hd, totals, aux, anchor,
                                       n_cons, n, d, mode, j, lhs, psi, wf, volume, mask,
-                                      inv_J, ends, o1, o2, o3, _, a, b)
+                                      inv_J, cmask, drop, dropped, dropped_mid, ends,
+                                      o1, o2, o3, _, a, b)
     @inbounds begin
         o = d == 1 ? o1 : d == 2 ? o2 : o3
         T = eltype(totals)
@@ -2625,6 +2688,29 @@ end
                 end
             end
             totals[c, a, b] = S
+            χ = zero(T)
+            if mode == 2 && cmask !== nothing
+                r, Md, row_lo, row_hi, mid = drop
+                X = zero(T)
+                Y = zero(T)
+                bc = base[c]
+                for p in row_lo:row_hi
+                    L = L0 + p * sd
+                    _fully_covered(cmask[L]) || continue
+                    res = r[1] * bc[L]
+                    for m in 1:Md
+                        res += r[m+1] * (bc[L+m*sd] + bc[L-m*sd])
+                    end
+                    X += res
+                    p <= j && (χ += res)
+                    p <= mid && (Y += res)
+                end
+                dropped[c, a, b] = X
+                dropped_mid[c, a, b] = Y
+                # Relative to the line's middle face, where a line one rank
+                # holds measures the relation: its χ is then zero.
+                χ -= Y
+            end
             if mode == 2 && j > 0
                 q = length(lhs)
                 Lj = L0 + j * sd
@@ -2640,7 +2726,8 @@ end
                 for l in 1-M:M
                     ψ += psi[l+M] * bc[Lj+l*sd]
                 end
-                aux[c, a, b] = (acc + wf * ψ) / sum_l
+                aux[c, a, b] = cmask === nothing ? (acc + wf * ψ) / sum_l :
+                                                   (acc + wf * (ψ - χ)) / sum_l
             end
             whole || continue
             # A filter pass: no offset, and the measured constant removed.

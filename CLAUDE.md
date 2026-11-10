@@ -172,7 +172,7 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as one testset.
 
-The `321 testsets` and the `809/809` of the full `mpi_tests.jl` at two ranks
+The `321 testsets` and the `852/852` of the full `mpi_tests.jl` at two ranks
 are counted by different mechanisms and are not comparable. `runtests.jl`
 runs everything inside one top-level `@testset` and prints one summary tree
 at the end: the top row totals the `@test`s, and each row one indent

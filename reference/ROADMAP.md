@@ -283,7 +283,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   times the unlimited step. Under the limiter setup closes the patch and
   level interfaces with the closure rows, with a warning. The default
   `interface_flux = :ghost` is carried behind the test toggle
-  `LIMITED_GHOST_INTERFACES` (commit `HASH`): with the artificial
+  `LIMITED_GHOST_INTERFACES` (commit `2d5178f`): with the artificial
   properties on, the gradient plans difference the whole flux of an
   interface dimension, so a line is open at an interface, weight h up to it
   and h/2 at the end node, its face values anchored by the derivative's face
@@ -306,6 +306,10 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   stays at round-off, so the solution depends on the rank count. Without
   the artificial properties a part of the flux takes the divergence's
   one-sided rows, whose face form differs, and setup keeps the closure rows.
+  The filter pass a parent takes beside a child measures its face relation
+  relative to the middle face of the line, from the residual the pass
+  drops, so the faces it limits do not depend on the decomposition (commit
+  `HASH2`).
   The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the

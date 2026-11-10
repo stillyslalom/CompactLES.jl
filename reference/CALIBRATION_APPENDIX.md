@@ -2472,7 +2472,7 @@ blast's tiles and 1.64 on the r-z corner box; under `part=tilecost flux=ghost` t
 7.17 ms per step unlimited and 10.72 limited, the tiles 9.01 and 13.20, so the limited tiled
 step costs 1.47 times the unlimited tiled one and 1.24 times the limited box's.
 
-`part=tiledrift ledger=true` (package commit `HASH`, Julia 1.13.3; transcript
+`part=tiledrift ledger=true` (package commit `2d5178f5`, Julia 1.13.3; transcript
 `bench/results/tiledrift.txt`) runs the same cylindrical Noh, the level over root nodes 1:81,
 unlimited and under `patch_interfaces = :closure` except where a row says otherwise, on one layout
 and with one change at a time.

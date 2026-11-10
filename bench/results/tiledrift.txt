@@ -1,5 +1,5 @@
 === julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true
-    package commit HASH, Julia 1.13.3, one thread
+    package commit 2d5178f5, Julia 1.13.3, one thread
 
 === tiledrift: the cylindrical Noh level over 81 nodes ===
   uniform            6640 steps    4.2 s  plateau 15.6523  deficit 50.9%  shock 0.2033

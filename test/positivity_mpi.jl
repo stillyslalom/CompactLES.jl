@@ -197,9 +197,19 @@ function test_positivity_limiter()
         end
         scale = maximum(q -> maximum(abs, parent(q)), Qtref)
         tag = "patches, :$flux"
+        # The limited blast amplifies round-off under either flux once the
+        # limiter acts: on one rank, one unit in the last place of one node's
+        # initial density moves the state after 40 steps by 1.5e-11 under
+        # :closure and by 5.4e-8 under :ghost, where the growth starts at the
+        # shared node, whose two end faces under :ghost carry values that
+        # differ by the scheme's own mismatch; by step 80 it moves the density
+        # by 8e-4 (:closure) and 1.5e-3 (:ghost) in L1 and by step 300 by 2e-2
+        # and 4e-2. The decomposed runs depart by as much as the one-ulp
+        # change (3.9e-8 at np = 8, 4.7e-8 at np = 4).
+        tol = flux === :ghost ? 1e-6 : 1e-8
         check("$tag: interface flux kept", s.interface_flux === flux ? 0.0 : 1.0, 0.5)
-        check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
-        check("$tag: clock against one rank", abs(s.t - tref.t) / tref.t, 1e-8)
+        check("$tag: state against one rank (relative)", gmax(worst) / scale, tol)
+        check("$tag: clock against one rank", abs(s.t - tref.t) / tref.t, tol)
         check("$tag: stage faces limited (relative difference)",
               abs(c.stage_limited - ctref.stage_limited) / max(ctref.stage_limited, 1),
               1e-2)
@@ -328,6 +338,11 @@ function test_positivity_limiter()
         check("$tag: clock against one rank", abs(s.t - rref.t) / rref.t, 1e-8)
         check("$tag: stage faces limited (relative difference)",
               abs(c.stage_limited - crref.stage_limited) / max(crref.stage_limited, 1),
+              1e-2)
+        # The root's passes drop the tiles' residual, and the face relation of
+        # such a pass is measured at a face that depends on the split.
+        check("$tag: filter faces limited (relative difference)",
+              abs(c.filter_limited - crref.filter_limited) / max(crref.filter_limited, 1),
               1e-2)
         report = state_report(s, Q)
         check("$tag: inadmissible points at the end",
