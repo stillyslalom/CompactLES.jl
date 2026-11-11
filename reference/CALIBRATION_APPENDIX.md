@@ -348,52 +348,84 @@ species channel](#the-partial-density-species-channel)).
 
 ### C_Y, the mass-fraction bound
 
+```text
+julia --project=. -t 1 bench/artcal.jl Y alphaf=0.47
+```
+
 A shocked species interface rings, and the ringing grows as the initial interface narrows. A
-shock in air runs into a tanh interface with SF6 under the default `ArtificialProperties`:
+shock in air runs into a tanh interface with SF6 under the default `ArtificialProperties`
+and with the bound off, at the solver's filter strength (scratch script; `bench/artcal.jl Y`
+prints the worst excursions, the final widths and the `C_Y` sweep below):
 
 ```
 Mach 1.5, air γ = 1.4, R = 1; SF6 γ = 1.09, density 5.04; N = 400, Dirichlet ends, cfl = 0.4
-initial interface | worst Y          | final Y range     | width (cells)
-2h                | -0.204 / +1.204  | -0.009 / +1.098   | 6 → 3
-4h                | -0.023 / +1.023  | -0.0004 / +1.021  | 12 → 4
-8h                | clean            | clean             | 14
+initial   | defaults: worst Y   final Y range       | C_Y = 0: worst Y    final Y range       | width (cells)
+2h        | -0.0050 / +1.0050   -0.0006 / +1.0006   | -0.0079 / +1.0079   -0.0038 / +1.0038   | 6 → 5
+4h        | -0.0012 / +1.0012   -0.0007 / +1.0007   | -0.0043 / +1.0043   -0.0037 / +1.0037   | 12 → 6
+8h        | clean               clean               | clean               clean               | 24 → 9
 ```
 
-The shock compresses the interface by the density ratio across it, and the ringing is a
-two-cell odd-even train on the light side, set by the cells the interface spans after
-compression. Neither the resolution at a fixed initial width nor any numerical setting varied
-moves it, and only a species diffusivity a hundred times Cook's comes near removing it:
+The shock compresses the interface by the density ratio across it, and the ringing is set by
+the cells the interface spans after compression. At the default `C_D` the ringing sensor
+alone holds the 2h interface to under a percent outside the unit interval. The bound takes a
+third off the run's worst excursion and cuts the final one sixfold. With the bound off, the
+numerical settings move the excursion little, and a smaller `C_D` loses the interface:
 
 ```
-2h interface                                                  worst min Y
-N = 800 and 1600, closures = :onesided,
-beta_sensor = :dilatation, detector = :d8, cfl = 0.2,
-compact_filter(0.3), each varied alone                        −0.18 to −0.29
-C_D = 1, a hundred times Cook                                 −0.008
-artificial properties disabled                                −0.43
+2h interface, C_Y = 0, each setting varied alone   worst min Y                        steps
+defaults                                           −0.0079                            641
+N = 800                                            −0.0076                            1297
+N = 1600                                           −0.0068                            2610
+compact_filter(0.47, closures = :cascade)          −0.0079                            641
+compact_filter(0.3)                                −0.0411                            635
+cfl = 0.2                                          −0.0077                            1279
+beta_sensor = :dilatation                          −0.0080                            641
+detector = :delta4                                 −0.0055                            640
+detector = :d8                                     −0.0088                            620
+C_D = 0.01                                         outside the species band, stopped
+C_D = 0                                            outside the species band, stopped
+artificial properties disabled                     outside the species band, stopped
 ```
 
-Cook's D\* = C_D c h |δ⁴Y| peaks near 2e-5 in the train, a diffusive time across a cell of
-order one against a shock crossing of 0.005, so it cannot hold an interface the shock has
-thinned.
+Resolution, CFL, the filter's closure rows, the sensor field and the detector move the
+excursion by a third at most, and a stronger filter raises it fivefold. At Cook's constant,
+`C_D = 0.01`, and below it the ringing sensor does not hold an interface the shock has
+thinned, and the run leaves the band of `StepControl.species_band` and stops under the
+strict validity policy.
 
 The species diffusivity therefore carries the mass-fraction bound of [Cook (2007, eq.
 18)](https://doi.org/10.1063/1.2728937), zero wherever Y lies in the unit interval:
 
 ```
-D*_k = c · G[ max( C_D h |δ⁴Y_k| , C_Y h max(0, −Y_k, Y_k − 1) ) ]
+D*_k = c · G[ max( C_D h |D Y_k| , C_Y h max(0, −Y_k, Y_k − 1) ) ]
 ```
 
-with G the sensor smoother. Cook used `C_Y = 100`. His later form [(2009, appendix A, eq.
-A8)](https://doi.org/10.1063/1.3139305) writes the bound as twice the max, with
-`C_Y = 50`. Both Cook forms use the Δ²/Δt scaling. [Shankar, Kawai & Lele
+with G the sensor smoother and D the species detector. Cook used `C_Y = 100`. His later
+form [(2009, appendix A, eq. A8)](https://doi.org/10.1063/1.3139305) writes the bound as
+twice the max, with `C_Y = 50`. Both Cook forms use the Δ²/Δt scaling. [Shankar, Kawai & Lele
 (2011, eq. A4)](https://doi.org/10.1063/1.3553282) carry `C_Y = 100` into the cΔ scaling
 used here. This implementation uses a maximum rather than their additive combination, the
 later operator documented by [Brill, Olson & Bokman (2025, eq.
 24)](https://arxiv.org/abs/2503.12680). Cook's scaling differs from the cΔ form by 1/CFL, so
-the published values map to values near 100 here. Measured on the 2h case at `C_D = 0.01`:
+the published values map to values near 100 here. On the 2h case under the defaults:
 
 ```
+C_Y      | worst Y            | final Y range      | steps
+0        | -0.0079 / +1.0079  | -0.0038 / +1.0038  | 641
+50       | -0.0062 / +1.0062  | -0.0010 / +1.0010  | 641
+100   *  | -0.0050 / +1.0050  | -0.0006 / +1.0006  | 642
+200      | -0.0039 / +1.0039  | -0.0004 / +1.0004  | 644
+500      | -0.0025 / +1.0025  | -0.0003 / +1.0003  | 647
+1000     | -0.0018 / +1.0018  | -0.0002 / +1.0002  | 652
+```
+
+The worst excursion falls steadily with the constant, more than threefold from 50 to 1000.
+The step count rises over the same range by under 2%. The form of the term was chosen under `:delta4` at
+`C_D = 0.01`, where the bound carries the whole excursion; the rows are kept as the record of
+that choice:
+
+```
+:delta4, C_D = 0.01, 2h interface
 C_Y    combine  smoothing   | worst Y          | final Y range      | steps
 0      –        –           | -0.204 / +1.204  | -0.0087 / +1.098   |  640
 50     sum      separate    | -0.018 / +1.018  | -0.0012 / +1.001   |  644
@@ -408,53 +440,57 @@ C_Y    combine  smoothing   | worst Y          | final Y range      | steps
 Sum and max are indistinguishable, as are smoothing the two terms separately and smoothing
 their max once (Cook's single filter of the bracket), which costs no line solve beyond the
 ringing sensor's. The unsmoothed term is a grid-scale diffusivity that helps less and
-triples the step count through `compute_dt`. The residual 1% at the default is the compact
-scheme's dispersion at a three-cell contact, and it falls to 0.25% on an initial interface
-twice as wide. The bound keeps its effect on a stronger shock:
+triples the step count through `compute_dt`. The bound keeps its effect on a stronger shock,
+where at Cook's constant it is the difference between a bounded interface and a mass
+fraction below −1:
 
 ```
-Mach 3     worst min Y
-C_Y = 0    −0.94
-C_Y = 100  −0.043
+Mach 3, 2h interface, permissive validity (scratch script)
+config                   worst min Y    steps
+C_Y = 0                  −0.0257        1408
+C_Y = 100  *             −0.0105        1411
+C_D = 0.01, C_Y = 0      −1.2807        1415
+C_D = 0.01, C_Y = 100    −0.0152        1422
 ```
 
-The bound enters the diffusive rate like the rest of D\*: excluding it is stable to
-`C_Y = 500` and saves 1% of the steps, and at 1000 it takes a square root of a negative
-pressure. Cook's Δ²/Δt scaling fixes the bound's diffusion number by construction, so
+The bound enters the diffusive rate like the rest of D\*. With the form-variant rows above,
+excluding it from the rate was stable to `C_Y = 500` and saved 1% of the steps. At 1000 the
+excluded form took a square root of a negative pressure, while the included form completes
+the sweep above. Cook's Δ²/Δt scaling fixes the bound's diffusion number by construction, so
 keeping it in the rate is the same choice.
 
 **The dead band.** The term is not inert on a smooth profile that touches a bound: the
-intermediate Runge–Kutta stages leave [0, 1] although the completed steps never do, and the
-bound then costs more than one order of accuracy:
+intermediate Runge–Kutta stages leave the unit interval although the completed steps never
+do, and without a dead band the bound raises the error by a factor of 20 to 350:
 
 ```
-uniform advection of Y = (1 + cos 2πx)/2, one period
-C_Y     L2 order
-0       4.9
-100     3.6
+two-species advection of Y₁ = (1 + cos 2πx)/2 at uniform ρ, p and u, one period, cfl = 0.4;
+L2 error of Y₁ (scratch script)
+config                       N = 32     N = 64     N = 128    N = 256    orders
+defaults                     7.54e-08   1.73e-09   6.33e-11   3.33e-12   5.45 4.77 4.25
+C_Y = 0                      7.54e-08   1.73e-09   6.33e-11   3.33e-12   5.45 4.77 4.25
+C_D = 0                      7.51e-08   1.73e-09   6.33e-11   3.33e-12   5.44 4.77 4.25
+C_D = 0, Y_tolerance = 0     1.62e-06   1.60e-07   1.41e-08   1.18e-09   3.34 3.50 3.58
+Y_tolerance = 0              1.64e-06   1.61e-07   1.41e-08   1.18e-09   3.35 3.51 3.59
+species channel off          7.51e-08   1.73e-09   6.33e-11   3.33e-12   5.44 4.77 4.25
 ```
 
 The excursion appears only at the second to fifth stages, at 6e-6 on 64 points. It falls 4×
-per doubling. A dead band of `Y_tolerance = 1e-4` restores the `C_Y = 0` errors to the last
-digit and leaves the shock case unchanged, worst −0.0135 against −0.0134. Evaluating at
-stage 1 only does the same; the dead band stores nothing and is the form adopted.
+per doubling. The dead band of `Y_tolerance = 1e-4` restores the `C_Y = 0` errors to the
+last digit and leaves the worst excursion of the shocked 2h interface unchanged in four
+digits. Evaluating at stage 1 only does the same; the dead band stores nothing and is the
+form adopted.
 
-**Cost on a smooth profile.** On a resolved cosine the default species channel raises the
-error between 35 and 40 times, and the cost belongs to the ringing sensor, not to the bound:
+**Cost on a smooth profile.** The default species channel costs nothing on the resolved
+cosine: its errors match those with the channel off to within half a percent at the coarsest
+grid and to three digits above it. The profile touches both bounds and the dead band keeps
+the bound inert there, so the species detector's response to the cosine is below anything
+the error shows.
 
-```
-two-species advection of Y₁ = (1 + cos 2πx)/2 at uniform ρ, p and u
-                        L2 at N = 32   L2 at N = 256   order
-default D*, bound on    3.12e-6        1.15e-10        4.84 → 4.97
-species channel off     7.85e-8        3.23e-12        5.50 → 4.29
-```
-
-The profile touches both bounds, and the dead band keeps the bound inert there, so the
-factor is the ringing sensor's response to the cosine.
-
-**The surrounding formulation.** A resting two-gas interface stays in pressure and
-temperature equilibrium under it, and its mass-fraction overshoot comes from the filter. On
-a stationary interface at uniform p and T and zero velocity for t = 0.25, the compact filter
+**The surrounding formulation**, measured under `:fickian`, `:delta4` and `C_D = 0.01`. A
+resting two-gas interface stays in pressure and temperature equilibrium under the bound, and
+its mass-fraction overshoot comes from the filter. On a stationary interface at uniform p
+and T and zero velocity for t = 0.25, the compact filter
 alone leaves p, u and T uniform to 1e-14. It is the whole source of the ±1e-3 mass-fraction
 overshoot of a resting 2h interface, since the uniform-(p, T) state is a linear subspace of
 the conserved variables for ideal gases of constant c_v, which a componentwise linear filter
@@ -463,9 +499,16 @@ preserves. The artificial species flux with its enthalpy energy flux holds T uni
 same flux carrying species internal energy instead, which Brill et al. argue for, leaves a
 secular temperature drift 50× larger. Three species at equal density under the per-species
 diffusivities hold bulk density to 4e-14, so the correction velocity already gives what
-Brill et al. obtain from a shared diffusivity.
+Brill et al. obtain from a shared diffusivity. Under the default `:partial_density` channel a
+uniform (u, p, T) state stays uniform to round-off ([the partial-density species
+channel](#the-partial-density-species-channel)).
 
-**Recommendation:** `C_Y = 100` with `Y_tolerance = 1e-4`, the defaults.
+**Recommendation:** `C_Y = 100` with `Y_tolerance = 1e-4`, the defaults. At the default
+`C_D` the bound takes a third off the shocked interface's worst excursion and more than half
+at Mach 3 for a fraction of a percent more steps, and the dead band keeps it inert on a
+smooth profile. At a smaller
+`C_D` it is what holds a shock-thinned interface. Larger values hold the excursion tighter at
+a few more steps.
 
 ### The sensor smoother
 
@@ -1003,7 +1046,9 @@ whose C_D is 0.048. Within the converted rows the excursion doubles when C_beta 
 diffusive flux F_q = −D_b ∇q on every conserved variable, with D_b built from the Fickian
 channel's own bracket sensed on both the mass and the mole fraction of every species
 (`reference/DESIGN.md`, "The species channel"). Everything below is on the one-dimensional
-cases at the package's constants, the Gaussian smoother, D_b in the timestep, at CFL 0.4.
+cases under `detector = :delta4` and `C_D = 0.01` unless a row says otherwise, the Gaussian
+smoother, D_b in the timestep, at CFL 0.4. "Default" in this section names `:fickian`, the
+reference channel of these rows.
 
 Brill et al. find that the traditional Fickian channel leaves a pressure oscillation on an
 advected bubble that their diffused-density formulation removes. Their section 3.1 reports
@@ -1100,8 +1145,10 @@ by 6%; C_Y is the active constant and trades the excursion for steps. The two fa
 advection rows are the mass-fraction bound and not the channel: the two channels are
 bit-identical on that equal-weight case, and at C_Y = 200 both lose positivity on the first
 step, since a bound that switches on inside a step is not in the step size set before it.
-C_D = 0.01 and C_Y = 100 stay. The three-dimensional measurements are in [their own
-section](#the-bulk-species-channel-in-three-dimensions). Open beside them: the
+Under `:delta4` these rows kept C_D = 0.01 and C_Y = 100 for the channel; the channels at
+the current detector and C_D are compared in [the partial-density species
+channel](#the-partial-density-species-channel). The three-dimensional measurements are in
+[their own section](#the-bulk-species-channel-in-three-dimensions). Open beside them: the
 ratio-1000 failures, which are the transmitted shock's foot on the shock case and
 the seven-cell density jump on the slab, neither a species-channel failure; the unequal-γ
 drift is answered there.
@@ -10599,9 +10646,11 @@ no channel removes. The product form of the consistency fluxes is kept.
 
 ### The energy budget and the layer widths of the shocked tube
 
-`bench/tubebudget.jl`, serial at `-t 16`. The tube is the He/CO2 deck of [the
-partial-density channel's](#the-partial-density-species-channel) two-dimensional comparison
-under NASA-9 thermodynamics with Euler fluxes. A callback replays every accepted step with
+`bench/tubebudget.jl`, serial at `-t 16`. The tube is the He/CO2 deck of
+`bench/he_co2_shock_tube.jl` under NASA-9 thermodynamics with Euler fluxes, measured under
+`detector = :delta4` at `C_D = 0.1` and `compact_filter(0.45)`; [the partial-density
+channel's](#the-partial-density-species-channel) two-dimensional comparison runs the same
+deck calorically perfect under the current defaults. A callback replays every accepted step with
 each stage's right-hand side split by term; the replayed state agreed bitwise with the one
 `run!` held after every step of every run, so the `repairs` row is zero throughout. Changes
 are in J per metre of depth on the NASA-9 energy scale.
@@ -11561,10 +11610,8 @@ The split keeps what the full `:d8` loses at the origin: the spherical plateau a
 of wall heating on the planar wall and the axis, 0.2% on the Woodward–Colella peak and
 0.1% on the Shu–Osher train; the
 D\* half cannot, since it is not computed without species. At `C_D = 0.1` the split
-detector passes the period-four trail behind the shocked interface that δ⁴ damps. TV − 1
-rises nearly to its value at `C_D = 0.01` under δ⁴ ([the partial-density species
-channel](#the-partial-density-species-channel)), and the passive width is the D\*-off width
-of [C_D](#c_d-the-species-diffusivity). At `C_D = 1` the split holds the shocked interface
+detector passes the period-four trail behind the shocked interface that δ⁴ damps, and TV − 1
+rises tenfold. At `C_D = 1` the split holds the shocked interface
 tighter than the default in both TV − 1 and worst Y and narrows the passive width by 10%.
 On the smooth composition slab it deposits 300 times less than the default. A D\*-only
 split, δ⁴ on every field but the mass and mole fractions, would leave every single-species

@@ -98,9 +98,10 @@ given keywords replaced, keeping its element type.
   [Shankar, Kawai & Lele (2011, eq. A4)](https://doi.org/10.1063/1.3553282),
   while the maximum in place of their additive combination follows
   [Brill, Olson & Bokman (2025, eq. 24)](https://arxiv.org/abs/2503.12680).
-  The ringing sensor alone cannot hold a species interface that a shock or a
-  strain field has thinned to a few cells: a 2h interface hit by a Mach 1.5
-  shock reaches Y = −0.2 with `C_Y = 0` and −0.010 at the defaults.
+  At the default `C_D` the ringing sensor holds a species interface that a
+  shock has thinned to a few cells close to [0, 1], and the bound tightens it
+  further for a fraction of a percent more steps; at a smaller `C_D`, such as Cook's
+  own, the bound is what keeps such an interface inside [0, 1].
   Set `C_Y = 0` to disable it.
 - `Y_tolerance`: dead band of the bound; an excursion smaller than this is
   ignored. The stages of the Runge–Kutta step overshoot a smooth profile
@@ -152,20 +153,23 @@ given keywords replaced, keeping its element type.
   whatever the composition, no stress or conduction is added, and the
   channel produces thermodynamic entropy wherever the partial densities are
   positive. Under `ConstantTransport(mu0 = 0)` it takes as many line solves as the
-  Fickian channel and about a tenth more time per step.
+  Fickian channel and about the same time per step.
   `:fickian` is Cook's per-species flux J_k = −ρ D\\*_k ∇Y_k, with the
   correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
   Σ_k h_k J_k in the energy equation. Between gases of unequal molecular
   weight this flux carries a net volume, so it moves the pressure at an
-  interface and radiates grid-scale sound. It is the cheapest channel, and
-  that error vanishes between gases of equal molecular weight.
+  interface and radiates grid-scale sound; that error vanishes between gases
+  of equal molecular weight. Choose it to reproduce Cook's form; it costs
+  about what the default does.
   `:bulk` applies −D_b ∇q to every conserved variable q, the parabolic
   regularization of [Guermond & Popov (2014)](https://arxiv.org/abs/1212.5566).
   It holds a uniform (u, p, T) state as the default does, and also adds an
   artificial viscosity ρD_b ∇u and conduction, which damp the roll-up of a
-  shocked interface and hold a density ratio of 100 tighter. It costs n_cons
-  gradient line solves per direction, about a fifth more per step than the
-  Fickian channel.
+  shocked interface. Choose it where that added dissipation is wanted. At a
+  large density ratio it holds the mass fractions of a shocked interface no
+  closer to [0, 1] than the default, and how much it rings there depends on
+  the state filter's strength. It costs n_cons gradient line solves per
+  direction, about a seventh more per step than the default.
   D_b is stored in every `D_art[k]` and enters the diffusive timestep. Patched
   and refined runs take the channel as the root does.
 - `C_sharpen`: strength of the interface sharpening flux, 0 (default) for

@@ -9,9 +9,10 @@
 # field response brill2025 bulk bulkconst
 #
 # Background settings (`key=value`): smoother, detector, alphaf (the compact
-# filter's alpha, 0.45 = the solver default) and filter_cfl (0.35 = the solver
-# default, 0 = unrelaxed). `bulkconst` also reads C_Ds and C_Ys, each a comma
-# list overriding the swept C_D and C_Y values.
+# filter's alpha; 0.45 here, the value the constants were fitted at, while the
+# solver's default is 0.47, measured with `alphaf=0.47`) and filter_cfl (0.35 =
+# the solver default, 0 = unrelaxed). `bulkconst` also reads C_Ds and C_Ys,
+# each a comma list overriding the swept C_D and C_Y values.
 # The filter background reaches every case, so a constant re-swept at a
 # candidate alpha or under the relaxed formulation is measured on the same
 # battery its default was fitted on.
@@ -76,11 +77,12 @@ const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
 # plain run of the rest of the sweeps never has to parse them.
 const BULK_C_Ds = parse.(Float64, split(OPTS.C_Ds, ','))
 const BULK_C_Ys = parse.(Float64, split(OPTS.C_Ys, ','))
-# The filter background every case runs under. The two values above are the
-# `Numerics` defaults, spelled out because `Numerics` holds them only inside a
-# built filter; the `filter` sweep marks 0.45 as the default for the same
-# reason. A sweep that varies the filter itself passes `filt=` after these and
-# the later keyword wins.
+# The filter background every case runs under. `filter_cfl = 0.35` is the
+# `Numerics` default; `alphaf = 0.45` is the strength the battery's constants
+# were fitted at, below the solver's 0.47, and the `filter` sweep marks 0.45
+# as the background. Both are spelled out because `Numerics` holds them only
+# inside a built filter. A sweep that varies the filter itself passes `filt=`
+# after these and the later keyword wins.
 const BG = (filt = compact_filter(OPTS.alphaf), filter_cfl = OPTS.filter_cfl)
 const NAMES = filter(a -> !occursin('=', a), ARGS)
 const WHICH = isempty(NAMES) ? ALL : NAMES

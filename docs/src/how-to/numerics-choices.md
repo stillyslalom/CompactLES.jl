@@ -231,7 +231,7 @@ filtering even when artificial properties are enabled. Use
 | `smoother` | `:gaussian`, explicit | `:compact`, one pass of the state filter per sensor: a quarter of the right-hand side in the multicomponent case, and one sweep per species |
 | `beta_sensor` | `:strain` | `:dilatation` on an inviscid wall or wherever the strain cusp costs order |
 | `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` elsewhere | `:d8` on every field separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling on Noh from 0.5 to 0.4; `:delta4` with `C_D = 0.1` is the earlier default and Cook's form of the Fickian channel |
-| `species_flux` | `:partial_density`, one diffusivity on the partial densities with the mass flux carried into momentum and energy | `:bulk` for a shocked interface at a density ratio of 100 or more, at about a tenth more per step again; `:fickian`, Cook's per-species flux, is cheaper and moves the pressure at an interface of unequal molecular weight (see [Filtering and artificial properties](@ref)) |
+| `species_flux` | `:partial_density`, one diffusivity on the partial densities with the mass flux carried into momentum and energy | `:bulk` where an added viscosity and conduction at the interface are wanted, at about a seventh more per step; `:fickian`, Cook's per-species flux, costs about the same as the default and moves the pressure at an interface of unequal molecular weight (see [Filtering and artificial properties](@ref)) |
 
 Sensor smoothing is the largest single cost in the artificial-property
 calculation. With the default smoother, it takes about a quarter of a

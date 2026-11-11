@@ -85,7 +85,8 @@ function budget(name, solver, Q)
     # Detector applications and smoothing passes are counted separately, since
     # `mu_sensor = :velocity` is the one setting where they differ: it detects
     # three fields (one per velocity component) and smooths their reduction
-    # once.
+    # once. `detector = :species_d8` takes the pentadiagonal solve on the
+    # species fields alone, the rest under δ⁴.
     art = solver.art
     nsp = solver.equations.n_species > 1 ? solver.equations.n_species : 0
     strain = art.mu_sensor === :strain || art.beta_sensor in (:strain, :gated_strain)
@@ -94,7 +95,8 @@ function budget(name, solver, Q)
                             (dilat ? 1 : 0) + 1 + nsp : 0
     ndetect = art.enabled ? nsensor + (art.mu_sensor === :velocity ? 2 : 0) : 0
     nsmooth = art.smoother === :compact ? nact * nsensor : 0
-    nring = art.detector === :d8 ? nact * ndetect : 0
+    nring = art.detector === :d8 ? nact * ndetect :
+            art.detector === :species_d8 && art.enabled ? nact * nsp : 0
     nchannel = !shared ? 0 : art.species_flux === :bulk ?
                solver.equations.n_cons : solver.equations.n_species
     nY = CL._species_gradients_skipped(solver) ? 0 : solver.equations.n_species

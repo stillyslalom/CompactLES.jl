@@ -28,7 +28,7 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_mu` | 0.002 | open (N4) | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green at Re = 1600 fits best at 0 at 64³ and 128³ and selects no positive value; the evidence for 0.002 is decaying turbulence under a different filter ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green), [where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)). |
 | `C_D` | 1.0 | keep | The lowest value of a decade sweep that removes the lump of heavy gas behind a shocked interface, on the air/SF6 case and on the He/CO2 tube; the ringing changes little from 1 to 3 on both and at density ratio 100, while the width and the smooth deposit keep growing. It is the default under every detector; the `:delta4` measurements used 0.1. Under `:fickian` the interface pressure error grows with it ([C_D](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity), [species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
-| `C_Y` | 100 | keep | A shocked 2h interface rings to ±0.2 without the bound and ±0.012 with it ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
+| `C_Y` | 100 | keep | At the default `C_D` the bound takes a third off a shocked 2h interface's worst excursion and more than half at Mach 3, for a fraction of a percent more steps; at Cook's `C_D = 0.01` it is what holds the interface inside the species band. Larger values hold it tighter at a few more steps ([C_Y](CALIBRATION_APPENDIX.md#c_y-the-mass-fraction-bound)). |
 | `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
@@ -92,13 +92,15 @@ cost. The link is to the section holding the evidence.
   it was measured and not adopted; the relaxed filter's weight is directional
   and carries no such penalty
   ([directional β\*](CALIBRATION_APPENDIX.md#directional-bulk-viscosity)).
-- **Mass fractions leave [0, 1] at a shocked interface.** The default
-  `C_Y = 100` keeps the excursion of a shocked interface an order of magnitude
-  smaller than it is without the bound (the table above).
-  Resolve the interface over 4h for a quarter of a percent, or 8h for a clean
-  profile; resolution, closures, detector, sensor field, CFL and filter strength
-  each move the excursion by nothing
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+- **Mass fractions leave [0, 1] at a shocked interface.** The default `C_D`
+  and `C_Y` hold a shocked interface two cells wide to half a percent outside
+  the unit interval.
+  Resolve the interface over 4h for about a tenth of a percent, or 8h for a
+  clean profile, or raise `C_Y` at a few more steps; resolution, filter rows,
+  detector, sensor field and CFL each move the excursion by a third at most,
+  and a stronger filter raises it. Do not lower `C_D` toward Cook's 0.01
+  without the bound
+  ([C_Y](CALIBRATION_APPENDIX.md#c_y-the-mass-fraction-bound)).
 - **Mass fractions ring inside [0, 1] behind a shocked interface.** The
   bound is zero there, so `C_D` is the damping. Below the default `C_D = 1`
   a lump of the heavy gas separates from the light side of the interface;

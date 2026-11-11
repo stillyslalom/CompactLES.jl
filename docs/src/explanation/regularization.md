@@ -134,10 +134,10 @@ enthalpy flux in the energy equation. It moves no bulk mass. Between gases
 of unequal molecular weight, a mass flux that sums to zero still carries a
 net volume, so at a composition interface the enthalpy flux changes the
 pressure of a state whose velocity, pressure and temperature are uniform.
-The error is proportional to `C_D`. On an advected interface at a density
-ratio of a hundred it reaches a percent of the pressure, and behind a
-shocked helium/carbon dioxide interface it radiates sound four to five
-cells in wavelength. It is the cheapest of the three forms.
+The error grows with `C_D`. On an advected interface at a density ratio of
+a hundred it reaches several percent of the pressure, and behind a shocked
+helium/carbon dioxide interface it fills the light gas with grid-scale
+pressure waves. It costs about what the default does.
 
 `:bulk` diffuses every conserved variable with the shared diffusivity, the
 parabolic regularization of
@@ -148,12 +148,12 @@ the roll-up of a shocked interface. As a continuous model it satisfies the
 entropy inequality of the system; the discrete update does not inherit that
 property.
 
-Keep the default. Choose `:bulk` for a shocked interface at a density ratio
-of a hundred or more, where its added dissipation holds the mass fractions
-closer to [0, 1]. Choose `:fickian` to reproduce a code that uses Cook's
-form. On a two-dimensional shocked helium/carbon dioxide interface the
-default costs about a tenth more per step than `:fickian` and `:bulk`
-about a fifth more.
+Keep the default. Choose `:bulk` where an added viscosity and conduction at
+the interface are wanted; at a large density ratio it holds the mass
+fractions of a shocked interface no closer to [0, 1] than the default, and
+how much it rings there depends on the strength of the state filter. Choose
+`:fickian` to reproduce a code that uses Cook's form. The default and
+`:fickian` cost about the same per step, and `:bulk` about a seventh more.
 
 Bulk viscosity is the primary shock-spreading mechanism. Conductivity controls
 thermal ringing and wall heating. Species diffusivity prevents an unresolved
