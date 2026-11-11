@@ -175,20 +175,17 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as one testset.
 
-The `322 testsets` and the `852/852` of the full `mpi_tests.jl` at two ranks
-are counted by different mechanisms and are not comparable. `runtests.jl`
-runs everything inside one top-level `@testset` and prints one summary tree
-at the end: the top row totals the `@test`s, and each row one indent
-beneath it is one top-level `@testset` of `serial_suite.jl` or of a file it
-includes; the `322` counts those rows from the package environment, where
-HDF5 does not load, and the count is 332 under `Pkg.test`, whose test target
-carries HDF5. A failure is recorded and the suite runs on, so one run
-reports every failure, and the outer testset raises at the end.
+The serial and MPI suites count by different mechanisms, and their totals
+are not comparable. `runtests.jl` runs everything inside one top-level
+`@testset` and prints one summary tree at the end: the top row totals the
+`@test`s, and each row one indent beneath it is one top-level `@testset` of
+`serial_suite.jl` or of a file it includes, with more rows under `Pkg.test`,
+whose test target carries HDF5. A failure is recorded and the suite runs on,
+so one run reports every failure, and the outer testset raises at the end.
 `mpi_tests.jl` uses `Test` not at all and counts individual
 `check(name, val, tol)` assertions, printing `passed/total` and exiting
-nonzero on any failure. Adding a testset moves the first number, adding one
-assertion moves the second, and neither is a fraction of the other, so treat
-both as figures to record before a change and compare after.
+nonzero on any failure. Neither total is recorded here: take both from a run
+of the base commit and compare after the change.
 
 `test/hdf5_tests.jl` covers the HDF5 extension and is skipped by the gate above:
 HDF5 is a `[weakdeps]` entry, so it is not loadable from the package
@@ -214,63 +211,16 @@ runs them.** The Makie extension is verified only from the docs environment,
 which carries CairoMakie, and under `mpiexec` for the
 decomposition-independent profile; CI's documentation job runs both.
 
-`test/convergence.jl` prints measured orders against regression guards baked
-into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.18
-(`:cascade3` 3.17, `:cascade4` 4.02, `:brady_livescu` 5.88), C8 wall closures
-3.18 (`:brady_livescu` 7.91), C10 wall closures 3.18, filter pass
-`:cascade` 1.88 / `:onesided` 8.07,
-symmetry planes 6.00 / 6.00 (C6), 8.05 / 7.95 (C8) and 10.23 / 10.17 (C10)
-on an even and an odd field, with a filter pass between planes at 7.88,
-cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
-2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 3.00 / 7.00 /
-3.00 (C6 `:neutral3`, `:cascade3`, `:cascade4`, `:brady_livescu`, then C8
-`:neutral3` and `:brady_livescu`, then C10 `:neutral3`), staggered
-operators 6.04 / 6.07 / 5.97 / 6.06 periodic (D_s, G, interpolation, L) and
-6.00 / 6.02 / 5.99 / 6.02 under the wall mirror and 6.01 / 5.98 / 6.00 /
-5.98 between symmetry planes (L on an odd field 6.01), L on the metric 6.06
-(stretched), 5.96 (cylindrical axis), 5.07 (resolved-θ axis), 4.03
-(spherical origin), 5.33 (spherical poles) and 1.00 (curved wall), wall
-evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
-3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
-shear mode 4.67), a pulse on slip walls 4.88 (Cartesian line) / 4.62 (r-z
-annulus), against the run at a third of the spacing,
-symmetry-plane evolution 4.46 (one-sided filter 4.69, C8 4.00, C10 4.00,
-viscous slip with a tangential shear 6.04),
-interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
-(two levels under the closure rows, C6 / `:brady_livescu`), 6.00 (three
-levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
-`:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
-pentadiagonal filter), a level at a slip wall 4.68 and at a symmetry plane
-6.33 (the fine wall window against the uniform run at the fine spacing;
-1.55 under the `:filter` restriction), three levels at a symmetry plane
-5.49 (the second level's plane window, filtered), a level at the r-z axis
-6.43 / 6.47 (inviscid / viscous, filtered, the fine axis window) and at the
-corner of the axis and a plane at z = 0 7.11 (the
-fold window), a level on an r-z annulus 5.70 / 5.41 (inviscid / viscous, the
-fine interface window against the uniform run at the fine spacing), a level
-at an NSCBC outflow 6.45 (the fine face window against the uniform run at
-the fine spacing), a level across a periodic seam 6.24 (the fine interface
-window against the uniform run at the fine spacing), temporal order 3.99 / 4.09
-(Dirichlet / NSCBC inflow data),
-1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
-additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is
-`:neutral3`; the coordinate-singularity studies close
-their outer end with a wall and use the default rows, and the interface
-studies take the default ghost fluxes but for the three closure-row studies,
-where an interface divergence selects the cascade rows or the source's.
-A symmetry plane plans no closure row; its evolution rows are measured
-against a five-times-finer folded mirror, since the mirror at the same
-spacing reproduces the run to round-off.
-The evolution
-rows share `test/smooth_cases.jl` with `bench/boundaryorder.jl`; add a smooth
-case there, not in either consumer.
-**For a change not
-expected to affect numerics these should come out bit-identical, down to the error
-magnitudes.** A moved digit indicates a real change; chase it before moving
-on. Each study asserts both a wide guard, which fails when the order
-has regressed, and a ±0.02 guard against the number above, which fails when it
-has drifted; the two print different diagnostics. Update a `recorded` value only
-together with the list here and the table in the file's header.
+`test/convergence.jl` prints measured orders against the regression guards
+recorded in the table of its header, which also says how each study is set
+up. **For a change not expected to affect numerics the output should come
+out bit-identical, down to the error magnitudes.** A moved digit indicates a
+real change; chase it before moving on. Each study asserts both a wide
+guard, which fails when the order has regressed, and a ±0.02 guard against
+its recorded order, which fails when it has drifted; the two print different
+diagnostics. Update a `recorded` value only together with that table. The
+evolution rows share `test/smooth_cases.jl` with `bench/boundaryorder.jl`;
+add a smooth case there, not in either consumer.
 
 `test/validation.jl` prints measured errors against guards baked into its
 header. Unlike the convergence orders these are **not** bit-reproducible: each

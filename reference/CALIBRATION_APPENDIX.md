@@ -2344,10 +2344,10 @@ lines at a coarse-fine face with the same interface rows, and its end node there
 parent's shell overwrites, is not held. Held to their cell bounds, the parent's nodes the
 restriction overwrites fell to temperatures of 1e-12 under subcycling, where the parent steps
 them at up to the CFL number 0.75, and κ\* = ρc/T there set the root step: Woodward–Colella with a
-box took 3055 root steps against 1126 unlimited. Exempt, and kept out of their held neighbours'
-first-order fluxes where not admissible, they took 1548; held at the global step, where they
-advance at the fine level's CFL number, the same run took 2632 steps against 2369 exempt, and
-Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3568. Both nodes of a face beside such
+box took 3055 root steps against 1133 unlimited. Exempt, and kept out of their held neighbours'
+first-order fluxes where not admissible, they took 1561; held at the global step, where they
+advance at the fine level's CFL number, the same run took 2632 steps against 2349 exempt, and
+Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3410. Both nodes of a face beside such
 a node take one first-order flux, with the node replaced by its held neighbour. Replaced only when
 the neighbour's correction was taken, the two corrections of the face differed, and the face
 register carried the difference to the far end of the line: of 31 perturbations of the subcycled
@@ -2358,24 +2358,24 @@ point-steps after every step, those on a refined patch's coarse-fine plane apart
 
 ```
 case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
-WC 200, box, global step               1950 / 2369      147, 14704             0, 0
-WC 200, box, subcycled                 1126 / 1548      133, 10314             0, 0
-WC 200, regridded box                  3203 / 4204      0, 32799               0, 0
-WC 200, regridded tiles of 8           1094 / 1428      0, 8429                0, 0
-WC 200, regridded tiles, subcycled     1085 / 1398      0, 8432                0, 0
-Noh ν = 2, box over 85 nodes           6642 / 9220      0, 56724               0, 0
-Noh ν = 2, box over 43 nodes           6015 / 8150      478, 53942             0, 0
-Noh ν = 2, 85 nodes, subcycled         2214 / 2989      0, 18991               0, 0
-Noh ν = 2, 43 nodes, subcycled         2349 / 4086      219, 21807             0, 0
-r-z converging shock, corner box       627 / 627        0, 903                 0, 0
-blast 64², tiles of 8                  227 / 255        2774, 11385            0, 0
-blast 64², tiles of 8, subcycled       139 / 210        1900, 8208             0, 0
+WC 200, box, global step               1985 / 2349      145, 14950             0, 0
+WC 200, box, subcycled                 1133 / 1561      130, 10341             0, 0
+WC 200, regridded box                  3202 / 4259      0, 32845               0, 0
+WC 200, regridded tiles of 8           1094 / 1420      0, 8432                0, 0
+WC 200, regridded tiles, subcycled     1085 / 1440      0, 8441                0, 0
+Noh ν = 2, box over 85 nodes           6640 / 9220      0, 56700               0, 0
+Noh ν = 2, box over 43 nodes           6024 / 8155      176, 50648             0, 0
+Noh ν = 2, 85 nodes, subcycled         2214 / 2989      0, 18925               0, 0
+Noh ν = 2, 43 nodes, subcycled         2330 / 4167      73, 19809              0, 0
+r-z converging shock, corner box       628 / 627        0, 911                 0, 0
+blast 64², tiles of 8                  227 / 256        1485, 9767             0, 0
+blast 64², tiles of 8, subcycled       136 / 219        1496, 6955             0, 0
 ```
 
 On the Noh level rows the limited box over 85 nodes gives plateau 15.6672, deficit 50.9%, shock
-0.2032 and mass −1.85e-6 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
-0.2032 and −4.4e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8311, 50.8%,
-0.2086 and −6.2e-5 (unlimited 14.9517, 52.4%, 0.2084, −1.3e-3). The 3568 unguaranteed sides
+0.2032 and mass −5.2e-7 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
+0.2032 and −4.4e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8280, 50.6%,
+0.2086 and −1.2e-4 (unlimited 14.9258, 50.2%, 0.2104, +3.7e-6). The 3410 unguaranteed sides
 there are the parent's, from the shock's arrival in its covered nodes. Unlimited, the shell
 nodes left inadmissible lie between parent nodes that are inadmissible themselves, which no
 interpolant repairs; the fallback took 2852 shell entries on the validation battery's Noh row

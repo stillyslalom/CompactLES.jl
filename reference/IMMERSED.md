@@ -233,8 +233,8 @@ inference survives; verify with `bench/jetcheck.jl` deltas as usual).
    problem solved with a fitted `SlipWallBC` at the same location: reflected
    shock position and post-reflection state, error measured versus δ and
    versus h (expect first order in the interface region).
-3. The serial suite and the MPI suite (counts in `CLAUDE.md`) pass with a body
-   straddling rank boundaries (the mask is pointwise, so this is expected to
+3. The serial suite and the MPI suite pass with a body straddling rank
+   boundaries (the mask is pointwise, so this is expected to
    hold; the test keeps it so).
 
 ## Stage 2 — validation battery and calibration

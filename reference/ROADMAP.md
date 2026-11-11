@@ -301,7 +301,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   regridded tiles, and the limiter does not raise a node that enters a
   stage below its bound. Regridded tiles of a radial grid keep `:ghost`
   under the toggle. Every limited run takes this fallback, under either
-  interface flux (commit `HASH`), since fills under the closure rows leave
+  interface flux (commit `adf5732`), since fills under the closure rows leave
   such nodes too at the same interpolation order; whether unlimited runs
   take it is open. The toggle stays off because of two defects. The filter's row at a
   node two tiles share is the identity, a row that does not conserve, and
