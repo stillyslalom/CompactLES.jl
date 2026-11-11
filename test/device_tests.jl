@@ -952,6 +952,48 @@ end
     end
 end
 
+@testset "a limited fill under :ghost reproduces the CPU solver" begin
+    # positivity_tests.jl's fill ahead of a jump into cold gas, on a box at the
+    # axis over the first 25 root nodes filled again from the root as a regrid
+    # fills a new box: the nodes the interpolation leaves inadmissible take
+    # the multilinear state of their parent nodes in a kernel, bitwise against
+    # the CPUBackend under FORCE_KA and FORCE_DEVICE_EXCHANGE.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    prob = Problem(eos=IdealSpecies("gas"; gamma=5 / 3, R=1.0),
+                   transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((AxisBC(), SlipWallBC()), per, per),
+                   ic=(r, θ, z) -> r < 0.15 ? Prim(rho=16.0, u=(0.0, 0.0, 0.0), p=16 / 3) :
+                                              Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=1e-4))
+    filled(backend) = begin
+        CL.LIMITED_GHOST_INTERFACES[] = true
+        s, Q = try
+            setup(prob, Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=true),
+                                 execution=Execution(storage=backend),
+                                 patch_interfaces=:ghost, positivity_limiter=true,
+                                 amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)))))
+        finally
+            CL.LIMITED_GHOST_INTERFACES[] = false
+        end
+        CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
+        return s, Q
+    end
+    s1, q1 = filled(CPUBackend())
+    CL.FORCE_KA[] = true
+    CL.FORCE_DEVICE_EXCHANGE[] = true
+    s2, q2 = try
+        filled(DeviceBackend(cpu_ka))
+    finally
+        CL.FORCE_KA[] = false
+        CL.FORCE_DEVICE_EXCHANGE[] = false
+    end
+    report = state_report(s1, q1)
+    @test s1.interface_flux === s2.interface_flux === :ghost
+    @test report.inadmissible == 0 && report.negative_density == 0
+    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+end
+
 @testset "field collections adapt to their device forms" begin
     # DeviceFieldVector, DeviceFieldMatrix and the ConservedState rule are
     # what a real device launch builds out of the host wrappers. Nothing
@@ -1009,7 +1051,7 @@ const POINTWISE_BODIES = (
     :_dilatation_point!, :_dilatation_switch_point!, :_edge_fill_point!,
     :_edge_fill_z_point!, :_energy_split_point!, :_extrapolation_point!,
     :_face_pick_point!,
-    :_face_put_point!, :_face_save_point!,
+    :_face_put_point!, :_face_save_point!, :_fill_fallback_point!,
     :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!, :_fold_fill_z_point!,
     :_gate_beta_point!, :_gated_beta_point!,
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,

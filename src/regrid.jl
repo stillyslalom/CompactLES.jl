@@ -616,6 +616,7 @@ function _fill_tile_from_box!(solver::Solver, states, lt::LevelTransfer)
             _write_fine_shell!(Qf, c, lt.pstage[K+1], lt, fine.decomp,
                                lt.pdecomps[K+1], false)
         end
+        _fill_fallback(solver) && _fill_fallback!(solver, Qf, lt, fine.decomp)
         return states
     end
     # Device patch: every component runs through the scratch's chain, whose
@@ -635,7 +636,59 @@ function _fill_tile_from_box!(solver::Solver, states, lt::LevelTransfer)
                                fine.decomp, lt.pdecomps[K+1], false)
         end
     end
+    _fill_fallback(solver) && _fill_fallback!(solver, Qf, lt, fine.decomp)
     return states
+end
+
+# The admissible fallback of a fill, the shell's (`_shell_fallback!`) over the
+# patch's own nodes: a node the Lagrange chain leaves with ρ ≤ 0 or ρe ≤ 0
+# takes the multilinear interpolant of the parent nodes bracketing it where
+# that is admissible, as it is wherever they are. In cold gas moving fast, as
+# ahead of the shock of Noh, ρe = E − |m|²/(2ρ) is a small difference of large
+# terms, and the chain's errors in E, m and ρ, each interpolated on its own,
+# can exceed it. The positivity limiter keeps a node admissible from an
+# admissible base state and does not raise one that enters a stage below its
+# bound, so such a node stays inadmissible for several steps. The halos and
+# the shell are written again before the next step, the shell with its own
+# fallback. Taken where the limiter runs with `interface_flux = :ghost`; a run
+# under the closure rows keeps the chain's values.
+_fill_fallback(solver) =
+    getfield(solver, :positivity) !== nothing &&
+    getfield(solver, :interface_flux) === :ghost && _shell_fallback(solver)
+
+function _fill_fallback!(solver, Qf, lt::LevelTransfer, df::Decomp)
+    src = _limiter_upload(parent(Qf), lt.box_gather)
+    place = (df.offset, df.n_halo_d, _box_shift(lt),
+             (df.active[1], df.active[2], df.active[3]))
+    box = (lt.pdecomps[1].n_halo_d, lt.pdecomps[1].n_local)
+    n = df.n_local
+    pointwise!(_fill_fallback_point!, Qf, n[1], n[2], n[3],
+               Qf, src, zero(eltype(src)), place, box, _limiter_layout(solver))
+    return Qf
+end
+
+@inline function _fill_fallback_point!(Q, src, w, place, box, lay, i, j, k)
+    @inbounds begin
+        off, pad, shift, active = place
+        ns, m1, m2, m3, ie, nc = lay
+        I = CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
+        ρ = zero(w)
+        for sp in 1:ns
+            ρ += Q[I, sp]
+        end
+        mx, my, mz = Q[I, m1], Q[I, m2], Q[I, m3]
+        admissible = (ρ > 0) & (2 * ρ * Q[I, ie] - (mx * mx + my * my + mz * mz) > 0)
+        if !admissible
+            # The node of the chain's final box, as `_write_fine_shell!` reads it.
+            n = (i + off[1] + shift[1], j + off[2] + shift[2], k + off[3] + shift[3])
+            if _linear_admissible(src, src, w, n, active, box, 1, 1, lay)
+                for c in 1:nc
+                    Q[I, c] = _linear_value(src, src, w, n, active, box, c)
+                end
+            end
+        end
+    end
+    return nothing
 end
 
 # Copy surviving fine data from the old patch onto the new one over the

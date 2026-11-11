@@ -152,9 +152,8 @@
 # values differ by the scheme's own mismatch at the node, the explicit row
 # there in place of a compact one, which limiting moves toward zero. Where a
 # part of the flux took the divergence's one-sided rows, whose face form
-# differs (`_limiter_ghost`), and on regridded tiles of a radial grid, the
-# constructor closes the interfaces with the closure rows instead, with a
-# warning.
+# differs (`_limiter_ghost`), the constructor closes the interfaces with the
+# closure rows instead, with a warning.
 #
 # Refined levels. A refined patch closes its lines at a coarse-fine face with
 # the same interface rows, or leaves them open there, so its weights there are
@@ -173,7 +172,9 @@
 # cadence, are limited there. A tile over a partial lattice cell, at a domain
 # face or at the nesting margin, can be too short for the face form: setup
 # refuses such a patch, and a regrid does not create it and leaves the cell
-# to the parent (`_limiter_tile_short`).
+# to the parent (`_limiter_tile_short`). Under `:ghost` a node the fill of a
+# new patch leaves inadmissible takes the multilinear state of its parent
+# nodes (`_fill_fallback!`), as the shell does.
 #
 # Per-point work runs through `pointwise!` bodies over three index boxes: the
 # lines of a direction (the running sums and the θ passes, one sequential sweep

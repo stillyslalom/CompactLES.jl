@@ -353,20 +353,13 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # interface with the closure rows, or with the gradient plans' rows
         # where those take the whole flux (`_limiter_ghost`), which the
         # limiter takes only under `LIMITED_GHOST_INTERFACES`; otherwise the
-        # interfaces take the closure rows before any plan is built. Regridded
-        # tiles of a radial grid take them as well: under :ghost the
-        # cylindrical Noh of the level rows left inadmissible points in the
-        # steps after two of its regrids, where the closure rows left none.
+        # interfaces take the closure rows before any plan is built.
         ghost_kept = LIMITED_GHOST_INTERFACES[]
-        regridded_radial = ghost_kept && tiled && regrid_interval > 0 &&
-                           _limiter_radial_line(bcs, metric, n_global)
         if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1) &&
-           (!ghost_kept || !_limiter_ghost(art) || regridded_radial)
+           (!ghost_kept || !_limiter_ghost(art))
             MPI.Comm_rank(comm) == 0 &&
                 @warn "positivity_limiter: " *
-                      (!ghost_kept ? "" :
-                       regridded_radial ? "on regridded tiles of a radial grid " :
-                                          "with the artificial properties off ") *
+                      (ghost_kept ? "with the artificial properties off " : "") *
                       "the limiter takes interface lines closed by the closure rows, " *
                       "so the patch and level interfaces close with them " *
                       "(PatchInterfaces(flux = :closure)) in place of :ghost; this can " *

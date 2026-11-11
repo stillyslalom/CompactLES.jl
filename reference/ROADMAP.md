@@ -288,24 +288,31 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   interface dimension, so a line is open at an interface, weight h up to it
   and h/2 at the end node, its face values anchored by the derivative's face
   relation near the low end, and the gradient-plan solves take the
-  registers. Under it patches, boxes and static tiles leave no inadmissible
-  point on the cases above, at 1.05 to 1.64 times the unlimited step, and
+  registers. Under it patches, boxes and tiles leave no inadmissible point
+  on the cases above, at 1.05 to 1.64 times the unlimited step, and
   patches and boxes run bitwise against the host on device storage; on the
   cylindrical Noh the limited tiles drift half as far as under `:closure`
   and ten times as far as unlimited `:ghost` tiles
-  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)). The
-  toggle stays off because of three defects. The filter's row at a node two
-  tiles share is the identity, a row that does not conserve, and the filter
-  passes carry three quarters of that drift, so the mass budget of A21's
-  limited, tiled band waits on a conservative filter row there. On
-  regridded tiles of a radial grid the cylindrical Noh left inadmissible
-  points in the steps after two of its regrids, and setup keeps the closure
-  rows there under the toggle too. On a tiled level a perturbation of one
-  unit in the last place grows in the limited `:ghost` run to a visible
-  difference within a few hundred steps, where under the closure rows it
-  stays at round-off, so the solution depends on the rank count. Without
-  the artificial properties a part of the flux takes the divergence's
-  one-sided rows, whose face form differs, and setup keeps the closure rows.
+  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)). A node
+  the fill of a new tile or box leaves inadmissible takes the multilinear
+  state of its parent nodes, as a shell node does (commit `HASH`): ahead of
+  a strong shock in cold gas moving fast, ρe is a small difference of large
+  terms, the Lagrange chain's error exceeded it on the cylindrical Noh's
+  regridded tiles, and the limiter does not raise a node that enters a
+  stage below its bound. Regridded tiles of a radial grid keep `:ghost`
+  under the toggle. Only limited runs under `:ghost` take this fallback;
+  fills under the closure rows leave such nodes too at the same
+  interpolation order, and whether they, and unlimited runs, take it is
+  open. The toggle stays off because of two defects. The filter's row at a
+  node two tiles share is the identity, a row that does not conserve, and
+  the filter passes carry three quarters of that drift, so the mass budget
+  of A21's limited, tiled band waits on a conservative filter row there. On
+  a tiled level a perturbation of one unit in the last place grows in the
+  limited `:ghost` run to a visible difference within a few hundred steps,
+  where under the closure rows it stays at round-off, so the solution
+  depends on the rank count. Without the artificial properties a part of
+  the flux takes the divergence's one-sided rows, whose face form differs,
+  and setup keeps the closure rows.
   The filter pass a parent takes beside a child measures its face relation
   relative to the middle face of the line, from the residual the pass
   drops, so the faces it limits do not depend on the decomposition (commit
@@ -380,7 +387,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   seven days are still followed by a rebuild. The solver configurations of
   the compile-bound eight-rank phases are in the package image behind the
   `precompile_mpi_suite` preference, which the eight-rank job sets (commit
-  `HASH`). Building each serial reference of the MPI suite on rank 0 alone
+  `4b8d4e2`). Building each serial reference of the MPI suite on rank 0 alone
   was measured and did not change the eight-rank wall, since the time is in
   the decomposed runs' collectives, so that trim is dropped.
   Remaining: read the eight-rank job's wall in the first CI runs with the

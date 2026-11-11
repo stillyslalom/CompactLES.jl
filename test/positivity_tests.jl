@@ -9,11 +9,12 @@
 # (`:ghost` under `LIMITED_GHOST_INTERFACES`), a run it never acts in and a
 # strong shock it keeps admissible, there with the shell's admissible fallback
 # on subcycled tiles, and on tiles at the cylindrical axis and the r-z corner,
-# a run it never acts in and the strong shocks; the face values of an open
-# interface end on a smooth field, the interface flux setup takes, and a tile
-# too short for its face form, refused at setup and left out by a regrid. The
-# rejected configurations are in capability_tests.jl, the decomposed run in
-# the MPI suite's "positivity limiter" phase.
+# a run it never acts in and the strong shocks, there with the admissible
+# fallback of a regrid's fill on regridded tiles under :ghost; the face values
+# of an open interface end on a smooth field, the interface flux setup takes,
+# and a tile too short for its face form, refused at setup and left out by a
+# regrid. The rejected configurations are in capability_tests.jl, the
+# decomposed run in the MPI suite's "positivity limiter" phase.
 #
 # Serial. Included by runtests.jl, and runnable on its own:
 #
@@ -539,9 +540,10 @@ end
     @testset "the interface flux setup takes under the limiter" begin
         # By default setup closes the patch and level interfaces of a limited
         # run with the closure rows. Under the toggle it keeps :ghost with the
-        # artificial properties on; without them a part of the flux takes the
-        # divergence's one-sided rows at the interface, and setup closes it
-        # with the closure rows, as it does on regridded tiles of a radial grid.
+        # artificial properties on, on static and regridded tiles of a radial
+        # grid as well; without them a part of the flux takes the divergence's
+        # one-sided rows at the interface, and setup closes it with the closure
+        # rows.
         prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
                        domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
                        ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
@@ -551,7 +553,6 @@ end
         warn = Base.CoreLogging.Warn
         closed = (:warn, r"^positivity_limiter: the limiter takes interface lines")
         art_off = (:warn, r"with the artificial properties off")
-        radial = (:warn, r"on regridded tiles of a radial grid")
         s, _ = @test_logs closed min_level=warn setup(prob, num(true))
         @test s.interface_flux === :closure
         rnum(regrid_interval) =
@@ -567,10 +568,10 @@ end
             @test s.interface_flux === :ghost
             s, _ = @test_logs art_off min_level=warn setup(prob, num(false))
             @test s.interface_flux === :closure
-            s, _ = @test_logs radial min_level=warn setup(noh, rnum(10))
-            @test s.interface_flux === :closure
-            s, _ = @test_logs min_level=warn setup(noh, rnum(0))
-            @test s.interface_flux === :ghost
+            for regrid_interval in (0, 10)
+                s, _ = @test_logs min_level=warn setup(noh, rnum(regrid_interval))
+                @test s.interface_flux === :ghost
+            end
         end
         @test !CL.LIMITED_GHOST_INTERFACES[]
     end
@@ -800,6 +801,59 @@ end
             report = state_report(s, Q)
             @test report.inadmissible == 0 && report.negative_density == 0
         end
+    end
+
+    @testset "a fill ahead of a strong shock in cold gas stays admissible under :ghost" begin
+        # Tiles of edge 8 at the axis over the first 25 root nodes, filled
+        # again from the root as a regrid fills a new tile, the root holding a
+        # jump at r = 0.15 from hot gas at rest to cold gas moving toward the
+        # axis, whose ρe is 3e-4 of E. The interpolation of order 8 leaves
+        # nodes ahead of the jump with ρe ≤ 0, as the unlimited run's fill
+        # shows; the fill of a limited run under :ghost gives them the
+        # multilinear state of their parent nodes.
+        prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
+                       transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
+                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       ic=(r, θ, z) -> r < 0.15 ?
+                                       Prim(rho=16.0, u=(0.0, 0.0, 0.0), p=16 / 3) :
+                                       Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=NOH_P0))
+        filled(on) = begin
+            s, Q = pos_flux(:ghost) do
+                setup(prob, Numerics(n_global=(96, 1, 1),
+                                     art=ArtificialProperties(enabled=true),
+                                     patch_interfaces=:ghost, positivity_limiter=on,
+                                     amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
+                                             tile=8)))
+            end
+            @test s.interface_flux === :ghost
+            CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
+            report = state_report(s, Q)
+            report.inadmissible + report.negative_density
+        end
+        @test filled(false) > 0
+        @test filled(true) == 0
+    end
+
+    @testset "Noh through the axis on regridded tiles under :ghost stays admissible" begin
+        # Tiles of edge 8 regridded every 10 steps from a box over the first
+        # 49 root nodes. A new tile ahead of the outgoing shock is filled from
+        # the root where the gas is cold and moving fast; without the fill's
+        # admissible fallback the run leaves inadmissible points after its
+        # regrids.
+        s, Q = pos_flux(:ghost) do
+            setup(noh_problem(2; N=160, t0=0.0),
+                  Numerics(n_global=(160, 1, 1), cfl=NOH_CFL,
+                           art=ArtificialProperties(enabled=true),
+                           patch_interfaces=:ghost, positivity_limiter=true,
+                           control=StepControl(validity=:permissive),
+                           amr=AMR(initial=BlockRegion((0, 0, 0), (49, 1, 1)), tile=8,
+                                   regrid_interval=10)))
+        end
+        @test s.interface_flux === :ghost
+        bad = pos_bad_points(s, Q; tfinal=NOH_T, nmax=6000)
+        @test completed(s, NOH_T)
+        @test bad == 0
     end
 
     @testset "a tile too short for the limiter is refused at setup, left out by a regrid" begin

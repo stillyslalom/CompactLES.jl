@@ -2446,7 +2446,7 @@ Noh ν = 2, 85 nodes, subcycled         2214 / 2985      0, 18929               
 Noh ν = 2, 43 nodes, subcycled         2321 / 4190      24, 19540              0, 0
 Noh ν = 2, tiles of 8 over 81 nodes    6634 / 8890      0, 63103               0, 0
 the same, subcycled                    2211 / 2904      0, 20984               0, 0
-the same, regridded                    6639 / 9344      5, 63315               0, 8
+the same, regridded                    6639 / 9322      5, 63315               0, 0
 regridded and subcycled                2214 / 3106      7, 21246               0, 0
 blast 64², tiles of 8                  221 / 248        1477, 9429             0, 0
 blast 64², tiles of 8, subcycled       135 / 226        1503, 6722             0, 0
@@ -2462,12 +2462,16 @@ The limited Noh box over 85 nodes gives plateau 15.6673, deficit 50.8%, shock 0.
 50.6%, 0.2086 and −1.2e-4 with 3786 unguaranteed sides (unlimited 14.9507, 50.7%, 0.2109,
 +8.4e-6). The tiles of 8 over 81 nodes give 15.6628, 50.9%, 0.2033 and +2.1e-4, against
 +4.1e-4 under the closure rows and +1.9e-5 unlimited (`part=tiledrift` below). The regridded
-tiles on the cylindrical line leave 8 inadmissible point-steps, at an interior node of a tile
-in the steps after the regrids at steps 5570 and 8840 (t = 0.380 and 0.571), each recovering
-within five steps, where the closure rows leave none; setup keeps the closure rows on regridded
-tiles of a radial grid. The tiled rows leave 0 to 132 unguaranteed sides. Under
-`part=levelcost flux=ghost` the limited step costs 1.05 times the unlimited one on
-Woodward–Colella with a box, 1.13 subcycled, 1.19 on the Noh box over 85 nodes, 1.27 on the
+tiles on the cylindrical line give plateau 15.6637, deficit 50.5%, shock 0.2033 and mass
++2.3e-4. Without the fill's admissible fallback (`_fill_fallback!`) they leave 8 inadmissible
+point-steps: the fills after the regrids at steps 5570 and 8840 (t = 0.380 and 0.571) put a
+node of the new tile, 4 and 1 fine nodes inside its face with the tile below, at
+ρe = −5.6e-5 and −1.3e-4, in the cold gas 9 and 8 parent nodes ahead of the shock, where the
+parent's ρe is 3e-5 to 5e-3 against E ≈ 1.7. Both faces of the node's cell then take θ = 0,
+its sides counted unguaranteed, for the 3 and 5 steps it stays inadmissible. The fallback
+gives the two nodes ρe = +5.1e-4 and +4.6e-4. The tiled rows leave 0 to 44 unguaranteed
+sides. Under `part=levelcost flux=ghost` the limited step costs 1.05 times the unlimited one
+on Woodward–Colella with a box, 1.13 subcycled, 1.19 on the Noh box over 85 nodes, 1.27 on the
 blast's tiles and 1.64 on the r-z corner box; under `part=tilecost flux=ghost` the box takes
 7.17 ms per step unlimited and 10.72 limited, the tiles 9.01 and 13.20, so the limited tiled
 step costs 1.47 times the unlimited tiled one and 1.24 times the limited box's.
