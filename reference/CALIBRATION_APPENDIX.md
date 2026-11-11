@@ -8028,13 +8028,19 @@ the only monotone choice.
 
 `julia --project=. test/runtests.jl` (the patch testsets). The rows under the
 default ghost fluxes, the viscous rows and the drift are the testsets' output
-at `743fdb4b`, Julia 1.13.3; the two rows reading "the same under `:closure`"
-are the closure-row figures the test file records and no longer runs (the C6
-entropy orders are the `gflux` table's), and the degree-9 row is
-`test/serial_suite.jl`'s.
+at `743fdb4b` under Julia 1.13.3. The two rows reading "the same under
+`:closure`" are the closure-row figures the test file records and no longer
+runs (the C6 entropy orders are the `gflux` table's), and the row of the
+ninth-degree polynomial is `test/serial_suite.jl`'s.
 
-Two conforming patches, manufactured smooth solutions across the interface,
-since the bit-exact oracle does not survive it.
+Settled: under the default ghost fluxes the inviscid orders through the
+interface are the interior's (C6) or the time integrator's (C10), and
+`interface_rhs = :onesided` is refused. Under `interface_flux = :closure` the
+divergence's one-sided rows limit the inviscid orders, so
+`interface_rhs = :extended` is measurable only through the gradients, where it
+is worth two orders. C10 interface rows are the default halo's, no wider. The
+cases are two conforming patches with manufactured smooth solutions across the
+interface, since the bit-exact oracle does not survive it.
 
 | gate | C6 | C10 |
 |---|---|---|
@@ -8050,15 +8056,9 @@ since the bit-exact oracle does not survive it.
 | conservation drift, long periodic run | 1.6e-11 relative (single patch 4.2e-15) | — |
 
 Rank partitioning reproduces the serial two-patch answer bitwise at one rank
-per patch; once a patch itself decomposes, agreement is round-off, 3.1e-15 at
-np = 4 against a 9.5e-8 signal, with identical step counts.
-
-Settled: under the default ghost fluxes the inviscid orders through the
-interface are the interior's (C6) or the time integrator's (C10), and
-`interface_rhs = :onesided` is refused. Under `interface_flux = :closure` the
-divergence's one-sided rows bind the inviscid orders, so
-`interface_rhs = :extended` is measurable only through the gradients, where it
-is worth two orders. C10 interface rows are the default halo's, no wider.
+per patch. Once a patch itself decomposes, the agreement is round-off, with
+identical step counts: at four ranks the difference is 3.1e-15 against a
+9.5e-8 signal.
 
 ### test/level_tests.jl: the level hierarchy
 
@@ -8066,16 +8066,19 @@ is worth two orders. C10 interface rows are the default halo's, no wider.
 `test/mpi_tests.jl`. Commits `772e304` and `e215c5a`, tiles `eb0cb38`,
 covered masks `8d32ab3`, checkpoint `4b42724`.
 
-**Coupling choice.** The invertible pair as the live coupling measures order
-1.3–1.7 on a manufactured solution, since prolongation's input must be samples
-of the filtered field and the live coarse solution is not. Order-6 Lagrange up
-with coincident-node injection down measures 3.46 / 3.64 at errors three
-decades lower, and is the default.
+**Coupling choice.** The default coupling is sixth-order Lagrange
+prolongation with coincident-node injection, whose orders on a manufactured
+solution are 3.46 / 3.64. The invertible pair as the live coupling reaches
+only 1.3–1.7 at errors three decades higher, since prolongation's input must
+be samples of the filtered field and the live coarse solution is not.
 
 **Buffers.** Restricting to the fine boundary closes an amplifying loop
-through the imposed shell, gain ≈ 2 per step; `RESTRICT_MARGIN = 2` makes the
-growth flat. The C10 sweep over `RESTRICT_MARGIN` 0–3 with `LEVEL_BUFFER` 4
-and 6, on the two-level entropy wave and the subcycled Sod crossing:
+through the imposed shell, gain ≈ 2 per step, and `RESTRICT_MARGIN = 2` makes
+the growth flat. Settled: the constants stay at 4 and 2. The sweep below
+varies `RESTRICT_MARGIN` on the two-level entropy wave and the subcycled Sod
+crossing, with `LEVEL_BUFFER` at its default and at 6. The wider buffer
+reproduces the default buffer's numbers to the last digit at both schemes,
+and the Sod noise stays between 3.5e-10 and 8.8e-10 throughout.
 
 | margin | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
@@ -8084,65 +8087,96 @@ and 6, on the two-level entropy wave and the subcycled Sod crossing:
 | error growth t = 0.5 → 2, C10 | 2.2 | 2.2 | 3.3 | 1.9 |
 | error growth t = 0.5 → 2, C6 | 1.7 | 1.7 | 2.5 | 1.6 |
 
-Sod noise stays between 3.5e-10 and 8.8e-10 throughout, and `LEVEL_BUFFER = 6`
-reproduces the buffer-4 numbers to the last digit at both schemes. Settled:
-the constants stay at 4 and 2.
+**Subcycling.** Subcycling keeps the orders at a third of the steps, and on
+the Sod gate it lowers both the noise ahead of the shock and the mass drift
+under the coarse-fine correction.
 
-**Subcycling.** Orders are unchanged at a third of the steps, and the
-subcycled Sod gate improves on the global-dt one: ahead-of-shock noise
-1.1e-10 against 3.5e-10, mass drift 2.3e-8 against 6.2e-8 under the
-coarse-fine correction. At C10 the
-two-level wave measures 3.84 / 3.54 (8.2e-8, 5.7e-9, 4.9e-10; subcycled
-3.88 / 3.53) and the Sod crossing leaves 5.4e-10 of momentum noise ahead of
-the shock (subcycled 4.0e-10; C6 6.4e-10 and 1.3e-10).
+| case | global step | subcycled |
+|---|---|---|
+| Sod gate, noise ahead of the shock | 3.5e-10 | 1.1e-10 |
+| Sod gate, mass drift under the coarse-fine correction | 6.2e-8 | 2.3e-8 |
+| C10 two-level wave, orders | 3.84 / 3.54 | 3.88 / 3.53 |
+| C10 two-level wave, errors | 8.2e-8, 5.7e-9, 4.9e-10 | |
+| C10 Sod crossing, momentum noise ahead of the shock | 5.4e-10 | 4.0e-10 |
+| C6 Sod crossing, momentum noise ahead of the shock | 6.4e-10 | 1.3e-10 |
 
-**Distributed coupling.** Replicating the interpolation chain per rank put the
-3-D cost case at 85% of the uniform-fine wall; distributing the chains by
-conserved component and sharing the shell ring through one Allgatherv brought
-it to 49%, serial results bit-identical.
+**Distributed coupling.** Distributing the interpolation chains by conserved
+component, with the shell ring shared through one Allgatherv, brings the cost
+case in three dimensions to 49% of the uniform-fine wall, from 85% with the
+chain replicated on every rank. The serial results are bit-identical.
 
-**Tiles.** A tiled level costs nothing visible against the one-patch level:
-1-D entropy wave at tile 8, 6.0e-10 against 6.2e-10 at N = 192, orders
-3.95 / 3.91; a 2×2 tile nest in 2-D, corner included, 4.29e-8 against 4.27e-8.
-A flat pairwise pass over a node shared by four tiles with copies 1, 2, 3, 4
-ends at 2.23, 2.68, 2.41, 2.68 instead of the mean, which is why
-`_sync_level_records!` is dimension-phased.
+**Tiles.** A tiled level costs nothing visible in accuracy against the
+one-patch level.
 
-**Moving regions.** Sod at N = 201 coarse against a 601-node uniform-fine
-reference: composite density error 2.8e-3 where uniform-coarse gives 7.3e-2,
-26× better, with fine resolution over a third of the domain. Shu–Osher: 10×
-better in L∞ over the wave train, 6.7× in L1, at 2497 coarse steps against the
-reference's 4662. The tiled regrid reproduces the Sod gate.
+| case | tiled | one patch |
+|---|---|---|
+| 1-D entropy wave, tile 8, error at N = 192 | 6.0e-10 | 6.2e-10 |
+| the same, orders | 3.95 / 3.91 | |
+| 2-D nest of 2×2 tiles, corner included, error | 4.29e-8 | 4.27e-8 |
 
-**Three regridded levels.** A shock driven from x = 0.25 through a contact
-into heavy gas at x = 0.5 (densities 1, 0.125, 0.5), N = 81, tile 8,
-`max_levels = 3`, subcycled, CFL 0.2, against a 721-node uniform reference
-at t = 0.25: composite density L1 error at the root stations 1.44e-3 where
-the root alone gives 2.37e-2, 16× better. Decomposed runs match the serial
-tile sets and density to 1e-14 to 7e-13 at np = 2, 4 and 8. At CFL 0.2,
-moving the first discontinuity to x = 0.3 fails at step 1 at two levels as at
-three; CFL 0.1 runs.
+A flat pairwise pass over a node shared by four tiles does not end at the
+mean of the four copies, which is why `_sync_level_records!` is
+dimension-phased:
 
-**Composite diagnostics.** Taylor–Green at 24³ with an 8³ region refined
-off-centre, 61 steps: the composite energy history stays within 4.1e-8 of
-the single-level history in the conserved quadrature, where the unmasked
-sum sits 1.3e-2 above it. Settled the per-orthant covered mask against a
-per-dimension factor.
+| copy | first | second | third | fourth |
+|---|---|---|---|---|
+| before the pass | 1 | 2 | 3 | 4 |
+| after a flat pairwise pass | 2.23 | 2.68 | 2.41 | 2.68 |
 
-**Restart.** The tiled and box Sod regrid cases checkpointed at step 23 and
-continued to step 130 agree with the uninterrupted run at every slot, tag
-history included, serially and (the tiled case at 400 nodes, step 21 → 41) at
-np = 2, 4 and 8. A twelve-tile wave written on half the ranks and restored on
-all of them, rebuilt from a six-tile initial region, continues to 1e-12 in the
-wave error.
+**Moving regions.** A moving level puts the composite error well below the
+uniform coarse grid's: on Sod with fine resolution over a third of the domain,
+and on Shu–Osher at about half the reference's steps. The tiled regrid
+reproduces the Sod gate.
 
-**Axisymmetric levels.** The instrument is the convergence rows' case (a
-cylindrical pulse at r = 1 on the annulus [1/2, 3/2], a level over [11/12,
-13/12], the fine window against the uniform run at its spacing in equal
-steps, t = 0.2) and a 2-D r-z drift case (the annulus periodic in z, a pulse
-crossing a 12×12 level, t = 0.4, filter and artificial properties off), with
-the variants built in a scratch copy of the tree. Interpolating r·Q and
-dividing by r at the fine nodes against interpolating Q:
+| case | composite | uniform coarse | improvement | coarse steps | reference steps |
+|---|---|---|---|---|---|
+| Sod, N = 201, density error against 601 uniform-fine nodes | 2.8e-3 | 7.3e-2 | 26× | | |
+| Shu–Osher, L∞ over the wave train | | | 10× | 2497 | 4662 |
+| Shu–Osher, L1 | | | 6.7× | | |
+
+**Three regridded levels.** Three subcycled levels put the composite density
+error at the root stations sixteen times below the root's alone, on a shock
+driven through a contact into heavy gas. Decomposed runs at two, four and
+eight ranks match the serial tile sets and density to 1e-14 to 7e-13.
+
+| run: shock from x = 0.25 through a contact at x = 0.5, densities 1 / 0.125 / 0.5, N = 81, tile 8, subcycled, CFL 0.2, t = 0.25 | density L1 error at the root stations, against a 721-node uniform reference |
+|---|---|
+| `max_levels = 3` | 1.44e-3 |
+| root alone | 2.37e-2 |
+
+With the first discontinuity moved to x = 0.3 the case fails at its first
+step at the table's CFL number, at two levels as at three, and runs at
+CFL 0.1.
+
+**Composite diagnostics.** Under the per-orthant covered mask the composite
+energy history stays within 4.1e-8 of the single-level history in the
+conserved quadrature, where the unmasked sum sits 1.3e-2 above it. Settled:
+the per-orthant mask, against a per-dimension factor. The case is
+Taylor–Green on a 24³ root with an 8³ region refined off-centre. The
+histories cover 61 steps.
+
+**Restart.** A restart reproduces the uninterrupted run at every slot, tag
+history included, serially and decomposed:
+
+| restart case | ranks | nodes | checkpoint step | final step |
+|---|---|---|---|---|
+| tiled and box Sod regrid | serial | | 23 | 130 |
+| tiled Sod regrid | 2, 4, 8 | 400 | 21 | 41 |
+
+A twelve-tile wave rebuilt from a six-tile initial region, written on half
+the ranks and restored on all of them, continues to 1e-12 in the wave error.
+
+**Axisymmetric levels.** Interpolating r·Q and dividing by r at the fine
+nodes gives the window errors of interpolating Q to the second or third
+figure. Settled: the conserved variables are interpolated. Without the
+curvature terms in the ring flux the viscous window barely converges, and
+under the closure rows the inviscid errors are larger and converge more
+slowly. The instrument is the convergence rows' case `annulus_level_case`, its
+fine window read against the uniform run at its spacing in equal steps at
+t = 0.2, and an r-z drift case, with the variants built in a scratch copy of
+the tree. The drift case makes the annulus periodic in z, with a pulse
+crossing a square level of edge 12 to t = 0.4 and the filter and artificial
+properties off.
 
 | window error at N | 49 | 97 | 193 |
 |---|---|---|---|
@@ -8154,23 +8188,35 @@ dividing by r at the fine nodes against interpolating Q:
 | Cartesian, μ = 0.002 | 3.65e-7 | 7.43e-9 | 2.11e-10 |
 | Q, closure rows, inviscid | 1.09e-6 | 5.89e-8 | 5.67e-9 |
 
-The relative mass drift of the 2-D case is 8.73e-7 at 37 root nodes and
-6.25e-8 at 73, against 8.42e-7 and 5.73e-8 for the root alone, and on the
-Cartesian metric 5.72e-7 and 5.68e-8 refined, 4.89e-7 and 4.78e-8 alone;
-the ledger closes to round-off. Settled: the conserved variables are
-interpolated. A standing wave touching the annulus
-walls was not used for the rows: its data violate a compatibility condition
-of the curved wall, which caps its order near two on any grid
+The relative mass drift of the refined drift case stays within a fifth of the
+root alone's on both metrics, and the ledger closes to round-off.
+
+| relative mass drift, root nodes | 37 | 73 |
+|---|---|---|
+| r-z, refined | 8.73e-7 | 6.25e-8 |
+| r-z, root alone | 8.42e-7 | 5.73e-8 |
+| Cartesian, refined | 5.72e-7 | 5.68e-8 |
+| Cartesian, root alone | 4.89e-7 | 4.78e-8 |
+
+A standing wave touching the annulus walls was not used for the rows: its
+data violate a compatibility condition of the curved wall, which caps its
+order near two on any grid
 ([the slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)).
 
-**NSCBC faces on a level.** The instrument is the convergence row's case
-(`outflow_level_case`: an acoustic pulse of amplitude 0.01 and width 0.1 on a
-stream at 0.3, leaving [0, 1] through an `NSCBCOutflowBC` whose face a level
-over [5/6, 1] carries), read against the uniform run at the level's spacing
-in equal steps. The density error over the fine face window at t = 0.35,
-halfway through the exit, is 2.40e-5, 3.52e-7, 4.24e-9 and 4.61e-11 at
-N = 25, 49, 97 and 193 (successive orders 6.09, 6.37, 6.52). The reflection,
-the largest |p − 1| left in the domain at t = 0.8 after the pulse has gone:
+**NSCBC faces on a level.** A level carrying an outflow face converges at
+sixth order in its fine face window, and once the root resolves the pulse
+its reflection is the fine run's. The instrument is the convergence row's
+case `outflow_level_case`, an acoustic pulse carried by a stream out through
+an `NSCBCOutflowBC` whose face a level carries, read against the uniform run
+at the level's spacing in equal steps.
+
+| N | 25 | 49 | 97 | 193 |
+|---|---|---|---|---|
+| density error over the fine face window at t = 0.35, halfway through the exit | 2.40e-5 | 3.52e-7 | 4.24e-9 | 4.61e-11 |
+| successive order | | 6.09 | 6.37 | 6.52 |
+
+The reflection is the largest |p − 1| left in the domain at t = 0.8, after
+the pulse has gone:
 
 | reflection at N | 25 | 49 | 97 |
 |---|---|---|---|
@@ -8179,126 +8225,205 @@ the largest |p − 1| left in the domain at t = 0.8 after the pulse has gone:
 | uniform at the root's spacing | 6.4315e-4 | 1.6652e-4 | 1.6067e-4 |
 
 At N = 25 the root holds under three nodes per pulse width, and the level's
-reflection carries that error; from N = 49 it is the fine run's to 2e-4 of
+reflection carries that error. From N = 49 it is the fine run's to 2e-4 of
 its value.
 
-**Levels on the axis.** The instrument is the axis rows' case (a pulse
-converging on the axis of the radial line (0, 2], a level over the first
-N/6 + 1 root nodes, the tile against the uniform run at its spacing in equal
-steps) with scratch scripts. On one state the tile's right-hand side agrees
-with the uniform run's at the axis to 1e-14, and one step from one state to
-1e-17. Unfiltered, the tile's axis window departs from the uniform run: 2.7e-4,
-1.4e-5, 1.7e-6 at N = 96, 192, 384 at t = 0.4, where the root alone reads
-1.1e-4, 8.4e-7, 1.3e-8 at its own nodes and the same pulse at a Cartesian
-plane's tile 9e-8 at N = 96. The difference is a sawtooth emitted at the
-coarse-fine face whose amplitude grows at the axis node. A uniform run shows
-the same response without a level: a 1e-9 sawtooth in ρ, ρu and E over
-r < 0.3 reaches 6.0e-7 at node 1 by t = 0.05 and decays afterwards (4.5e-8 at
-t = 0.2); in ρ alone it stays at 1e-9, and at a Cartesian plane the
-three-component sawtooth stays at 7e-10. The cylindrical divergence
-(1/r)D(r·) does not hold the π mode of ρu in its null space. Filtered at
-every step (αf = 0.45, the rows' filter), the axis window reads 4.6e-7,
-3.0e-9, 3.0e-11 at t = 0.3. Under the default αf = 0.47 the window at
-N = 768, t = 0.4 reaches 3.9e-7, against 1.4e-11 under 0.45. These
-measurements carry the radial pressure term in the area form; the growth
-belongs to the unrefined axis, and it and the ∂p/∂r form that removes it
-are measured under
+**Levels on the axis.** A level at the axis reproduces the uniform run on one
+state and over one step. Unfiltered, its axis window departs from the uniform
+run through a grid-scale growth of the axis itself: the cylindrical divergence
+(1/r)D(r·) does not hold the π mode of ρu in its null space. A filter pass at
+every step at the rows' strength removes the growth, and one at the default
+strength does not at the finest spacing measured. The instrument is the axis
+rows' case `axis_level_case`, the tile against the uniform run at its spacing
+in equal steps, with scratch scripts. On one state the tile's right-hand side
+agrees with the uniform run's at the axis to 1e-14, and one step from one
+state agrees to 1e-17.
+
+| axis window, unfiltered unless noted | t | errors |
+|---|---|---|
+| tile, N = 96, 192, 384 | 0.4 | 2.7e-4, 1.4e-5, 1.7e-6 |
+| root alone at its own nodes, N = 96, 192, 384 | 0.4 | 1.1e-4, 8.4e-7, 1.3e-8 |
+| the same pulse on the tile at a Cartesian plane, N = 96 | 0.4 | 9e-8 |
+| tile, filtered at every step, αf = 0.45 | 0.3 | 4.6e-7, 3.0e-9, 3.0e-11 |
+| tile, N = 768, filtered, αf = 0.45 | 0.4 | 1.4e-11 |
+| tile, N = 768, filtered, the default αf = 0.47 | 0.4 | 3.9e-7 |
+
+The unfiltered difference is a sawtooth emitted at the coarse-fine face whose
+amplitude grows at the axis node. A uniform run without a level shows the
+same response to a sawtooth in ρ, ρu and E near the axis, which grows by
+nearly three orders of magnitude at the axis node and then decays. In ρ
+alone, and in all three components at a Cartesian plane, the sawtooth does
+not grow.
+
+| sawtooth of 1e-9 over r < 0.3, uniform run | largest at node 1, t = 0.05 | t = 0.2 |
+|---|---|---|
+| in ρ, ρu and E | 6.0e-7 | 4.5e-8 |
+| in ρ alone | stays at 1e-9 | |
+| in ρ, ρu and E at a Cartesian plane | stays at 7e-10 | |
+
+These measurements carry the radial pressure term in the area form. The
+growth belongs to the unrefined axis, and it and the ∂p/∂r form that removes
+it are measured under
 [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis).
 
-**Levels placed on a face by tags.** The instrument is the `level_boundaries`
-testset of `test/level_tests.jl`, at N = 49 in equal steps against the uniform
-run at the level's spacing. A level placed on the high slip wall of the 1-D
-standing wave by a regrid at step 0 differs from it by 4.0e-8 as one box and
-1.5e-7 as two tiles at t = 0.2 (a level the setup places there: 9.0e-9); the
-regrid's interpolated start and the tile face between the two tiles carry the
-difference. Tiles following the acoustic pulse of the NSCBC case out through
-the outflow differ by 5.8e-7 at t = 0.35, and the reflection at t = 0.8 is
-1.6064e-4 against 1.6056e-4 uniform at the fine spacing and 1.6652e-4 at the
-coarse one. On a uniform state the tag sweep of a wall tile marks no node
-with its taps clamped at the wall and two with the face read as open, whose
-ghost layers hold zeros.
+**Levels placed on a face by tags.** A level that tags place on a domain face
+reproduces the uniform run at the level's spacing, and at an outflow its
+reflection is the fine run's. On the slip wall the regrid's interpolated start
+and the tile face between two tiles carry the difference. The instrument is
+the `level_boundaries` testset of `test/level_tests.jl`, in equal steps
+against the uniform run at the level's spacing.
 
-**Levels regridded onto a fold and nested at one.** The instrument is the
-fold testsets of `test/level_tests.jl`, in equal steps against the uniform run
-at the level's spacing. The standing wave at N = 49, a level placed on the low
-symmetry plane by a regrid at step 0, differs by 2.9e-8 as one box and 1.8e-7
-as two tiles at t = 0.2; on the r-z axis, filtered at every step, by 3.6e-11
-and 5.7e-11. A second level at either plane of the standing wave between two
-planes, N = 48, t = 0.1, differs by 4.5e-13 and 2.3e-13. The convergence
-row's case `plane_nest_case` (first level over N/3 + 1 root nodes at the
-plane, second over its parent's first N/3 nodes from offset −1, t = 0.4),
-unfiltered, reads the second level against the uniform run on 9N nodes:
+| case, N = 49 | t | difference from the uniform run at the level's spacing |
+|---|---|---|
+| high slip wall of the standing wave, level placed by a regrid at step 0, one box | 0.2 | 4.0e-8 |
+| the same, two tiles | 0.2 | 1.5e-7 |
+| the same, level placed by the setup | 0.2 | 9.0e-9 |
+| tiles following the acoustic pulse of the NSCBC case out through the outflow | 0.35 | 5.8e-7 |
 
-| N | 36 | 48 | 72 |
+| reflection of the NSCBC case at t = 0.8 | |
+|---|---|
+| tiles placed by tags | 1.6064e-4 |
+| uniform at the fine spacing | 1.6056e-4 |
+| uniform at the coarse spacing | 1.6652e-4 |
+
+On a uniform state the tag sweep of a wall tile marks no node with its taps
+clamped at the wall, and two with the face read as open, whose ghost layers
+hold zeros.
+
+**Levels regridded onto a fold and nested at one.** A level that a regrid
+places on a symmetry plane or the r-z axis reproduces the uniform run at the
+level's spacing, as does a second level nested at a plane once the state is
+filtered. Unfiltered, the nest converges below its order: the ghost-flux
+coupling of the nest carries a growing mode, a real eigenvalue of its one-step
+map above one, which a filter pass every step or every tenth step removes.
+The instrument is the fold testsets of `test/level_tests.jl`, in equal steps
+against the uniform run at the level's spacing.
+
+| case | N | t | one box | two tiles |
+|---|---|---|---|---|
+| standing wave, level placed on the low symmetry plane by a regrid at step 0 | 49 | 0.2 | 2.9e-8 | 1.8e-7 |
+| the same on the r-z axis, filtered at every step | | | 3.6e-11 | 5.7e-11 |
+
+A second level at either plane of the standing wave between two planes
+reproduces the uniform run to round-off:
+
+| standing wave between two planes, N = 48, t = 0.1 | second level at one plane | at the other |
+|---|---|---|
+| difference | 4.5e-13 | 2.3e-13 |
+
+Unfiltered, the convergence row's case `plane_nest_case` at t = 0.4 reads the
+second level against the uniform run on 9N nodes:
+
+| N | 36 | 48 | 72 | order |
+|---|---|---|---|---|
+| plane window | 3.64e-11 | 1.06e-11 | 1.97e-12 | 4.2 |
+| coarse-fine face window | 9.51e-11 | 3.10e-11 | 7.60e-12 | 3.6 |
+| interior | 6.76e-11 | 2.23e-11 | 5.46e-12 | |
+| face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 | 3.1 |
+
+The loss is a growing mode of the unfiltered coupling under the ghost fluxes.
+`bench/couplingspectrum.jl` linearizes the map over one step of 0.4/(18N)
+about the state after the first and reads its eigenvalues of largest modulus.
+The nest's leading eigenvalue is real, a mode that does not oscillate, whose
+eigenvector peaks on the first level's node beside the restriction window and
+carries an odd-even component on both levels. Its growth rate rises with N,
+and neither the interpolation order nor a wider restriction margin removes
+it. Under the closure rows the rate falls by more than an order of magnitude,
+and a filter pass every step or every tenth step brings it to the uniform
+run's, which is that of the nonlinear base state.
+
+| map, growth rate of the leading eigenvalue per unit time | N | rate |
+|---|---|---|
+| uniform run | | 8.5e-4 |
+| nest, ghost fluxes, real | 36 / 72 / 144 | 5.6 / 9.6 / 17.9 (e^2.2 to e^7.2 by t = 0.4) |
+| one level at the plane (`plane_level_case`), oscillating pair | 36 / 72 | 0.51 / 2.42 |
+| the same, real | 144 | 9.7 |
+| nest, closure rows | 72 | 0.33 |
+| one level at the plane, closure rows | 144 | 0.28 |
+| nest, a filter pass every step or every tenth step | | 8.6e-4 |
+| nest, interpolation order 6, 8 or 10 | 36 | 5.5 to 5.8 |
+| nest, restriction margin of 4 / 6 parent nodes for the second level (a patched build) | | 4.1 / 3.6 |
+| entropy wave through a nest of the same shape on a periodic line, real | 36 | 2.0 |
+
+The mode's growth with the step count shows in the second level's plane
+window. With the second level's restriction into the first switched off (a
+patched build) the unfiltered window converges at sixth order, and with it on
+the order falls as the steps at fixed N increase. Filtered at every step, the
+convergence row's configuration, the face and interior windows converge at
+6.24 and 6.08.
+
+| second level's plane window, N = 36 / 48 / 72 | errors | order |
+|---|---|---|
+| unfiltered, restriction switched off | 6.9e-12, 1.3e-12, 1.3e-13 | 5.7 |
+| unfiltered, restriction on, 6N steps | | 5.0 |
+| the same, 18N steps | the table above | |
+| the same, 54N steps | | 3.8 |
+| filtered at every step | 5.6e-12, 1.2e-12, 1.2e-13 | |
+
+The entropy wave through the periodic nest converges at 7.1 to 7.7 with the
+second level's restriction on or off, although its map carries a real
+eigenvalue above one: its error excites the mode too little to show it, as in
+the three-level entropy rows.
+
+**Levels across a periodic seam.** A level across the periodic seam computes
+the solution of a level clear of it to round-off, and its interface window
+converges at sixth order. The whole composite mass drift of a box across the
+seam is the junction's flux mismatch. The convergence row's case
+`seam_level_case` is read against the uniform run at the level's spacing in
+2N equal steps to t = 0.5:
+
+| N | 48 | 96 | 192 |
 |---|---|---|---|
-| plane window | 3.64e-11 | 1.06e-11 | 1.97e-12 |
-| coarse-fine face window | 9.51e-11 | 3.10e-11 | 7.60e-12 |
-| interior | 6.76e-11 | 2.23e-11 | 5.46e-12 |
-| face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 |
+| density error, fine interface window | 1.370e-7 | 1.727e-9 | 2.414e-11 |
+| successive order | | 6.31 | 6.16 |
+| density error, interior window | 4.44e-8 | 8.18e-10 | 1.54e-11 |
 
-The second level's face window converges at 3.6 reaching the plane and 3.1
-held inside, and the plane window at 4.2. The loss is a growing mode of the
-unfiltered coupling under the ghost fluxes. `bench/couplingspectrum.jl`
-linearizes the map over one step of 0.4/(18N) about the state after the
-first and reads its eigenvalues of largest modulus; the uniform run's leading
-growth rate, 8.5e-4 per unit time, is that of the nonlinear base state. The
-nest carries a real eigenvalue above one, a mode that does not oscillate,
-whose eigenvector peaks on the first level's node beside the restriction
-window and carries an odd-even component on both levels, at 5.6, 9.6 and 17.9
-per unit time at N = 36, 72 and 144, an amplification of e^2.2 to e^7.2 by
-t = 0.4. One level at the plane (`plane_level_case`) carries an oscillating
-pair at 0.51 and 2.42 at N = 36 and 72 and a real eigenvalue at 9.7 at
-N = 144. Under the closure rows the leading rate is 0.33 (nest, N = 72) and
-0.28 (one level, N = 144), and a filter pass every step or every tenth step
-puts the nest at 8.6e-4. The interpolation order (6, 8 or 10) leaves the
-nest's real eigenvalue at 5.5 to 5.8 (N = 36), and a restriction margin of 4
-or 6 parent nodes for the second level (a patched build) at 4.1 or 3.6. In
-the unfiltered convergence runs the second level's plane window reads
-6.9e-12, 1.3e-12 and 1.3e-13 (5.7) with the second level's restriction into
-the first switched off (a patched build), and with it on the window degrades
-with the step count at fixed N: 5.0 over N = 36 to 72 at 6N steps, 4.2 at 18N
-and 3.8 at 54N. Filtered at every step, the convergence row's configuration,
-the plane window reads 5.6e-12, 1.2e-12 and 1.2e-13, and the face and
-interior windows converge at 6.24 and 6.08. The entropy
-wave through a nest of the same shape on a periodic line converges at 7.1 to
-7.7 with the second level's restriction on or off, although its map carries
-a real eigenvalue at 2.0 (N = 36): its error excites the mode too little to
-show it, as in the three-level entropy rows.
+The seam testset of `test/level_tests.jl` translates a periodic run so that
+the level lies across the seam in one run and clear of it in the other. The
+two runs differ over every patch by:
 
-**Levels across a periodic seam.** The convergence row's case
-(`seam_level_case`: the entropy wave on the periodic [0, 2π), a level over
-[11L/12, 13L/12]) against the uniform run at the level's spacing in 2N equal
-steps to t = 0.5: the density error over the fine interface window is
-1.370e-7, 1.727e-9 and 2.414e-11 at N = 48, 96 and 192 (successive orders
-6.31, 6.16), the interior window 4.44e-8, 8.18e-10 and 1.54e-11. The seam
-testset of `test/level_tests.jl` translates a periodic run by 36 root nodes,
-so that the level lies across the seam in one run and clear of it in the
-other: the two differ by 1.1e-14 over every patch after 40 steps for a box in
-1-D under either stepping mode and for a corner box across both seams in 2-D,
-and by 8.4e-15 for two tiles abutting across the seam (a shift of 30, the
-lattice edge 6 dividing N = 48); a level at the axis of an r-z run across
-the seam in z, static or regridded onto the axis, differs by 2.2e-14 as a box
-and 1.9e-14 as tiles after 8 steps. The composite mass drift of the 2-D corner
-box over 12 steps is −5.92193e-10 on both sides of the seam, to 1e-15, and
-the ledger's coarse-fine and covered-face columns sum to −5.92194e-10 on
-both: the whole drift is the junction's flux mismatch.
-A box and tiles regridded across the seam under `level_boundaries`, following
-a window at unit speed, stay within 4.8e-10 (box) and 4.3e-10 (tiles) of the
-uniform fine run over 96 steps. The same entropy wave with a level clear of
-the seam, and with one across it, drifts in composite mass by −3.9e-11 and
-+1.8e-11 over t = 0.5 at N = 48. A density step through a box across the
-seam, which the coarse-fine correction acts on, matches its translation to
-4.4e-14 and conserves mass to 4e-15.
+| translated case | shift, root nodes | steps | difference |
+|---|---|---|---|
+| box in 1-D under either stepping mode, and corner box across both seams in 2-D | 36 | 40 | 1.1e-14 |
+| two tiles abutting across the seam, lattice edge 6, N = 48 | 30 | | 8.4e-15 |
+| level at the axis of an r-z run across the seam in z, static or regridded onto the axis, box | | 8 | 2.2e-14 |
+| the same, tiles | | 8 | 1.9e-14 |
 
-**A converging shock on the axis level.** The instrument is
-`noh_axis_level` (`test/cases.jl`): cylindrical Noh from the cold start at
-N = 256, CFL 0.15 and the default filter, a static tile over the first m root
-nodes against the uniform run on 767 nodes; the global-step rows at m = 85 and
-43 are guarded in `test/validation.jl`, whose header carries them. Scratch
-variants of the same case, and a planar control (folded Noh, N = 400, a tile
-at the symmetry plane over the same fractions of the line, against the
-uniform run on 1199 nodes), the axis rows with the radial pressure term in
-the area form:
+The composite mass drift of the corner box is the same on both sides of the
+seam to 1e-15, and the ledger's coarse-fine and covered-face columns account
+for all of it:
+
+| corner box in 2-D, 12 steps | across the seam and clear of it |
+|---|---|
+| composite mass drift | −5.92193e-10 |
+| sum of the ledger's coarse-fine and covered-face columns | −5.92194e-10 |
+
+A density step through a box across the seam, which the coarse-fine
+correction acts on, matches its translation to 4.4e-14 and conserves mass to
+4e-15. A level regridded across the seam under `level_boundaries`, and the
+entropy wave's composite mass with a level on either side of the seam:
+
+| case | measure | value |
+|---|---|---|
+| box regridded across the seam, following a window at unit speed, 96 steps | difference from the uniform fine run | 4.8e-10 |
+| the same, tiles | difference from the uniform fine run | 4.3e-10 |
+| entropy wave, N = 48, t = 0.5, level clear of the seam | composite mass drift | −3.9e-11 |
+| the same, level across the seam | composite mass drift | +1.8e-11 |
+
+**A converging shock on the axis level.** A tile holding the shock's whole
+path reproduces the uniform fine run on the axis as at a symmetry plane. A
+shorter tile, which the shock leaves, loses mass at the crossing and
+post-shock plateau inside the tile, at the axis as at the plane, so the loss
+is the coupling's at a shock and not the axis's. The conservative coupling holds the crossing's
+mass but not its plateau. The instrument is `noh_axis_level`
+(`test/cases.jl`): cylindrical Noh from the cold start at N = 256 and CFL 0.15
+with the default filter. A static tile over the first m root nodes is read
+against the uniform run on 767 nodes. The global-step rows at m = 85 and 43
+are guarded in `test/validation.jl`, whose header carries them. The table
+holds scratch variants of the same case and a planar control (folded Noh,
+N = 400, a tile at the symmetry plane over the same fractions of the line,
+against the uniform run on 1199 nodes), the axis rows with the radial
+pressure term in the area form:
 
 | run | plateau | deficit | shock | mass drift | max \|ρ − uniform\| on the tile | steps |
 |---|---|---|---|---|---|---|
@@ -8308,73 +8433,106 @@ the area form:
 | plane, m = 134 | 3.9989 | 22.7% | 0.2008 | −2e-12 | 1.5e-4 | 10487 |
 | plane, m = 67 | 3.9507 | 22.3% | 0.2036 | −1.14e-3 | 2.0 | 9739 |
 
-A tile holding the shock reproduces the uniform fine run on the axis as at
-the plane; the subcycled tile's axis node reads a deficit 1.7 points above
-the global step's. The table's rows are uncorrected (`REFLUX[] = false`).
-Once the shock leaves the tile, near t = 0.5, the uncorrected composite loses
-mass at the crossing and the post-shock plateau inside the tile falls: on the
-axis to within 1.5% of the battery's uniform ν = 2 row on 256 nodes, at the
-plane by 1.2%. The loss is the coupling's at a shock, not the axis's. The
-conservative coupling holds the axis crossing's mass to −3.6e-7 in the
-conserved quadrature
-([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)),
-but not its plateau, 14.906 against 14.912 uncorrected under the global
-step. No axis runaway appears under αf = 0.47 at the level's spacing, 767
-radial nodes.
+The table's rows are uncorrected (`REFLUX[] = false`). The subcycled tile's
+axis node reads a deficit 1.7 points above the global step's. Once the shock
+leaves the tile, near t = 0.5, the uncorrected composite loses mass at the
+crossing and the post-shock plateau inside the tile falls. On the axis it
+falls to within 1.5% of the battery's uniform cylindrical row at the root's
+resolution, and at the plane by 1.2%. Under the global step the conservative
+coupling
+([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling))
+leaves the axis crossing's plateau where the uncorrected run puts it:
 
-**Reproducibility tier.** A tile owned by a proper subset reproduces the
-every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
-cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches
-the serial time to 5e-18. A decomposed patch sits at 1e-15 to 6e-15.
+| axis crossing, global step | mass drift in the conserved quadrature | plateau |
+|---|---|---|
+| conservative coupling | −3.6e-7 | 14.906 |
+| uncorrected | | 14.912 |
+
+No axis runaway appears under αf = 0.47 at the level's spacing, 767 radial
+nodes.
+
+**Reproducibility tier.** A tile owned by a proper subset of the ranks
+reproduces the every-rank answer to round-off, not bitwise.
+
+| case, at 2, 4 and 8 ranks | difference |
+|---|---|
+| tiled wave cases, a tile owned by a proper subset, against every rank | 0 to 6e-15 |
+| tiled Sod regrid with rebalancing on, its final time against the serial one | 5e-18 |
+| a decomposed patch | 1e-15 to 6e-15 |
 
 ### bench/amr_tiles.jl: tiled cover and per-tile cost
 
 `julia --project=. bench/amr_tiles.jl [N=192] [tile=6] [steps=3]` (`eb0cb38`;
 workspace pooling `41d212f`, patch-type compile `556d69a`).
 
-Annular tag set, N = 192, r0 = 0.75, w = 0.02, buffer 1:
+Settled: the lattice cover is worth having. A tiled lattice covers an annular
+tag set with under half of its bounding box, and the ratio improves with a
+thinner shell, which is the implosion argument for tiles over one box.
 
-| tile edge | cover of the bounding box | tiles | fine nodes each | memory each |
+| tile edge (annular tag set, N = 192, r0 = 0.75, w = 0.02, buffer 1) | cover of the bounding box | tiles | fine nodes each | memory each |
 |---|---|---|---|---|
 | 6 | 41% | 208 | 19² | 0.40 MB |
 | 12 | 47% | 80 | 37² | 1.1 MB |
 
-Settled: the lattice cover is worth having, and the ratio improves with a
-thinner shell, which is the implosion argument for tiles over one box.
+Per-tile cost: setup time lies in plan construction and grows with the tile
+count, which argues for tile edges of 12 or more in 3-D. Native code compiles
+once per distinct `Patch` type, and `promote_typeof` specialization cost time
+per distinct patch count, which is why every refined face carries
+`InterfaceBC` and `solver.patches` is a typed vector.
 
-Per-tile cost: setup is 0.06–0.12 s per tile in plan construction (N = 96: 64
-tiles in 7.6 s, 196 in 11.4 s), which argues for tile edges of 12 or more in
-3-D. Warm construction of plans, scratch, transfers and communicators is
-0.03 s for eight tiles. Native code compiles once per distinct `Patch` type at
-1.8 s on the CPU backend and 3.9 s on the device backend, and `promote_typeof`
-specialization cost 0.5–1.7 s per distinct patch count, which is why every
-refined face carries `InterfaceBC` and `solver.patches` is a typed vector.
+| setup cost | time |
+|---|---|
+| plan construction, N = 96, 64 tiles | 7.6 s |
+| the same, 196 tiles | 11.4 s |
+| warm construction of plans, scratch, transfers and communicators, eight tiles | 0.03 s |
+| native code per distinct `Patch` type, CPU backend | 1.8 s |
+| the same, device backend | 3.9 s |
+| `promote_typeof` specialization per distinct patch count | 0.5–1.7 s |
 
-Shared RHS workspace at tile 6 (208 tiles of 19² plus the root): 103.0 MB over
-the patch set before the pooling, 60.3 MB after, a factor of 1.71, with
-0.207 MB of each tile's 0.398 MB shared. The warm step is 0.55 s before and
-0.56 s after at one rank on 16 threads, inside the run-to-run spread.
+Pooling the right-hand-side workspace cuts the memory of the patch set by a
+factor of 1.71, since about half of each tile's memory is scratch a pool can
+share. The warm step does not change outside the run-to-run spread.
 
-Workstation pathology: any 2-D case at np = 8 runs at ~7 s/step, one patch or
-four tiles alike, against ~0.5 s at np = 4, of the kind `CLUSTER.md` records
-for hybrid cores; the MPI suite's tiled check is bounded to ten steps for it.
+| tile 6: 208 tiles of 19² plus the root, one rank on 16 threads | before pooling | after |
+|---|---|---|
+| memory over the patch set | 103.0 MB | 60.3 MB |
+| memory of each tile | 0.398 MB | |
+| of it shared after pooling | | 0.207 MB |
+| warm step | 0.55 s | 0.56 s |
 
-Open: a rough count puts the RHS work of 40 tiles of 37² on a 96² root near
-2 s per subcycled step, against one cold measurement of 8–10 s; the warm
-annular reading at a different configuration matches expectation. Remeasure
-warm at the original configuration.
+Workstation pathology: at eight ranks any two-dimensional case, one patch or
+four tiles alike, runs at ~7 s/step against ~0.5 s at four ranks, of the kind
+`CLUSTER.md` records for hybrid cores. The MPI suite's tiled check is bounded
+to ten steps for it.
+
+Open: one cold measurement of a configuration of large tiles took four to five
+times a rough count of its right-hand-side work, while the warm annular
+reading at a different configuration matches expectation. Remeasure warm at
+the original configuration.
+
+| configuration, per subcycled step | rough count of the RHS work | measured |
+|---|---|---|
+| 40 tiles of 37² on a 96² root | near 2 s | 8–10 s, one cold run |
 
 ### bench/rmicost.jl: whole tiles, the subdivided lattice and per-dimension edges
 
 `mpiexec -n 8 julia --project=. -t 1 bench/rmicost.jl config=amr2 dim=3
 affinity=0x5555` and the other legs below, on `98031e2` (base: tiles split
 over rank ranges) against the same tree with whole-tile ownership and the
-lattice subdivision; P-cores, the two trees alternated in one session. ms per
-root step over the steady steps (mean, median), steady wall per simulated
-µs, busy max/mean, the waiting share of the summed steady wall, refined
-node-steps per level, and the mix width W (fine2 6.239 mm and fine3
-6.075 mm in 2-D, fine2 5.608 mm in 3-D). The 3-D amr3 rows are the first 17
-root steps, 7 of them steady.
+lattice subdivision; P-cores, the two trees alternated in one session. The
+columns give ms per root step over the steady steps (mean, median), steady
+wall per simulated µs, busy max/mean, the waiting share of the summed steady
+wall, refined node-steps per level, and the mix width W, whose values on the
+uniform fine runs are:
+
+| uniform fine run | W mm |
+|---|---|
+| 2-D fine2 | 6.239 |
+| 2-D fine3 | 6.075 |
+| 3-D fine2 | 5.608 |
+
+The amr3 rows in three dimensions cover the first 17 root steps, 7 of them
+steady.
 
 | leg | tree | lattice at the end | ms/step | median | s/µs | busy | wait | node-steps L1 / L2 | W mm |
 |---|---|---|---|---|---|---|---|---|---|
@@ -8390,36 +8548,52 @@ root steps, 7 of them steady.
 | 3-D amr3, 17 steps | base | 12 / 12 | 15970 | 15310 | 10.9 | 1.06 | 21% | 9.2e6 / 2.94e8 | |
 | 3-D amr3, 17 steps | new | (6, 6, 12) / 12 | 18580 | 18160 | 12.2 | 1.04 | 23% | 9.4e6 / 3.33e8 | |
 
-Settled: in 3-D amr2, where four or five level-1 tiles of 37 × 36 × 36 fine
-nodes were each split over two ranks, whole tiles on the subdivided lattice
-(12 to 28 tiles) take 15% off the step, and the busy max/mean falls from
-1.11 to 1.05. Thin tiles along the shock normal (`tile = (4, 12, 12)`) cover
-the planar fronts with 21% fewer refined node-steps than cubes of 12, and in
-2-D amr3 halve the level-2 node-steps and take 18% off the step; in 3-D
-amr2 the saving in nodes is spent on the extra tile faces and the step is
-the subdivided cube lattice's. In 2-D amr2 the median step falls by a
-third, and the mean does not move: the regrid checks rebuild 14 to 16 small
-tiles where the base rebuilt 2 to 5, and the checks rise from 8% to 45% of
-the steady wall. The 2-D amr3 level 2 already holds 12 to 30 tiles on the
-configured lattice and is not subdivided; there the mean moves inside the
-spread.
+Settled: whole tiles on the subdivided lattice take 15% off the step of the
+three-dimensional amr2 leg and bring its busy max/mean close to one. There the
+base had split each of its first level's few large tiles over two ranks:
+
+| 3-D amr2, first level | tiles | fine nodes each | ranks per tile |
+|---|---|---|---|
+| base | 4 or 5 | 37 × 36 × 36 | 2 |
+| new, subdivided lattice | 12 to 28 | | 1 |
+
+Thin tiles along the shock normal (`tile = (4, 12, 12)`) cover the planar
+fronts with fewer refined node-steps than cubes. In 2-D amr3 they halve the
+second level's node-steps and take 18% off the step. In 3-D amr2 the saving
+in nodes is spent on the extra tile faces, and the step is the subdivided
+cube lattice's. In 2-D amr2 the median step falls by a third and the mean
+does not move, because the regrid checks rebuild more small tiles than the
+base did:
+
+| 2-D amr2, regrid checks | tiles rebuilt per check | share of the steady wall |
+|---|---|---|
+| base | 2 to 5 | 8% |
+| new | 14 to 16 | 45% |
+
+In two dimensions the second level of amr3 already holds 12 to 30 tiles on
+the configured lattice and is not subdivided, and its mean step moves inside
+the spread.
 
 A sampling profile of the first 200 root steps of 3-D amr2 (`profile=true
-nmax=200`), ms per root step and the share inside MPI.jl calls, base
-against new: the level artificial coefficients 153.6 (39%) and 101.9 (22%),
-the right-hand side 107.0 (31%) and 74.1 (14%), the same-level sync 41.4
-(60%) and 33.1 (78%), the ghost-flux divergence 50.4 (47%) and 98.0 (15%);
-the step 422.1 (39%) and 374.1 (23%). The ghost-flux passes, which run per
-tile face, double with the tile count, and are the cost the subdivision
-pays for whole tiles.
+nmax=200`) places the cost of whole tiles in the ghost-flux divergence, whose
+passes run per tile face and double with the tile count. The other phases are
+cheaper, and the level's artificial coefficients and right-hand side spend a
+smaller share of their time inside MPI.jl calls.
+
+| 3-D amr2, ms per root step (share inside MPI.jl calls) | base | new |
+|---|---|---|
+| level artificial coefficients | 153.6 (39%) | 101.9 (22%) |
+| right-hand side | 107.0 (31%) | 74.1 (14%) |
+| same-level sync | 41.4 (60%) | 33.1 (78%) |
+| ghost-flux divergence | 50.4 (47%) | 98.0 (15%) |
+| step | 422.1 (39%) | 374.1 (23%) |
 
 W moves at the third or fourth figure with the layout: the subdivided and the
-thin lattices cover the features more tightly, so less of the flow sees the
-fine spacing, and W lies further from the uniform fine run's (3-D amr2: 0.5%,
-0.7% and 0.9% above fine2 for base, subdivided and thin). The serial runs,
-the convergence rows and the MPI suite's serial comparisons are unchanged,
-since one rank never subdivides and a whole tile computes as the serial tile
-does.
+thin lattices cover the features more tightly, so less of the flow is at the
+fine spacing, and W lies further from the uniform fine run's. The serial
+runs, the convergence rows and the MPI suite's serial comparisons are
+unchanged, since one rank never subdivides and a whole tile computes as the
+serial tile does.
 
 #### The lattice chosen by the measured cost model
 
@@ -8427,11 +8601,14 @@ The same legs on `a02b946` (base: the coarsest lattice giving a tile per
 rank) against the lattice of the shortest predicted step (`_choose_lattice`),
 the model's coefficients measured on the run; the new tree's script against
 both projects, which adds the compilation after the warm-up, the most of
-any rank. The coefficients at the end, in seconds per node (a), per node
-and interface dimension (b), per tile (k) and per message (m), each per
-step of the level, and per tile at a check (c): 2-D amr2 1.2e-6, 2.1e-7,
-3.3e-4, 1–3e-4, 7.3e-4; 3-D amr2 2.3e-6, 3.2e-7, 0.024, 4.0e-3, 5.1e-3;
-3-D amr3 3.4e-6, 3.4e-7, 6.9e-4, 5.1e-3, 0.026.
+any rank. The coefficients at the end of each run, in seconds per step of the
+level, but c per check:
+
+| leg | a, per node | b, per node and interface dimension | k, per tile | m, per message | c, per tile at a check |
+|---|---|---|---|---|---|
+| 2-D amr2 | 1.2e-6 | 2.1e-7 | 3.3e-4 | 1–3e-4 | 7.3e-4 |
+| 3-D amr2 | 2.3e-6 | 3.2e-7 | 0.024 | 4.0e-3 | 5.1e-3 |
+| 3-D amr3 | 3.4e-6 | 3.4e-7 | 6.9e-4 | 5.1e-3 | 0.026 |
 
 | leg | tree | lattice at the end | ms/step | median | compiling s | s/µs | busy | node-steps L1 / L2 | W mm |
 |---|---|---|---|---|---|---|---|---|---|
@@ -8440,50 +8617,62 @@ step of the level, and per tile at a check (c): 2-D amr2 1.2e-6, 2.1e-7,
 | 2-D amr3 | base | (6, 6) / 12 | 138.7 | 104.3 | 5.5 | 0.088 | 1.07 | 5.36e6 / 7.52e7 | 6.0835 |
 | 2-D amr3 | model | (6, 12) / 12 | 188.9 | 108.4 | 12.2 | 0.120 | 1.27 | 5.18e6 / 7.66e7 | 6.0898 |
 | 3-D amr2 | base | (6, 6, 12) | 399.6 | 398.7 | 5.8 | 0.299 | 1.05 | 1.53e8 | 5.6454 |
-| 3-D amr2 | model | (6, 12, 12) | 347.0 | 318.0 | 5.5 | 0.261 | 1.07 | 1.48e8 | 5.6452 |
+| 3-D amr2 | model | (6, 12, 12), 8 tiles of 24624 nodes | 347.0 | 318.0 | 5.5 | 0.261 | 1.07 | 1.48e8 | 5.6452 |
 | 3-D amr3, 17 steps | base | (6, 6, 12) / 12 | 15540 | 15200 | 5.7 | 10.18 | 1.04 | 9.41e6 / 3.33e8 | |
 | 3-D amr3, 17 steps | model | (6, 6, 12) / 12 | 14230 | 14230 | 5.9 | 9.72 | 1.04 | 8.81e6 / 3.00e8 | |
 
-Settled: in 3-D the model's lattice is the faster. 3-D amr2 takes the
-half-subdivided (6, 12, 12), 8 tiles of 24624 nodes, a tile per rank, over
-the (6, 6, 12) the count rule reaches, and the step falls 13% (median 20%).
-In 3-D amr3 level 1 ends on the same (6, 6, 12) as the count rule, chosen
-because a level of whole tiles spans as many ranks as it has tiles and its
-children are placed within them: on the configured lattice level 1 holds
-4 tiles, which would leave level 2, nine tenths of the work, on 4 ranks.
-The 17-step window runs 8% faster with 10% fewer level-2 node-steps, the
-98031e2 count of the table above. The level's share of the step alone
-would have kept level 1 coarse.
+Settled: in three dimensions the model's lattice is the faster. On amr2 it
+takes the half-subdivided lattice, a tile per rank, over the lattice the
+count rule reaches, and the step falls 13%. On amr3 the first level ends on
+the count rule's lattice, chosen because a level of whole tiles spans as many
+ranks as it has tiles and its children are placed within them. On the
+configured lattice the first level would hold four tiles and leave the
+second, nine tenths of the work, on four ranks. The window runs 8% faster
+than the base with 10% fewer node-steps on the second level, whose base count
+is that of the `98031e2` table above. The level's share of the step alone
+would have kept the first level coarse.
 
-Open: in 2-D the median step falls (amr2 18%) or holds (amr3 +4%), and the
-mean rises five- and 1.4-fold, all of it in the regrid checks (amr2: 17.9 s
-over the median step against 1.6–1.8 s). A traced run (`trace=true`) shows
-the checks that place a tile of a face combination new to its rank at 1.3
-to 3.2 s of wall, nearly all of it one rank compiling the step's tile phases
-while the others wait at the check's collectives; less that compilation
-the checks cost about 1 ms per tile. The count rule subdivided at the first
-check and met its combinations in the first ten steps on every rank at
-once; the model starts on the configured lattice, changes it once an
-interval is measured, and the tile set then grows rank by rank, so the
-compilations come one at a time inside the steady window. The column gives
-the compilation of the most compiling rank after the warm-up, inside the
-steps or between them (Julia's process-wide counter). The model takes a
-check's wall less the longest compilation in it, and leaves out the
-observations of a rank that compiled in an interval; before that it swung
-between (12, 12) and (6, 12) on compile spikes.
+Open: in two dimensions the model's lattice raises the mean step while the
+median falls or holds, and all of the rise is in the regrid checks. A traced
+run (`trace=true`) puts a check that places a tile of a face combination new
+to its rank at 1.3 to 3.2 s of wall, nearly all of it one rank compiling the
+step's tile phases while the others wait at the check's collectives. Less
+that compilation, the checks cost about 1 ms per tile.
+
+| 2-D leg, model against base | median step | mean step |
+|---|---|---|
+| amr2 | 18% lower | five-fold |
+| amr3 | +4% | 1.4-fold |
+
+| 2-D amr2 | wall of the regrid checks over the median step |
+|---|---|
+| base | 1.6–1.8 s |
+| model | 17.9 s |
+
+The count rule subdivided at the first check and met its combinations in the
+first ten steps on every rank at once. The model starts on the configured
+lattice, changes it once an interval is measured, and the tile set then grows
+rank by rank, so the compilations come one at a time inside the steady
+window. The compiling column gives the compilation of the most compiling rank
+after the warm-up, inside the steps or between them (Julia's process-wide
+counter). The model takes a check's wall less the longest compilation in it,
+and leaves out the observations of a rank that compiled in an interval.
+Without that exclusion it swung between the configured lattice and the
+half-subdivided one on compile spikes.
 
 ### bench/latticescale.jl: the lattice decision at a cluster's rank count
 
 `julia --project=. -t 1 bench/latticescale.jl affinity=0x5555`, serial on
-one P-core, on synthetic 3-D Richtmyer–Meshkov fronts at 48³ root nodes per
-rank and a configured edge of 16: seconds of each step of one regrid check's
-decision, which every rank (or rank 0, for a deeper level) runs. Base is
-593f673 (`_lattice_wanted` and `_tile_faces` pairwise, the knapsack's
-proximity over every rank); new is the tree that indexes the old tiles and
-bounds the chain at `_lattice_budget`. "Price" is the face table, the
-placement and the layout cost of every lattice of the chain, "inherit" the
-creation checks of a re-chopped level, "nest" level 2's nesting test (rank
-0), "place" the stored-ownership placement and the balance check.
+one P-core, on synthetic three-dimensional Richtmyer–Meshkov fronts at 48³
+root nodes per rank and a configured edge of 16. The table gives seconds of
+each step of one regrid check's decision, which every rank (or rank 0, for a
+deeper level) runs. Base is `593f673` (`_lattice_wanted` and `_tile_faces`
+pairwise, the knapsack's proximity over every rank); new is the tree that
+indexes the old tiles and bounds the chain at `_lattice_budget`. In the columns, "price" is
+the face table, the placement and the layout cost of every lattice of the
+chain, "inherit" the creation checks of a re-chopped level, "nest" the second
+level's nesting test (on rank 0), and "place" the stored-ownership placement
+and the balance check.
 
 | P | tree | lattices | tiles, finest | wanted | price | inherit | place | nest |
 |---|---|---|---|---|---|---|---|---|
@@ -8495,20 +8684,25 @@ creation checks of a re-chopped level, "nest" level 2's nesting test (rank
 
 Settled: the base decision was quadratic in the tiles (each cell of every
 lattice tested against every old tile, every pair of tiles in the face
-table) and took 30 s a check at one node; it never finished a check at ten.
-The new one is linear in the tiles, about 1 s a check at 11,200 ranks on
-150,000 tiles of the finest lattice, against a predicted root step of 13
-to 160 s on these fronts and a check every four steps. The budget stops
-the chain at 4.6 MB of cell flags at 11,200 ranks, where halving to four
-parent nodes would reach tens of megabytes on every rank. The fold of the gathered timings takes
+table), took 30 s a check at one node and never finished a check at ten.
+The new one is linear in the tiles and costs about 1 s a check at 11200
+ranks. That is small against a predicted root step of 13 to 160 s on these
+fronts, with a check every four steps. The budget stops the chain at 4.6 MB
+of cell flags at 11200 ranks, where halving to four parent nodes would reach
+tens of megabytes on every rank. The fold of the gathered timings takes
 milliseconds.
 
-Part 2 prices four rules for two refined levels under the model with the
-coefficients fitted on the workstation (3-D amr2 at eight ranks, below:
-a 2.15e-6, b 3.2e-7, k 0.028, m 5.4e-3, c 0.044) and nodes of 112 ranks;
-the cost of a message leaving the node (m_x = ratio m) has not been
-measured and is swept. Every entry is the model's prediction, s per root
-step, with the best rule's step in the last column:
+The script's second part prices four rules for two refined levels under the
+model, with nodes of 112 ranks and the coefficients fitted on the workstation
+(3-D amr2 at eight ranks, below). The cost of a message leaving the node
+(m_x = ratio m) has not been measured and is swept.
+
+| coefficients, fitted on 3-D amr2 at eight ranks | a | b | k | m | c |
+|---|---|---|---|---|---|
+| s | 2.15e-6 | 3.2e-7 | 0.028 | 5.4e-3 | 0.044 |
+
+Every entry is the model's prediction, s per root step, with the best rule's
+step in the last column:
 
 | scene | P | ratio | configured | count rule | model, one node | model, nodes | best |
 |---|---|---|---|---|---|---|---|
@@ -8519,36 +8713,51 @@ step, with the best rule's step in the last column:
 | front | 1120 | 10 | 185.3 | 185.3 | 187.0 | 143.3 | 143.3 |
 | front | 11200 | 10 | 159.3 | 159.3 | 159.3 | 127.8 | 127.8 |
 
-Modeled, not measured: early in a run (thin), at 11,200 ranks the
-configured lattice gives level 1 0.64 tiles per rank and confines level 2
-to those ranks, and the subdivided lattice the count rule and the model
+Modeled, not measured: early in a run (thin) at 11200 ranks the configured
+lattice gives the first level 0.64 tiles per rank and confines the second
+level to those ranks. The subdivided lattice the count rule and the model
 take is predicted 1.6 times faster. Where the off-node message costs ten
-times one within a node, placing a level's tiles by node takes 12 to 23%
-off the predicted step; where it costs the same, placement by node is
-predicted 4 to 5% slower than the single-node knapsack (the runs cut per
-node balance a little worse), so the gain rests on the ratio rzhound
-measures (bench/slurm/rmicost_lattice.sbatch, not yet run).
+times one within a node, placing a level's tiles by node takes 12 to 23% off
+the predicted step. Where it costs the same, placement by node is predicted
+4 to 5% slower than the single-node knapsack, since the runs cut per node
+balance a little worse, so the gain rests on the ratio rzhound measures
+(bench/slurm/rmicost_lattice.sbatch, not yet run).
 
-The workstation smoke at np = 8 (bench/rmicost.jl, P-cores, two runs a
-tree alternated, base 593f673): 3-D amr2 holds (6, 12, 12) at 342.5 and
-340.7 ms per root step (base) and 342.6 and 342.1 (new), W 5.6452 mm in
-all four; 2-D amr2 ends on (6, 12, 12) with medians of 8.70 and 8.04 ms
-(base) and 7.35 and 7.33 (new) and a steady wall of 15.2 and 10.6 s against
-5.9 and 5.9, the difference in the regrid checks (12.5 and 8.5 s against
-3.9 s each), not resolved further. The fitted c, per tile of the busiest
-rank, is 0.036 to 0.051 s in 3-D and 0.0012 to 0.0125 s in 2-D. In the MPI
-suite's measured three-level shock on fake nodes of two ranks, one run in
-four told m_x (3.9e-5 s) apart from m (9.4e-5 s); the others fitted one
-coefficient.
+The workstation smoke at eight ranks (bench/rmicost.jl, P-cores, two runs a
+tree alternated, base `593f673`) shows the new decision at the base's step in
+three dimensions, on the same lattice and at the same W. In two dimensions
+the new tree's median step and steady wall are lower, the difference lying in
+the regrid checks and not resolved further.
+
+| leg | tree | lattice at the end | ms per root step | median ms | steady wall s | regrid checks s | W mm |
+|---|---|---|---|---|---|---|---|
+| 3-D amr2 | base | (6, 12, 12) | 342.5, 340.7 | | | | 5.6452 |
+| 3-D amr2 | new | (6, 12, 12) | 342.6, 342.1 | | | | 5.6452 |
+| 2-D amr2 | base | (6, 12, 12) | | 8.70, 8.04 | 15.2, 10.6 | 12.5, 8.5 | |
+| 2-D amr2 | new | (6, 12, 12) | | 7.35, 7.33 | 5.9, 5.9 | 3.9 each | |
+
+The fitted c, per tile of the busiest rank, is larger in three dimensions
+than in two:
+
+| fitted c per tile of the busiest rank | 3-D | 2-D |
+|---|---|---|
+| s | 0.036 to 0.051 | 0.0012 to 0.0125 |
+
+In the MPI suite's measured three-level shock on fake nodes of two ranks, the
+fit separated m_x (3.9e-5 s) from m (9.4e-5 s) in one run of four and fitted
+one coefficient in the others.
 
 ### bench/amr_cost.jl: the mixing cost case
 
 `mpiexec -n 8 julia --project=. -t 1 bench/amr_cost.jl 48 1.0` (`6382d8e`;
 masked quadrature and tag criteria `f8e1a23`).
 
-A heavy-gas blob mixing case on a 48³ root grid with a subcycled, regridding
-region covering a sixth of the volume, against uniform 48³ and 142³ references
-at t = 1. The metric is ∫Y(1−Y)dV on the shared coarse lattice.
+Settled: the composite buys most of the fine answer at a third to a half of
+its cost, and the artificial diffusivity number alone tracks the blob to the
+same final region. The case is a heavy-gas blob mixing on a 48³ root with a
+subcycled, regridding region covering a sixth of the volume, run to t = 1
+against the uniform coarse and fine grids of the table. The metric is
+∫Y(1−Y)dV on the shared coarse lattice.
 
 | configuration | mixedness error | wall | memory |
 |---|---|---|---|
@@ -8557,11 +8766,10 @@ at t = 1. The metric is ∫Y(1−Y)dV on the shared coarse lattice.
 | composite, sensor tag (`tag=sensor sensor=0.02`) | 1.7e-3 | 35% of fine | — |
 | fine 142³ | reference | 471 s | 2737 MiB |
 
-Single runs at np = 8; read the ratios, not the third digit. Settled: the
-composite buys most of the fine answer at a third to a half of its cost, and
-the artificial diffusivity number alone tracks the blob to the same final
-region (nothing above 0.02 farther than 0.6 from the interface on the coarse
-grid; a captured Sod shock reads about 2 under the default C_β).
+Single runs at np = 8; read the ratios, not the third digit. The sensor tag's
+threshold of 0.02 compares with about 2 on a captured Sod shock under the
+default C_β. On the coarse grid no node farther than 0.6 from the interface
+reads above the threshold.
 
 Dead end: pointwise in-region error is the wrong metric. Coarse and composite
 both sit at max ≈ 0.19 against fine there, the sub-cell displacement of a
@@ -8570,14 +8778,22 @@ near-discontinuous interface.
 ### bench/amrwin.jl: time to solution against the uniform fine grid
 
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
-process, one rank and one thread on the i9-12900K under Julia 1.11.4, the
-package at the commit that records this table and the overhead profile; the
-root-step account below says at which commits it was taken. Each
+process, one rank and one thread on the i9-12900K. The runs use Julia 1.11.4
+and the package at the commit that records this table and the overhead
+profile; the root-step account below says at which commits it was taken. Each
 problem runs warm as the root grid alone (coarse), the root with one
 subcycled regridded box, the same with lattice tiles, and the uniform grid at
 the refined spacing (fine). The error is the composite L1 norm of ρ
 against the fine run at coincident nodes. Single runs; read the ratios to two
 figures.
+
+Of the four problems only the Sod tube gains clearly in time to solution: its
+box and tiles reach under a thirtieth of the coarse error at under half the
+fine wall. On the blobs and the shock the refined runs take longer than the
+uniform fine grid. On the blobs the level takes up to twice the fine run's
+steps, and on the shock each point-step costs more than twice the fine run's.
+On the 3-D blob the box beats the fine wall, but at eleven times the tiles'
+error.
 
 | problem | root / fine grid | end time | fine wall | fine steps |
 |---|---|---|---|---|
@@ -8606,29 +8822,40 @@ substep, and its points are the time average of the level-1 nodes.
 | blob3d | tiles | 1.68 | 1.25 | 1.34 | 1.56 | 0.79 | 7.93e-5 |
 
 The shock ran under `validity=permissive`: under the default policy the
-tiled run stops with an invalid state at its last step, the 761st, and its
-L1 ρ is 3.8e-3 on the level against 5.4e-4 on the root. Its runs take one to
-three seconds, short enough that a single process's wall moves its ratios.
+tiled run stops with an invalid state at its last step, the 761st. Its L1 ρ
+is 3.8e-3 on the level against 5.4e-4 on the root. Its runs take one to three
+seconds, short enough that a single process's wall moves its ratios.
 
-The mixedness ∫Y(1−Y)dV against the fine run's is +122% coarse, +2.3% box
-and +0.16% tiles on the blobs, and +114%, +24% and −0.30% on the 3-D blob. On
-both blob problems only the tiles come near the fine answer, and the box's
-lower wall on the 3-D blob comes with eleven times the tiles' error.
+On both blob problems only the tiles come near the fine run's mixedness:
 
-**The root step.** The account below was taken at `f1d420c`, before
-`1fe960a` left a covered node's unresolved residual out of the parent's filter
-pass, but for the 3-D blob's rows, which were taken with the table above and
-have no before column; the root and level step counts of the table above are
-the current ones.
-At `4a1f0b4` the covered root nodes, carrying the
-artificial diffusivity the root's sensor takes on the restricted fine
-solution, bounded 99.4–100% of the root steps on the Sod tube, the shock and
-the tiled blobs, 73% and 86% on the 3-D blob and 30% on the box blobs, with
-the artificial diffusivity above half the bound on 56–100% of them. `max_rate` now holds a parent's overwritten nodes, those covered and
-at least `LEVEL_BUFFER` nodes from any node a child does not fully cover, to
-a CFL number of 0.75 where the solver's is lower. Root steps against the
-root-only run and the level's steps against the fine run's, before and
-after, and the class bounding the root step after:
+| mixedness ∫Y(1−Y)dV against the fine run's | coarse | box | tiles |
+|---|---|---|---|
+| blobs | +122% | +2.3% | +0.16% |
+| blob3d | +114% | +24% | −0.30% |
+
+**The root step.** The covered root nodes, which carry the artificial
+diffusivity the root's sensor takes on the restricted fine solution, bounded
+most root steps of a refined run, and nearly all of them on the Sod tube and
+the shock. `max_rate` now holds a parent's
+overwritten nodes, those covered and at least `LEVEL_BUFFER` nodes from any
+node a child does not fully cover, to a CFL number of 0.75 where the solver's
+is lower. The level of the Sod tube then takes the fine run's steps, the
+shock's steps fall by a third, and the box blobs, whose root step the level
+bounds, barely change. The account below was taken at `f1d420c`, before
+`1fe960a` left a covered node's unresolved residual out of the parent's
+filter pass, but for the 3-D blob's rows, which were taken with the table
+above and have no before column. The root and level step counts of the table
+above are the current ones.
+
+| at `4a1f0b4`, root steps bounded by the covered root nodes | share |
+|---|---|
+| Sod tube, shock and tiled blobs | 99.4–100% |
+| 3-D blob, the two refined runs | 73% and 86% |
+| box blobs | 30% |
+| of these, steps with the artificial diffusivity above half the bound | 56–100% |
+
+Root steps against the root-only run and the level's steps against the fine
+run's, before and after, and the class bounding the root step after:
 
 | run | root steps / root-only, before | after | level steps / fine, before | after | bounding class after |
 |---|---|---|---|---|---|
@@ -8641,34 +8868,55 @@ after, and the class bounding the root step after:
 | blob3d box | | 1.63 | | 2.16 | root covered 71%, level 29% |
 | blob3d tiles | | 1.17 | | 1.56 | level 81.5%, root covered 16.7%, overwritten 1.9% |
 
-At cfl 0.2 the Sod tube's overwritten nodes ran at up to 2.8 times the
-solver's CFL number, under the 3.75 the ceiling allows, so the ceiling never
-bound there. The composite L1 ρ before was 1.38e-4 and 1.08e-4 on the Sod box
-and tiles, 1.09e-2 and 4.35e-4 on the blobs and 1.53e-3 and 2.11e-3 on the
-shock. The Sod values move by that much with the step sequence alone: held
-to twice the solver's CFL number instead, the overwritten nodes bound a few
-steps (452 and 450 root steps) and the box and tiles measured 1.45e-4 and
-1.12e-4. With the overwritten nodes left out of the rate altogether the
-tiled blobs took 90 root steps (2.55 of the fine wall, L1 ρ 4.24e-4) and
-the shock box 673, but on the shock the covered nodes nearest the axis ran
-away within one root step at the focus: their rate after the step reached
-1.85e6 times the step's rate on the box, from 3.7 the step before, and 36
-times on the tiles, from 19. Held to a CFL number of 1.0 the box run's step
-then collapsed at t = 0.22096 and the tiles' rate reached 9.6e4 times; held
-to 0.9 or 0.75 both runs completed, with the rate after the last step at
-most 28 times. On the 3-D blob box the artificial diffusivity is above half
-the bounding rate on 91% of the root-covered steps and 86% of the level's,
-and the rates with the covered root nodes left out predict 68.7 root steps,
-1.49 of the root-only run's. On the tiles it is above half on 2.3% of the
-level's steps, and the prediction is 52.2, 1.13 of the root-only run's.
-The overwritten nodes ran at up to 1.18 and 1.50 times the solver's CFL
-number on the box and the tiles, the tiles at the ceiling.
+The Sod tube's overwritten nodes ran at up to 2.8 times the solver's CFL
+number, under the 3.75 the ceiling allows at the tube's cfl, so the ceiling
+never bound there. The Sod errors change by up to a factor of two between
+before and after, and the step sequence alone moves them that much: held to
+twice the solver's CFL number instead, the overwritten nodes bound a few
+steps and the Sod errors return to those before.
 
-**Where the tiled overhead goes.** Milliseconds per root step of the box and
-the tiles, from the sampling profile scaled by the timed wall, and the
-tiles' cost per level point over the box's. The level held 6278 and 7274
-points on Sod (11.6 tiles on average), 27528 and 31623 on the blobs (13.2)
-and 85778 and 295139 on the 3-D blob (18.9).
+| run | L1 ρ before the ceiling | overwritten nodes held to twice the solver's CFL: root steps | L1 ρ |
+|---|---|---|---|
+| sod box | 1.38e-4 | 452 | 1.45e-4 |
+| sod tiles | 1.08e-4 | 450 | 1.12e-4 |
+| blobs box | 1.09e-2 | | |
+| blobs tiles | 4.35e-4 | | |
+| shock box | 1.53e-3 | | |
+| shock tiles | 2.11e-3 | | |
+
+The shock sets the ceiling's value. With the overwritten nodes left out of
+the rate altogether, the covered nodes nearest the axis ran away within one
+root step at the focus. Under the highest ceiling tried the box run's step still
+collapsed, and under the two lower ones both runs completed.
+
+| overwritten nodes in the rate | run | root steps | wall / fine | L1 ρ | covered nodes' rate after the step over the step's rate |
+|---|---|---|---|---|---|
+| left out | blobs tiles | 90 | 2.55 | 4.24e-4 | |
+| left out | shock box | 673 | | | 1.85e6, from 3.7 the step before |
+| left out | shock tiles | | | | 36, from 19 the step before |
+| held to CFL 1.0 | shock box | | | | the step collapsed at t = 0.22096 |
+| held to CFL 1.0 | shock tiles | | | | 9.6e4 |
+| held to CFL 0.9 or 0.75 | shock box and tiles | | | | at most 28 after the last step |
+
+On the 3-D blob the artificial diffusivity bounds the box's steps, on the
+covered root nodes and on the level alike, and with the covered root nodes
+left out of the rate the box would still take half again the root-only run's
+steps. On the tiles it rarely bounds the step.
+
+| 3-D blob | steps with the artificial diffusivity above half the bounding rate | root steps predicted with the covered root nodes left out | of the root-only run's | overwritten nodes' largest CFL over the solver's |
+|---|---|---|---|---|
+| box | 91% of the root-covered, 86% of the level's | 68.7 | 1.49 | 1.18 |
+| tiles | 2.3% of the level's | 52.2 | 1.13 | 1.50, at the ceiling |
+
+**Where the tiled overhead goes.** On tiles the level-wide artificial
+coefficients and the ghost-flux divergence take nearly three fifths of the
+step. Per level point the tiles cost within a factor of two of the box in
+every phase but Sod's ghost-flux divergence, whose tiles have two interface
+dimensions where the box spanning the channel has one. The same-level
+synchronization exists only on tiles and is a few percent of the step. The
+table gives milliseconds per root step of the box and the tiles, from the
+sampling profile scaled by the timed wall, and the tiles' cost per level
+point over the box's.
 
 | phase | sod box | sod tiles | per point | blobs box | blobs tiles | per point | blob3d box | blob3d tiles | per point |
 |---|---|---|---|---|---|---|---|---|---|
@@ -8682,75 +8930,115 @@ and 85778 and 295139 on the 3-D blob (18.9).
 | root RHS and Hermite endpoint | 3.22 | 3.13 | | 5.17 | 5.52 | | 31.9 | 30.5 | |
 | regrid | 0.36 | 0.27 | | 5.19 | 3.85 | | 17.2 | 24.9 | |
 | whole step | 21.2 | 32.2 | | 122 | 151 | | 801 | 2530 | |
+| level points | 6278 | 7274 | | 27528 | 31623 | | 85778 | 295139 | |
+| tiles on average | | 11.6 | | | 13.2 | | | 18.9 | |
 
-On the tiles the level-wide artificial coefficients alone take 34.5%, 37.0%
-and 34.5% of the step, the ghost-flux divergence 24.3%, 22.0% and 24.1%, and
-the Hermite shell fill 2.4%, 3.2% and 10.1%. The shell is filled only on a
-tile with a parent-fed face, and there only over the boxes of the
-interpolation chain its slots read. Each tile's right-hand side reads the
-primitives and velocity gradients computed in the level-wide pass.
-Per level point against the box, the filter and the stage update cost
-0.92–1.47 times as much on tiles, the right-hand side with the artificial
-coefficients 0.98–1.17 times, the ghost-flux divergence 1.02–2.39 times, the
-most on Sod, whose tiles have two interface dimensions where the box spanning
-the channel has one, and the shell fill and the post-step shell 0.58–1.78
-times. The same-level synchronization exists only on tiles, at 1.1–3.1% of
-the step.
+| share of the tiles' step | sod | blobs | blob3d |
+|---|---|---|---|
+| level-wide artificial coefficients | 34.5% | 37.0% | 34.5% |
+| ghost-flux divergence | 24.3% | 22.0% | 24.1% |
+| Hermite shell fill | 2.4% | 3.2% | 10.1% |
 
-On the 1-D shock box the level's right-hand side is 34.2% of the step, the
-ghost-flux divergence 28.4%, the root's right-hand side and the Hermite
-endpoint 16.2%, regridding 3.1%, the shell fill 1.7% and the folded box at
-the axis 1.9%. On its tiles (7.1 on average) the level-wide artificial
-coefficients take 33.4%, the ghost-flux divergence 22.8%, the level's
-right-hand side 16.9% and the shell fill 3.0%.
+The shell is filled only on a tile with a parent-fed face, and there only
+over the boxes of the interpolation chain its slots read. Each tile's
+right-hand side reads the primitives and velocity gradients computed in the
+level-wide pass.
 
-**Per level point and right-hand side.** A scratch script (not kept) timed
-one evaluation at the state after 150 root steps, on the Sod tiles (10
-tiles, 6250 level points, padded blocks 1.74 times their interiors) and the
-blobs' (13 tiles, 31213 points, 1.35), against the uniform fine grid. The
-level-wide pass costs 102 and 114 ns per point, where the fine grid's
-primitives, velocity gradients and `compute_artificial!` cost 90 and 102
-ns. Of the pass, the primitives and velocity gradients take 35 and 32 ns (25
-and 27 on the fine grid), the exchanges between its stages 4 and 2 ns, and
-the sensors and the coefficients 62 and 85 ns (65 and 75 in
-`compute_artificial!`). The ghost-flux divergence takes 71 ns on both: two
-line solves of 29 ns, each summed over the components and the interface
-dimensions, and the split of every flux into its ghost-differenced part and
-the remainder, 10 and 12 ns. The fine grid's divergence is one solve, 23 and
-29 ns. On the 3-D blob's tiles after six root steps (8 tiles, 125000 points)
-the split costs 24 ns and each solve 47 ns. The divergence plans' one-sided
+The 1-D shock's step divides in the same way, the folded box at the axis
+taking a small share:
+
+| shock, share of the step | box | tiles (7.1 on average) |
+|---|---|---|
+| level right-hand side | 34.2% | 16.9% |
+| level-wide artificial coefficients | | 33.4% |
+| ghost-flux divergence | 28.4% | 22.8% |
+| root right-hand side and Hermite endpoint | 16.2% | |
+| regridding | 3.1% | |
+| shell fill | 1.7% | 3.0% |
+| folded box at the axis | 1.9% | |
+
+**Per level point and right-hand side.** The level-wide pass costs about an
+eighth more per point than the fine grid's primitives, velocity gradients and
+`compute_artificial!`. The ghost-flux divergence costs about three times the
+fine grid's on Sod and two and a half times on the blobs, since it takes two
+line solves where the fine grid takes one, plus the split of every flux into
+its ghost-differenced part and the remainder. The divergence plans' one-sided
 interface rows carry left-hand-side rows of their own, so the two solves
-share no factorization.
+share no factorization. A scratch script (not kept) timed one evaluation at
+the state after 150 root steps on the Sod and blob tiles, and after six on the
+3-D blob's, against the uniform fine grid; each solve is summed over the
+components and the interface dimensions.
 
-**The species band on the blobs.** A per-step trace of the mass-fraction
-minimum to t = 0.4 (a scratch script, not kept) shows the box's excursion. With a
-64-node root and the edge at 0.64 root spacings, level 1 falls to −0.064 and
-−0.072 at the first two regrid checks and recovers within three steps, against
-−0.027 in the root-only run. With a 32-node root and the edge at a third of a
-spacing, the covered root nodes fall steadily to −0.26, and the box takes 339
-root steps where the root-only run takes 92. With the edge at one root
-spacing the box stays above −0.021, and the tiles stay above −0.015 at a
-third of a spacing.
+| ns per point | Sod tiles | blob tiles | 3-D blob tiles |
+|---|---|---|---|
+| tiles, level points, padded block over its interior | 10, 6250, 1.74 | 13, 31213, 1.35 | 8, 125000 |
+| level-wide pass | 102 | 114 | |
+| of it, primitives and velocity gradients | 35 | 32 | |
+| of it, exchanges between its stages | 4 | 2 | |
+| of it, sensors and coefficients | 62 | 85 | |
+| fine grid: primitives, velocity gradients and `compute_artificial!` | 90 | 102 | |
+| fine grid: primitives and velocity gradients | 25 | 27 | |
+| fine grid: `compute_artificial!` | 65 | 75 | |
+| ghost-flux divergence | 71 | 71 | |
+| of it, each of two line solves | 29 | 29 | 47 |
+| of it, the split | 10 | 12 | 24 |
+| fine grid's divergence, one solve | 23 | 29 | |
+
+**The species band on the blobs.** The box carries the mass fraction further
+below zero than the root alone: briefly at the regrid checks when the edge
+spans most of a root spacing, and steadily, with nearly four times the
+root-only run's steps, when it spans a third. At an edge of one root spacing
+the box stays above the root-only minimum of the first configuration, and the
+tiles stay above it even at a third of a spacing. A per-step trace of the
+mass-fraction minimum to t = 0.4 (a scratch script, not kept):
+
+| root nodes | edge, in root spacings | run | mass-fraction minimum | root steps |
+|---|---|---|---|---|
+| 64 | 0.64 | box, level 1 at the first two regrid checks, recovering within three steps | −0.064, −0.072 | |
+| 64 | 0.64 | root only | −0.027 | |
+| 32 | a third | box, covered root nodes, falling steadily | −0.26 | 339 |
+| 32 | a third | root only | | 92 |
+| | one | box | above −0.021 | |
+| | a third | tiles | above −0.015 | |
 
 ### bench/movinglevel.jl: disturbances a moving level carries
 
 `julia --project=. -t 1 bench/movinglevel.jl`, one rank and one thread on the
-i9-12900K under Julia 1.11.4. Two reduced tutorial configurations: one helium
-bubble in air, 48² root nodes 10 mm apart, edge width w = 10 mm (one root
-spacing), tiles of edge 12 following it 60 mm along the diagonal; and the
-Imploding shock tutorial's 256-node r-z line with one subcycled sensor-placed
-box. The disturbance is the largest difference from the exact solution (the
-bubble's mole fraction more than 4w beyond its radius) or from the gas at rest
-ahead of the shock (|ρ − 1| more than 0.02 and more than 0.05 inside the shock
-radius, over 0.02 < R < 0.3), over composite nodes at the end (bubble) or over
-every step (shock). `-plain` filters the parent's covered nodes as well
-(`MASK_CHILD_RESIDUAL[] = false`). The refined runs take the parent's
-derivative mask, the package default (`MASK_CHILD_DERIVATIVE[]`), and
-`-plainD` the plain derivatives (`derivative_mask=both`). The
-shock runs accept the state at the axis near t_c, which can carry a negative
-internal energy at a few nodes (`validity = :permissive`). Single runs
-under the overwritten-node CFL ceiling and the conservative coarse-fine
-coupling with its gate testing either side of the face (2.4 minutes for both problems); the masses are in the conserved
+i9-12900K. The runs use Julia 1.11.4.
+
+A fixed cover carries the uniform fine grid's disturbance to within a factor
+of two under every filter pass and either derivative. A moving cover carries
+far more, and the two masks of the parent's covered nodes, of its filter
+residual and of its derivatives, together cut it by more than an order of
+magnitude.
+
+| moving cover, disturbance over the uniform fine grid's | neither mask | both masks |
+|---|---|---|
+| bubble, level, away | 260 | 8 |
+| shock, beyond 0.05 | 9.4e4 | 140 |
+| shock, beyond 0.02 | | 12 |
+
+The configurations are two reduced tutorials:
+
+| configuration | root | refinement |
+|---|---|---|
+| a helium bubble in air, edge width w = 10 mm (one root spacing) | 48² nodes 10 mm apart | tiles of edge 12 following the bubble 60 mm along the diagonal |
+| the Imploding shock tutorial | a 256-node r-z line | one subcycled sensor-placed box |
+
+For the bubble the disturbance is the largest difference of the mole fraction
+from the exact solution more than 4w beyond its radius, over composite nodes
+at the end. For the shock it is the largest departure of ρ from the gas at
+rest ahead of the shock over every step, at nodes more than 0.02 and more than
+0.05 inside the shock radius (the table's two columns). The shock radius lies
+between 0.02 and 0.3 over the measurement. `-plain` filters the parent's
+covered nodes as well (`MASK_CHILD_RESIDUAL[] = false`). The refined runs take
+the parent's derivative mask, the package default
+(`MASK_CHILD_DERIVATIVE[]`), and `-plainD` the plain derivatives
+(`derivative_mask=both`). The shock runs accept the state at the axis near
+t_c, which can carry a negative internal energy at a few nodes
+(`validity = :permissive`). Single runs under the overwritten-node CFL ceiling
+and the conservative coarse-fine coupling with its gate testing either side of
+the face (2.4 minutes for both problems); the masses are in the conserved
 quadrature.
 
 | bubble | away, root | away, level | He mass | layout changes |
@@ -8778,25 +9066,33 @@ quadrature.
 | fixed-plain-plainD | 798 | 3.35e-4 | 2.44e-7 | 0 | 2 |
 
 The shock's columns take the larger of the root and the level; the last
-column counts the inadmissible nodes at t = 0.221, after the collapse. The
-fixed covers carry the uniform fine grid's disturbance to within a factor of
-two under every pass; the moving ones carry 260 (bubble) and 9.4e4 (shock,
-beyond 0.05) times it with neither mask, and 8 and 140 times it with both
-(12 times it beyond 0.02). The coarse-fine correction raises the moving
-shock's: with the correction off (`REFLUX[] = false`) the rows read 3.38e-4
-(moving, beyond 0.02, 1.16 times the fine grid's) and 1.08e-2 (moving-plainD),
-and with the default gate, which tests the uncovered nodes alone, the moving
-row reads 3.05e-4, 1.05 times; how the correction does it is under
+column counts the inadmissible nodes at t = 0.221, after the collapse.
+
+The coarse-fine correction under the gate testing either side of the face
+raises the moving shock's disturbance. With the correction off, or under the
+default gate, which tests the uncovered nodes alone, the moving row comes
+within a fifth of the fine grid's. How the correction does it is under
 [bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling).
-The mass change of the plain bubble run, +1.0e-4, is +1.3e-4 in the steps
-that changed the layout. With the derivative mask the shock's root takes 12
+
+| moving shock, beyond 0.02 | moving | moving-plainD |
+|---|---|---|
+| correction off (`REFLUX[] = false`) | 3.38e-4, 1.16 times the fine grid's | 1.08e-2 |
+| default gate, testing the uncovered nodes alone | 3.05e-4, 1.05 times | |
+
+The plain bubble run's mass change lies in the steps that changed the layout,
+which account for +1.3e-4. With the derivative mask the shock's root takes 12
 to 16% fewer steps.
 
-**Attribution.** A scratch script (not kept) replaced the state at regrids,
-reset parent nodes to the exact solution after each step, or switched the
-filter pass per level, on the plain bubble run (level, away: 1.19e-3); this
-and the next table were taken at `d5fd609`, before the overwritten-node
-ceiling, which leaves the bubble rows above unchanged:
+**Attribution.** The root's filter pass is the cause of the moving bubble's
+disturbance. Its residual at the covered nodes, where the restricted bubble
+edge is a jump on the root spacing, spreads along the root's lines into the
+uncovered nodes and into the covered ones the tiles' ghost layers are
+interpolated from. Neither the regrid fill nor the level's own pass matters at
+this level. A scratch script (not kept) replaced the state at regrids, reset
+parent nodes to the exact solution after each step, or switched the filter
+pass per level, on the plain bubble run (level, away: 1.19e-3). This and the
+next table were taken at `d5fd609`, before the overwritten-node ceiling,
+which leaves the bubble rows above unchanged:
 
 | change | level, away |
 |---|---|
@@ -8811,19 +9107,20 @@ ceiling, which leaves the bubble rows above unchanged:
 | the same, the masked set eroded by 4 nodes | 9.0e-4 |
 | every fully covered node masked, root reset beyond R + 5w after each step | 3.9e-6 |
 
-The root's filter pass is the cause: its residual at the covered nodes, where
-the restricted bubble edge is a jump on the root spacing, spreads along the
-root's lines into the uncovered nodes and into the covered ones the tiles'
-ghost layers are interpolated from. Neither the regrid fill nor the level's
-own pass matters at this level.
-
 **The resolution test.** Dropping the residual at every fully covered node
-moves the smooth level rows of `test/convergence.jl`: the cascade-filter
-interface row's N = 48 error rises from 1.43e-6 to 1.59e-6 and the r-z axis
-row's N = 96 and 192 errors by 2.7 times, the pass being weaker on the
-covered side of the face than on the other. The mask therefore takes a
-covered node only where the relative undivided fourth difference of the
-density along the line exceeds a threshold within a reach of nodes:
+moves the smooth level rows of `test/convergence.jl`, the pass being weaker on
+the covered side of the face than on the other:
+
+| `test/convergence.jl` row | residual kept | every fully covered node masked |
+|---|---|---|
+| cascade-filter interface row, error at N = 48 | 1.43e-6 | 1.59e-6 |
+| r-z axis row, errors at N = 96 and 192 | | 2.7 times those with the residual |
+
+The mask therefore takes a covered node only where the relative undivided
+fourth difference of the density along the line exceeds a threshold within a
+reach of nodes. The default threshold of 0.01 within two nodes leaves the
+convergence rows unchanged and keeps most of the bubble's gain from masking
+every covered node:
 
 | threshold, reach | bubble level, away | shock beyond 0.02 / 0.05, level | convergence level rows |
 |---|---|---|---|
@@ -8837,21 +9134,35 @@ density along the line exceeds a threshold within a reach of nodes:
 "Unchanged" is every printed digit of every row from the interface window to
 the temporal order section; under the overwritten-node ceiling the default
 leaves them unchanged as well. This table predates the derivative mask. The
-shock's maximum beyond 0.02 varies between 1.1e-2 and 4.5e-2 over these
-settings without a trend; it is the precursor the parent's derivatives
-place ahead of the shock, which the next paragraphs attribute.
+first of the shock's two figures varies between 1.1e-2 and 4.5e-2 over these
+settings without a trend. It is the precursor the parent's derivatives place
+ahead of the shock, which the next paragraphs attribute.
 
-**The parent's derivatives.** With the positivity limiter on
-(`limiter=true`), the plain derivatives leave the shock's level, measured
-beyond 0.02 against the fine grid's 1.93e-4, at 9.33e-3, 6.58e-3, 5.25e-3,
-2.51e-3 and 1.22e-3 for `tag_buffer` 4, 6, 8, 12 and 16, every run ending
-admissible. At `tag_buffer` 8, setting the nodes a regrid newly covers to the
-state at rest lowers the level to 3.73e-4 and filling them from the uncovered
-root alone to 2.54e-3; the fill only carries the disturbance inward, since a
-fixed box with its inner face ahead of the shock (`fixed_inner=0.1`, the
-face at r = 0.0881) carries it as well. On that fixed box a scratch script
-(not kept) switched one candidate off at a time, the level's maximum falling
-at the face node when the shock is six root spacings inside it:
+**The parent's derivatives.** The precursor ahead of a moving shock's level
+is the alternating tail of the root's compact derivative across the
+restricted shock, which reaches the face node from the covered nodes behind
+it. Masking the root's divergences and gradients at the covered nodes
+together removes it, and either alone does not. Under the plain derivatives
+the precursor falls as `tag_buffer` widens, every run with the positivity
+limiter on (`limiter=true`) ending admissible:
+
+| `tag_buffer` | 4 | 6 | 8 | 12 | 16 |
+|---|---|---|---|---|---|
+| shock's level beyond 0.02, plain derivatives, limiter on (fine grid: 1.93e-4) | 9.33e-3 | 6.58e-3 | 5.25e-3 | 2.51e-3 | 1.22e-3 |
+
+The fill of the nodes a regrid newly covers changes the level's disturbance,
+but the fill only carries it inward, since a fixed box with its inner face
+ahead of the shock (`fixed_inner=0.1`, the face at r = 0.0881) carries it as
+well.
+
+| `tag_buffer` 8, nodes a regrid newly covers | level, beyond 0.02 |
+|---|---|
+| set to the state at rest | 3.73e-4 |
+| filled from the uncovered root alone | 2.54e-3 |
+
+On that fixed box a scratch script (not kept) switched one candidate off at a
+time, the level's maximum falling at the face node when the shock is six root
+spacings inside it:
 
 | change, fixed box at r > 0.0881, limiter on | level, beyond 0.02 |
 |---|---|
@@ -8869,16 +9180,27 @@ at the face node when the shock is six root spacings inside it:
 | root update zeroed at the restricted nodes | 1.10e-2 |
 
 The disturbance follows the distance from the face of the nearest strong
-jump in the root's right-hand side, the hidden ranges leaving one of their
-own at their far end. At one state with the shock seven spacings inside the
+jump in the root's right-hand side, and each hidden range leaves a jump of
+its own at its far end. At one state, with the shock seven spacings inside the
 face, the energy rate at the face node and the four covered nodes behind it
-is −12.8, 34, −86, 215 and −540 with the restricted shock in view and below
-1 without it: the alternating tail of the compact derivative, decaying by
-0.4 per node. Without the limiter, masking the divergences alone leaves the
-level at 2.20e-3 and the gradients alone at 4.10e-3 (reference 2.09e-3);
-both together, 1.21e-4. The mask's variants were chosen with the limiter on,
-its registers holding the masked divergence unless a row says otherwise, on
-the fixed box and the moving box at `tag_buffer` 4:
+alternates in sign and grows toward the shock with the restricted shock in
+view, and stays below 1 without it: the alternating tail of the compact
+derivative, decaying by 0.4 per node toward the face.
+
+| energy rate, shock seven spacings inside the face | face node | first covered | second | third | fourth |
+|---|---|---|---|---|---|
+| restricted shock in view | −12.8 | 34 | −86 | 215 | −540 |
+
+| limiter off, masked at the covered nodes | level, beyond 0.02 |
+|---|---|
+| nothing (reference) | 2.09e-3 |
+| divergences alone | 2.20e-3 |
+| gradients alone | 4.10e-3 |
+| both | 1.21e-4 |
+
+The mask's variants were chosen with the limiter on, its registers holding the
+masked divergence unless a row says otherwise, on the fixed box and the moving
+box at `tag_buffer` 4:
 
 | variant | fixed | moving |
 |---|---|---|
@@ -8891,20 +9213,26 @@ the fixed box and the moving box at `tag_buffer` 4:
 
 The last arrangement gives 2.61e-4 at `tag_buffer` 8, every run ending
 admissible. Under the limiter the mask nevertheless stays off, even when it
-is enabled. On the limiter's
-refined rows of `bench/positivity.jl part=levels`, registers holding the
+is enabled, because neither register arrangement holds up on the limiter's
+refined rows of `bench/positivity.jl part=levels`. Registers holding the
 masked divergence carried its dropped flux to every face beyond the masked
-nodes, and the cylindrical Noh box (`noh43`) ended at a plateau of 12.86
-and a shock radius of 0.2282 against 14.83 and 0.2086, with 19.8% of the
-stage faces limited, while Woodward–Colella lost positivity at step 1140;
-registers restoring the dropped source at the masked nodes left 31 shell and
-42 other inadmissible nodes on the Noh box and 934 unguaranteed faces on
-Woodward–Colella, where the plain derivatives leave none.
+nodes, and registers restoring the dropped source left inadmissible nodes and
+unguaranteed faces where the plain derivatives leave none.
 
-**Composite conservation.** The Sod shocks of `test/level_tests.jl`, which
-cross a level in both directions, relative mass drift at t = 0.2 in the
-conserved quadrature, with the coarse-fine correction and without it (the
-uncorrected columns without Ω, since that coupling builds no captures):
+| limiter's refined rows | cylindrical Noh box (`noh43`) | Woodward–Colella |
+|---|---|---|
+| plain derivatives | plateau 14.83, shock radius 0.2086 | no unguaranteed faces |
+| registers holding the masked divergence | plateau 12.86, shock radius 0.2282, 19.8% of the stage faces limited | lost positivity at step 1140 |
+| registers restoring the dropped source at the masked nodes | 31 shell and 42 other inadmissible nodes | 934 unguaranteed faces |
+
+**Composite conservation.** Uncorrected, the derivative mask loses far more
+mass than the plain derivatives, since the removed tail carries part of the
+mass the parent's uncovered nodes exchange through the coarse-fine face. The
+correction returns nearly all of it. The table gives the relative mass drift
+at t = 0.2 in the conserved quadrature of the Sod shocks of
+`test/level_tests.jl`, which cross a level in both directions, with the
+coarse-fine correction and without it (the uncorrected columns without Ω,
+since that coupling builds no captures):
 
 | case | plain | mask | plain, uncorrected | mask, uncorrected |
 |---|---|---|---|---|
@@ -8913,48 +9241,53 @@ uncorrected columns without Ω, since that coupling builds no captures):
 | subcycled, C6 | +2.3e-8 | +3.7e-8 | +9.1e-5 | −7.5e-4 |
 | subcycled, C10 | +3.8e-9 | −7.4e-9 | +7.0e-5 | −2.0e-3 |
 
-The removed tail carries part of the mass the parent's uncovered nodes
-exchange through the coarse-fine face, and the correction returns it.
+**The tutorial configuration.** On the Advected bubbles tutorial itself the
+masked run's disturbance away from each bubble lies within a factor of ten of
+the uniform fine grid's, where the plain pass leaves one to four hundred times
+it, and each gas's mass change is one to two orders of magnitude smaller. The
+disturbance is the largest difference from the exact solution more than 4w
+beyond each bubble's radius, helium / SF6 / krypton.
 
-**The tutorial configuration.** The Advected bubbles tutorial itself (96²
-root, three bubbles, tiles of 12, against the uniform 288² grid): the largest
-difference from the exact solution more than 4w beyond every bubble's radius,
-helium / SF6 / krypton, and each gas's mass change.
-
-| run | away from each bubble | mass change, air / He / SF6 / Kr |
+| run (96² root, three bubbles, tiles of 12) | away from each bubble | mass change, air / He / SF6 / Kr |
 |---|---|---|
 | refined | 3.9e-5 / 4.9e-6 / 1.3e-5 | 1.2e-8 / −1.1e-6 / 7.4e-7 / −1.6e-6 |
 | refined, plain pass | 1.6e-3 / 4.7e-4 / 7.8e-4 | 7.3e-7 / −5.5e-5 / −9.7e-6 / −6.1e-5 |
 | uniform 288² | 4.0e-6 / 3.9e-6 / 3.9e-6 | round-off |
 
-**Regrid churn.** On the tiled Sod fixture of the level tests (201 nodes,
-tiles of 8, checks every 5 steps) the first check to create a tile beside a
-survivor follows step 8 under the plain pass and step 65 under the mask. On
-the tiled run whose first tiles a Dirichlet inflow's shock creates, the mask
-adds a tile at the checks after steps 20, 40, 95, 140 and 185 and drops
-none; at `d5fd609` the plain pass dropped and re-created the leading tile
-four times in 160 steps. On the 121-node Sod tube of the MPI suite's deep
-regrid (tiles of 4, three levels, np = 8) no level-2 tile changes owner
-within 240 steps under the mask, so that phase runs the plain pass. The
-refined tutorial run took 35 s against the plain pass's 40 s, on 23 tiles at
-the end against 25, single runs.
+**Regrid churn.** The mask of the covered nodes' residual quiets the tag
+history: tiles beside a survivor are created later, and the leading tile is
+no longer dropped and re-created. The MPI suite's deep regrid therefore runs
+the plain pass, since under the mask no tile of its second level changes
+owner.
+
+| case | plain pass | mask |
+|---|---|---|
+| tiled Sod fixture of the level tests (201 nodes, tiles of 8, checks every 5 steps): first check to create a tile beside a survivor | after step 8 | after step 65 |
+| tiled run whose first tiles a Dirichlet inflow's shock creates | the leading tile dropped and re-created four times in 160 steps (at `d5fd609`) | a tile added at the checks after steps 20, 40, 95, 140 and 185, none dropped |
+| MPI suite's deep regrid (121-node Sod tube, tiles of 4, three levels, np = 8): second-level tiles changing owner within 240 steps | | none |
+| refined Advected bubbles tutorial, single runs: wall, tiles at the end | 40 s, 25 | 35 s, 23 |
 
 ### bench/levelpattern.jl: the grid-scale pattern of a refined level
 
 `julia --project=. -t 8 bench/levelpattern.jl` and `julia --project=. -t 8
 bench/levelpattern.jl problems=interface configs=uniform,box,tiles`, one rank
-and eight threads on the i9-12900K under Julia 1.11.4, single runs, package at
-the commit that adds the script unless a row says otherwise. The pattern is
-the mean undivided fourth difference of the density over the shell behind a
-converging shock, relative to the density, or of the helium mass fraction over
-a sharpened interface; the script's header defines both and the problems.
+and eight threads on the i9-12900K, single runs. The runs use Julia 1.11.4 and
+the package at the commit that adds the script unless a row says otherwise.
+The pattern is the mean undivided fourth difference of the density over the
+shell behind a converging shock, relative to the density, or of the helium
+mass fraction over a sharpened interface; the script's header defines both
+and the problems.
 
-**The converging shock**, 64² root, t = 0.165 (R = 0.167, 740 shell nodes).
-The plain pass filters the parent's covered nodes with their residual
-(`mask=false`). The last column counts the nodes the state report finds
-inadmissible at the end.
+**The converging shock.** A box reproduces the uniform run's pattern, and
+tiles, fixed or regridded, carry about a fifth more. Without the mask of the
+covered nodes' residual the regridded tiles' pattern doubles while the fixed
+tiles' moves in the fourth digit only, so the mask removes what regridding
+added and leaves fixed and regridded tiles with the same remainder. The plain
+pass filters the parent's covered nodes with their residual (`mask=false`).
+The last column counts the nodes the state report finds inadmissible at the
+end.
 
-| configuration | root steps | pattern | ratio | inadmissible |
+| configuration (64² root, t = 0.165, R = 0.167, 740 shell nodes) | root steps | pattern | ratio | inadmissible |
 |---|---|---|---|---|
 | uniform 191² | 629 | 1.119e-2 | 1.00 | 5 |
 | box | 628 | 1.118e-2 | 1.00 | 5 |
@@ -8965,20 +9298,22 @@ inadmissible at the end.
 
 The same measure, with snapshots every 0.015 of simulated time, gave the
 regridded tiles 2.39 at `ce1f513`, before the overwritten-node ceiling
-(`f1d420c`) and the mask of the covered nodes' residual (`04d3cff`). The
-plain-pass rows place the change at the mask, which moves the fixed tiles in
-the fourth digit only. Fixed and regridded tiles then carry the same
-remainder. Over the run (`dsnap=0.015`) the regridded tiles' pattern is 1.38
-times the uniform run's at t = 0.03 and 1.13 times it at 0.045, between 1.00
-and 1.04 times it from 0.06 to 0.12, and 1.07, 1.16 and 1.19 times it at the
-last three snapshots.
+(`f1d420c`) and the mask of the covered nodes' residual (`04d3cff`). Over
+the run (`dsnap=0.015`) the regridded tiles' excess over the uniform run is
+largest early, vanishes in mid-run and returns toward the end:
 
-**The sharpened interface**, 48² root, w = 10 mm, `C_sharpen = 1`, tiles of
-8, 980 steps in every run, 500 band nodes. The uniform 144² run's pattern is
-3.066e-2. Mean and largest difference of the helium mass fraction from the
-uniform run over the band:
+| t | 0.03 | 0.045 | 0.06 to 0.12 | last three snapshots |
+|---|---|---|---|---|
+| regridded tiles' pattern over the uniform run's | 1.38 | 1.13 | 1.00 to 1.04 | 1.07, 1.16, 1.19 |
 
-| configuration | ratio | mean | largest |
+**The sharpened interface.** Smoothed over the level
+(`_level_sharpening_gradients!`), the sharpening flux's filtered gradients
+leave the tiles a hundredth of the difference from the uniform run that
+smoothing tile by tile left, and twice the difference the tiles carry without
+the flux. The table gives the mean and largest difference of the helium mass
+fraction from the uniform run over the band:
+
+| configuration (48² root, w = 10 mm, `C_sharpen = 1`, tiles of 8, 980 steps in every run, 500 band nodes; uniform 144² pattern 3.066e-2) | ratio | mean | largest |
 |---|---|---|---|
 | box | 1.00 | 1.03e-7 | 9.23e-7 |
 | tiles, gradients smoothed per tile (`7d6b0ba`) | 0.98 | 1.79e-2 | 4.60e-2 |
@@ -8987,9 +9322,7 @@ uniform run over the band:
 
 Smoothed tile by tile, the flux's filtered gradients took at a shared face
 the smoother's rows for a field without ghosts, and the gate and the pair
-normals changed along the tile lattice. Smoothed over the level
-(`_level_sharpening_gradients!`), they leave the tiles twice the difference
-the tiles carry without the flux. The level test `tiled level: sharpening
+normals changed along the tile lattice. The level test `tiled level: sharpening
 gradients across shared faces` checks the smoothed gradients against one
 patch over the same region.
 
@@ -8998,15 +9331,18 @@ patch over the same region.
 `mpiexec -n 4 julia --project=. -t 1 bench/amr_balance.jl [N=800] [interval=10]
 [steps=200] [persist=1]` (`603af33`).
 
-A 1-D Sod shock crossing a tiled refined level, np = 4, N = 800. With
-rebalancing off the stored groups drift to two tiles on ranks 0–1 against four
-on 2–3 and the per-check max/mean busy time climbs to 1.3–1.5. With it on at
-threshold 1 and persist 1, every check repartitions, one tile per rank where
-the count allows, and the partition then follows the timing noise from check
-to check (1.0–1.7). Settled: mechanics only, and the reason `rebalance` and
-`rebalance_persist` exist; the workstation cannot say what a rebalance is
-worth, since per-rank costs on rzhound and rzadams differ from it by 27–66×
-and move with rank placement. A moved tile here is one kilobyte.
+Settled: mechanics only, and the reason `rebalance` and `rebalance_persist`
+exist. Without rebalancing the stored groups drift out of balance; with it on
+at its most eager settings every check repartitions, and the partition then
+follows the timing noise from check to check. The workstation cannot say what
+a rebalance is worth, since per-rank costs on rzhound and rzadams differ from
+it by 27–66× and move with rank placement. A moved tile here is one kilobyte.
+The case is a 1-D Sod shock crossing a tiled refined level at np = 4.
+
+| rebalancing | tiles per rank | per-check max/mean busy time |
+|---|---|---|
+| off | two on ranks 0–1 against four on 2–3 | climbs to 1.3–1.5 |
+| on, threshold 1 and persist 1 | one per rank where the count allows, repartitioned at every check | 1.0–1.7 |
 
 `MIGRATION_AUDIT` holds the migrated state bitwise against the replicated
 carry it replaced, at zero differing slots, in the MPI suite.
@@ -9016,12 +9352,14 @@ carry it replaced, at zero differing slots, in the MPI suite.
 `mpiexec -n <np> julia --project=. -t 1 bench/amr_scaling.jl [N=96] [tile=8]
 [dim=2] [steps=3] [reps=20]`; before is `235d557`, after is `d54f019`.
 
-A 2-D planar slab of tiles of edge 8 spanning a root of 64 × 96·np nodes,
-global stepping, so each rank holds about the same root block and 20–24
-tiles at every np. Each figure is the largest over ranks: the level's memory
-(`Base.summarysize` of the `Level`, which excludes the tiles' patches), the
-median of twenty `sync_levels!` calls, and one step, beside one step of the
-same root unrefined.
+The distributed level coupling weak-scales as the root does: its memory
+follows the rank's own tiles, and the refined step grows no faster than the
+unrefined root's. The case is a planar slab of tiles spanning a root of
+64 × N·np nodes under global stepping, so each rank holds about the same root
+block and tile count at every np. Each figure is the largest over ranks: the
+level's memory (`Base.summarysize` of the `Level`, which excludes the tiles'
+patches), the median of twenty `sync_levels!` calls, and one step, beside one
+step of the same root unrefined.
 
 | np | tiles | level memory, before / after | `sync_levels!`, before / after | step, before / after | root alone |
 |---|---|---|---|---|---|
@@ -9033,24 +9371,28 @@ same root unrefined.
 Before, every rank of the parent held every tile's chain, box and Hermite
 storage and gathered every tile's box with one Allgatherv per tile per stage,
 so the level memory was 0.29 MB per tile of the whole level on every rank and
-the step grew 12× from one rank to eight. After, the memory follows the
-rank's own tiles, the growth from 4.73 to 6.21 MB being the four more tiles
-and the per-tile metadata every parent rank keeps, and the refined step
-grows 2.4× where the unrefined root grows 3.1×, the workstation's own
-weak-scaling loss (hybrid cores, and the 2-D np = 8 pathology above).
-Single runs; read the growth, not the third digit. The two couplings agree
-bitwise: 3-D tiled runs at np = 4 and 8, subcycled and global-step,
-regridding and static, viscous with ghost fluxes and with tiles over one
-rank and over four, reproduce every patch interior bit for bit after five
-steps.
+the step grew 12× from one rank to eight. After, the remaining growth of the
+level memory is the four more tiles and the per-tile metadata every parent
+rank keeps. The refined step grows 2.4× from one rank to eight where the
+unrefined root grows 3.1×. The root's growth is the workstation's own
+weak-scaling loss, from the hybrid cores and the planar pathology at eight
+ranks above. Single runs; read the growth, not the third digit. The two
+couplings agree bitwise: three-dimensional tiled runs at four and eight
+ranks, subcycled and global-step, regridding and static, viscous with ghost
+fluxes and with tiles over one rank and over four, reproduce every patch
+interior bit for bit after five steps.
 
 ### bench/device_solver.jl: the device battery
 
 `julia --project=<env-with-AMDGPU> -t 8 bench/device_solver.jl backend=amdgpu`.
 RX 6800 XT, AMDGPU.jl on Windows/HIP; residency and stacked storage `602002c`
 and `346f83e`. Workstation numbers are evidence that the structural pitfalls
-are gone, not a performance claim about the target machine: RDNA2 runs vector
-FP64 at 1/16 the FP32 rate where MI300A runs it at full rate.
+are gone, not a performance claim about the target machine. RDNA2 runs vector
+double precision at a sixteenth of the single-precision rate, where the
+target machine runs it at full rate.
+
+Settled: the CPU keeps `@threaded`; the one unconditional fence is the
+reduced-solve one; the device floor is launch submission, not arithmetic.
 
 | measurement | value |
 |---|---|
@@ -9063,11 +9405,9 @@ FP64 at 1/16 the FP32 rate where MI300A runs it at full rate.
 | KA-CPU against `@threaded` at 64³ | 2.8× (flux assembly) to 40–50× (RK update) slower |
 | removing the per-launch synchronize | 28–32% off the device step |
 
-Settled: the CPU keeps `@threaded`; the one unconditional fence is the
-reduced-solve one; the device floor is launch submission, not arithmetic.
-
-**Stacked tile storage**, warm steps, one run each, the 8-thread CPU as
-reference:
+**Stacked tile storage.** Stacking a level's tiles into one array puts the
+twelve-tile 3-D level ahead of the CPU, the first tiled configuration on which
+the device leads. Warm steps, one run each, the 8-thread CPU as reference:
 
 | case | before stacking | after |
 |---|---|---|
@@ -9076,38 +9416,45 @@ reference:
 | 3-D level, twelve 16³ tiles in one stack, subcycled | — | 0.354 s (CPU 0.576 s) |
 | unstacked 64³ TGV | 0.146 s | 0.164–0.176 s |
 
-Settled: the twelve-tile 3-D level is the first tiled configuration on which
-the device leads. The residual floor is the work that stays per tile: the
-shell impositions, the interface records, and `max_rate`'s two reductions per
-tile. Whether the fill and scatter kernels' fourth index dimension of extent
-one costs anything on the unstacked TGV is at the edge of the run-to-run
-spread and needs a repeated-process measurement.
+The residual floor is the work that stays per tile: the shell impositions,
+the interface records, and `max_rate`'s two reductions per tile. Whether the
+fill and scatter kernels' fourth index dimension of extent one costs anything
+on the unstacked TGV is at the edge of the run-to-run spread and needs a
+repeated-process measurement.
 
-**Precision.** Uniform Float32 on the CPU at 64³ TGV, t = 10: identical peak
-dissipation to the printed precision, 2.00× smaller footprint, 1.10× wall, and
-mean-density drift 1.4e-4 against 7.5e-13. The drift is why Float32 is not the
-default. On device Float32 runs at 1.25× the Float64 rate, because the step is
-bounded by launch submission and fences rather than arithmetic.
+**Precision.** Single precision is not the default because of its
+mean-density drift. On the device it runs only a quarter faster, because the
+step is bounded by launch submission and fences rather than arithmetic.
+
+| Float32 against Float64 | |
+|---|---|
+| CPU, 64³ TGV to t = 10: peak dissipation | identical to the printed precision |
+| the same: footprint | 2.00× smaller |
+| the same: wall | 1.10× |
+| the same: mean-density drift | 1.4e-4 against 7.5e-13 |
+| device: rate | 1.25× the Float64 rate |
 
 ### bench/device_mpi.jl: distributed device runs
 
 `mpiexec -n 2 julia --project=<env-with-AMDGPU> bench/device_mpi.jl
 backend=amdgpu` (repeat at 4 and 8; `6f14a0c`). Every distributed device stage
-was accepted on `max |device − cpu| = 0` over full runs at np = 2, 4 and 8, in
-both launch-policy modes. The staged transfer volumes are the halo and
+was accepted on `max |device − cpu| = 0` over full runs at two, four and eight
+ranks, in both launch-policy modes. The staged transfer volumes are the halo and
 reduced-interface percentages recorded above.
 
 ### bench/device_nasa9.jl: NASA-9 on the device
 
 `julia --project=<env-with-AMDGPU> -t 8 bench/device_nasa9.jl backend=amdgpu`,
-RX 6800 XT, He/CO2/N2 unless noted. The recovery set is 120 hard states
-(joins to a few ulp, range edges and beyond, no-root energies, no-bracket
-compositions) plus 100,000 swept states from 150 to 30,000 K. On the KA CPU
-backend the mirror is bitwise against the host (`test/device_tests.jl`); on
-the GPU the logarithm and the integer powers are the device's own.
+RX 6800 XT, He/CO2/N2 unless noted. The recovery set is hard states (joins
+to a few ulp, range edges and beyond, no-root energies, no-bracket
+compositions) and a temperature sweep, sized in the table's first row. On the
+KA CPU backend the mirror is bitwise against the host
+(`test/device_tests.jl`); on the GPU the logarithm and the integer powers are
+the device's own.
 
 | measurement | Float64 | Float32 |
 |---|---|---|
+| recovery set | 120 hard states and 100,000 swept from 150 to 30,000 K | |
 | recovered T_ion, max relative difference | 2.9e-14 (130 eps) | 1.7e-5 (142 eps) |
 | cp, max relative difference | 5.7e-15 | 2.8e-6 |
 | points whose status differs, of 100,120 | 0 | 24, all met/missed convergence |
@@ -9126,15 +9473,16 @@ Settled: the device reproduces the host recovery to the inversion's own
 tolerance. At three species a status differs only where one side meets the
 32 eps criterion and the other misses it; at eight species under
 `:polynomial` three points differ in another bit, in a sweep where the
-polynomial extension leaves 6,286 host points unrecovered. No pitfall: a
-NASA-9 step costs 6% more than an `IdealMixture` step on the device, against
-33% on the CPU. The Float32 misses on the host itself sit at the 6000 K
-join and near 10–11 kK.
+polynomial extension leaves 6286 host points unrecovered. No pitfall: a
+`Nasa9Mixture` step costs 6% more than an `IdealMixture` step on the device,
+against 33% on the CPU. The single-precision misses on the host itself sit at
+the 6000 K join. The others lie near 10–11 kK.
 
 ### probes/device_floors.jl: rzadams floors and the wait stall
 
-`julia --project=<env> probes/device_floors.jl`. rzadams MI300A, ROCm 6.4.3,
-logs in `bench/logs/rzadams_20260819*.txt`.
+`julia --project=<env> probes/device_floors.jl` on the MI300A APUs of
+rzadams, logs in `bench/logs/rzadams_20260819*.txt`. The ROCm version is
+6.4.3.
 
 | measurement | value |
 |---|---|
