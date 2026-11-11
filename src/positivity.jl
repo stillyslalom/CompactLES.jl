@@ -80,7 +80,26 @@
 # tiles, under one-ulp perturbations of the initial state, the multiple 4 left
 # no inadmissible point and the multiples 1 and 2 did. In Float32 the cold
 # gas there holds about 2500 eps(T) |E|, so the floor stays below its 1%
-# bound. A cell whose ρe lies under the floor is below its own bound: its
+# bound.
+#
+# A write aimed at the floor rounds to a few units in the last place of E on
+# either side of it. Where the floor sets a cell's bound, a state therefore
+# holds the bound if its ρe is at least the floor less
+# `LIMITER_ENERGY_TOLERANCE` eps(T) |E|, or the bound without the floor where
+# that is larger (`_limiter_cell_bound`). Every test of a state against the
+# bound takes that threshold (the high-order and first-order half states, and
+# a radial cell's node part), while θ is still interpolated to the bound itself
+# (`_limiter_side`). What the limiter guarantees for such a cell is ρe at least
+# the bound less the tolerance, at least (`LIMITER_ENERGY_ULPS` −
+# `LIMITER_ENERGY_TOLERANCE`) eps(T) |E| > 0, so a held cell stays admissible
+# to `state_report`, whose test is ρe > 0. Where a fraction of the cell's own
+# state or ε sets the bound, the threshold is the bound, and a run in which the
+# floor never sets one is bitwise the run without the tolerance. Without it a
+# cell rounded under the floor is below its bound, and the unguaranteed sides
+# of the planar Noh on patches and tiles, and in Float32, rise well above their
+# count under a bound without the floor; under one-ulp perturbations of the
+# initial state, 3 is the smallest tolerance that leaves no more of them than
+# that. A cell whose ρe lies under the threshold is below its own bound: its
 # faces take the first-order flux where its half states need it, and it is
 # counted unguaranteed.
 #
@@ -224,6 +243,9 @@ const LIMITER_CELL_FRACTION = LIMITER_FRACTION
 # A cell's bound on ρe is at least this many times eps(T) |E|, between this
 # many and twice as many units in the last place of its total energy E.
 const LIMITER_ENERGY_ULPS = 16
+# A state whose ρe lies under that floor by at most this many times eps(T) |E|
+# counts as holding a bound the floor sets.
+const LIMITER_ENERGY_TOLERANCE = 3
 # The share of the face at r = 0 on a radial line, against the cell's outer
 # face. It bounds the first-order step at the fold's node: at the spherical
 # origin τ (|u| + c)/h < 1/(4 (1 + AXIS_SHARE)). The cylindrical axis face
@@ -1830,17 +1852,27 @@ end
 # The bound of a cell whose base state aggregates to q: the smaller of the run's
 # ε and the fraction ε[3] of the cell's own ρ and ρe, at least zero, and for ρe
 # at least ε[4] |E|, ε[4] = `LIMITER_ENERGY_ULPS` eps(T) (see The bound, above).
+# Returns the bounds on ρ and ρe and, third, the least ρe a state may hold and
+# count as holding the bound: the bound on ρe with the floor less the
+# tolerance, ε[5] |E|, in place of the floor, ε[5] = (`LIMITER_ENERGY_ULPS` −
+# `LIMITER_ENERGY_TOLERANCE`) eps(T). It is the bound itself wherever the floor
+# does not set the bound.
 @inline function _limiter_cell_bound(q, ε)
     ρ = q[1]
     e = ρ > 0 ? _limiter_internal(q) : zero(ρ)
-    return (min(ε[1], ε[3] * max(ρ, zero(ρ))),
-            max(min(ε[2], ε[3] * max(e, zero(e))), ε[4] * abs(q[5])))
+    fraction = min(ε[2], ε[3] * max(e, zero(e)))
+    E = abs(q[5])
+    return (min(ε[1], ε[3] * max(ρ, zero(ρ))), max(fraction, ε[4] * E),
+            max(fraction, ε[5] * E))
 end
 
-# The run's bounds, the cell fraction and the relative floor of the bound on
-# ρe, as the per-point bodies take them.
-_limiter_bounds(lim) = (lim.eps_rho, lim.eps_e, oftype(lim.eps_rho, LIMITER_CELL_FRACTION),
-                        LIMITER_ENERGY_ULPS * eps(typeof(lim.eps_rho)))
+# The run's bounds, the cell fraction, the relative floor of the bound on ρe and
+# the floor less the tolerance, as the per-point bodies take them.
+function _limiter_bounds(lim)
+    T = typeof(lim.eps_rho)
+    return (lim.eps_rho, lim.eps_e, T(LIMITER_CELL_FRACTION), LIMITER_ENERGY_ULPS * eps(T),
+            (LIMITER_ENERGY_ULPS - LIMITER_ENERGY_TOLERANCE) * eps(T))
+end
 
 # θ per face of direction d into `lim.theta`, a line per body, then the faces and
 # the unguaranteed sides of this rank counted. Returns the number of faces
@@ -2036,17 +2068,18 @@ Base.@propagate_inbounds function _limiter_node_increment(Q, dQ, du, regs, inv_J
     return out
 end
 
-# The largest s ≥ 0 for which q + s δ keeps ρ ≥ ε[1] and ρe ≥ ε[2]: the
-# smaller of the density's root and the first positive root of
-# 2ρ(s)(E(s) − ρ(s) ε[2]) − |m(s)|², a quadratic in s; Inf when neither
-# bound is reached. The admissible set is convex, so [0, s] is admissible.
+# The largest s ≥ 0 for which q + s δ keeps ρ ≥ ε[1] and ρe ≥ ε[3], the
+# threshold of `_limiter_admissible`: the smaller of the density's root and the
+# first positive root of 2ρ(s)(E(s) − ε[3]) − |m(s)|², a quadratic in s;
+# Inf when neither bound is reached. The admissible set is convex, so [0, s]
+# is admissible.
 @inline function _limiter_reach(q, δ, ε)
     T = typeof(q[1])
     s = T(Inf)
     δ[1] < 0 && (s = min(s, (q[1] - ε[1]) / -δ[1]))
-    a0 = 2 * q[1] * (q[5] - ε[2]) - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4])
+    a0 = 2 * q[1] * (q[5] - ε[3]) - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4])
     a0 > 0 || return zero(T)
-    a1 = 2 * (q[1] * δ[5] + δ[1] * (q[5] - ε[2])) -
+    a1 = 2 * (q[1] * δ[5] + δ[1] * (q[5] - ε[3])) -
          2 * (q[2] * δ[2] + q[3] * δ[3] + q[4] * δ[4])
     a2 = 2 * δ[1] * δ[5] - (δ[2] * δ[2] + δ[3] * δ[3] + δ[4] * δ[4])
     disc = a1 * a1 - 4 * a2 * a0
@@ -2886,10 +2919,12 @@ end
 # ρ > 0 and ρe > 0.
 @inline _limiter_positive(q) =
     q[1] > 0 && 2 * q[1] * q[5] - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4]) > 0
-# ρ ≥ ε_ρ and ρe ≥ ε_e, the second multiplied through by 2ρ > 0.
+# Whether q holds a cell's bound ε (`_limiter_cell_bound`): ρ ≥ ε[1] and ρe at
+# least ε[3], the bound less the tolerance where the floor sets it, the second
+# multiplied through by 2ρ > 0.
 @inline _limiter_admissible(q, ε) =
     q[1] >= ε[1] &&
-    2 * q[1] * q[5] - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4]) >= 2 * q[1] * ε[2]
+    2 * q[1] * q[5] - (q[2] * q[2] + q[3] * q[3] + q[4] * q[4]) >= 2 * q[1] * ε[3]
 
 # τ times the Lax–Friedrichs flux of the aggregated state along d between
 # nodes L and R, whose wave speed is the larger of the two.
@@ -2904,7 +2939,11 @@ end
 # The limit of one cell side: the largest θ for which q + s (θ G + (1 − θ) G_L)
 # keeps ρ and ρe at or above ε, by linear interpolation in ρ and then in ρe
 # along the shortened segment, sufficient since ρe is concave. Returns θ and
-# whether the side is guaranteed.
+# whether the side is guaranteed. A half state holds the bound as
+# `_limiter_admissible` tests it, but θ is interpolated to ε[2], the bound
+# itself, so that the limited write rounds to within the tolerance of it; where
+# q_L lies within the tolerance under the bound, θ is interpolated to q_L's own
+# ρe.
 @inline function _limiter_side(q, G, GL, s, ε)
     T = typeof(s)
     qH = _limiter_axpy(q, s, G)
@@ -2915,7 +2954,8 @@ end
     qθ = _limiter_axpy(qL, θ, map(-, qH, qL))
     eL = _limiter_internal(qL)
     e = _limiter_internal(qθ)
-    e < ε[2] && (θ *= (eL - ε[2]) / (eL - e))
+    target = max(min(ε[2], eL), ε[3])
+    e < target && (θ *= (eL - target) / (eL - e))
     return (clamp(θ, zero(T), one(T)), true)
 end
 

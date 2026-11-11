@@ -313,7 +313,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   at the interface order and with no inadmissible point, and leaves a level
   with no same-level face bit for bit as it is. A device level keeps one
   stack per extent and set of boundary faces, its batched filter closing each
-  tile's lines with that tile's rows (commit `HASH`); a dimension along which
+  tile's lines with that tile's rows (commit `17c3ee3`); a dimension along which
   the tile's ranks split it still splits the stack by face kind. The toggle stays off
   because on a tiled level a perturbation of one unit in the last place grows in the
   limited `:ghost` run to a visible difference within a few hundred steps,
@@ -336,7 +336,9 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   least 16 eps |E| (commit `fec3e93`), so that it stays above the rounding step
   of E in cold gas moving fast, the planar Noh on four patches and on static
   and regridded tiles (`pnoh81tiles`, `pnoh81regrid`) and a limited Float32
-  planar Noh leave none either. Device storage carries it
+  planar Noh leave none either, and with a state within 3 eps |E| under that
+  floor counted as holding it (commit `HASH`) they leave no more unguaranteed
+  sides than a bound without the floor. Device storage carries it
   (commits `222894a`, `bacc29f`) on one patch, the radial lines, the r-z plane,
   same-level patches and refined boxes, bitwise against the host under the
   KernelAbstractions CPU backend and on an RX 6800 XT; a θ pass's tallies,

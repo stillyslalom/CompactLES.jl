@@ -3203,7 +3203,7 @@ layout, change                   off        on                   off        on
 box                              −7.0e-6    −7.0e-6              +1.12e-10  +1.12e-10
 tiles of 8                       +3.9e-3    +4.1e-4              −1.91e-9   +1.29e-9
 tiles of 8, :ghost               +3.6e-5    −1.1e-5              +1.05e-10  +1.05e-10
-tiles of 8, limited              +8.7e-4    +1.2e-4
+tiles of 8, limited              +8.8e-4    +1.2e-4
 tiles of 8, limited, :ghost      +3.1e-4    +8.5e-5
 ```
 

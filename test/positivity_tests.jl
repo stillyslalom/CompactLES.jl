@@ -545,7 +545,10 @@ end
         # and a bound of 1% of the cell's own ρe falls a hundredfold per
         # write, below the rounding step of E within a few writes; the floor
         # of the bound at `LIMITER_ENERGY_ULPS` eps |E| keeps the last write
-        # above it.
+        # above it. A write that rounds under the floor by at most
+        # `LIMITER_ENERGY_TOLERANCE` eps |E| holds the bound, so the run leaves
+        # no more unguaranteed sides than it does without the floor, none; a
+        # few remain where such a write counts as below its bound.
         s, Q = setup(noh_problem(1; N=256, t0=0.0),
                      Numerics(n_global=(256, 1, 1), art=ArtificialProperties(enabled=true),
                               cfl=NOH_CFL, positivity_limiter=true,
@@ -556,13 +559,17 @@ end
         @test completed(s, NOH_T)
         counts = CL.positivity_counts(s)
         @test counts.stage_limited > 0 && counts.filter_limited > 0
+        @test counts.unguaranteed <= 4
     end
 
     @testset "planar Noh in Float32 leaves no inadmissible point" begin
         # In Float32 the cold gas holds a few thousand rounding steps of E, so
         # a bound of a fraction of the cell's own ρe passes below the rounding
         # step after two limited writes, and without the floor the run on one
-        # patch leaves more than ten thousand inadmissible point-steps.
+        # patch leaves more than ten thousand inadmissible point-steps. Its
+        # unguaranteed sides number a few thousand without the floor, twice as
+        # many where a write rounded under the floor counts as below its bound,
+        # and about ten with the tolerance.
         s, Q = setup(noh_problem(1; N=256, t0=0.0),
                      Numerics(n_global=(256, 1, 1), art=ArtificialProperties(enabled=true),
                               cfl=NOH_CFL, positivity_limiter=true,
@@ -573,6 +580,7 @@ end
         @test isapprox(s.t, NOH_T; rtol=1e-5)
         counts = CL.positivity_counts(s)
         @test counts.stage_limited > 0 && counts.filter_limited > 0
+        @test counts.unguaranteed <= 100
     end
 
     @testset "the interface flux setup takes under the limiter" begin

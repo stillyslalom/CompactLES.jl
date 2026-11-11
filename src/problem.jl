@@ -1054,11 +1054,12 @@ keywords the ones given after it override.
   while the rest of the grid keeps its bound. The bound on ρe is at least
   16 `eps(T)` |E|, with E the cell's total energy, so that in cold gas moving
   fast, where ρe is a small part of E, the bound stays above the rounding
-  step of E. The partial densities are not bounded. On a Cartesian grid
-  source terms and the NSCBC boundary terms are outside the guarantee; on a
-  radial grid they are a part of each cell's update and inside it, except
-  where they alone would take the cell below its bound, and the cell then
-  takes first-order fluxes. A cell whose
+  step of E, and a state within 3 `eps(T)` |E| under that floor, the rounding
+  of a write aimed at it, counts as holding it. The partial densities are not
+  bounded. On a Cartesian grid source terms and the NSCBC boundary terms are
+  outside the guarantee; on a radial grid they are a part of each cell's
+  update and inside it, except where they alone would take the cell below its
+  bound, and the cell then takes first-order fluxes. A cell whose
   first-order step violates its own CFL bound is outside it too, which at a
   wall node under the default closure rows happens above a CFL of about
   0.32, and at the spherical origin above about 0.6. The limiter acts in
