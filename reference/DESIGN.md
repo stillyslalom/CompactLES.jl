@@ -760,7 +760,7 @@ configuration. Their defaults:
 C_μ    0.002
 C_β    1.0
 C_κ    0.01
-C_D    1 for the compact eighth-derivative species detector; 0.1 under :delta4
+C_D    1.0 under every detector; the :delta4 measurements used 0.1
 ```
 
 `enabled=false` skips the
@@ -796,8 +796,8 @@ periods eight orders above that of the rest of the scheme
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species channel").
 A mass flux that sums to zero carries a net volume between gases of unequal
 molecular weight, and at uniform p and T that volume has to be produced
-acoustically; with an artificial D the error is grid-scale and proportional
-to C_D, and no Fickian driving force removes it for two species.
+acoustically; with an artificial D the error is grid-scale and grows with
+C_D, and no Fickian driving force removes it for two species.
 
 `:bulk` replaces it by the classical parabolic regularization of the system,
 one flux F_q = −D_b ∇q on every conserved variable q with one nonnegative

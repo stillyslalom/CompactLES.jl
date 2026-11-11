@@ -75,14 +75,15 @@ given keywords replaced, keeping its element type.
 - `C_D`: coefficient of the artificial species diffusivity generated from
   the mass-fraction sensors. It damps oscillation of `Y_k` inside [0, 1],
   which the bound below leaves untouched, such as the ringing behind an
-  interface a shock has compressed to a few cells. The default of 1 is the
-  value for the compact eighth-derivative detector that the default
-  `detector = :species_d8` applies to the mass and mole fractions. The
-  explicit fourth difference of `detector = :delta4` responds more strongly
-  to a resolved profile and takes 0.1, ten times the value Shankar, Kawai &
-  Lele (below) use in the same `cΔ` scaling. Under
-  `species_flux = :fickian` the pressure error at an interface grows in
-  proportion to it.
+  interface a shock has compressed to a few cells. The default of 1,
+  calibrated for the compact eighth-derivative detector that the default
+  `detector = :species_d8` applies to the mass and mole fractions, does not
+  change with the detector. The explicit fourth difference of
+  `detector = :delta4` responds more strongly to a resolved profile and was
+  calibrated at 0.1, ten times the value Shankar, Kawai & Lele (below) use in
+  the same `cΔ` scaling; pass that value with it. Under
+  `species_flux = :fickian` the pressure error at an interface grows with
+  `C_D`.
 - `C_Y`: coefficient of the mass-fraction bound, a second contribution to the
   species diffusivity that is zero wherever `0 ≤ Y_k ≤ 1` and grows with the
   excursion outside: `D*_k = c · G[max(C_D Δ_d |D_d Y_k|, C_Y Δ_g max(0, −Y_k,

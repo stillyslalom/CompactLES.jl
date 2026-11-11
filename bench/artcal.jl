@@ -260,7 +260,7 @@ if want("D")
     println("\n=== C_D sweep (artificial species diffusivity) ===")
     println("C_D       | interface width after t=$(MIX_T) at u=$(MIX_U) (initial 2h = $(round(2/MIX_N, digits=5)))")
     hr()
-    for c in (0.0, 0.0025, 0.01, 0.04, 0.1, 0.16)
+    for c in (0.0, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0)
         @printf("%-8.4g%s | %.5f\n", c, mark(c, DEFAULTS.C_D), m_mix(art=art(C_D=c)))
     end
 end
@@ -270,7 +270,7 @@ if want("Y")
     println("\n=== C_D at a shocked air/SF6 interface (mass-fraction excursion) ===")
     println("C_D       delta/h | worst min Y   max Y | width cells | steps | TV - 1")
     hr()
-    for c in (0.01, 0.03, 0.1, 0.3), d in (2, 4, 8)
+    for c in (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0), d in (2, 4, 8)
         si = m_si(art=art(C_D=c), delta=d)
         @printf("%-8.4g%s %-7.3g | %+11.4f %7.4f | %11g | %5g | %6.4f\n",
                 c, mark(c, DEFAULTS.C_D), d, si[1], si[2], si[3], si[4], si[5])

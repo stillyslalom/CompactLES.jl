@@ -27,13 +27,13 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `C_beta` | 1.0 | keep | Accuracy optimum near 0.4; 1.0 maximizes the spherical-origin CFL ceiling and is the one value viable under both detectors ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_mu` | 0.002 | open (N4) | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green at Re = 1600 fits best at 0 at 64³ and 128³ and selects no positive value; the evidence for 0.002 is decaying turbulence under a different filter ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green), [where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)). |
-| `C_D` | 1.0 | keep | The value for the `:d8` species detector: the ringing behind a shocked interface is flat from 1 to 3 on the air/SF6 case and at density ratio 100 while the width and the smooth deposit keep growing. Under `detector = :delta4` the value is 0.1, where the excess variation falls 12-fold from 0.01. Under `:fickian` the interface pressure error grows in proportion ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [battery](CALIBRATION_APPENDIX.md#the-shock-battery), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
+| `C_D` | 1.0 | keep | The lowest value of a decade sweep that removes the lump of heavy gas behind a shocked interface, on the air/SF6 case and on the He/CO2 tube; the ringing changes little from 1 to 3 on both and at density ratio 100, while the width and the smooth deposit keep growing. It is the default under every detector; the `:delta4` measurements used 0.1. Under `:fickian` the interface pressure error grows with it ([C_D](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity), [species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
 | `C_Y` | 100 | keep | A shocked 2h interface rings to ±0.2 without the bound and ±0.012 with it ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.5 to 0.4 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs about 10% more per step than `:fickian` against `:bulk`'s 20 to 25% ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)). |
+| `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs no more per right-hand side than `:fickian`, against `:bulk`'s 14% more ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)). |
 | `cfl` | 0.5 | keep | A converging shock at a spherical origin completes at 0.5; keep `StepControl(retries = 4)` for a singular start or a strong blast through the origin, whose ceilings are 0.15 and 0.2; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
 | `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)). |
 | `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
@@ -100,28 +100,26 @@ cost. The link is to the section holding the evidence.
   each move the excursion by nothing
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Mass fractions ring inside [0, 1] behind a shocked interface.** The
-  bound is zero there, so `C_D` is the damping. Under the default species
-  detector the ringing is flat above `C_D = 1`, and at 0.3 it grows
-  sevenfold on the air/SF6 case and seventyfold at density ratio 100.
-  Under `detector = :delta4` a two-cell lump of the heavy gas separates from
-  the light side of the interface below about 0.1, and a trail of period
-  four cells remains up to 0.3. Raise `C_D` before widening the initial
-  interface, under the default channel or `:bulk`, not under `:fickian`,
-  whose pressure error grows with it
-  ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split),
-  [battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  bound is zero there, so `C_D` is the damping. Below the default `C_D = 1`
+  a lump of the heavy gas separates from the light side of the interface;
+  at the default a grid-scale trail remains, which `C_D = 3` cuts threefold
+  at three more cells of shocked width. Raise `C_D` before widening the
+  initial interface, under the default channel or `:bulk`, not under
+  `:fickian`, whose pressure error grows with it
+  ([C_D](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity),
+  [species-only split](CALIBRATION_APPENDIX.md#the-species-only-split)).
 - **A shocked species interface at a large density ratio rings, or an advected
   one drifts in pressure.** The pressure drift is the `:fickian` channel;
   the default and `:bulk` hold it to round-off. At a density ratio of 100 in
-  one dimension the Fickian channel fails, and the default completes with a
-  tenth of the ringing of `:bulk`; under `detector = :delta4` the default
-  rings and `:bulk` rings a quarter as much through its added viscosity
+  one dimension the Fickian channel fails, and the default completes and
+  rings no more than `:bulk`, whose ringing there depends on the filter
+  strength
   ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel),
   [battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel),
   [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
 - **A passive interface broadens faster than the species diffusivity explains.**
   The filter is the broadening: a passive interface more than doubles in width
-  with D\* off, and a 64-fold sweep in `C_D` moves the width by 18%. Weaken the
+  with D\* off, and the default `C_D` adds 2% to that width. Weaken the
   filter rather than `C_D` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Wall heating at a stagnation wall.** Keep the default filter closure rows,
   which took the planar Noh deficit down to 50% at N = 400; `detector = :d8`

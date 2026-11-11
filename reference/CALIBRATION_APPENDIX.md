@@ -235,76 +235,98 @@ condensed-matter model sets its own scale.
 
 ### C_D, the species diffusivity
 
-A sharp binary interface advected on the periodic slab with two such edges
-(`bench/artcal.jl D`):
+```text
+julia --project=. -t 1 bench/artcal.jl D Y bulk alphaf=0.47
+```
+
+Every table of this section was measured under the defaults, the `:species_d8` detector and
+the `:partial_density` channel except where a row names another, and under the solver's
+filter strength, 0.47, which `alphaf` sets in place of the script's 0.45. A sharp binary
+interface advected on the periodic slab with two such edges (`bench/artcal.jl D`):
 
 ```
 u = 1, t = 0.5, N = 256, initial 10–90% width 2h = 0.0078
 C_D       | interface width
-0         |  0.01786
-0.0025    |  0.01795
-0.01      |  0.01819
-0.03      |  0.01877
-0.04      |  0.01903
-0.1    *  |  0.02024
-0.16      |  0.02112
-0.3       |  0.02254
+0         |  0.01773
+0.01      |  0.01773
+0.03      |  0.01774
+0.1       |  0.01777
+0.3       |  0.01786
+1      *  |  0.01813
+3         |  0.01875
+10        |  0.01997
 ```
 
 With D\* disabled the interface still more than doubles in width, so the compact filter is
-the dominant source of broadening for a passive interface. At `n_species == 2` the
-per-species sensor machinery is a measurable no-op (`D*_1` and `D*_2` agree to 4.8e-16).
+the dominant source of broadening for a passive interface. The default adds 2% to that
+width, and the sweep up to `C_D = 10` adds 13%. Under `:fickian` at two species the two
+per-species diffusivities agree to round-off, since the second mass fraction is one minus
+the first and gives the same detector output and the same excursion.
 
 The passive width does not measure what C_D is for. Behind a shocked interface the mass
 fractions ring inside [0, 1], where the bound of the next section is zero, and C_D is the
 only damping. The measure is the total variation of the final profile beyond the 1 a
 monotone one carries (`TV − 1`), with the grid-scale content |δ⁴Y|/16 on the light side
 more than four cells from the interface. On the shocked air/SF6 interface of the next
-section, under `species_flux = :fickian` and the other constants at their defaults:
+section (`bench/artcal.jl Y` prints every column but the light-side one; `cells` is the
+final width):
 
 ```
-C_D       | 2h: TV − 1   light-side   worst min Y   steps | 4h: TV − 1   worst min Y
-0.01      |     0.0788   2.2e-3       -0.0129       647   |     0.0673   -0.0026
-0.02      |     0.0781   2.2e-3       -0.0130       647   |     0.0651   -0.0025
-0.03      |     0.0766   2.2e-3       -0.0129       647   |     0.0646   -0.0025
-0.05      |     0.0691   2.1e-3       -0.0127       646   |     0.0609   -0.0023
-0.07      |     0.0495   1.8e-3       -0.0115       646   |     0.0396   -0.0022
-0.1    *  |     0.0215   1.5e-3       -0.0115       646   |     0.0194   -0.0021
-0.3       |     0.0083   1.5e-3       -0.0084       644   |     0.0071   -0.0014
+C_D       | 2h: TV − 1   light-side   worst min Y   cells   steps | 4h: TV − 1   worst min Y
+0.01      |     0.0574   3.64e-3      -0.0102       3       650   |     0.0704   -0.0026
+0.03      |     0.0602   3.29e-3      -0.0099       3       650   |     0.0699   -0.0025
+0.1       |     0.0648   2.05e-3      -0.0094       4       648   |     0.0639   -0.0024
+0.3       |     0.0136   1.57e-3      -0.0075       4       645   |     0.0069   -0.0021
+1      *  |     0.0045   1.99e-3      -0.0050       5       642   |     0.0051   -0.0012
+3         |     0.0040   7.36e-4      -0.0036       8       642   |     0.0039   -0.0005
+10        |     0.0010   1.10e-3      -0.0011       9       644   |     0.0010   -0.0002
 ```
 
-The excess at 0.01 is a two-cell lump of the heavy gas, Y ≈ 0.08, separated from the
-interface by one cell of nearly pure light gas; the wider initial interface shows a
-similar excess. The same lump forms in the He/CO2 shock tube, where a constant three times
-larger already removes it. Neither the bulk channel nor a calorically perfect EOS moves it,
-and the perfect-gas form already shows it at the commit that introduced the bound, so no
-later change produced it:
+At 0.1 the excess is a two-cell lump of the heavy gas, Y ≈ 0.035, separated from the
+interface by one cell of nearly pure light gas, and it is the same excess at every smaller
+constant and on the wider initial interface. The default removes it, and the excess is flat
+from 1 to 3 while the shocked interface widens from five cells to eight. A smaller lump
+forms in the He/CO2 shock tube and persists to a larger constant, under either
+thermodynamics:
 
 ```
-1-D reduction of examples/shock_tube.jl: He/CO2, flat interface, 768 cells, to 2.5 ms
-time mean of TV − 1 after the shock crosses
-C_D     channel    thermodynamics          TV − 1    steps
-0.01    fickian    NASA-9                  0.113     2000
-0.03    fickian    NASA-9                  0.013     1997
-0.05    fickian    NASA-9                  0.013     1995
-0.1     fickian    NASA-9                  0.011     1992
-0.3     fickian    NASA-9                  0.003     1981
-0.01    bulk       NASA-9                  0.114
-0.01    fickian    calorically perfect     0.094
+1-D reduction of the bench/he_co2_shock_tube.jl tube: 10:1 helium driver, flat He/CO2 contact
+at x = 3 m, slip walls, 768 nodes, to 2.5 ms (scratch script, no bench entry). TV − 1 of
+Y_CO2 is the time mean from 0.77 ms, when the transmitted shock has crossed the contact;
+light-side is |δ⁴Y_CO2|/16 at the end, more than four cells from the contact.
+C_D     channel           thermodynamics        TV − 1    light-side   worst Y    steps
+0.01    partial_density   NASA-9                0.1978    5.78e-3      -0.0039    2003
+0.03    partial_density   NASA-9                0.0401    3.85e-3      -0.0038    1997
+0.05    partial_density   NASA-9                0.0126    3.17e-3      -0.0037    1996
+0.1     partial_density   NASA-9                0.0128    2.53e-3      -0.0033    1995
+0.3     partial_density   NASA-9                0.0139    3.11e-3      -0.0019    1994
+1       partial_density   NASA-9                0.0023    2.04e-3      -0.0025    1990
+3       partial_density   NASA-9                0.0018    6.02e-4      -0.0012    1985
+10      partial_density   NASA-9                0.0019    4.86e-4      -0.0008    1988
+1       fickian           NASA-9                0.0035    2.21e-3      -0.0020    1995
+1       bulk              NASA-9                0.0022    1.92e-3      -0.0023    1990
+0.01    partial_density   calorically perfect   0.1842    6.39e-3      -0.0035    2000
+1       partial_density   calorically perfect   0.0022    1.82e-3      -0.0023    1991
 ```
 
-What remains at the default is a trail of period four cells on the light side, growing
-toward the interface to a few 1e-3 in Y, ρ and p. Of the sweep only 0.3 reduces it,
-fivefold: the compact filter passes that wavelength, and δ⁴ responds to it at a quarter of
-its grid-oscillation weight. On the two-dimensional example a larger constant reduces the
-worst undershoot and shortens the run:
+At 0.1 the tube's final profile carries a lump of CO2 under a percent in Y, separated from
+the contact by a cell of nearly pure helium. The ringing stays at that level from 0.05 to
+0.3. The default removes the lump and cuts the ringing to a fifth, and larger constants
+leave it near that level. The calorically perfect gas rings as NASA-9 does, so the lump does
+not come from the thermodynamics. What remains at the default on both cases is a grid-scale
+trail on the light side, which `C_D = 3` cuts about threefold at three more cells of shocked
+width on the air/SF6 case.
+
+On the two-dimensional tube a larger constant reduces the worst undershoot and shortens the
+run:
 
 ```
-2-D examples/shock_tube.jl at half resolution, 384 × 24, fickian
-C_D     worst undershoot over the run   steps to 2.25 ms
-0.01    −1.0e-2                         1859
-0.1     −3e-3                           1591
-0.3     −1.8e-3                         1530
+2-D deck of bench/he_co2_shock_tube.jl, 384 × 24 to 2.5 ms (scratch script, same setup)
+C_D     worst undershoot over the run   steps
+0.1     −4.67e-3                        1758
+0.3     −3.27e-3                        1691
+1    *  −1.83e-3                        1651
+3       −8.92e-4                        1649
 ```
 
 Pyranda's own decks (`shockBubble.py`, `triplePoint.py`) write the species diffusivity as
@@ -314,21 +336,14 @@ D = 2e-4 ρ h² ring(Y)/Δt,   Δt = h/(|u| + c) at their CFL of 1,   ring = 240
 ```
 
 which is C_D ≈ 0.05 on `:d8` scaled by |u| + c in place of c, about 0.07 behind the shock
-in the He/CO2 tube; `RM3D.py` and `RT3D.py` use half that. At that constant under `:d8` the
-tube's excess falls by nearly an order of magnitude:
+in the He/CO2 tube; `RM3D.py` and `RT3D.py` use half that. The default is twenty times
+their constant. At their constant the tube's ringing is a sixteenth of its value at 0.01,
+while on the air/SF6 interface the lump persists at every swept constant up to 0.1.
 
-```
-He/CO2 tube under :d8    TV − 1
-C_D = 0.01               0.19
-C_D = 0.05               0.022
-```
-
-The Pyranda comparison deck (`bench/he_co2_shock_tube.jl`) carried this code's former 0.01,
-so both codes rang alike there.
-
-**Recommendation:** 0.1, the lowest value that removes the lump on both cases. It costs
-11% on the passive width and no steps, and under `:fickian` it raises the interface pressure
-error tenfold, which is one reason the default channel changed (see [the partial-density
+**Recommendation:** 1.0, the default, the lowest value of the sweep that removes the lump on
+both cases. It costs 2% on the passive width, one cell of shocked width against 0.3, and no
+steps. Larger values cut the remaining trail at the cost of a wider shocked interface. Under
+`:fickian` the interface pressure error grows with the constant (see [the partial-density
 species channel](#the-partial-density-species-channel)).
 
 ### C_Y, the mass-fraction bound
@@ -1097,96 +1112,110 @@ The partial-density channel, `species_flux = :partial_density`, is the form of e
 of Brill, Olson & Bokman. The partial densities diffuse with the shared D_b of the bulk
 channel, and their mass flux enters momentum as (ΣJ)u and energy as (ΣJ)|u|²/2 + Σ e_k J_k
 (`reference/DESIGN.md`, "The species channel"). It is the default. The one-dimensional
-battery rows of the previous section, under all three channels across C_D (scratch script,
-no bench entry; `bench/artcal.jl bulk` gives the default-constant row of each):
+battery rows of the previous section were measured under all three channels across C_D, at
+the default detector and the solver's filter strength (scratch script, no bench entry;
+`bench/artcal.jl bulk alphaf=0.47` gives the default-constant row of each). The advected
+width is the same under every channel, since its two gases share one molecular weight, and
+is in the table of [C_D](#c_d-the-species-diffusivity):
 
 ```
-channel          C_D  | mix width | SI 5.04: TV−1 / worst Y / width / steps | SI 100: TV−1 / worst Y / steps | slab 100: max|p−1| / worst Y / steps
-fickian          0.01 | 0.01819   | 0.0788 / -0.0129 / 4 / 647             | FAIL                           | 1.86e-02 / -0.0810 / 4207
-fickian          0.1  | 0.02024   | 0.0215 / -0.0115 / 4 / 646             | FAIL                           | 3.98e-02 / -0.0792 / 4094
-fickian          0.3  | 0.02254   | 0.0083 / -0.0084 / 5 / 644             | FAIL                           | 4.90e-02 / -0.0755 / 4052
-bulk             0.01 | 0.01819   | 0.0733 / -0.0108 / 3 / 644             | 0.4090 / -0.0193 / 684         | 4.92e-11 / -0.0643 / 4201
-bulk             0.1  | 0.02024   | 0.0060 / -0.0088 / 4 / 641             | 0.0861 / -0.0171 / 677         | 4.66e-11 / -0.0620 / 4049
-bulk             0.3  | 0.02254   | 0.0037 / -0.0038 / 7 / 636             | 0.0026 / -0.0128 / 673         | 5.75e-11 / -0.0575 / 4008
-partial_density  0.01 | 0.01819   | 0.0759 / -0.0111 / 4 / 647             | 0.5431 / -0.0220 / 719         | 6.08e-11 / -0.0643 / 4201
-partial_density  0.1  | 0.02024   | 0.0066 / -0.0098 / 4 / 644             | 0.3243 / -0.0189 / 704         | 4.98e-11 / -0.0620 / 4049
-partial_density  0.3  | 0.02254   | 0.0042 / -0.0058 / 7 / 640             | 0.0533 / -0.0169 / 693         | 4.73e-11 / -0.0575 / 4008
+V 5–95 is the volume-fraction width of `volume_width`, in cells
+channel          C_D  | SI 5.04: TV−1 / worst Y / width / steps | SI 100: TV−1 / worst Y / V 5–95 / steps | slab 100: max|p−1| / worst Y / steps
+fickian          0.3  | 0.0270 / -0.0083 / 4 / 649             | FAIL                                    | 4.95e-02 / -0.0860 / 4096
+fickian          1    | 0.0068 / -0.0065 / 5 / 646             | FAIL                                    | 6.30e-02 / -0.0743 / 4070
+fickian          3    | 0.0065 / -0.0040 / 8 / 646             | FAIL                                    | 9.02e-02 / -0.0482 / 4056
+bulk             0.3  | 0.0160 / -0.0069 / 4 / 643             | 0.0232 / -0.0121 / 4.35 / 685           | 5.32e-11 / -0.0692 / 4042
+bulk             1    | 0.0043 / -0.0049 / 5 / 638             | 0.0027 / -0.0090 / 4.78 / 682           | 5.05e-11 / -0.0547 / 4016
+bulk             3    | 0.0033 / -0.0032 / 7 / 636             | 0.0017 / -0.0058 / 5.49 / 681           | 4.08e-11 / -0.0443 / 4000
+partial_density  0.3  | 0.0136 / -0.0075 / 4 / 645             | 0.0881 / -0.0165 / 4.69 / 700           | 5.88e-11 / -0.0692 / 4042
+partial_density  1    | 0.0045 / -0.0050 / 5 / 642             | 0.0021 / -0.0093 / 5.12 / 701           | 5.18e-11 / -0.0547 / 4016
+partial_density  3    | 0.0040 / -0.0036 / 8 / 642             | 0.0010 / -0.0056 / 5.83 / 713           | 4.60e-11 / -0.0443 / 4000
 ```
 
-The Fickian pressure error on the slab grows with C_D; the two consistent channels hold it
-at round-off at every C_D. On the ratio-5.04 shock the two agree. At ratio 100 both complete,
-and at the default constant the partial-density channel rings four times as much as the bulk
-one, since it adds no viscosity; at 0.3 its ringing falls below the bulk channel's at the
-default. On an advected He/CO2 slab the Fickian pressure error grows in proportion to C_D,
-and either consistent channel stays at round-off:
+The Fickian pressure error on the slab grows with C_D, by under twofold over the tenfold
+range, and the two consistent channels hold it at round-off at every C_D. On the ratio-5.04
+shock the consistent channels agree, and at the default constant the Fickian one rings half
+as much again. At ratio 100 the Fickian channel fails at every constant. The bulk channel
+holds the ringing better only below the default: at 0.3 the partial-density channel
+rings four times as much as the bulk one, and from the default up it rings less, at the same
+worst mass fraction and a volume-fraction width about 7% wider. The bulk channel's ringing at
+ratio 100 is sensitive to the filter: at the script's 0.45 it is seven times its value here,
+while the partial-density channel's is unchanged ([the species-only
+split](#the-species-only-split) holds those rows).
+
+On an advected He/CO2 slab either consistent channel holds the pressure at round-off. The
+Fickian error depends weakly on the constant: it less than doubles from 0.1 to 3. The
+mass-fraction bound accounts for most of it at the smallest constant and almost none from
+the default up, and from the default up the Brill slab's Fickian error is the same without
+the bound:
 
 ```
-He/CO2 slab at 100 m/s, N = 256, two periods, uniform p and T; NASA-9 and perfect gas alike
-channel              C_D     max pressure error
-fickian              0.01    3.7e-5
-fickian              0.1     3.7e-4
-bulk or partial      –       7.5e-13
+He/CO2 slab: CO2 over half of a periodic 1 m line of helium, tanh edges over 3h, N = 256,
+u = 100 m/s, uniform p = 1 atm and T = 300 K, two periods (scratch script, no bench entry);
+the last column is the Brill slab of the table above under the same constants
+channel           C_D   C_Y   thermodynamics        max |δp/p|   | Brill slab max |p − 1|
+fickian           0.1   100   NASA-9                3.15e-5      | 3.33e-2
+fickian           1     100   NASA-9                3.46e-5      | 6.30e-2
+fickian           3     100   NASA-9                5.71e-5      | 9.02e-2
+fickian           0.1   0     NASA-9                1.19e-5      | lost positivity
+fickian           1     0     NASA-9                3.35e-5      | 5.88e-2
+fickian           3     0     NASA-9                5.71e-5      | 9.00e-2
+fickian           1     100   calorically perfect   3.76e-5      |
+bulk              1     100   NASA-9                6.60e-13     |
+partial_density   1     100   NASA-9                6.58e-13     |
+partial_density   1     100   calorically perfect   6.53e-13     |
 ```
 
-On the one-dimensional reduction of `examples/shock_tube.jl` (previous section's measure)
-the three channels ring alike at the default constant:
+On the one-dimensional He/CO2 tube the consistent channels ring alike at the default
+constant and the Fickian one half as much again (the channel rows of the table of
+[C_D](#c_d-the-species-diffusivity)).
+
+On the two-dimensional tube the consistent channels cut the grid-scale pressure behind the
+contact six- to fifteenfold against the Fickian channel, and the bulk channel's roll-up is
+the weakest of the three:
 
 ```
-time mean of TV − 1, all within 1979 to 1992 steps
-channel           C_D    TV − 1
-fickian           0.1    0.011
-bulk              0.1    0.0096
-partial_density   0.1    0.0097
-partial_density   0.3    0.0020
+2-D deck of bench/he_co2_shock_tube.jl, 768 × 48 to 2.5 ms at C_D = 1 (scratch script, same
+setup). Grid-scale p is max |δ⁴_x p|/16p over pure helium (Y_CO2 < 1e-3) within 0.25 m
+behind the contact on each row, six cells and more from it. The helium dip is 1 − Y_CO2 at
+its minimum on the line y = L/2 beyond the first point where Y_CO2 exceeds 0.9, and max |v|
+the largest transverse velocity, both at 2.5 ms.
+channel          | steps | grid-scale p at 1.5 / 2.0 / 2.5 ms | worst Y_CO2 | helium dip | max |v|
+fickian          | 3427  | 1.0e-3 / 9.8e-4 / 9.3e-4           | -1.71e-3    | 13.3%      | 152.6 m/s
+bulk             | 3233  | 6.5e-5 / 9.4e-5 / 1.1e-4           | -1.11e-3    | 4.5%       | 99.5 m/s
+partial_density  | 3439  | 1.0e-4 / 1.7e-4 / 1.5e-4           | -1.22e-3    | 14.6%      | 163.8 m/s
 ```
 
-On the two-dimensional example the consistent channels cut the grid-scale pressure several
-times over, and the bulk channel's helium dip is a quarter of the other two. The time per
-step is the range over alternating runs of each channel to 1.5 ms, taken after the two
-reductions described below. Grid-scale pressure is max |δ⁴_x p|/16p over pure helium within 0.25 m
-behind the interface, excluding six cells beside it. The helium dip is 1 − Y_CO2 at its
-minimum inside the mushroom head on the line y = L/2 at the final time:
+The bulk channel entrains a third as much helium into the CO2 head and carries two thirds of
+the transverse velocity, as its added viscosity ρD_b∇u would; the partial-density channel
+reproduces the Fickian roll-up on both measures to within a tenth. Which roll-up is right
+is open, since no converged reference exists for it and no published comparison of RM
+mixing between these forms was found.
 
-```
-768 × 48 to 2.5 ms at C_D = 0.1, -t 16 on the development workstation
-channel          | steps | s/step          | grid-scale p at 1.5 / 2.0 / 2.5 ms | worst Y_CO2 | helium dip
-fickian          | 3576  | 0.0221 .. 0.0242 | 3.2e-4 / 7.7e-4 / 6.2e-4           | -4.6e-3     | 15%
-bulk             | 3327  | 0.0267 .. 0.0297 | 3.3e-5 / 1.5e-4 / 1.3e-4           | -3.9e-3     | 3.5%
-partial_density  | 3572  | 0.0250 .. 0.0275 | 6.5e-5 / 1.9e-4 / 1.4e-4           | -3.7e-3     | 15%
-```
+The consistent channels add the conserved gradients and a second sensed field, and two
+reductions keep the partial-density right-hand side at the Fickian one's. Under
+`ConstantTransport(mu0 = 0)` the shared-D_b channels skip `grad_Y`, whose only other reader
+is `NSCBCInflowBC`, which computes it itself. With two species only the first is sensed,
+since the second's detector outputs and excursions equal the first's to round-off. On the
+two-species tube of `bench/phases.jl` the Fickian channel's mass-fraction gradients and the
+partial-density gradients that take their place cost the same, and the partial-density
+right-hand side came out 4% below the Fickian one in both processes:
 
-Under the Fickian channel concentric pressure ripples four to five cells in wavelength
-spread from the interface through the helium; the consistent channels remove them, and what
-remains has a period of eight to ten cells. The bulk channel also weakens the vortex cores
-visibly (their pressure minima and the v field) and entrains less helium into the head,
-which is its added viscosity ρD_b∇u; the partial-density channel reproduces the Fickian
-roll-up. No converged reference decides which roll-up is right, and no published comparison
-of RM mixing between these forms was found.
-
-The extra cost of the consistent channels lies in the conserved gradients and in the second
-sensed field, and two reductions bring the partial-density right-hand side close to the
-Fickian one. Without them the partial-density channel costs 27% per step over the Fickian
-one and the bulk channel 41%. On the two-species tube of `bench/phases.jl` the difference
-is:
-
-```
-two-species tube, 512 × 32, per right-hand side
-conserved gradients, four line solves     0.25 ms of 2.85
-sensor on both Y and X                    0.19 ms
+```text
+julia --project=. -t 16 bench/phases.jl species_flux=<channel>   # twice per channel, alternating
 ```
 
-Under `ConstantTransport(mu0 = 0)` the shared-D_b channels skip `grad_Y`, whose only other
-reader is `NSCBCInflowBC`, which computes it itself; that returns the four solves. With two
-species only the first is sensed, since the second's detector outputs and excursions equal
-the first's to round-off; that takes the sensor phase from 0.80 to 0.64 ms, the Fickian
-channel's figure. With both reductions the tube's right-hand sides compare as:
+```
+two-species tube, 512 × 32, per right-hand side (minimum of 20), one figure per process;
+scalar gradients are those of T_ion and, under :fickian, of the mass fractions
+channel           right-hand side    artificial         scalar gradients   channel gradients   derivative line solves
+fickian           1.425, 1.442 ms    0.514, 0.637 ms    0.146, 0.173 ms    –                   24
+partial_density   1.373, 1.381 ms    0.658, 0.538 ms    0.057, 0.048 ms    0.112, 0.126 ms     24
+bulk              1.618, 1.654 ms    0.664, 0.619 ms    0.058, 0.053 ms    0.443, 0.435 ms     32
+```
 
-```
-channel           right-hand side    line solves
-fickian           2.27 ms            24
-partial_density   2.38 to 2.61 ms    24
-bulk              3.16 ms            32
-```
+The bulk channel costs about 14% more per right-hand side, in its n_cons conserved
+gradients.
 
 In the literature, Brill, Olson & Bokman and Aslani & Regele (Int. J. Numer. Meth. Fluids
 88, 2018) both reject the Fickian flux with the enthalpy term on this pressure argument and
@@ -1257,9 +1286,11 @@ settles the detector's normalization, the sensed fields, the Gaussian, the filte
 cadence, and the meaning of Δt in Pyranda. Which Δt Miranda uses in eq. 24, how Miranda
 discretizes eqs. 32–40 and 68, and how eq. 27 reads are not in it.
 
-**Recommendation:** `:partial_density` as the default, with C_D = 0.1; `:bulk` at a density
-ratio of 100 or more, where its viscosity holds the ringing; `:fickian` only to reproduce
-Cook's form.
+**Recommendation:** `:partial_density` as the default, at C_D = 1. It holds a uniform
+(u, p, T) state to round-off, rings no more than `:bulk` on the one-dimensional rows at the
+default constant, keeps the Fickian roll-up and costs no more per step than `:fickian`.
+`:bulk` where an added viscosity and conduction at the interface are wanted, at about a
+seventh more per right-hand side. `:fickian` only to reproduce Cook's form.
 
 ### The CFL rate convention
 
