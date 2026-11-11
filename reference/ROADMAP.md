@@ -242,7 +242,8 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   the smaller of that minimum and its own value (commit `4d7fc5a`), which
   cuts the unguaranteed sides of a 2-D Sedov quadrant by two orders.
   The θ passes run as line sweeps over linearly indexed fields (commit
-  `cb0b33a`), so the limited step costs 1.1 to 1.7 times the unlimited one.
+  `cb0b33a`). The limited step costs about 1.3 times the unlimited one on the
+  planar lines and 1.9 times on the periodic blast plane.
   A `run!` entering with a marginally inadmissible point keeps the limiter
   on, with ε taken over the admissible points (commit `736d12b`).
   Remaining: wall nodes above cfl ≈ 0.32, where the first-order bound fails;
@@ -260,11 +261,11 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   radial lines folded at r = 0, the spherical origin and the θ-collapsed
   axis, carry it (commits `4d7fc5a`, `71f4fb1`): Sedov, the cylindrical and
   spherical Noh and the Supernova remnant tutorial run under strict validity
-  with no inadmissible point, at about 1.4 times the unlimited step. The
+  with no inadmissible point, at about 1.6 times the unlimited step. The
   r-z plane carries it with the axis, a symmetry plane at z = 0 and their
   corner (commits `d50697d`, `451285c`): Sedov leaves no inadmissible point
   and its shock radius is within 0.25% of the spherical line's in every
-  direction, at about 1.7 times the unlimited step. Same-level patches carry it under
+  direction, at about 2.1 times the unlimited step. Same-level patches carry it under
   `interface_flux = :closure` (commit `7a191c3`): the face at the shared
   node is limited by one θ on both patches and carries its own register,
   and Woodward–Colella and planar Noh on two and three patches leave no
@@ -281,7 +282,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   overwritten nodes are not
   held, and their inadmissible states are kept out of held cells'
   first-order fluxes; Woodward–Colella with a box or tiles, the Noh level
-  rows and the A19 corner box leave no inadmissible point, at 1.15 to 1.6
+  rows and the A19 corner box leave no inadmissible point, at 1.04 to 1.86
   times the unlimited step. Under the limiter setup closes the patch and
   level interfaces with the closure rows, with a warning. The default
   `interface_flux = :ghost` is carried behind the test toggle
@@ -291,7 +292,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   and h/2 at the end node, its face values anchored by the derivative's face
   relation near the low end, and the gradient-plan solves take the
   registers. Under it patches, boxes and tiles leave no inadmissible point
-  on the cases above, at 1.05 to 1.64 times the unlimited step, and
+  on the cases above, at 1.04 to 1.65 times the unlimited step, and
   patches and boxes run bitwise against the host on device storage; on the
   cylindrical Noh the limited tiles drift half as far as under `:closure`
   and ten times as far as unlimited `:ghost` tiles
@@ -337,7 +338,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   of E in cold gas moving fast, the planar Noh on four patches and on static
   and regridded tiles (`pnoh81tiles`, `pnoh81regrid`) and a limited Float32
   planar Noh leave none either, and with a state within 3 eps |E| under that
-  floor counted as holding it (commit `HASH`) they leave no more unguaranteed
+  floor counted as holding it (commit `4e8ef33`) they leave no more unguaranteed
   sides than a bound without the floor. Device storage carries it
   (commits `222894a`, `bacc29f`) on one patch, the radial lines, the r-z plane,
   same-level patches and refined boxes, bitwise against the host under the
