@@ -63,7 +63,7 @@ below. R of order 1e3 to 1e6 is the design range.
   Aslam, MNRAS 422, 2012 and JCP 257, 2014), Strang-split from the
   hydrodynamics, second order in time, with no linear solve.
 - **SUNDIALS ARKODE** supplies additive Runge–Kutta pairs, among them
-  ARK4(3)6L[2]SA (Kennedy and Carpenter, Appl. Numer. Math. 44, 2003):
+  `ARK4(3)6L[2]SA` (Kennedy and Carpenter, Appl. Numer. Math. 44, 2003):
   six stages, fourth order, an L-stable stiffly accurate ESDIRK implicit half
   of stage order two, and an explicit half sharing its abscissae.
 - **Low-storage IMEX schemes** (Cavaglieri and Bewley, JCP 286, 2015) keep
@@ -182,7 +182,7 @@ Each implicit stage solves `(I − γΔt L) Y = r`, nonlinear in `Y` through
 
 ## The integrator
 
-ARK4(3)6L[2]SA is the H2 integrator. The advective, acoustic and
+`ARK4(3)6L[2]SA` is the H2 integrator. The advective, acoustic and
 artificial-property terms form its explicit half; conduction, radiation
 diffusion and exchange its implicit half. It reaches fourth order on the model
 problem at moderate stiffness and falls toward third at large R, the order
@@ -280,7 +280,7 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
   The choice rests on the measured cost of each. Stage 2 delivers GMRES,
   which reaches 1e-10 in as many preconditioned iterations as conjugate
   gradients on the symmetric geometries
-  ([appendix](CALIBRATION_APPENDIX.md#the-implicit-stage)); a correction
+  ([appendix](CALIBRATION_APPENDIX.md#the-implicit-stage)). A correction
   contracting by 0.14 per outer step needs about twelve outer steps to the
   same tolerance, each an inner solve, and competes only if loose inner
   solves keep that contraction.

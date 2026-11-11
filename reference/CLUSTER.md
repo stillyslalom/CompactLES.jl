@@ -17,8 +17,13 @@ MPI.jl defaults to a bundled JLL. On one node it satisfies the launcher over
 shared memory and reproduces the physics bit-for-bit, so single-node timing
 cannot detect a misconfiguration. Off-node it may fail to reach the interconnect,
 running an order of magnitude or more slower with no symptom but speed. At 256³
-TGV the penalty grew with the off-node share: **27x at 224 ranks over 2 nodes,
-66x at 448 ranks over 4 nodes**, same launch line each time.
+TGV the penalty grew with the off-node share, under the same launch line each
+time:
+
+| ranks | nodes | slowdown under the JLL |
+|-------|-------|------------------------|
+| 224   | 2     | **27x**                |
+| 448   | 4     | **66x**                |
 
 Configure the system MPI once per checkout. Load its module first (so `libmpi` is
 on `LD_LIBRARY_PATH`) and name the launcher explicitly; without `mpiexec=`,
@@ -53,8 +58,8 @@ And `!` triggers history expansion even inside single quotes, so
 Running the setup commands from a `bash` subshell avoids all three; `setenv`
 variables and loaded modules are inherited.
 
-If `MPI.Init` then hangs, or every rank reports itself as rank 0 of a 1-rank
-world (plausible output at ~1/N speed, not an error), the launcher needs a
+If `MPI.Init` then hangs, or every rank reports itself as rank 0 of a world
+of one (plausible output at ~1/N speed, not an error), the launcher needs a
 bootstrap flag: `srun --mpi=list`, then `--mpi=pmi2` for MVAPICH2 or `--mpi=pmix`
 for OpenMPI. Then **restart Julia** (the preference is read at precompile) and
 verify with `clusterprobe.jl`, whose `MPI binary` line reports `system` vs a
@@ -118,9 +123,14 @@ On rzhound this is `hdf5-parallel/1.14.0` under the
 that way at 16 ranks reproduces a serial single-process write to five or six
 digits per spectral shell, diverging only where the two grids differ.
 
-Write cost is negligible. Two 151 MB checkpoints from a 128 cubed run over 224
-ranks cost under 1.5% of an 1176 s run, and that figure also includes the
-per-step reductions of the same callback list. The transfer-mode note at the
+Write cost is negligible. Two checkpoints and the per-step reductions of the
+same callback list together cost a small fraction of the run's wall:
+
+| run       | ranks | checkpoints   | wall   | checkpoints and reductions |
+|-----------|-------|---------------|--------|----------------------------|
+| 128 cubed | 224   | two of 151 MB | 1176 s | under 1.5%                 |
+
+The transfer-mode note at the
 top of `ext/CompactLESHDF5Ext.jl` records the decision, and
 [the shared-file write](CALIBRATION_APPENDIX.md#the-shared-file-write) the
 measurement behind it.
@@ -144,11 +154,17 @@ julia --project=$HOME/phdf5env -e 'using MPI, HDF5, CompactLES; println(CompactL
 $P/bin/mpiexec -n 4 julia --project=$HOME/phdf5env -t 1 test/hdf5_tests.jl
 ```
 
-Verified with OpenMPI 5.0.11, libhdf5 2.2.0 and HDF5.jl 0.17.4 under WSL2
-Ubuntu 24.04, with the checkout on the Windows drive; `hdf5_parallel()` is
-true, and `test/hdf5_tests.jl` passes at one, two and four ranks under either
-transfer mode. `bench/hdf5xfer.jl` times the two modes from the same
-environment.
+Verified under WSL2 with the checkout on the Windows drive, at the versions
+below; `hdf5_parallel()` is true, and `test/hdf5_tests.jl` passes at one, two
+and four ranks under either transfer mode. `bench/hdf5xfer.jl` times the two
+modes from the same environment.
+
+| component | version |
+|-----------|---------|
+| Ubuntu    | 24.04   |
+| OpenMPI   | 5.0.11  |
+| libhdf5   | 2.2.0   |
+| HDF5.jl   | 0.17.4  |
 
 ### One home directory, several clusters
 
@@ -242,13 +258,19 @@ periodic direction held by one rank (`_reduced_solve!` in `src/tridiag.jl`): a
 field per Runge-Kutta stage. A direction split over ranks takes a band solve
 that calls no BLAS. OpenBLAS forks its thread pool for each of those and waits on
 the join, so the cost is paid per call and grows with the node's core count while
-the arithmetic it parallelizes stays trivial. On rzhound (112 logical CPUs,
-Sapphire Rapids) a 32³ step measured 7.0 s at the default thread count and
-0.079 s under `OPENBLAS_NUM_THREADS=1`, with nothing else changed; the profile
-put 123 of the working thread's 191 samples in OpenBLAS's `exec_blas_async_wait`
-before and one in a BLAS kernel after. The same setting is worth 12-17% on a
-24-thread desktop, so this is not a cluster-only rule, it is a large-node rule
-that a cluster makes unmissable. Set `OPENBLAS_NUM_THREADS=1` in the launch
+the arithmetic it parallelizes stays trivial. On rzhound a step ran ninety
+times slower at the default thread count than under `OPENBLAS_NUM_THREADS=1`,
+with nothing else changed, and the profile placed most of the working thread's
+samples in OpenBLAS's join wait:
+
+| rzhound (112 logical CPUs, Sapphire Rapids), 32³ | s/step | profile of the working thread |
+|---|---|---|
+| default OpenBLAS thread count | 7.0 | 123 of 191 samples in `exec_blas_async_wait` |
+| `OPENBLAS_NUM_THREADS=1` | 0.079 | one sample in a BLAS kernel |
+
+On the development workstation the same setting is worth 12-17%, so the rule
+belongs to large nodes in general, and a cluster makes it unmissable. Set
+`OPENBLAS_NUM_THREADS=1` in the launch
 environment; `clusterprobe.jl` and `depotprobe.jl` both report the count and
 flag anything above 1.
 
@@ -275,11 +297,11 @@ rank's own mask: false` as a pre-flight check.
 **Threads are usually inactive under fine decomposition.** `@threaded` runs
 serially unless a region reaches `THREAD_MIN_WORK` (1024 points per thread × the
 rank's `-t`), and once `prod(n_local)` falls below it every thread past the first
-idles. 64³ over 56 ranks is 4608 points/rank, well under the `-t 56` bar; asking
-for `-t 56` there measured slower than `-t 1` from runtime and GC overhead alone.
-Because `-t` is per rank, `-n R -t T` requests R×T compute plus R×(T/2) GC
-threads; one configuration created ~19,000 threads on a node and never reached
-the first step.
+idles. A 64³ grid over 56 ranks leaves each rank far under the `-t 56` bar;
+asking for `-t 56` there measured slower than `-t 1` from runtime and GC
+overhead alone. Because `-t` is per rank, `-n R -t T` requests R×T compute plus
+R×(T/2) GC threads. One configuration created ~19,000 threads on a node and
+never reached the first step.
 
 **Even where `@threaded` is active, threads lose to ranks at fixed core count.**
 The solver is memory-bandwidth-bound, so a rank saturates bandwidth with one
@@ -303,53 +325,82 @@ per-region barriers. Trixi.jl, the nearest comparable solver and one that offers
 hybrid mode, likewise published its large-scale TGV scaling as pure MPI.
 
 **On a hybrid desktop, two further effects sit on top of that.** Measured on
-the development workstation (i9-12900K, 8 performance and 8 efficiency cores,
-Windows, Julia 1.11.4) on the 768×48 two-species tube of
+the development workstation on the two-species tube of
 `bench/he_co2_shock_tube.jl` under C10, `detector = :d8` and
-`mu_sensor = :velocity`, 2026-09-09:
+`mu_sensor = :velocity`:
+
+| setting | value |
+|---|---|
+| CPU | i9-12900K, 8 performance and 8 efficiency cores |
+| system | Windows, Julia 1.11.4 |
+| grid | 768×48 |
+| date | 2026-09-09 |
 
 - *Thread placement.* Nothing pins threads on Windows, and the scheduler places
   some of eight threads on efficiency cores or on SMT siblings for part of a
-  run. At `-t 8` the median `step!` over fifteen calls was 30–37 ms while the
-  minimum was 19–27 ms; confining the process to one SMT thread per performance
-  core (affinity mask `0x5555`, through `SetProcessAffinityMask` in-process or
-  `start /affinity` at launch) gave a median of 21.7 ms against a minimum of
-  18.6. End to end the pinned run reproduces to 3% (12.8 and 13.2 s for 412
-  steps) where unpinned runs spread from 12.3 to 14.7 s. The comparison across
+  run. Confining the process to one SMT thread per performance core (affinity
+  mask `0x5555`, through `SetProcessAffinityMask` in-process or
+  `start /affinity` at launch) brings the median `step!` down to near its
+  minimum, and the end-to-end wall of a pinned run reproduces to 3% where
+  unpinned runs spread several times wider:
+
+  | `-t 8` | median `step!` over fifteen calls | minimum | 412 steps end to end |
+  |---|---|---|---|
+  | unpinned | 30–37 ms | 19–27 ms | 12.3 to 14.7 s |
+  | pinned | 21.7 ms | 18.6 ms | 12.8 and 13.2 s |
+
+  The comparison across
   thread counts in the `@threaded` note of `src/threading.jl` and the `-t 16`
   guidance elsewhere were taken unpinned, so their spread includes this.
 - *Compilation inside the timed wall.* The deck's callback is a closure, so
-  `run!` is compiled afresh inside the wall the script prints: 3.2 s at `-t 8`,
-  or a quarter of that 412-step run and 40% of the 8-rank one. The script now
-  prints a steady-state ms/step beside the total; compare runs on that.
+  `run!` is compiled afresh inside the wall the script prints, 3.2 s at `-t 8`.
+  That is a quarter of the threaded run's wall and 40% of the 8-rank one. The
+  script prints a steady-state ms/step beside the total; compare runs on that.
 
-Net of both, the 768×48 case at eight P-cores costs 24 ms/step pinned at `-t 8`
-and 12 ms/step at `-n 8 -t 1`, so ranks beat threads 2x on a 37k-point planar
-grid, with every phase of the RHS scaling about 3x at eight threads (pointwise
-passes 4x, line solves 2.5x). The loss was region granularity rather than
-bandwidth at this size: that configuration entered 195 threaded regions per RHS
-evaluation of about 54 µs serial work each, against a 3–5 µs spawn/join floor
-at eight threads (`probes/spawnfloor.jl`, 1 ms per RHS of a 3.5 ms total) and a
-join barrier per region, and the line-solve path then took three regions per
-solve (fill, solve, scatter) with the solved block crossing cores in between.
+Net of both, ranks beat threads 2x on this planar grid of 37k points. The
+cost per step and the scaling of the RHS phases at eight threads:
+
+| eight P-cores | ms/step |
+|---|---|
+| pinned, `-t 8` | 24 |
+| `-n 8 -t 1` | 12 |
+
+| RHS phase | speedup at eight threads |
+|---|---|
+| every phase | about 3x |
+| pointwise passes | 4x |
+| line solves | 2.5x |
+
+The loss was region granularity rather than bandwidth at this size. Each
+RHS evaluation entered many short threaded regions, each paying the
+spawn/join floor and a join barrier, and the line-solve path then took three
+regions per solve (fill, solve, scatter) with the solved block crossing cores
+in between:
+
+| one RHS evaluation, eight threads | |
+|---|---|
+| threaded regions | 195, of about 54 µs serial work each |
+| spawn/join floor (`probes/spawnfloor.jl`) | 3–5 µs per region, 1 ms in all |
+| RHS total | 3.5 ms |
+
 A prototype that filled, solved and scattered each thread's own lines in one
-region ran the x-direction filter solve 1.86x faster at `-t 8` (36.9 to
-19.8 µs), at parity serially once the 16-wide column blocking was kept inside
+region ran the x-direction filter solve at `-t 8` in 19.8 µs against 36.9 µs.
+It was at parity serially once the 16-wide column blocking was kept inside
 each chunk, and bitwise identical. The fusion is now in the code (commits
 `8613edb`, `17cdd9f`): a host-plan solve takes one region, or two with an
 interface stage. The 768×48 figures above were measured on the three-region
 path and not on the fused one; their re-measurement is roadmap item S11.
 Static scheduling for `Threads.@threads` and a narrower column block for the
-48-line x solve were both measured inside the 10–20% spread and not adopted.
+x-direction solve were both measured inside the 10–20% spread and not adopted.
 
-**`--cpu-bind=threads` distributes CPUs non-uniformly below full packing** (3–5
-cores per rank at half, 7–14 at a quarter), and an explicit `-c` does not repair
-it. With collectives every step the slowest rank sets the pace, so these ragged
-masks confound the bottom rows above; inspect the mask before trusting any
+**`--cpu-bind=threads` distributes CPUs non-uniformly below full packing**, as
+the cores/rank column of the table above shows, and an explicit `-c` does not
+repair it. With collectives every step the slowest rank sets the pace, so
+these ragged masks confound the bottom rows above; inspect the mask before trusting any
 `-t > 1` result.
 
 **Rank count has a fixed ceiling for a given grid.** The C8 filter needs 9 points
-per rank per dimension, so `n_global[d] >= 9 * dims[d]`; at 64³ this caps the run
+per rank per dimension, so `n_global[d] >= 9 * dims[d]`. At 64³ this caps the run
 near 112 ranks, and larger counts fail at setup with an error, not a slowdown.
 
 **Evaluate placement by cross-socket data volume, not link percentage.**
@@ -406,11 +457,11 @@ Two effects act oppositely. At fixed *rank* count, halving ranks-per-node
 improves performance ~1.7x, attributable to memory bandwidth per rank, since the
 compact line solves are bandwidth-bound and the decomposition is identical
 within each pair.
-At fixed *node* count, packing all cores still wins but by a shrinking margin
-(1.30x on one node, ~1.14x on two and four): the second half of the cores gives
-~14% more throughput for twice the core-hours, so full packing favors node-hour
-efficiency and half packing favors core-hour. Node scaling packed was ~1.93x per
-doubling (93% at four nodes), so off-node communication costs little here.
+At fixed *node* count, packing all cores still wins but by a shrinking margin,
+1.30x on one node and ~1.14x on two and four. The second half of the cores
+therefore gives ~14% more throughput for twice the core-hours, so full
+packing favors node-hour efficiency and half packing favors core-hour. Node
+scaling packed was ~1.93x per doubling (93% at four nodes), so off-node communication costs little here.
 
 ## Open cluster questions
 

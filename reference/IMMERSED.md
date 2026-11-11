@@ -252,11 +252,15 @@ need. Cases small enough to respect the run-cost discipline, added to
   long-time interface stability.
 - **Shock–cylinder diffraction** (Bryson & Gross): shock trajectory
   comparison; the RM-relevant case and the sternest interface-noise test.
-- **Parameter sweep** over δ (1.5–4 cells) and η (0, dt, 10 dt) in the
-  `bench/artcal.jl` style, including the artificial-property masking
-  question and the conservation-defect magnitude. Results land in a new
-  section of this file, with recommended defaults, in the CALIBRATION.md
-  format.
+- **Parameter sweep** over δ and η in the `bench/artcal.jl` style, including
+  the artificial-property masking question and the conservation-defect
+  magnitude. Results land in a new section of this file, with recommended
+  defaults, in the CALIBRATION.md format. The sweep covers
+
+  ```
+  δ    1.5–4 cells
+  η    0, dt, 10 dt
+  ```
 
 ## Stage 3 — normal extrapolation refinements
 
@@ -321,10 +325,13 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 ## Risks and open questions
 
 1. **Spurious acoustics from the interface under strong shocks**, the known
-   failure mode of diffuse IB. Mitigations, in order: δ ≥ 2 cells (echoing
-   the ≥ 3-cell resolution lesson from the spherical origin), the sensors,
-   which damp interface noise, and η > 0 softening the imposition. The
-   shock–cylinder case is the designated probe.
+   failure mode of diffuse IB. Mitigations, in order:
+   - δ ≥ 2 cells, echoing the ≥ 3-cell resolution lesson from the spherical
+     origin;
+   - the sensors, which damp interface noise;
+   - η > 0 softening the imposition.
+
+   The shock–cylinder case is the designated probe.
 2. **Thin geometry.** A body feature under ~3 cells thick cannot hold a χ
    plateau and leaks. No general setup-time detection is possible from a
    black-box φ; document the requirement beside the origin-fold resolution

@@ -162,10 +162,10 @@ numbering.
    it. The SBP–SAT multiblock literature is node-coincident too, so a
    cell-centered migration was never a prerequisite.
 7. **Error localization is favorable.** The inverse of a compact LHS decays
-   geometrically off the diagonal (≈ α^|i−j|, α = 1/3 for C6), so pollution
-   injected at an inexact interface decays about 3× per point into the
-   patch, and the default 4-coarse-cell tagging buffer is sized from the
-   measured rate. The `closure_localization` study of
+   geometrically off the diagonal, as α^|i−j| with α = 1/3 for C6. Pollution
+   injected at an inexact interface therefore decays about 3× per point into
+   the patch, and the default tagging buffer of 4 coarse cells is sized from
+   the measured rate. The `closure_localization` study of
    `bench/amr_transfer.jl` measures the decay of the derivative's response
    to a unit error in the first ghost layer, through the interface closure
    rows and the interior solve, and finds it at exactly the root of the LHS
@@ -194,9 +194,15 @@ alpha = -0.0321826755129339
 ```
 
 Restriction applies the filter; prolongation deconvolves it, using the same
-coefficients with LHS and RHS roles swapped. Unit DC gain
-(a + 2b + 2c = 1 + 2α to the last bit) preserves constants, and the
-tabulated boundary closures preserve that gain. This does not establish
+coefficients with LHS and RHS roles swapped. The coefficients satisfy the
+unit DC gain condition to the last bit,
+
+```
+a + 2b + 2c = 1 + 2α
+```
+
+so the pair preserves constants, and the tabulated boundary closures
+preserve that gain. This does not establish
 conservation under the composite quadrature or during coupled evolution.
 The extended-data closure
 variant is tabulated identically to the one-sided one, "to maintain
@@ -211,13 +217,14 @@ the existing `plan_direction`, which supplies the distributed spike solve
 and the fold parity variants without further code, and reproduces
 parity-extended full lines for both schemes and both signs.
 
-**The 3:1 sampling convention**, pinned numerically because the public
-kernels do not fully specify it: restriction filters the fine line and takes
-the coincident nodes (fine node 3m − 2 ↔ coarse node m); prolongation
+**The 3:1 sampling convention** is pinned numerically, because the public
+kernels do not fully specify it. Restriction filters the fine line and takes
+the coincident nodes, fine node 3m − 2 for coarse node m. Prolongation
 injects coarse values onto coincident fine nodes, fills the intermediate
-nodes by Lagrange interpolation (order 4/6/8, default 6), then deconvolves.
-The pair round-trips to round-off, restriction is a left inverse of
-prolongation for arbitrary data, fine → coarse → fine converges at the
+nodes by Lagrange interpolation, then deconvolves. The interpolation order
+is 6 by default (`interp_order` of `plan_transfer`). Orders 4 and 8 were
+measured as well. The pair round-trips to round-off, restriction is a left
+inverse of prolongation for arbitrary data, fine → coarse → fine converges at the
 interpolation order, and a constant survives both directions; within 6
 points of a closed end the round-trip converges at the closure order
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
@@ -275,9 +282,10 @@ flux at the junction is local: the derivative at two nodes beside it and the
 explicit stencil. Each right-hand side's junction fluxes, and each filter
 pass's, go through the low-storage recurrence into a register, and after the
 child's steps and the restriction the difference of the two grids', less the
-change of Ω, is added to the parent's next node out from the face. Ω makes
-that correction vanish to high order for smooth data on a 1-D line, but
-across a 2-D or 3-D face the two grids' tangential quadratures differ at
+change of Ω, is added to the parent's next node out from the face. With
+Ω subtracted, that correction vanishes to high order for smooth data on a
+line in one dimension, but across a face in two or three dimensions the
+two grids' tangential quadratures differ at
 order H³ per line, so a line is corrected only in a step where the parent's
 density within a few nodes of the face, on either side, holds a feature its
 spacing does not resolve, the masks' fourth-difference test, and a connected
@@ -347,12 +355,18 @@ The pentadiagonal C10 (`lele_d1_10`) closes a patch interface with two
 rows per end, one per left-hand-side band that would couple a ghost
 unknown (`interface_closures(::BandedCompactScheme)`,
 `src/kernels_banded.jl`). Each is a compact row whose left-hand side
-couples interior unknowns only, Taylor-matched at construction (exact
-rationals) to order 2(M + q) = 10, the interior formal order, on a 9-point
-right-hand side of half-width M + q − 1 = 4 centered on its own node: row
-1 couples nodes 1, 2, 3 with weights 1, 8/5, 2/5 and reads four ghost
-layers, the default halo, and row 2 is a centered tridiagonal row with
-2/5 on both neighbors. An explicit central row of the same order would
+couples interior unknowns only, Taylor-matched at construction in exact
+rationals to the interior formal order, on a right-hand side centered on
+its own node. Row 1 reads four ghost layers, the default halo.
+
+```
+formal order            2(M + q) = 10
+right-hand side         half-width M + q − 1 = 4, 9 points
+row 1 left-hand side    nodes 1, 2, 3 with weights 1, 8/5, 2/5
+row 2 left-hand side    centered tridiagonal, 2/5 on both neighbors
+```
+
+An explicit central row of the same order would
 read five layers and force a wider halo, which is why the rows are
 compact. Rows 3 onward keep the interior stencil, reading the exchanged
 ghosts. `plan_direction` for a `BandPlan`
@@ -378,9 +392,15 @@ bitwise at one rank per patch and to round-off once a patch decomposes, as
 C6 does.
 
 The level buffers were remeasured at C10 with the two-level entropy wave and
-the subcycled Sod crossing over `RESTRICT_MARGIN` 0–3 and `LEVEL_BUFFER` 4
-and 6, in a scratch copy of the tree with the constants edited, the two
-testsets being the instrument. C10 tracks C6 at every setting, nothing calls
+the subcycled Sod crossing, the two testsets run with the constants edited
+over these values:
+
+```
+RESTRICT_MARGIN    0–3
+LEVEL_BUFFER       4, 6
+```
+
+C10 tracks C6 at every setting, nothing calls
 for wider buffers, and the constants stay where they are
 ([measurements](CALIBRATION_APPENDIX.md#amr)). The amplifying loop
 `RESTRICT_MARGIN` was introduced against did not appear at margin 0 in this
@@ -391,7 +411,8 @@ coupling, not a reason to move a C6 constant.
 
 `src/levels.jl`, `src/regrid.jl`. The hierarchy is a chain of levels, root
 first in `solver.levels`, each level a set of patches covering regions of
-its parent at ratio 3, node-centered (m parent nodes ↔ 3m − 2 fine nodes).
+its parent at ratio 3. The levels are node-centered: m parent nodes span
+3m − 2 fine nodes.
 A `Level` holds its depth, the indices into `solver.patches` of the patches
 this rank holds, one `LevelTransfer` per patch coupling it to its parents
 (the buffered box, the shell ring, the Hermite storage `box_Q0` .. `box_dQ1`,
@@ -538,16 +559,22 @@ alike. The same keyword lets them cross a periodic seam ("Levels across a period
 seam"). With it off every face keeps the margin.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
-a root cell h from it, so the coincident lattice (parent node g at fine node
-3(g − 1) + 1) starts at h/2. The tile takes one fine node outside that
+a root cell h from it, so the lattice of fine nodes coincident with the
+parent's starts at h/2. The tile takes one fine node outside that
 lattice, at h/6, half a fine cell from the plane: its nodes are then those of
 a uniform folded run at h/3, and the plane is a face-centred fold at the fine
 spacing. `LevelTransfer.folded` marks the face and `_fold_lead` counts the
-extra node. The tile's region in the level's node space (`_fine_region`) has
-offset 3·offset − 1 at a low plane, which places node 1 at h/6 through the
-root's `coord_shift`, and one more node at each folded face; the box shift,
-the shell and ring extents and the restriction's coincident samples
-(`_coincident`: region node m at patch node 3(m − 1) + 2) carry the lead.
+extra node. The tile's region in the level's node space (`_fine_region`)
+starts that node early at a low plane and takes one more node at each folded
+face; the box shift, the shell and ring extents and the restriction's
+coincident samples (`_coincident`) carry the lead. The index relations at a
+low plane:
+
+```
+coincident lattice     parent node g  ->  fine node 3(g − 1) + 1
+fine region offset     3·offset − 1, placing node 1 at h/6 through the root's coord_shift
+coincident sample      region node m  ->  patch node 3(m − 1) + 2
+```
 
 The tile holds a self-paired `FoldSpec` on its own decomposition with the
 root fold's parities. Each operator pair folds the plane end onto the
@@ -568,8 +595,8 @@ continuation; the wall's box takes one-sided stencils instead. The face is
 not imposed: the restriction writes up to the region's node at h/2, and the
 shell and ring leave out the face and the slots beyond the plane, which hold
 the fold's mirror. The covered mask treats the face as closed, so the root's
-node at h/2, whose cell spans [0, h], is covered on both halves, and the
-tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
+node at h/2, whose cell runs from the plane to h, is covered on both halves,
+and the tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
 Setup accepts an explicit region, box or tiled `refine` reaching a plane, of
 a Cartesian run or at z of an r-z run, and the regrid places one there under
 `level_boundaries`. A tile built by a regrid or a
@@ -600,25 +627,33 @@ reduces it modulo the tile's extent. Both are bitwise against the host on
 the KernelAbstractions CPU backend (`test/device_tests.jl`).
 
 **A nested level at a fold.** Level ℓ's node n lies n − 1 level spacings
-h/3^ℓ from the root's first node, so the nodes coincident with the root's
-run from 1 to E_ℓ = 3^ℓ(N − 1) + 1, and parent node g is child node
-3(g − 1) + 1 at every depth. The node of level ℓ nearest a fold lies half a
-level spacing from it, (3^ℓ − 1)/2 nodes outside that lattice, and
-`_level_span` extends the node space there: (3 − 3^ℓ)/2 .. E_ℓ at a low
-fold, so 0 at the first level and −3 at the second, and E_ℓ + (3^ℓ − 1)/2 at
-a high one. A region reaching a fold starts on its parent's first node,
-offset (1 − 3^(ℓ−1))/2 in the parent's node space (0, −1, −4 for ℓ = 1, 2, 3),
-and its tile takes one node beyond the parent's lattice as the first level's
-does (`_fold_lead` is one at every depth), so `_fine_region`'s 3·offset − 1,
-the box shift, the ring, the coincident samples and the per-tile geometry
-serve every level unchanged; the second level's first node lies at h/18 and
-the level-1 node at h/6 is its coincident node −2. `_boundary_faces` reads
+h/3^ℓ from the root's first node. The nodes coincident with the root's run
+from the first to E_ℓ, and the map from a parent node to its coincident child
+node is the same at every depth. The node of level ℓ nearest a fold lies
+half a level spacing from it, outside that lattice, and `_level_span`
+extends the node space there. A region reaching a fold starts on its
+parent's first node, and its tile takes one node beyond the parent's lattice
+as the first level's does (`_fold_lead` is one at every depth), so
+`_fine_region`'s offset rule, the box shift, the ring, the coincident
+samples and the per-tile geometry serve every level unchanged.
+
+```
+last coincident node         E_ℓ = 3^ℓ(N − 1) + 1
+coincident map               parent node g  ->  child node 3(g − 1) + 1
+nodes outside the lattice    (3^ℓ − 1)/2 at a fold
+level span, low fold         (3 − 3^ℓ)/2 .. E_ℓ, so 0 at the first level and −3 at the second
+level span, high fold        up to E_ℓ + (3^ℓ − 1)/2
+region offset at a fold      (1 − 3^(ℓ−1))/2 in the parent's node space (0, −1, −4 for ℓ = 1, 2, 3)
+second level                 first node at h/18; the level-1 node at h/6 is its coincident node −2
+```
+
+`_boundary_faces` reads
 a face from the span's ends, `_mirror_folded_box!` mirrors about the
 parent's span, and the lattice of a level below the first extends its first
 and last cells to the span's ends rather than adding a cell of the
 extension nodes alone (`_lattice_tile`, `_cell_of` clamping a negative
 offset). The alternative convention, a node space shifted per level so a
-fold always starts at node 1, was rejected: the coincident map 3(g − 1) + 1
+fold always starts at node 1, was rejected. Under it the coincident map
 would carry a per-level shift into every transfer, the tile lattice, the
 record and the outputs, while negative offsets are what the first level's
 fine region already holds. The frontend's shapes follow the same spans.
@@ -648,8 +683,8 @@ at such a face.
 
 ### Levels across a periodic seam
 
-Along a periodic dimension of N root nodes, node N + 1 is node 1, and level
-ℓ's node space repeats every P = 3^ℓ N nodes (`_level_period`). A region
+Along a periodic dimension of N root nodes, node N + 1 is node 1. Level ℓ's
+node space repeats every P = 3^ℓ N nodes (`_level_period`). A region
 there may start anywhere in the period and run past its end: the level
 stores it with its offset in [0, P) (`_canonical`), so a region across the
 seam is one contiguous block whose nodes past P are the nodes a period
@@ -673,9 +708,9 @@ joined by a same-level interface. That adds an interface where the physics
 has none, with its closure rows and its shared-plane averaging, and splits a
 line solve the region would otherwise hold whole (constraint 1); the image
 relations leave both the patch and the solve intact. A lattice anchored at
-node 0 is periodic only if its last cell ends on the seam, so the lattice
-over a periodic dimension runs over [1, P + 1] and its last cell is clipped
-there (`_wrapped_parts`, `_level_tiles`): the seam is always a lattice
+node 0 is periodic only if its last cell ends on the seam. The lattice over
+a periodic dimension therefore runs over [1, P + 1], and its last cell is
+clipped there (`_wrapped_parts`, `_level_tiles`): the seam is always a lattice
 plane, no tile straddles it, and the two tiles on either side of it abut as
 same-level neighbours through the ordinary records, their planes compared
 modulo the period (`_tile_faces`). A last cell below four nodes is dropped,
@@ -725,8 +760,8 @@ mirror in r: each radial line continues into itself through r = 0, with no
 antipodal partner, so the prohibition of constraint 4 does not apply to it.
 A refined level, at any depth, reaches the axis as it reaches a symmetry
 plane (`_level_fold_condition`). The root's node nearest the axis lies at
-h/2, so a first-level tile takes the extra node at h/6 and its nodes are
-those of a uniform axis run at h/3; `_fine_region`, the box shift, the
+h/2. A first-level tile therefore takes the extra node at h/6, and its nodes
+are those of a uniform axis run at h/3; `_fine_region`, the box shift, the
 shell, the ring and the restriction's coincident samples are the plane's.
 The tile's fold, the box mirror and the ghost-flux divergence read the root
 fold's parities, which at the axis make the radial velocity, the swirl and
@@ -741,8 +776,14 @@ metric source. The curvature terms
 of the gradient ring are evaluated only at ring slots inside the domain,
 since the ring leaves out the slots beyond the fold. The covered mask treats
 the axis face as closed, so the root's node at h/2 is covered on both
-halves of its cell [0, h], and the tile's node at h/6 carries the weight
-(h/6)(h/3), the exact r-weighted measure of [0, h/3]. A corner tile at the
+halves of its cell, which reaches the axis. The tile's node at h/6 carries
+the exact r-weighted measure of its cell:
+
+```
+weight of the tile's node at h/6    (h/6)(h/3), the measure ∫ r dr of [0, h/3]
+```
+
+A corner tile at the
 axis and a symmetry plane at z = 0, the capsule's layout, folds on both
 dimensions; the box mirror takes them in turn. A regridded level, a nested
 one and a device tile reach the axis as they reach a plane, and the
@@ -779,8 +820,8 @@ ahead-of-shock noise and mass drift
 
 The step driver is recursive (`_advance_level!`): one step of level ℓ, the
 extra RHS that saves the Hermite endpoint for its children, three substeps
-of level ℓ+1 at dt/3, then restriction of ℓ+1 onto ℓ for every ℓ above the
-root (the root's restriction stays in `run!`, after its filter pass). Each
+of its child level at dt/3, then restriction of the child onto ℓ for every
+level above the root (the root's restriction stays in `run!`, after its filter pass). Each
 level below the root filters itself at its own cadence, substep index
 `3 · parent index + m`. The extra parent RHS recurs on every level that has
 children, about 1/15 of the RHS work at similarly weighted levels, not a
@@ -795,11 +836,17 @@ estimate, independently of timing-based ownership changes.
 
 The fine level of an implosion is a shell of tiles, so a level can be a
 set of fixed-size tiles on a lattice, not one box and not slabs. `tile` is
-the lattice edge in parent nodes (0, the default, keeps one patch per
-level; the floor is 3 from constraint 2); lattice cell k spans parent nodes
-k·tile + 1 .. (k+1)·tile + 1, so abutting tiles share their interface plane
-as root slabs do, and every tile face is either fully shared with one
-neighbor or fully parent-fed. A static `refine` box expands to the lattice
+the lattice edge in parent nodes. The default, 0, keeps one patch per level.
+The floor is 3, from constraint 2. Adjacent lattice cells share their end
+node, so abutting tiles share their interface plane as root slabs do, and
+every tile face is either fully shared with one neighbor or fully
+parent-fed:
+
+```
+lattice cell k    parent nodes k·tile + 1 .. (k+1)·tile + 1
+```
+
+A static `refine` box expands to the lattice
 cells that reach past its planes; cells at the domain edge are clipped to
 the nesting margin, or to the face under `level_boundaries`, and dropped
 below four nodes. Along a periodic dimension a region reaching the seam's
@@ -900,7 +947,8 @@ one set per stack, since the batched evaluation writes every tile's
 scratch in one launch.
 
 A tiled level costs nothing visible in accuracy against the one-patch level
-on the 1-D entropy wave or a 2×2 nest in 2-D with its corner, decomposed
+on the one-dimensional entropy wave or a 2×2 nest in two dimensions with its
+corner, decomposed
 runs reproduce serial to round-off, and the tiled regrid tracks the Sod
 shock through lattice cells that stay contiguous. On an annular tag set in
 2-D (`bench/amr_tiles.jl`) the lattice covers well under half the bounding
@@ -1026,9 +1074,14 @@ clamps as the root's edge does), on the lattice of level ℓ − 1's
 global node space. The level-1 rules of the tiled regrid apply, and a cell
 is also wanted only if its buffered extent lies in level ℓ − 1's own nodes
 by the nesting margin; a cell that does not is left out, not clipped. A
-level that may have children buffers its tags by
-max(b, ⌈(b + tile + margin + 1)/3⌉ + 1) of its parent's nodes, which lets a
-child tagged at the same place nest. A level whose parent was rebuilt is
+level that may have children buffers its tags by a wider count of its
+parent's nodes, which lets a child tagged at the same place nest:
+
+```
+tag buffer of a level with children    max(b, ⌈(b + tile + margin + 1)/3⌉ + 1) parent nodes
+```
+
+A level whose parent was rebuilt is
 rebuilt with it (`_swap_level!`): its transfers, patch indices and subset
 follow the parent's tiles, and a kept tile keeps its arrays and state.
 
@@ -1046,13 +1099,14 @@ backend is refused too, since the tile sweep and the carry run on the host.
 A restart rebuilds each level from the record the same way
 (`_restore_levels!`), on the writing rank count with the stored ownership.
 
-The gate is a shock driven through a contact into heavy gas in 1-D with
-three levels built from the initial state's tags: the finest level holds
-the leading shock at every sampled time, the composite is an order of
-magnitude closer than the root alone to a uniform run at the finest spacing
-([measurements](CALIBRATION_APPENDIX.md#amr)), decomposed runs reproduce the
-serial tile sets and density to round-off at np = 2, 4 and 8, and a
-checkpoint taken with level 2 present continues bit for bit.
+The gate is a shock driven through a contact into heavy gas in one
+dimension, with three levels built from the initial state's tags. The
+finest level holds the leading shock at every sampled time, and the
+composite is an order of magnitude closer than the root alone to a uniform
+run at the finest spacing ([measurements](CALIBRATION_APPENDIX.md#amr)).
+Decomposed runs on two, four and eight ranks reproduce the serial tile sets
+and density to round-off, and a checkpoint taken with the second level
+present continues bit for bit.
 
 ### Diagnostics on the composite grid
 
@@ -1061,8 +1115,13 @@ exclude the coarse nodes a child level covers, and exclude them exactly
 once; a double-counted covered node is the single most likely source of a
 silently wrong number in a multi-level run. The data model is a per-patch
 mask, `Patch.covered`: one host byte per node of the padded extent, each
-bit the orthant of the node's quadrature cell (signs s_d along the three
-dimensions, bit (s1 > 0) + 2(s2 > 0) + 4(s3 > 0)) that a child tile covers.
+bit an orthant of the node's quadrature cell that a child tile covers. With
+s_d the orthant's sign along dimension d, the bit is
+
+```
+(s1 > 0) + 2(s2 > 0) + 4(s3 > 0)
+```
+
 With node-centered quadrature a tile spanning parent nodes lo .. hi covers
 the + side of a node for lo ≤ g ≤ hi − 1 and the − side for lo + 1 ≤ g ≤ hi,
 so a node on a child's face keeps half its cell, an edge node three
@@ -1097,9 +1156,10 @@ was and apply no mask.
 
 The composite quadrature is exact for a linear field on a wall-bounded
 box that a level does not reach, which pins it to round-off on one refined
-patch, a 3×3×3 tile nest and a three-level nest, where the same sums without
-the masks carry the covered volume twice (serial and MPI suites); a level on
-a wall leaves the two walls' half cells at different spacings, f'(H² − h²)/8. On a refined Taylor–Green the
+patch, a cubic nest of three tiles per edge and a three-level nest, where
+the same sums without the masks carry the covered volume twice (serial and
+MPI suites). A level on a wall leaves the two walls' half cells at different
+spacings, an error of f'(H² − h²)/8. On a refined Taylor–Green the
 masked composite energy history tracks the single-level history to the fine
 sampling's own quadrature difference, where the unmasked sum sits nearly two
 orders above it ([measurements](CALIBRATION_APPENDIX.md#amr)); the same check
@@ -1124,9 +1184,19 @@ retry's first step at zero.
 
 ### Cost structure
 
-**The cost case** (`bench/amr_cost.jl`, np = 8) is a heavy-gas blob mixing
-case on a 48³ root grid with a subcycled, regridding region covering a
-sixth of the volume, against uniform 48³ and 142³ references at t = 1. On
+**The cost case** (`bench/amr_cost.jl`) is a heavy-gas blob mixing case
+with a subcycled, regridding region covering a sixth of the volume,
+compared against a uniform run on the root grid and a uniform run at the
+level's spacing:
+
+```
+ranks          np = 8
+root grid      48³
+references     uniform 48³ and 142³
+end time       t = 1
+```
+
+On
 ∫Y(1−Y)dV the composite lands several times closer to the fine answer than
 the coarse run, at a third to a half of the fine wall and a quarter of its
 memory, under the δ⁴ρ tag and under the sensor tag alone
@@ -1154,7 +1224,8 @@ latency per imposition, and on a many-tile run that is one rank; the box and
 restriction exchanges that feed it are point to point, one message per
 pair of ranks exchanging data.
 
-**Workstation pathology.** Any 2-D case at np = 8 on the workstation runs an
+**Workstation pathology.** Any two-dimensional case at np = 8 on the
+workstation runs an
 order of magnitude slower per step than at np = 4, one patch or four tiles
 alike: a machine pathology of the kind `CLUSTER.md` records for hybrid
 cores, not a tile cost, and the reason the MPI suite's tiled check is
@@ -1301,9 +1372,10 @@ tiles at once (`_most_held`); a level's price is that of its most loaded
 rank under the
 placement the regrid would make (`_knapsack_owners`). The levels below are
 priced with it on the ranks the lattice gives the level, which spans one
-rank per tile and confines its children to those ranks (`_level_rank_count`):
-on 3-D amr3 the configured level-1 lattice holds 4 tiles and would leave
-level 2, nine tenths of the work, on 4 of 8 ranks. The root and the levels
+rank per tile and confines its children to those ranks (`_level_rank_count`).
+On the three-dimensional amr3 case the configured first-level lattice holds
+4 tiles and would leave the second level, nine tenths of the work, on half
+of the 8 ranks. The root and the levels
 above enter as laid out, so a level taking a small share of the step never
 gains enough to change. A level changes lattice only for a step
 `PLACEMENT_GAIN` times shorter, its own rebuild of every tile amortized over
@@ -1352,15 +1424,21 @@ seeds its shared planes as a survivor, so it continues bit for bit; the
 conservative coupling continues at round-off, its junction registers summed
 by an `Allreduce` whose order follows the ranks contributing.
 
-The decision is sized for runs of 112 ranks per node on 1 to 100 nodes,
+The decision is sized for runs of 112 ranks per node on up to 100 nodes,
 where a level holds tens of thousands of tiles and every rank decides at
 every check. The tests of a lattice's cells against the old tiles, the
 inherited creation checks and the nesting test of a deeper level go through
 an index of the regions binned by node (`_RegionIndex`), the face table
 through a lookup (`_tile_faces`), the knapsack scans only the least loaded
-ranks, and the chain stops at `_lattice_budget` cells (256 per rank, at
-least 2^20), which bounds the flag reduction and the pricing; the timings
-gather by `Gatherv` rather than object serialization. Over several nodes a
+ranks, and the chain stops at `_lattice_budget` cells, which bounds the
+flag reduction and the pricing; the timings gather by `Gatherv` rather than
+object serialization.
+
+```
+_lattice_budget    max(2^20, 256 per rank) cells
+```
+
+Over several nodes a
 level of more tiles than ranks is placed by node first: the space-filling
 curve is cut into one run per node, of weight in proportion to its ranks,
 and the knapsack places each run on its own node's ranks
@@ -1371,8 +1449,8 @@ coefficient for both otherwise. The nodes come from
 `MPI.COMM_TYPE_SHARED` (`_node_map`), or from `NODE_SIZE`, the toggle the
 MPI suite's "lattice over nodes" phase uses to group a workstation's ranks.
 A level of fewer tiles than ranks takes a prefix of the ranks, which under
-block rank numbering lies on the fewest nodes. bench/latticescale.jl times
-the decision and prices the rules at 112 to 11,200 ranks
+block rank numbering lies on the fewest nodes. `bench/latticescale.jl` times
+the decision and prices the rules from one node to 100 nodes of 112 ranks
 (`reference/CALIBRATION_APPENDIX.md`), and
 `bench/slurm/rmicost_lattice.sbatch` is the A/B on rzhound.
 
@@ -1453,7 +1531,7 @@ A box level's patch owned by a proper subset is a different decomposition
 of it, so it reproduces the every-rank answer to round-off rather than
 bitwise, the tier the MPI suite applies to decomposed patches; a whole tile
 is the serial tile, and the tiled wave and Sod regrid cases hold the serial
-answer at np = 2, 4 and 8 with the subdivision off
+answer on two, four and eight ranks with the subdivision off
 ([measurements](CALIBRATION_APPENDIX.md#amr)). With it on, the layout and
 the solution to within the truncation error follow the rank count. A rank
 outside a subset
@@ -1528,7 +1606,8 @@ so the communicator splits are reached together.
 
 The tiled and box Sod regrid cases checkpointed mid-run and continued
 through the regrids in between agree with the uninterrupted run at every
-slot, tag history included, serially and at np = 2, 4 and 8; a twelve-tile
+slot, tag history included, serially and on two, four and eight ranks; a
+twelve-tile
 wave written on half the ranks and restored on all of them, rebuilt from a
 six-tile initial region, continues to the round-off tier
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
@@ -1596,8 +1675,9 @@ every body ([measurements](CALIBRATION_APPENDIX.md#amr)).
 `device_plan` mirrors a host `DirPlan`/`BandPlan` onto a KA backend as a
 `DevicePlan`: fill, elimination sweeps (one thread per line), spike
 correction, and scatter as kernels in a (lines × n) layout for every
-dimension. The reduced 2qP × 2qP interface stage stays host-side: a pack
-kernel writes the 2q interface values per line, one device-to-host copy
+dimension. The reduced interface stage, a 2qP × 2qP system, stays
+host-side. A pack kernel writes the 2q interface values per line, one
+device-to-host copy
 feeds the same `_reduced_solve!` the host layouts share, and one copy
 returns the corrections, so collective ordering is identical to the host
 path. The kernels carry a `colwise` switch because the two host layouts
@@ -1696,10 +1776,10 @@ exchange of a stacked array moves every tile's slabs in one message along
 the two unstacked dimensions and runs per tile along the stacking one.
 The per-point arithmetic and the per-line solve are the per-tile ones,
 so a stacked level reproduces its tiles' separate evaluation bitwise, which
-the serial and MPI suites pin against the CPU hierarchy in 1-D, 2-D and
-3-D (`test/device_tests.jl`, twelve 3-D tiles stacked along an active
-dimension included). A regrid rebuilds the stacks with the tiles: a kept
-tile copies its state and persistent fields into its new slots, since the
+the serial and MPI suites pin against the CPU hierarchy in one, two and
+three dimensions (`test/device_tests.jl`, twelve three-dimensional tiles
+stacked along an active dimension included). A regrid rebuilds the stacks
+with the tiles: a kept tile copies its state and persistent fields into its new slots, since the
 new stack is a new allocation. Tiles clipped at the domain edge, whose
 extent differs from the lattice cell's, form stacks of their own.
 
@@ -1733,10 +1813,10 @@ The oracle hierarchy, strongest first:
    an element copy, or an exact max/min reduction, so the whole composition
    is bitwise. Every device stage was accepted on `max |device − cpu| = 0`
    over full runs: smooth periodic and closed cases, NSCBC, folds,
-   freestream/GCL, a 578-step Sod, refined static and regridding runs, 64³
-   TGV histories in both precisions, and distributed runs at np = 2/4/8, in
-   both launch-policy modes. `Nasa9Mixture` is the exception on hardware:
-   the device's logarithm and integer powers are its own, so its runs agree
+   freestream/GCL, a Sod run of 578 steps, refined static and regridding
+   runs, 64³ TGV histories in both precisions, and distributed runs on two,
+   four and eight ranks, in both launch-policy modes. `Nasa9Mixture` is the
+   exception on hardware: the device's logarithm and integer powers are its own, so its runs agree
    with the CPU to round-off and are bitwise only on the KA CPU backend.
 2. **Bitwise equality within a patch across configurations.** The
    single-patch and level paths are held bit-identical where the

@@ -170,9 +170,9 @@ Key derived quantities on `Decomp`:
 
 - `active[d]`: whether dimension `d` is resolved (`n_global[d] > 1`). **Collapsed**
   dimensions (`n_global[d] == 1`) carry no halos, derivatives, filters, or
-  exchanges; `n_halo_d[d]` (per-dimension halo pad) is zero for them. A 1-D,
-  2-D or axisymmetric run therefore costs 1-D/2-D memory and work, not that
-  of a thin 3-D slab.
+  exchanges; `n_halo_d[d]` (per-dimension halo pad) is zero for them. A
+  one- or two-dimensional or axisymmetric run therefore costs the memory and
+  work of its resolved dimensions, not that of a thin three-dimensional slab.
 - `neighbors[d]`: the `(lo, hi)` neighbor ranks along `d`, with `MPI.PROC_NULL` at
   open (non-periodic) global edges.
 - `sub[d]`: a sub-communicator containing exactly the ranks along dimension
@@ -238,31 +238,64 @@ mirroring (LHS sub/super swapped; RHS reversed, and negated for derivatives).
 
 Presets:
 
-- `lele_d1_6()`: sixth-order tridiagonal first derivative (α = 1/3, a = 14/9,
-  b = 1/9) with third/fourth-order one-sided closures on the first two rows.
-- `lele_d1_8()`: eighth-order tridiagonal first derivative (α = 3/8,
-  a = 25/16, b = 1/5, c = −1/80), the seven-point member of Lele's
-  tridiagonal family. It shares the tridiagonal line solve and every path
+- `lele_d1_6()`: sixth-order tridiagonal first derivative with
+  third/fourth-order one-sided closures on the first two rows. Its interior
+  coefficients, in Lele's notation:
+
+  ```
+  α = 1/3, a = 14/9, b = 1/9
+  ```
+
+- `lele_d1_8()`: eighth-order tridiagonal first derivative, the seven-point
+  member of Lele's tridiagonal family, with interior coefficients
+
+  ```
+  α = 3/8, a = 25/16, b = 1/5, c = −1/80
+  ```
+
+  It shares the tridiagonal line solve and every path
   built on it (decomposed, multi-patch, device) with `lele_d1_6`, which the
   pentadiagonal `lele_d1_10` does not; its closed edge takes three rows.
-- Both tridiagonal derivatives take `closures = :neutral3` (default; an
-  explicit third-order row 1 on four points and a fourth-order compact row 2,
-  with coefficients that make the linearized Euler step between slip walls
-  neutral), `:cascade3` (row 1 is Lele's third-order one-sided row, row 2 the
-  fourth-order Padé row, row 3 the C6 interior), `:cascade4` (row 1 at
-  α = 3, fourth order) or
-  `:brady_livescu` (Brady & Livescu, Computers & Fluids 2019, schemes T6 and
-  T8, set 1 of their Data in Brief databases: four fifth-order rows for C6, six
-  seventh-order rows for C8, discretely conservative and stable on their
-  long-time Euler tests without a filter). Measured maximum-norm wall orders
-  in `test/convergence.jl` are 3.17 / 4.02 / 5.88 for C6 and 7.91 for C8 under
-  `:brady_livescu` on a smooth field, 3 / 4 / 5 and 7 on a polynomial of the
-  rows' degree plus one (the rows' formal order), and in a wall-bounded
-  evolution without a filter the window next to the wall converges at 3.9
-  under `:cascade3` and 5.7 under C6 `:brady_livescu` (the smooth-evolution
-  rows of the same file). The Brady–Livescu rows are far from diagonally dominant,
-  and a closed line's condition number rises from 16 to about 1e3 (C6) and
-  4e3 (C8), and neither set is the default for that reason. The T8 set needs
+- Both tridiagonal derivatives take one of four closure sets through
+  `closures`:
+  - `:neutral3`, the default: an explicit third-order row 1 on four points
+    and a fourth-order compact row 2, with coefficients that make the
+    linearized Euler step between slip walls neutral.
+  - `:cascade3`: rows 1 to 3 are Lele's third-order one-sided row, the
+    fourth-order Padé row and the C6 interior.
+  - `:cascade4`: row 1 at α = 3, fourth order.
+  - `:brady_livescu`: Brady & Livescu, Computers & Fluids 2019, schemes T6
+    and T8, set 1 of their Data in Brief databases. These are four
+    fifth-order rows for C6 and six seventh-order rows for C8, discretely
+    conservative and stable on their long-time Euler tests without a
+    filter.
+
+  The maximum-norm wall orders measured in `test/convergence.jl` reach each
+  set's formal order, which a polynomial of the rows' degree plus one
+  recovers exactly. In a wall-bounded evolution without a filter the window
+  next to the wall converges somewhat above the formal order (the
+  smooth-evolution rows of the same file):
+
+  ```
+  wall order, max norm    smooth field   polynomial (formal order)   evolution, no filter
+  C6 :cascade3            3.17           3                           3.9
+  C6 :cascade4            4.02           4
+  C6 :brady_livescu       5.88           5                           5.7
+  C8 :brady_livescu       7.91           7
+  ```
+
+  The Brady–Livescu rows are far from diagonally dominant and raise a closed
+  line's condition number by about two orders, and neither set is the
+  default for that reason:
+
+  ```
+  closed-line condition number
+  cascade                 16
+  C6 :brady_livescu       about 1e3
+  C8 :brady_livescu       4e3
+  ```
+
+  The T8 set needs
   13 points along a dimension closed at both ends (`plan_direction` counts
   closure rows only at closed ends, so a periodic or interior block needs
   the interior stencil's 7). Under the filter's cascade rows neither
@@ -273,8 +306,9 @@ Presets:
   takes the singular cold start as well, while `:cascade4` loses the F2 filter row
   it depends on and fails even a smooth pulse, so it is paired with
   `compact_filter(closures = :cascade)`. In Float32 the Brady–Livescu wall
-  error of one derivative floors near 1e-3, above the cascade's, from
-  N = 48 up, while a wall evolution floors near 3e-5 under either. C6
+  error of one derivative floors near 1e-3, above the cascade's from N = 48
+  up, while a wall evolution floors at the same level under either closure
+  ([round-off floor](CALIBRATION_APPENDIX.md#the-round-off-floor)). C6
   `:brady_livescu` under the default filter rows is the supported
   high-order wall configuration, within the limits measured in September
   2026: the CFL numbers the default closure takes on a resolved start and
@@ -290,42 +324,50 @@ Presets:
   which the cascade filter's F2 row damped exactly and the one-sided
   rows only halve; Dirichlet ends, viscous no-slip walls and unfiltered
   C6 `:brady_livescu` are neutral. The `:neutral3` rows, the default
-  since roadmap N6d, carry no such mode. The runs
-  are in `reference/CALIBRATION_APPENDIX.md` under "Wall closures under
-  the artificial properties", "The filter's wall rows on the current
-  solver", "The Brady–Livescu rows as a wall configuration" and
-  "Constant annihilation and the slip-wall mode".
+  since roadmap N6d, carry no such mode. The runs are in the appendix
+  under [the filter's wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows),
+  [wall closures in production](CALIBRATION_APPENDIX.md#wall-closures-in-production)
+  and [constant annihilation](CALIBRATION_APPENDIX.md#constant-annihilation).
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.
   `alphaf ∈ (−½, ½)` sets the strength (larger → weaker). Near closed edges
-  the first row is left unfiltered; `closures = :onesided` (default since
-  September 2026) applies the paper's one-sided eighth-order rows on rows
-  2–4, derived at construction by `onesided_filter_row` from polynomial
-  exactness through degree 7 plus a Nyquist zero (the interior stencil's
-  own construction, which the derivation reproduces at the centered
-  point), and `:cascade` applies centered compact filters of order 2/4/6
-  at the same α, the standard reduced-order boundary cascade. One filter
-  pass of a smooth field is eighth order along the whole closed line under
-  the one-sided rows and second under the cascade, measured in
-  `test/convergence.jl` at 8.07 and 1.88; in evolution the cascade caps
-  the wall window of a filtered run at 1.8 whatever the derivative
-  closure, and the one-sided rows return it to the closure's own order. On
-  the planar Noh case the one-sided rows cut the wall density deficit from
-  60% to 50% at N = 400 and 61% to 43% at N = 800 under the relaxed filter
-  (64% to 29% unrelaxed), with the shock position unchanged and the
-  plateau 0.15% lower, cut the mass and energy the passes create between
-  two walls by two orders, and are what lets the Brady–Livescu rows run at
-  a shocked wall. Their cost is a reflection resolved over fewer than
-  about ten cells, where they read two to three times the cascade's error.
+  the first row is left unfiltered, and `closures` sets rows 2–4:
+  - `:onesided`, the default since September 2026: the paper's one-sided
+    eighth-order rows, derived at construction by `onesided_filter_row`
+    from polynomial exactness through degree 7 plus a Nyquist zero (the
+    interior stencil's own construction, which the derivation reproduces at
+    the centered point).
+  - `:cascade`: the centered compact filters F2, F4 and F6 at the same α,
+    the standard reduced-order boundary cascade.
+
+  One filter pass of a smooth field is eighth order along the whole closed
+  line under the one-sided rows and second under the cascade, 8.07 and 1.88
+  in `test/convergence.jl`. In evolution the cascade caps the wall window of
+  a filtered run at 1.8 whatever the derivative closure, and the one-sided
+  rows return it to the closure's own order. On the planar Noh case the
+  one-sided rows cut the wall density deficit by 10–18 points under the
+  relaxed filter and by more unrelaxed, with the shock position unchanged
+  and the plateau slightly lower
+  ([the battery](CALIBRATION_APPENDIX.md#the-battery-under-both-row-sets)).
+  Between two walls they cut the mass and energy the passes create by two
+  orders, and under them the Brady–Livescu rows run at a shocked wall. Their
+  cost is a reflection resolved over fewer than about ten cells, where they
+  read two to three times the cascade's error.
   `:cascade4` needs the F2 row and takes `closures = :cascade`;
   `reference/CALIBRATION_APPENDIX.md` has the measurements.
 
 `kernels_banded.jl` generalizes this to a **banded LHS** of half-bandwidth `q`
 via `BandedCompactScheme` (q = 1 is tridiagonal, q = 2 is pentadiagonal, which
 admits schemes to tenth order). `lele_d1_10()` is the classical tenth-order
-pentadiagonal derivative (β = 1/20, α = 1/2) with a C6-cascade closure on the
-first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
+pentadiagonal derivative with a C6-cascade closure on the first three rows;
+its RHS reaches ±3, so the default `n_halo = 4` suffices. Its left-hand side
+coefficients are
+
+```
+β = 1/20, α = 1/2
+```
+
 `compact_d8()` is the second preset and the one symmetric banded scheme: an
 undivided compact eighth derivative used as the sensor high-pass of the
 species fields under the default `ArtificialProperties.detector = :species_d8`
@@ -369,15 +411,22 @@ scheme; it is assembled from a single `Allgather` of the spike corners
 `(v₁, vₙ, w₁, wₙ)` and factorized **once at plan time**. A rank's interface
 unknowns couple only to its two neighbours, so the matrix is block-tridiagonal
 in P, and block-cyclic-tridiagonal on a periodic line. It is factorized as a
-band LU with partial pivoting (`ReducedBand`), with the periodic blocks
-ordered 0, P−1, 1, P−2, … so that every pair of ring neighbours lies within
-two blocks and the corner blocks fall inside the band; the half-bandwidth is
-2 closed and 4 periodic for the tridiagonal operators, 5 and 9 for the
-pentadiagonal ones. The ordering keeps one pivoted factorization for both
+band LU with partial pivoting (`ReducedBand`). On a periodic line the blocks
+are ordered so that every pair of ring neighbours lies within two blocks and
+the corner blocks fall inside the band:
+
+```
+periodic block order    0, P−1, 1, P−2, …
+half-bandwidth          closed   periodic
+  tridiagonal           2        4
+  pentadiagonal         5        9
+```
+
+The ordering keeps one pivoted factorization for both
 topologies; bordering or a Sherman–Morrison–Woodbury correction would treat
 the corner blocks in a second solve path. One rank on a periodic line keeps a
-dense LU of its 2 × 2 (2q × 2q) block, which leaves every serial solve
-bitwise unchanged.
+dense LU of its 2q × 2q block, which leaves every serial solve bitwise
+unchanged.
 
 **Per application**, then, costs: batched local Thomas solves (threaded over
 lines), one `Allgather` of the two interface values per line, one band solve
@@ -585,10 +634,17 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
    derivatives act on area-weighted fluxes and the divergence is exact for the
    metric. On θ-collapsed r-z and on the spherical metric the radial momentum
    is the exception: its flux enters without the pressure, and `inv_h₁ · ∂p`
-   is subtracted instead, because (1/r)D(r p) − p/r and
-   (1/r²)D(r² p) − 2p/r differ from D(p) at the grid scale and the
+   is subtracted instead (`_radial_pressure_gradient`). The area forms of
+   the radial pressure term differ from D(p) at the grid scale, and the
    difference amplifies a grid-scale acoustic mode at the axis and the
-   origin (`_radial_pressure_gradient`). The spherical θ-momentum takes
+   origin:
+
+   ```
+   cylindrical    (1/r)D(r p) − p/r
+   spherical      (1/r²)D(r² p) − 2p/r
+   ```
+
+   The spherical θ-momentum takes
    `inv_h₂ · ∂p` along θ for the same reason at the poles
    (`_polar_pressure_gradient`). A stretched cylindrical radial grid with θ
    resolved also takes `inv_h₁ · ∂p`, since there the area form does not
@@ -612,10 +668,15 @@ MPI call sits in a serial section between threaded regions.
 `artificial.jl` implements the
 [Cook (2007) model](https://doi.org/10.1063/1.2728937). The sensors are built from an
 **undivided** high-pass in the computational indices: the explicit fourth
-difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
+difference δ⁴, or the compact eighth derivative of
 `compact_d8()`, which reproduces the operator in
 [Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
 and is normalized to the same response at two points per wavelength.
+
+```
+δ⁴ = (1, −4, 6, −4, 1)
+```
+
 `ArtificialProperties.detector` assigns them to fields. The default
 `:species_d8` applies the compact eighth derivative to the mass and mole
 fractions of the species channel and δ⁴ to the strain magnitude, the
@@ -692,9 +753,17 @@ switch to that as well; either costs one more sensor smoothing pass per RHS
 evaluation. The settings behave very differently at a coordinate fold; measured
 effects are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md).
 
-Constants live in `ArtificialProperties` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
-C_D = 1, the last for the compact eighth-derivative species detector; 0.1 is
-its value under `:delta4`) and should be revisited per configuration. `enabled=false` skips the
+Constants live in `ArtificialProperties` and should be revisited per
+configuration. Their defaults:
+
+```
+C_μ    0.002
+C_β    1.0
+C_κ    0.01
+C_D    1 for the compact eighth-derivative species detector; 0.1 under :delta4
+```
+
+`enabled=false` skips the
 whole computation and leaves the coefficient arrays zero. The high-pass itself
 acts in computational index space on every grid, a grid-based regularization
 consistent with resolving power following the mesh; only the length weighting
@@ -722,8 +791,8 @@ because at that state each conserved variable is a fixed linear combination
 of the partial densities and the convective fluxes reduce to u q plus a
 constant, so a linear derivative or filter applied componentwise keeps the
 combination. The Fickian flux is the one operator that does not, and on an
-advected interface of density ratio 100 it leaves a pressure error of 1e-2
-after ten periods where everything else leaves 1e-10
+advected interface of density ratio 100 it leaves a pressure error after ten
+periods eight orders above that of the rest of the scheme
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species channel").
 A mass flux that sums to zero carries a net volume between gases of unequal
 molecular weight, and at uniform p and T that volume has to be produced
@@ -750,14 +819,19 @@ properties follow from the form alone.
    solves per direction, and not by a product rule from the stored
    gradients, which would hold only to the truncation error of the discrete
    product rule, grid scale at a two-cell interface. Measured on a resting
-   air/SF6 interface with the filter and the artificial properties on: u, p
-   and T stay below 4e-14 over 298 steps while ρ relaxes by 2e-2, where the
-   Fickian channel drifts u to 2e-4.
+   air/SF6 interface with the filter and the artificial properties on, u, p
+   and T stay at round-off while ρ relaxes, where the Fickian channel drifts
+   u to 2e-4
+   ([the bulk species channel](CALIBRATION_APPENDIX.md#the-bulk-species-channel)).
 3. The continuous model satisfies every entropy inequality. For any convex
-   entropy pair (η, ψ)
-   of the hyperbolic system, multiplying by η'(q) gives
-   ∂_t η + ∇·(ψ − D_b ∇η) = −D_b ∇qᵀ η''(q) ∇q ≤ 0 pointwise for D_b ≥ 0, and
-   the inequality survives D_b → 0. For the Euler system with η = −ρs this is
+   entropy pair (η, ψ) of the hyperbolic system, multiplying by η'(q) gives,
+   pointwise for D_b ≥ 0,
+
+   ```
+   ∂_t η + ∇·(ψ − D_b ∇η) = −D_b ∇qᵀ η''(q) ∇q ≤ 0
+   ```
+
+   and the inequality survives D_b → 0. For the Euler system with η = −ρs this is
    thermodynamic consistency. A spatially varying D_b factors out of the
    quadratic form, so the argument needs no smoothness of the coefficient.
    The discrete update inherits none of this by argument: the compact
@@ -849,15 +923,26 @@ the species fluxes. The equations derived from them need a discrete product
 rule that the compact derivative D does not satisfy. With F = Σ_k J_k, the
 channel's kinetic-energy residual is its contribution to
 u·∂_t(ρu) − (|u|²/2) ∂_t ρ plus the divergence of the kinetic-energy flux
-F|u|²/2, −u D(uF) + (u²/2) D F + D(F u²/2), and its heating residual is
-−D(Σ_k e_k J_k) + Σ_k e_k D J_k + Σ_k c_v,k J_k D T; they vanish at uniform u
-and at uniform T respectively. The convective kinetic-energy and pressure-work
-residuals are the same construction on ρu and on p. Total energy is
+F|u|²/2. The channel's kinetic-energy and heating residuals are
+
+```
+kinetic energy    −u D(uF) + (u²/2) D F + D(F u²/2)
+heating           −D(Σ_k e_k J_k) + Σ_k e_k D J_k + Σ_k c_v,k J_k D T
+```
+
+and they vanish at uniform u and at uniform T respectively. The convective
+kinetic-energy and pressure-work residuals are the same construction on ρu and on p. Total energy is
 conservative, so each is an exchange between kinetic and internal energy.
 Where D is skew-symmetric the heating (at constant c_v,k) and pressure-work
-residuals integrate to zero, and the kinetic-energy residuals integrate to
-∫ F (u Du − D(u²)/2) and ∫ ρu (u Du − D(u²)/2); the split form
-[D(uF) + u DF + F Du]/2 of the channel's momentum term removes the first.
+residuals integrate to zero, and the kinetic-energy residuals of the
+channel and of convection integrate to
+
+```
+∫ F (u Du − D(u²)/2)    and    ∫ ρu (u Du − D(u²)/2)
+```
+
+The split form [D(uF) + u DF + F Du]/2 of the channel's momentum term
+removes the first.
 Measured on a shocked contact, the channel's exchange stays below a few
 thousandths of the artificial viscosity's dissipation, of either sign, and the
 convective one below a hundredth of it, always dissipative. The split form is
@@ -873,23 +958,28 @@ and over two fields per species, the mass fraction Y_k and the mole fraction
 X_k from the EOS contract's `mole_fraction`; the maximum is smoothed once and
 multiplied by c. The two fields do different work. On a two-gas interface of
 density ratio R the mole fraction is the volume fraction and sits on the
-density jump, and a sensor on it is what carries a shock through the
-interface; the mass fraction on the light side amplifies a volume-fraction
-excursion by up to R, Y_l = (1 − V)/(1 + (R − 1)V) at equal γ, so a sensor on
-it is what bounds Y, and the mole-fraction sensor is blind to that excursion
-at the 1e-3 level. The maximum over both is Pyranda's
+density jump, and a sensor on it carries a shock through the interface.
+The mass fraction on the light side amplifies a volume-fraction excursion
+by up to R, at equal γ
+
+```
+Y_l = (1 − V)/(1 + (R − 1)V)
+```
+
+so a sensor on it bounds Y, and the mole-fraction sensor is blind to that
+excursion at the 1e-3 level. The maximum over both is Pyranda's
 combination of mass- and volume-fraction detectors. The mole fraction's
 denominator Σ_j Y_j R_j passes through zero at a light-gas undershoot of
-−1/R inside the heavy gas, so it is floored and the result clamped to
-[−1, 2]; the excursion then saturates instead of diverging.
+−1/R inside the heavy gas. It is therefore floored, and the result clamped
+to [−1, 2], so the excursion saturates instead of diverging.
 
 The one D_b is written into every `D_art[k]`, so the checkpoint's coefficient
 block and `max_rate`'s diffusive rate see it where they saw the Fickian
 coefficients; `_fluxes_point!` skips the Fickian channel under either
 shared-D_b channel rather than reading `D_art` as a Fickian coefficient. The
 workspace carries `grad_Q`, a 3 × n_cons matrix of arrays under the two
-shared-D_b channels with more than one species and a 0 × 0 matrix of the same
-type otherwise, so the types do not depend on the option. `:bulk` costs
+shared-D_b channels with more than one species. Otherwise it carries an
+empty matrix of the same type, so the types do not depend on the option. `:bulk` costs
 n_cons gradient line solves per direction and `:partial_density` n_species
 (the partial densities). Both skip the n_species solves of `grad_Y`
 (`_species_gradients_skipped`) under `ConstantTransport(mu0 = 0)`: with a shared D_b
@@ -938,15 +1028,27 @@ on the volume fraction the logistic equilibrium V = 1/(1 + e^(−x/ε)) also
 makes Y a logistic of the same ε, so the heavy-gas tail in Y goes with the
 width in V. Γ = `C_sharpen`·c scales as D_b does, and the two fluxes settle
 to a logistic of thickness ε + D_b/Γ, ε = `sharpen_width` times the largest
-local spacing. The gate g localizes the flux: with θ = ε_g Σ_pairs|m_kj| /
-Σ_pairs|V_k V_j| and ε_g = ε + D_b/Γ, which is ε_g/ℓ on a two-gas logistic of
-thickness ℓ, g rises linearly from 0 at θ = 1/3 to 1 at θ = 1/2, so a
-composition gradient spread over more than three ε_g is not sharpened. On a
+local spacing. The gate g localizes the flux. It reads θ, which is ε_g/ℓ on
+a two-gas logistic of thickness ℓ, and rises linearly between two values of
+θ, so a composition gradient spread over more than three ε_g is not
+sharpened:
+
+```
+θ = ε_g Σ_pairs|m_kj| / Σ_pairs|V_k V_j|,   ε_g = ε + D_b/Γ
+g = 0 at θ = 1/3, rising linearly to g = 1 at θ = 1/2
+```
+
+On a
 smooth profile D_b is small and ε_g is ε; at a shocked interface a gate
 measured against ε alone closes on the profile the two fluxes settle to. The flux is anti-diffusive by
 design and the entropy inequality of the channel does not extend to it. Its
-rate, C_sharpen·c (Σ_d 1/Δ_d + 2ε Σ_d 1/Δ_d²), enters `max_rate` at every
-point, since the gate is not known there. The raw and the smoothed
+rate enters `max_rate` at every point, since the gate is not known there:
+
+```
+C_sharpen·c (Σ_d 1/Δ_d + 2ε Σ_d 1/Δ_d²)
+```
+
+The raw and the smoothed
 gradients of N − 1 fractions, and then the flux, are held in the four
 columns of `grad_Q` past the partial densities, which caps it at three
 species. Measurements are in
@@ -1006,9 +1108,10 @@ component takes its pressure in one of two forms (`_pressure_gradient` in
   (`_radial_pressure_gradient`).
 
 A collapsed dimension takes no derivative. For fields constant along it, the
-divergence along it reduces to its area term (1/J)(∂A_d/∂ξ_d)·F_d, which is
-nonzero for a collapsed r (s/r times the flux, s = 1 cylindrical and 2
-spherical) and for a collapsed spherical θ (cotθ/r times the flux), and zero
+divergence along it reduces to its area term (1/J)(∂A_d/∂ξ_d)·F_d. The
+term is nonzero for a collapsed r, where it is s/r times the flux with s = 1
+cylindrical and 2 spherical, and for a collapsed spherical θ (cotθ/r times
+the flux), and zero
 for a collapsed cylindrical θ or spherical φ, whose area factors do not vary
 along them. The solver omits that term for every flux. Its pressure part and
 the pressure part of the source cancel analytically, so a source on a
@@ -1092,10 +1195,16 @@ The even/odd decomposition `e = ½(f + σ f∘M)`, `o = ½(f − σ f∘M)`, wit
 pairing map and σ the component's antipodal basis sign, turns each into two
 problems the parity-fold machinery solves exactly: e is even across the
 singular point, o is odd. The folded compact plans apply unchanged and
-reconstruction is the inverse butterfly. Component signs are tabulated in
-`folds.jl`: cylindrical axis (u_r, u_θ, u_z) → (−1, −1, +1); spherical origin
-(u_r, u_θ, u_φ) → (−1, +1, −1); poles (+1, −1, −1). Radial/polar flux parities
-fold in the area weights.
+reconstruction is the inverse butterfly. The antipodal signs of the velocity
+components (`sigvel`, set in `construction.jl`):
+
+```
+cylindrical axis    (u_r, u_θ, u_z)    (−1, −1, +1)
+spherical origin    (u_r, u_θ, u_φ)    (−1, +1, −1)
+spherical poles     (u_r, u_θ, u_φ)    (+1, −1, −1)
+```
+
+Radial/polar flux parities fold in the area weights.
 
 **Parallel layout.** When the shifted or reversed dimension is split across
 ranks, the pairing is realized by whole-block `MPI.Sendrecv!` exchanges between
@@ -1170,8 +1279,17 @@ taken. `:linear` (default) freezes cp at the interval endpoint and continues h
 linearly, which stays monotone and therefore invertible at any temperature;
 `:polynomial` evaluates the nearest interval's fit, which is conventional and
 can turn cp negative or the energy non-monotone outside the range. Run past
-20000 K, the bundled CO₂ fit inverts an energy built at 30000 K to about
-62000 K under `:polynomial` and to 30000 K under `:linear`. The default is
+the end of its fitted range, the bundled CO₂ fit inverts an energy built at
+30000 K to about twice that temperature under `:polynomial` and to the
+temperature itself under `:linear`:
+
+```
+CO₂, fit range ending at 20000 K    temperature returned
+:polynomial                         about 62000 K
+:linear                             30000 K
+```
+
+The default is
 `:linear` because a non-monotone extension can give an energy a second root
 inside the fitted range, which the inversion returns with no failure status
 (`reference/CALIBRATION_APPENDIX.md`, `bench/nasa9_inversion.jl`).
@@ -1449,8 +1567,10 @@ report rejects:
 A composition counts as outside [0, 1] only beyond `StepControl.species_band`
 on either side, and the failsafe clips on the same band. A
 captured species interface is a few cells wide at any resolution and lies about
-1% outside [0, 1] under the artificial mass-fraction bound, against 5–7%
-without it, so the band separates a bounded interface from an unbounded one. It
+1% outside the unit interval under the artificial mass-fraction bound and
+several times further without it, so the band separates a bounded interface
+from an unbounded one
+([the species validity band](CALIBRATION_APPENDIX.md#the-species-validity-band)). It
 is a separate threshold from the bound's own dead band `Y_tolerance`
 ([below](#boundedness-of-the-composition)).
 
@@ -1522,7 +1642,7 @@ under the shared-D_b channels, each mole fraction ([the species
 channel](#the-species-channel)). The flux it drives is a divergence, so it
 moves composition without creating species mass. It is a restoring
 diffusivity proportional to the excursion, not a projection, and a shocked
-interface still ends about 1% outside [0, 1] at every resolution
+interface still ends about 1% outside the unit interval at every resolution
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-species-validity-band)).
 The dead band exists because the Runge–Kutta stages overshoot a smooth profile
 that touches a bound by O(h²) where the completed step does not; a bound acting
@@ -1595,10 +1715,11 @@ never on a substep or a stage.
 
 ### What is proved
 
-Nothing in the discretization guarantees 0 ≤ Y_k ≤ 1, ρ > 0 or an admissible
-energy; the failsafe restores the first to within the species band and the
-second exactly, after a step and by substitution. With a nonnegative diffusivity the continuous `:bulk` model satisfies every
-entropy inequality and the continuous `:partial_density` model the
+Nothing in the discretization guarantees a mass fraction in [0, 1], a
+positive density or an admissible energy. The failsafe restores the first to
+within the species band and the second exactly, after a step and by
+substitution. With a nonnegative diffusivity the continuous `:bulk` model
+satisfies every entropy inequality and the continuous `:partial_density` model the
 thermodynamic one, σ = Σ_k R_k D_b |∇ρ_k|²/ρ_k ≥ 0
 ([the species channel](#the-species-channel)). The latter holds only where
 every partial density is positive: at an undershoot that species' term is
@@ -1699,16 +1820,28 @@ components.
   points get no correction (all waves leave). At the outer radial face of a
   cylindrical or spherical grid, with n_c = 1 or 2 transverse scale factors
   proportional to r, the imposed amplitude is
-  `L* = max(K, n_c c/2r)(p − p∞) − ρc² n_c u_r/r − β_t 𝒯`: the first-order
-  radiation condition of Bayliss and Turkel, (∂_t + c∂_r + n_c c/2r) p′ = 0,
-  with the curvature source of the velocity divergence taken out of the
-  incoming wave and out of 𝒯. 𝒯 otherwise takes the physical velocity
+  `L* = max(K, n_c c/2r)(p − p∞) − ρc² n_c u_r/r − β_t 𝒯`, the first-order
+  radiation condition of Bayliss and Turkel with the curvature source of the
+  velocity divergence taken out of the incoming wave and out of 𝒯. The
+  radiation condition is
+
+  ```
+  (∂_t + c∂_r + n_c c/2r) p′ = 0
+  ```
+
+  𝒯 otherwise takes the physical velocity
   gradient, a collapsed transverse dimension's curvature parts included, as
   at the inflow (u_r/r on the z face of an r-z grid, u_θ cot θ/r at the
-  radial face of an r-θ grid). It reflects a wave of wavenumber k by a
-  second-order 1/(2(kr)²) where the plane form reflects 1/(2kr), and its own
+  radial face of an r-θ grid). It reflects a wave of wavenumber k at second
+  order in 1/(kr), where the plane form reflects at first order, and its own
   relaxation toward p∞ replaces σ's wherever it is the faster; the inner face
-  of an annulus keeps the plane form. The derivation is in the header of
+  of an annulus keeps the plane form.
+
+  ```
+  reflection of a wave of wavenumber k    radial form 1/(2(kr)²)    plane form 1/(2kr)
+  ```
+
+  The derivation is in the header of
   `nscbc.jl` and the measurement in
   [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-outflow-face-on-a-radial-grid).
 - **Inflow** (`NSCBCInflowBC(u=..., T_ion=..., Y=...)`) replaces every incoming wave

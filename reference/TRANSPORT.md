@@ -209,7 +209,7 @@ molecular/atomic fluid, ionization and an insulator-metal transition.  It is a
 model and validation source, not a freely licensed ready-to-vendor table.
 Hu et al.'s [first-principles deuterium EOS](https://doi.org/10.1103/PhysRevB.84.224109),
 [open manuscript](https://arxiv.org/abs/1110.0001), spans 1.35 eV to 5.5 keV and documents ICF-
-significant differences from older SESAME tables; it does not cover the 19 K
+significant differences from older SESAME tables. It does not cover the 19 K
 initial state.  Caillabet et al. demonstrate an ab-initio multiphase DT EOS in
 an implosion initialized at 19 K in [Phys. Rev. Lett. 107, 115004 (2011)](https://doi.org/10.1103/PhysRevLett.107.115004),
 [open manuscript](https://arxiv.org/abs/1105.5495).  These sources define cross-checks, while
@@ -221,8 +221,8 @@ No one source above closes the full path.  Richardson, Leachman and Lemmon's
 line through 600 K and pressures through 2000 MPa and distinguishes ortho/para
 states, but it is neither a solid-DT nor a warm-plasma EOS.  The improved
 [first-principles deuterium EOS](https://doi.org/10.1103/PhysRevB.104.144104)
-extends roughly 800 K--256 MK and 0.001--1600 g/cm3 with quantum ions, leaving a
-gap to cryogenic initialization; substituting isotope masses does not establish
+covers a wide warm range with quantum ions (table below), leaving a gap to
+cryogenic initialization; substituting isotope masses does not establish
 cold-mixture accuracy.  Hu et al.'s [first-principles thermal conductivity](https://doi.org/10.1103/PhysRevE.89.043105)
 covers dense warm deuterium from
 about 5000 K and explicitly shows why Spitzer transport fails in cool dense ICF
@@ -232,6 +232,11 @@ below 30 K and estimates some D2/DT/T2 properties; estimated entries must remain
 flagged and cannot silently fill the solid-to-warm gap.  Until compatible DT
 phase, EOS and transport evidence overlaps these ranges, H5a remains a coverage
 gap rather than an interpolation task.
+
+| improved first-principles deuterium EOS | range |
+|---|---|
+| temperature | roughly 800 K--256 MK |
+| density | roughly 0.001--1600 g/cm3 |
 
 Hot-limit Spitzer--Harm conduction cannot be extended to cold DT by a flux
 limiter.  Lee and More's [wide-range electron transport model](https://doi.org/10.1063/1.864744)
@@ -285,12 +290,16 @@ The first-principles EOS database of Militzer et al.,
 [open manuscript](https://arxiv.org/abs/2012.07093), is the one open,
 redistributable (CC BY 4.0) source found so far with C, CH, CH2 and C2H3
 tables, alongside H, He, B, N, O and several ablator compounds, with its
-interpolation code in the supplement. It spans roughly 0.5 to 50 g/cm3 and
-10^4 to 10^9 K, so it covers the heated and compressed ablator but not the
-initial solid, and it tabulates CH, not CD; its other compositions are
-reached by linear mixing, which is itself an unvalidated closure here. It is
-a candidate first table for H5's reader and inversion checks, not a
-qualified CD model.
+interpolation code in the supplement. Its range, below, covers the heated
+and compressed ablator but not the initial solid, and it tabulates CH, not
+CD; its other compositions are reached by linear mixing, which is itself an
+unvalidated closure here. It is a candidate first table for H5's reader and
+inversion checks, not a qualified CD model.
+
+| Militzer et al. database | range |
+|---|---|
+| density | roughly 0.5 to 50 g/cm3 |
+| temperature | roughly 10^4 to 10^9 K |
 
 ## Staged execution and gates
 

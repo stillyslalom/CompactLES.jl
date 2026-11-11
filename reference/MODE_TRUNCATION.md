@@ -23,7 +23,7 @@ gates below inherit.
 
 `max_rate` (timestep.jl) charges the acoustic rate in an angular dimension at
 `(|u| + c) / (r·Δθ)`. On a half-offset polar grid the first node sits at
-r₁ = Δr/2, where the azimuthal spacing is tighter than the radial one by a
+r₁ = Δr/2. There the azimuthal spacing is tighter than the radial one by a
 factor of roughly N_θ/π, about 20× at N_θ = 64. The diffusive rate scales
 with the square of the inverse spacing, so its penalty is that factor squared,
 and the artificial bulk viscosity β\* peaks at the axis as a
@@ -33,8 +33,8 @@ zero at both the origin and the poles simultaneously.
 
 The physics does not require this. Analytic regularity at the axis forces
 azimuthal mode m of a scalar to vanish like r^m, so at r₁ every mode above
-m ≈ 1–2 has no resolvable content: the grid near the axis carries N_θ/2 modes
-of which only about πr/Δr can exist in a smooth solution. The timestep is
+m ≈ 1–2 has no resolvable content. The grid near the axis carries N_θ/2
+modes, of which only about πr/Δr can exist in a smooth solution. The timestep is
 being paid almost entirely for modes the continuous problem excludes. The
 radial and azimuthal components of a vector are the exception: they are the
 Cartesian components rotated by θ, so their mode m comes from Cartesian modes
@@ -67,7 +67,7 @@ are not re-derived:
   (`blend_interior!` blends with a scalar weight), but the C8
   passband is narrow: full strength removes only near-Nyquist
   content and cannot reach the mid-band modes (m ~ N_θ/4) that set `dt`.
-  Buys perhaps 1.5–2×, not 20×.
+  It buys perhaps 1.5–2×, a small part of the squeeze.
 - **Implicit/IMEX θ.** Needs block-coupled periodic implicit solves (the
   `line_solver` is scalar banded) plus an IMEX integrator replacing the
   low-storage RK45, and adds dispersion error where waves cross the implicit
@@ -123,7 +123,7 @@ Each is structural or follows from a repo convention; none is a preference.
    positivity under the artificial properties with both, and its density
    error at the axis is far above the untruncated run's with either
    ([measurements](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
-   Any floor of at least 1 keeps the invariants: the
+   Any floor of at least 1 keeps the invariants. The
    m = 0 coefficient is untouched, so ring sums of every conserved
    component, and hence mass and energy, are conserved exactly (uniform θ
    quadrature weights, metric factors independent of θ), and the Cartesian
@@ -131,10 +131,14 @@ Each is structural or follows from a repo convention; none is a preference.
    momenta, which are always kept. A discretely sampled m = 1 field is
    projected without aliasing error for any N_θ ≥ 4, so uniform freestream
    (u_r = U·cosθ, u_θ = −U·sinθ) is preserved to roundoff.
-3. **Active set.** Rings with mode_limit + 1 < N_θ/2, so that no component
-   reaches the Nyquist mode, i.e. r ≲ κ·N_θ·Δr/(2π): about ten radial
-   indices at N_θ = 64. Precomputed at setup as an index range plus the
-   per-index limits.
+3. **Active set.** The rings on which no component reaches the Nyquist mode,
+   about ten radial indices at N_θ = 64:
+
+   ```
+   mode_limit + 1 < N_θ/2,   i.e.   r ≲ κ·N_θ·Δr/(2π)
+   ```
+
+   Precomputed at setup as an index range plus the per-index limits.
 4. **Placement: once per step in `run!`**, after `filter_state!` (when it
    fires) and before `apply_positivity_floor!`, writing the interior only.
    Halos are left stale by the same convention the floor uses; `max_rate`
@@ -227,7 +231,7 @@ Deliverables:
 New MPI test (test/mpi_tests.jl): the same seeded field truncated under
 serial and under θ-splitting process grids matches bit-for-bit.
 
-Gate: 90/90 plus the new tests at np = 2, 4, 8.
+Gate: the full MPI suite plus the new tests at two, four and eight ranks.
 
 ## Stage 3 — measurement, calibration, defaults
 
@@ -239,7 +243,11 @@ Deliverables:
   calibration cannot drift apart). Measured: achieved `dt` against the
   collapsed-θ baseline, the θ-limited fraction of the run via periodic
   `dt_report`, wall-clock cost of `truncate_modes!` per step, and stability
-  as a function of κ ∈ {1, 1.5, 2}.
+  as a function of κ over
+
+  ```
+  κ ∈ {1, 1.5, 2}
+  ```
 - The validation battery with truncation on: `test/validation.jl` guards at
   the four-digit comparison level, and the resolved-θ 3.71 convergence guard
   with the order preserved (error magnitudes at the innermost rings may
@@ -289,7 +297,7 @@ guards; the serial and MPI gates.
   finite and the mode is then zeroed exactly, so the loop is bounded if
   nonlinear production feeds from resolved modes, the standard argument in
   the atmospheric literature, but the margin has not been measured on this
-  scheme. Stage 3's κ sweep is the measurement; if κ = 1 is unstable and
+  scheme. Stage 3's κ sweep is the measurement. If κ = 1 is unstable and
   κ = 2 is not, the default moves and the README states the achieved factor.
 - **Aliasing repopulation.** The projection is applied after the nonlinear
   step, so truncated modes are repopulated by aliasing each step and removed

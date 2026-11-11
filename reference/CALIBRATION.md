@@ -78,7 +78,7 @@ cost. The link is to the section holding the evidence.
   noise than the default there
   ([filter strength](CALIBRATION_APPENDIX.md#the-filter-strength-on-the-battery)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
-  0.7% more Shu-Osher amplitude and an 18% narrower contact than 1.0, at the
+  0.7% more Shu-Osher amplitude and an 18% narrower contact than the default, at the
   cost of half the spherical origin's timestep; `detector = :d8` keeps 1.1% more
   amplitude ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Lowering the CFL or writing output more often changes the solution.** Keep
@@ -93,16 +93,17 @@ cost. The link is to the section holding the evidence.
   and carries no such penalty
   ([directional β\*](CALIBRATION_APPENDIX.md#directional-bulk-viscosity)).
 - **Mass fractions leave [0, 1] at a shocked interface.** The default
-  `C_Y = 100` holds a 2h interface to ±0.012 where it rings to ±0.2 without it.
+  `C_Y = 100` keeps the excursion of a shocked interface an order of magnitude
+  smaller than it is without the bound (the table above).
   Resolve the interface over 4h for a quarter of a percent, or 8h for a clean
   profile; resolution, closures, detector, sensor field, CFL and filter strength
   each move the excursion by nothing
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Mass fractions ring inside [0, 1] behind a shocked interface.** The
   bound is zero there, so `C_D` is the damping. Under the default species
-  detector the ringing is flat above `C_D = 1` and at 0.3 grows sevenfold
-  on the air/SF6 case and seventyfold at density ratio 100;
-  under `detector = :delta4` a two-cell lump of the heavy gas separates from
+  detector the ringing is flat above `C_D = 1`, and at 0.3 it grows
+  sevenfold on the air/SF6 case and seventyfold at density ratio 100.
+  Under `detector = :delta4` a two-cell lump of the heavy gas separates from
   the light side of the interface below about 0.1, and a trail of period
   four cells remains up to 0.3. Raise `C_D` before widening the initial
   interface, under the default channel or `:bulk`, not under `:fickian`,
@@ -123,7 +124,7 @@ cost. The link is to the section holding the evidence.
   with D\* off, and a 64-fold sweep in `C_D` moves the width by 18%. Weaken the
   filter rather than `C_D` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Wall heating at a stagnation wall.** Keep the default filter closure rows,
-  which took the planar Noh deficit from 60% to 50% at N = 400; `detector = :d8`
+  which took the planar Noh deficit down to 50% at N = 400; `detector = :d8`
   lowers it further at high CFL. Raising `C_kappa` does not reduce it under the
   default smoother, and the deficit does not converge away with resolution
   ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)).
@@ -236,8 +237,9 @@ cost. The link is to the section holding the evidence.
   pole
   ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)).
 - **Float32 or device runs.** Keep the default closure rows. In Float32 the
-  Brady-Livescu rows floor one derivative at 1e-3 against the cascade's 1e-4,
-  although a wall evolution floors near 3e-5 under either closure
+  Brady-Livescu rows floor one derivative at 1e-3, an order of magnitude above
+  the cascade, although a wall evolution floors at the same level under either
+  closure
   ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
 - **A three-dimensional CFL number looks small next to the literature.**
   `max_rate` takes the acoustic rate as the Euclidean bound `c · sqrt(Σ 1/h_d²)`,
