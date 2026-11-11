@@ -406,10 +406,10 @@ LEVEL_BUFFER       4, 6
 
 C10 tracks C6 at every setting, nothing calls
 for wider buffers, and the constants stay where they are
-([measurements](CALIBRATION_APPENDIX.md#amr)). The amplifying loop
-`RESTRICT_MARGIN` was introduced against did not appear at margin 0 in this
-configuration for either scheme, which is an observation about the current
-coupling, not a reason to move a C6 constant.
+([measurements](CALIBRATION_APPENDIX.md#amr)). The amplifying loop that
+`RESTRICT_MARGIN` breaks belongs to `level_restriction = :filter`: restricting
+up to the face, the filtered coupling fails within twenty steps at either
+scheme, while under injection no margin shows a loop.
 
 ## Refinement
 
@@ -457,11 +457,13 @@ over a box extending `LEVEL_BUFFER = 4` coarse nodes beyond the region.
 This is Dirichlet forcing by the coarse solution, and it removes the
 inter-level drift mode without an averaging step. After every completed
 step the fine state writes back onto the covered coarse region, holding
-`RESTRICT_MARGIN = 2` coarse nodes off the boundary. The margin is not
-optional: restricting all the way to the boundary closes an amplifying loop
-through the fine solution's least-accurate nodes (its imposed shell) into
-the closure rows that feed the next shell; the measured growth is flat with
-the margin in place ([measurements](CALIBRATION_APPENDIX.md#amr)). Restricting before
+`RESTRICT_MARGIN = 2` coarse nodes off the boundary. Under
+`level_restriction = :filter` the margin is required: restricting all the way
+to the boundary closes an amplifying loop through the fine solution's imposed
+shell into the filter's closure rows, whose output feeds the next shell, and
+the run fails within twenty steps. Under injection no margin shows a loop,
+and the margin of 2 is kept for the Sod crossing's mass drift, which a
+smaller margin raises ([measurements](CALIBRATION_APPENDIX.md#amr)). Restricting before
 every stage of the global step removes a coupling term first order in the step but not a
 measurable error, so the write-back stays once per step
 ([measurements](CALIBRATION_APPENDIX.md#benchrestrictcostjl-restriction-before-every-stage)).
@@ -1926,8 +1928,9 @@ guarded somewhere; none should be re-derived.
    algorithm requires bounds what any stream topology can recover.
 8. **Pointwise metrics misread interface-dominated fields.** Judge a cost
    case on the quantity the refinement exists to predict.
-9. **Restriction must stand off the imposed boundary** (`RESTRICT_MARGIN`);
-   without the margin the coupling amplifies from step to step.
+9. **Filtered restriction must stand off the imposed boundary**
+   (`RESTRICT_MARGIN`); without the margin the `:filter` coupling amplifies
+   from step to step, while injection does not.
 10. **NaN survives rollback** in the artificial coefficient arrays and the
     low-storage accumulator; the resets are gated on `:nonfinite` failures.
 11. **A device package loaded inside `main` is a world-age trap.** Bench

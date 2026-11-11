@@ -8636,27 +8636,53 @@ solution are 3.46 / 3.64. The invertible pair as the live coupling reaches
 only 1.3–1.7 at errors three decades higher, since prolongation's input must
 be samples of the filtered field and the live coarse solution is not.
 
-**Buffers.** The restriction margin shows no amplifying loop on the two-level
-entropy wave: at every margin swept the error grows by at most a few times
-over the run. The two smallest margins give the same figures, and the default
-margin of 2 gives the largest error and the largest growth at both schemes.
-The loop of gain ≈ 2 per step that `RESTRICT_MARGIN` was introduced against
-(`772e304`) does not appear at margin 0 under the coupling of this sweep
-(`8271bd7`). The restriction holds `RESTRICT_MARGIN` region nodes back from a
-parent-fed face (`_restrict_window`), and the derivative mask and the
-parent's overwritten nodes count their depth past those nodes. The sweep varies
-`RESTRICT_MARGIN` on the two-level entropy wave and the subcycled Sod
-crossing, with `LEVEL_BUFFER` at its default and at 6. The wider buffer
-reproduces the default buffer's numbers to the last digit at both schemes,
-and the Sod noise stays between 3.5e-10 and 8.8e-10 throughout. The constants
-stay at 4 and 2.
+**Buffers.** The restriction margin breaks an amplifying loop under
+`level_restriction = :filter` only. Restricting up to the face itself, the
+C6 wave's error doubles every step and every filtered case fails within twenty
+steps; at a margin of one node the error is flat. Under the default injection
+no margin shows a loop: from t = 0.5 to 4 the wave error grows by under half a
+percent per step, as an accumulating error does. There the two smallest
+margins give the same wave
+figures, since the node the smallest adds is the coincident node of the fine
+boundary plane, which the shell imposes from the parent after every stage. A
+margin of 1 lowers the wave error where it stands above round-off and lowers
+the Sod noise, both against the default, but raises the Sod mass drift in
+every configuration; a margin of 0 raises that drift under injection by one to
+three orders. The constant stays at 2.
+
+The restriction holds `RESTRICT_MARGIN` region nodes back from a parent-fed
+face (`_restrict_window`). The derivative mask and the parent's overwritten
+nodes are formed from the covered mask and do not read the constant, so the
+sweep moves the restriction alone. It redefines `_restrict_window` in one
+process, which at the default margin reproduces the constant bitwise, under
+Julia 1.13.3 at `17c3ee3`. The wave is the two-level entropy wave of
+`test/level_tests.jl` at N = 96, with the artificial properties and the filter
+off, run to t = 4; its error is the largest density error over both patches.
+Its gain per step is the geometric mean from step 6 to the failure or to step
+24. The Sod crossing is the subcycled one of the same file, its noise the momentum
+ahead of the shock at t = 0.1 and its drift the relative mass change at
+t = 0.2. At `8271bd7` a `LEVEL_BUFFER` of 6 reproduced the default buffer's
+figures to the last digit at both schemes.
 
 | margin | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
-| wave error at 96, C10 | 5.1e-9 | 5.1e-9 | 5.7e-9 | 5.4e-9 |
-| wave error at 96, C6 | 5.0e-9 | 5.0e-9 | 7.7e-9 | 5.8e-9 |
-| error growth t = 0.5 → 2, C10 | 2.2 | 2.2 | 3.3 | 1.9 |
-| error growth t = 0.5 → 2, C6 | 1.7 | 1.7 | 2.5 | 1.6 |
+| wave error at t = 0.5, C6, injection, ghost fluxes | 1.89e-12 | 1.89e-12 | 1.95e-12 | 1.93e-12 |
+| the same, closure rows | 4.97e-9 | 4.97e-9 | 7.68e-9 | 5.81e-9 |
+| wave error at t = 0.5, C10, injection, ghost fluxes | 2.11e-14 | 2.11e-14 | 1.93e-14 | 2.04e-14 |
+| the same, closure rows | 5.11e-9 | 5.11e-9 | 5.73e-9 | 5.41e-9 |
+| wave error at t = 0.5, C6, `:filter`, ghost fluxes | fails at step 16 | 1.70e-5 | 3.06e-5 | 1.73e-5 |
+| the same, closure rows | fails at step 19 | 1.75e-5 | 2.97e-5 | 1.74e-5 |
+| wave error at t = 0.5, C10, `:filter`, ghost fluxes | fails at step 18 | 2.07e-5 | 2.80e-5 | 1.74e-5 |
+| the same, closure rows | fails at step 19 | 1.97e-5 | 2.82e-5 | 1.73e-5 |
+| wave error growth t = 0.5 → 2, C6 / C10, injection, ghost fluxes | 4.04 / 3.67 | 4.04 / 3.67 | 4.65 / 4.10 | 4.01 / 3.83 |
+| the same, closure rows | 1.70 / 2.17 | 1.70 / 2.17 | 2.54 / 3.34 | 1.55 / 1.91 |
+| the same, `:filter`, ghost fluxes | | 1.72 / 2.10 | 2.32 / 2.20 | 1.76 / 2.31 |
+| the same, `:filter`, closure rows | | 1.73 / 2.13 | 2.25 / 2.19 | 1.78 / 2.32 |
+| wave error gain per step from step 6, C6, `:filter`, closure rows / ghost fluxes | 2.02 / 2.25 | 1.00 / 1.00 | 1.01 / 1.01 | |
+| Sod noise, C6 / C10, injection | 1.40e-10 / 3.15e-9 | 7.43e-11 / 1.96e-9 | 9.57e-11 / 3.44e-9 | 3.34e-10 / 2.04e-9 |
+| Sod mass drift, C6 / C10, injection | −4.18e-5 / −8.52e-4 | −1.87e-6 / −1.08e-6 | −1.13e-6 / −7.82e-7 | −1.46e-6 / −5.69e-7 |
+| Sod noise, C6 / C10, `:filter` | fails at step 17 | 6.59e-11 / 1.74e-9 | 8.99e-11 / 3.10e-9 | 3.02e-10 / 1.76e-9 |
+| Sod mass drift, C6 / C10, `:filter` | | −1.12e-6 / −1.45e-6 | −2.25e-7 / −1.23e-6 | −1.53e-6 / −7.29e-7 |
 
 **Subcycling.** Subcycling keeps the orders at a third of the steps, and on
 the Sod gate it lowers both the noise ahead of the shock and the mass drift

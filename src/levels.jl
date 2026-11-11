@@ -33,7 +33,7 @@
 #   - After every completed step (post-filter), `restrict_level!` copies the
 #     fine field's coincident-node values onto the covered coarse region,
 #     holding `RESTRICT_MARGIN` coarse nodes back from the boundary (see that
-#     constant for the measured amplifying loop the margin breaks).
+#     constant).
 #     Between restrictions the coarse operator advances the covered nodes,
 #     so on a fixed grid the coupling carries a term first order in the step
 #     and proportional to the difference between the coarse and fine
@@ -131,14 +131,24 @@
 "Coarse nodes of prolongation buffer beyond the refined region, per side."
 const LEVEL_BUFFER = 4
 
-# Coarse nodes per side of the covered region excluded from the restriction
-# write-back. Restricting all the way to the coarse-fine boundary closes an
-# amplifying loop: the fine solution is least accurate at its imposed
-# boundary, the restriction segment's one-sided closure rows read exactly
-# those values, and the polluted coarse boundary nodes feed the next fine
-# shell. The measured gain is ≈ 2 per step on the entropy-wave test, against
-# a flat error with the write-back held off the boundary. Two coarse nodes clear
-# both the closure rows' footprint and the imposed plane's neighborhood.
+# Region nodes per side of a parent-fed face that the restriction does not
+# write back (`_restrict_window`, which `build_level_coupling` reads for the
+# injection pieces and `_write_covered_region!` for `:filter`). A face shared
+# with a same-level tile, or one carrying the root's own condition, is written
+# to the face. Under `level_restriction = :filter` the margin breaks an
+# amplifying loop: the restriction's filter closes at the ends of the fine
+# patch with rows that read the boundary plane the shell imposes from the
+# parent, and the coarse nodes written from them feed the next shell. At a
+# margin of 0 the error of the two-level entropy wave doubles every step, and
+# the wave and the subcycled Sod crossing fail within twenty steps; at a
+# margin of 1 the error is flat. Under injection no margin from 0 to 3 shows a
+# loop. A margin of 1 lowers the wave's error and the Sod crossing's noise but
+# raises its mass drift, and a margin of 0 raises that drift by one to three
+# orders, so the margin is 2. The parent nodes the derivative mask may take
+# (`_fill_child_deep!`) and the overwritten nodes (`_fill_overwritten!`) are
+# formed from the covered mask, not from this constant: the first set starts at
+# the first node a margin of 2 writes, the second `LEVEL_BUFFER + 1` nodes
+# inside the face.
 const RESTRICT_MARGIN = 2
 
 # The CFL number `max_rate` holds a parent's overwritten nodes to where the
