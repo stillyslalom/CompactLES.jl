@@ -1115,6 +1115,122 @@ function _check_art_count(stored::Int, solver::SolverLike, source::AbstractStrin
 end
 
 # ---------------------------------------------------------------------------
+# The output record: what a reader of a field file or a snapshot needs beyond
+# the coordinates and the point data. The species the fields `Y1`, `Y2`, ...
+# name, the gas constants that convert their mass fractions to mole fractions,
+# the metric, the type of each domain face, the domain's bounds, the time, the
+# global node count and the stride. A strided file's coordinates fix neither
+# the period of a periodic dimension nor the position of a mirror plane, which
+# lies half a spacing outside the first node; the bounds and the node count
+# fix both. Every entry is configuration that every rank holds identically,
+# so building the record needs no communication.
+
+"""
+    boundary_conditions(solver) -> NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
+
+The boundary conditions of the domain's faces, `(low, high)` per dimension, as
+the solver was built with them. On a refined or patch-partitioned solver these
+are the conditions of the whole domain, which the root grid carries; the
+interface markers placed on internal patch faces are not among them. Every
+rank returns the same conditions without communication.
+"""
+boundary_conditions(solver::Solver) = getfield(solver, :schemes).bcs
+
+"""
+    domain_bounds(solver) -> (lo, hi)
+
+The low and high bounds of the domain along each dimension, as two 3-tuples
+in the metric's own coordinates and the solver's element type. They are the
+physical faces, not the outermost nodes: a face-centred symmetry plane or a
+coordinate fold lies half a spacing outside the nearest node, and the high bound
+of a periodic dimension is one spacing past the last node, so `hi[d] - lo[d]`
+is the period. On a stretched dimension the bounds are the mapping's
+endpoints. On a refined or patch-partitioned solver they are the bounds of the
+whole domain. Every rank returns the same bounds without communication; the
+node coordinates along a dimension are [`profile_coordinate`](@ref).
+"""
+function domain_bounds(solver::Solver)
+    T = _precision(solver)
+    b = ntuple(d -> _domain_bounds(solver, d), 3)
+    return ntuple(d -> T(b[d][1]), 3), ntuple(d -> T(b[d][2]), 3)
+end
+
+# The type of a face as a reader wraps across it: a periodic face, a mirror
+# (the face-centred symmetry plane), a coordinate fold through the axis, the
+# origin or a pole, or an open face, which is every wall, inflow and outflow.
+_boundary_kind(::BoundaryCondition) = :open
+_boundary_kind(::PeriodicBC) = :periodic
+_boundary_kind(::SymmetryPlaneBC) = :mirror
+_boundary_kind(::Union{AxisBC,OriginBC,PoleBC}) = :axis
+
+boundary_kinds(solver::Solver) =
+    map(pair -> map(_boundary_kind, pair), boundary_conditions(solver))
+
+# The metric's name in the record: the type name without its suffix, in
+# lower case (`cartesian`, `cylindrical`, `spherical`).
+_metric_name(metric::Metric) = lowercase(chopsuffix(type_name(metric), "Metric"))
+
+# The per-species gas constants R_k of an EOS whose mole fraction is
+# Y_k R_k / Σ_j Y_j R_j, or `nothing` for one without them, for which no
+# gas constant is recorded.
+_gas_constants(::EOS) = nothing
+_gas_constants(eos::Union{IdealMixture,Nasa9Mixture}) = collect(Float64, eos.Rk)
+
+# The solver a `SolverLike` belongs to.
+_owner(solver::Solver) = solver
+_owner(ps::PatchSolver) = getfield(ps, :solver)
+
+"""
+    output_record(solver, stride; level = nothing) -> Vector{Pair{String,Vector}}
+
+The record [`save_vtk`](@ref) writes as `FieldData`, in order: `species_names`,
+`gas_constants` (omitted for an EOS without per-species gas constants),
+`metric`, `boundary` (`open`, `periodic`, `mirror` or `axis`, low then high per
+dimension), `domain` (low then high bound per dimension), `TIME`, `n_global`
+(the root grid's node count) and `stride`, followed by `level` when one is
+given. Strings are `Vector{String}`, integers `Vector{Int64}` and reals
+`Vector{Float64}`.
+"""
+function output_record(solver::Solver, stride::NTuple{3,Int}; level=nothing)
+    rec = Pair{String,Vector}["species_names" => String.(species_names(solver.eos))]
+    R = _gas_constants(solver.eos)
+    R === nothing || push!(rec, "gas_constants" => R)
+    push!(rec, "metric" => [_metric_name(solver.metric)])
+    push!(rec, "boundary" => [String(k) for pair in boundary_kinds(solver) for k in pair])
+    lo, hi = domain_bounds(solver)
+    push!(rec, "domain" => Float64[x for d in 1:3 for x in (lo[d], hi[d])])
+    push!(rec, "TIME" => Float64[solver.t])
+    push!(rec, "n_global" => Int64[solver.n_global...])
+    push!(rec, "stride" => Int64[stride...])
+    level === nothing || push!(rec, "level" => Int64[level])
+    return rec
+end
+
+# The record as a VTK `FieldData` element, in the layout VTK's own XML writer
+# gives it: a string array as an `Array` of type `String` whose ASCII payload is
+# the code units of each string followed by a zero, every other array as a
+# `DataArray`. The ASCII payload sits in the header, so the offsets of the
+# appended blocks are unchanged.
+function _write_field_data(io, record)
+    write(io, "<FieldData>\n")
+    for (name, value) in record
+        n = string(length(value))
+        if eltype(value) <: AbstractString
+            codes = join((string(c) for s in value for c in (codeunits(s)..., 0x00)), ' ')
+            write(io, "<Array type=\"String\" Name=\"", name, "\" NumberOfTuples=\"",
+                      n, "\" format=\"ascii\">\n", codes, "\n</Array>\n")
+        else
+            kind = eltype(value) <: Integer ? "Int64" : "Float64"
+            write(io, "<DataArray type=\"", kind, "\" Name=\"", name,
+                      "\" NumberOfTuples=\"", n, "\" format=\"ascii\">\n",
+                      join((string(v) for v in value), ' '), "\n</DataArray>\n")
+        end
+    end
+    write(io, "</FieldData>\n")
+    return io
+end
+
+# ---------------------------------------------------------------------------
 # VTK output: dependency-free parallel structured output with appended raw
 # binary and Float32 payloads. The metric selects one of two grid types.
 #
@@ -1818,6 +1934,28 @@ not. Only the ranks whose block spans `g` write a piece, so the container lists
 fewer pieces than there are ranks; the rest write nothing. `slice` composes with
 `stride`, which then applies to the two dimensions still resolved.
 
+Every piece and the container carry a record of the run as VTK `FieldData`,
+from which a reader of the file takes what it would otherwise be given by
+keyword:
+
+- `species_names`: the species of `Y1`, `Y2`, ... in that order.
+- `gas_constants`: the per-species gas constant R in the EOS's units, written
+  for `IdealMixture` and `Nasa9Mixture` only.
+- `metric`: `cartesian`, `cylindrical` or `spherical`.
+- `boundary`: six strings, the low and the high face of each dimension:
+  `periodic`, `mirror` (a [`SymmetryPlaneBC`](@ref)), `axis` (an
+  [`AxisBC`](@ref), [`OriginBC`](@ref) or [`PoleBC`](@ref)), or `open` (every
+  wall, inflow and outflow).
+- `domain`: six reals, the low and the high bound of each dimension, as
+  [`domain_bounds`](@ref) gives them.
+- `TIME`: the solver time.
+- `n_global`, `stride`: the global node count and the stride of this file.
+
+A strided file's coordinates fix neither the period of a periodic dimension nor
+the position of a mirror plane, half a spacing outside the first node; the
+bounds and the node count fix both. A string array is written as VTK's own
+writer writes one, the characters' codes with each string zero-terminated.
+
 Subsampling reduces file size and write time only. The fields are still produced
 over the whole local block before any point is sampled, so a strided or sliced
 dump costs the same to compute as a full one, including on a rank that holds
@@ -1847,31 +1985,35 @@ function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
         seams = _output_seams(solver, slice, ranges)
         entries = _close_seams(solver, entries, ranges, seams)
         written = _seam_ranges(ranges, st, seams)
-        return curvilinear ? _save_vts(solver, entries, prefix, st, slice, written) :
-                             _save_vtr(solver, entries, prefix, st, slice, written)
+        record = output_record(_owner(solver), st)
+        return curvilinear ?
+            _save_vts(solver, entries, prefix, st, slice, written, record) :
+            _save_vtr(solver, entries, prefix, st, slice, written, record)
     end
 end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
 
 function _save_vtr(solver::SolverLike, entries, prefix::AbstractString, stride,
-                   slice, ranges)
+                   slice, ranges, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     lo, hi = _output_piece_extent(solver, stride, slice, ranges)
     _has_output(ranges) || return _write_parallel_container(
-        solver, entries, prefix, lo, hi, false, stride, slice)
+        solver, entries, prefix, lo, hi, false, stride, slice, record)
     _write_vtr_piece(_piece_name(prefix, rank, ".vtr"), solver, entries, lo, hi,
-                     ranges, nothing)
-    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride, slice)
+                     ranges, nothing, record)
+    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride, slice,
+                              record)
     return prefix
 end
 
-# One rectilinear piece at `path`, with the physical coordinates of `ranges`
-# and, when `ghost` is given, the `vtkGhostType` point array that blanks the
-# nodes a child level covers (the multiblock writer below).
+# One rectilinear piece at `path`, with the physical coordinates of `ranges`,
+# the output record as `FieldData` and, when `ghost` is given, the
+# `vtkGhostType` point array that blanks the nodes a child level covers (the
+# multiblock writer below).
 function _write_vtr_piece(path::AbstractString, solver::SolverLike, entries, lo, hi,
-                          ranges, ghost::Union{Nothing,Vector{UInt8}})
+                          ranges, ghost::Union{Nothing,Vector{UInt8}}, record)
     coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in ranges[d]], 3)
     blocks = Any[coords[1], coords[2], coords[3]]
     append!(blocks, (data for (_, _, data) in entries))
@@ -1882,6 +2024,7 @@ function _write_vtr_piece(path::AbstractString, solver::SolverLike, entries, lo,
         write(io, "<VTKFile type=\"RectilinearGrid\" version=\"1.0\" ",
                   "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<RectilinearGrid WholeExtent=\"", _extent_str(lo, hi), "\">\n")
+        _write_field_data(io, record)
         write(io, "<Piece Extent=\"", _extent_str(lo, hi), "\">\n<Coordinates>\n")
         for d in 1:3
             write(io, "<DataArray type=\"Float64\" Name=\"", "xyz"[d],
@@ -1906,12 +2049,12 @@ end
 # --- Structured: an explicit Cartesian position per point.
 
 function _save_vts(solver::SolverLike, entries, prefix::AbstractString, stride,
-                   slice, ranges)
+                   slice, ranges, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     lo, hi = _output_piece_extent(solver, stride, slice, ranges)
     _has_output(ranges) || return _write_parallel_container(
-        solver, entries, prefix, lo, hi, true, stride, slice)
+        solver, entries, prefix, lo, hi, true, stride, slice, record)
 
     points = Vector{Float64}(undef, 3 * prod(length.(ranges)))
     idx = 1
@@ -1931,6 +2074,7 @@ function _save_vts(solver::SolverLike, entries, prefix::AbstractString, stride,
         write(io, "<VTKFile type=\"StructuredGrid\" version=\"1.0\" ",
                   "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<StructuredGrid WholeExtent=\"", _extent_str(lo, hi), "\">\n")
+        _write_field_data(io, record)
         write(io, "<Piece Extent=\"", _extent_str(lo, hi), "\">\n<Points>\n")
         write(io, "<DataArray type=\"Float64\" NumberOfComponents=\"3\" ",
                   "format=\"appended\" offset=\"", string(offs[1]), "\"/>\n")
@@ -1943,14 +2087,16 @@ function _save_vts(solver::SolverLike, entries, prefix::AbstractString, stride,
         write(io, "</PointData>\n</Piece>\n</StructuredGrid>\n")
         _write_appended(io, blocks)
     end
-    _write_parallel_container(solver, entries, prefix, lo, hi, true, stride, slice)
+    _write_parallel_container(solver, entries, prefix, lo, hi, true, stride, slice,
+                              record)
     return prefix
 end
 
-# --- The container, identical in shape for both grid types.
+# --- The container, identical in shape for both grid types, and carrying the
+# record as its pieces do.
 
 function _write_parallel_container(solver::SolverLike, entries, prefix, lo, hi,
-                                   curvilinear::Bool, stride, slice)
+                                   curvilinear::Bool, stride, slice, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     P = MPI.Comm_size(decomp.comm)
@@ -1968,6 +2114,7 @@ function _write_parallel_container(solver::SolverLike, entries, prefix, lo, hi,
                   "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<P", kind, " WholeExtent=\"", _extent_str(glo, ghi),
                   "\" GhostLevel=\"0\">\n")
+        _write_field_data(io, record)
         if curvilinear
             write(io, "<PPoints>\n<PDataArray type=\"Float64\" ",
                       "NumberOfComponents=\"3\"/>\n</PPoints>\n")
@@ -2065,6 +2212,11 @@ level's right-hand side computes over the whole level, which differ from a
 tile's own within a few nodes of a face shared with another tile. Collective:
 every rank walks its patches in patch order, each patch's derived fields run
 on that patch's communicator, and the index gathers the piece list.
+
+The `.vtm` and every piece carry the record described above. Its `n_global`
+and `domain` are the root grid's and its `stride` acts in each patch's own
+node space; a piece adds `level`, its refinement level, at which the spacing
+is the root's divided by 3^`level` along every resolved dimension.
 """
 function save_vtk(solver::Solver, states::Vector{<:ConservedState},
                   prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
@@ -2097,7 +2249,7 @@ function save_vtk(solver::Solver, states::Vector{<:ConservedState},
                                   Dict{Int,Any}()
         _save_patch_pieces!(pieces, solver, states, prefix, fields, st, slice,
                             tile_of, levels, patches, rank, held)
-        _write_multiblock(solver, pieces, prefix)
+        _write_multiblock(solver, pieces, prefix, st)
         return prefix
     end
 end
@@ -2131,16 +2283,18 @@ function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
         written = _seam_ranges(ranges, st, seams)
         lo, hi = _output_piece_extent(ps, st, pslice, written)
         _write_vtr_piece(_patch_piece_name(prefix, ℓ, ti, rank), ps, entries, lo,
-                         hi, written, ghost)
+                         hi, written, ghost, output_record(solver, st; level=ℓ))
         push!(pieces, ℓ, ti)
     end
     return pieces
 end
 
 # The `.vtm` index: every rank's `(level, tile)` piece list gathered to rank
-# 0, which lists the pieces of each level under one block.
+# 0, which lists the pieces of each level under one block, followed by the
+# record as `FieldData` beside the block structure, where VTK's multiblock
+# writer places a composite dataset's field data.
 function _write_multiblock(solver::Solver, pieces::Vector{Int64},
-                           prefix::AbstractString)
+                           prefix::AbstractString, stride::NTuple{3,Int})
     comm = solver.comm
     all_pieces = MPI.gather(pieces, comm; root=0)
     MPI.Comm_rank(comm) == 0 || return prefix
@@ -2164,7 +2318,9 @@ function _write_multiblock(solver::Solver, pieces::Vector{Int64},
             end
             write(io, "</Block>\n")
         end
-        write(io, "</vtkMultiBlockDataSet>\n</VTKFile>\n")
+        write(io, "</vtkMultiBlockDataSet>\n")
+        _write_field_data(io, output_record(solver, stride))
+        write(io, "</VTKFile>\n")
     end
     return prefix
 end
@@ -2206,10 +2362,11 @@ evenly spaced time schedule.
 
 `fields`, `stride` and `slice` are passed through to [`save_vtk`](@ref), which
 documents the available names, the cost of each, how points are selected for
-subsampling, and what a slice writes. `pad` sets the width of the zero-padded
-frame number, and `collection = false` suppresses the `.pvd`. On a grid with a
-resolved angular dimension the container is `.pvts`, and the collection
-references it accordingly.
+subsampling, what a slice writes, and the record of the run every frame
+carries. `pad` sets the width of the zero-padded frame number, and
+`collection = false` suppresses the `.pvd`. On a grid with a resolved angular
+dimension the container is `.pvts`, and the collection references it
+accordingly.
 
 Like the wrapped `save_vtk` call, this operation is collective and must run on
 every rank. A [`Callback`](@ref) provides that guarantee. The first dump creates

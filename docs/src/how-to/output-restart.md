@@ -75,6 +75,32 @@ root lattice, which each patch maps to its own coincident node:
 save_vtk(solver, states, "output/amr"; fields = (:rho, :schlieren), slice = (3, 64))
 ```
 
+## Read the record of an output file
+
+Every piece and container `save_vtk` writes, the `.vtm` index of a refined run
+included, carries a record of the run as VTK `FieldData`:
+
+| array | content |
+|---|---|
+| `species_names` | the species of `Y1`, `Y2`, ... in that order |
+| `gas_constants` | per-species gas constant R, for `IdealMixture` and `Nasa9Mixture` |
+| `metric` | `cartesian`, `cylindrical` or `spherical` |
+| `boundary` | low and high face per dimension: `open`, `periodic`, `mirror` or `axis` |
+| `domain` | low and high bound per dimension |
+| `TIME` | solver time |
+| `n_global` | global node count |
+| `stride` | stride of the file |
+
+A face carrying a [`SymmetryPlaneBC`](@ref) is a `mirror`; an
+[`AxisBC`](@ref), [`OriginBC`](@ref) or [`PoleBC`](@ref) face is an `axis`;
+every wall, inflow and outflow is `open`. The bounds are the domain's faces,
+so a periodic dimension's period is `domain` high less low, and a mirror plane
+or a fold lies on its bound, half a spacing outside the nearest node. The
+coordinates of a strided or sliced file fix neither of these. The pieces of a
+refined run add `level`, and their `stride` is in the patch's own node space.
+A solver answers the same questions through [`boundary_conditions`](@ref),
+[`domain_bounds`](@ref) and [`profile_coordinate`](@ref).
+
 ## Restart with the same decomposition
 
 The dependency-free checkpoint path writes one file per rank:

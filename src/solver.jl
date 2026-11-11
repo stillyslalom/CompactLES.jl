@@ -10,7 +10,9 @@
 # `interface_rhs`, the interpolation order and the restriction live only in
 # the transfers and the `RegridSpec`. The checkpoint's configuration record
 # (io.jl) reads them from here, and `run!` reads the restriction once per call.
-# Never read on the step path.
+# `bcs` holds the domain's boundary conditions as given, which a same-level
+# patch layout keeps only on the patches at the domain's faces; the output
+# record and `boundary_conditions` read them. Never read on the step path.
 struct SchemeSettings
     deriv::AbstractCompactScheme
     filt::AbstractCompactScheme
@@ -18,6 +20,7 @@ struct SchemeSettings
     interface_rhs::Symbol
     level_interpolation_order::Int
     level_restriction::Symbol
+    bcs::FaceConditions
 end
 
 # The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a refined

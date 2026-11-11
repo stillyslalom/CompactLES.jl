@@ -546,7 +546,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         something(level_interpolation_order,
                   default_interpolation_order(deriv, interface_flux))
     schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
-                             level_interpolation_order, level_restriction)
+                             level_interpolation_order, level_restriction, bcs)
     # --- Azimuthal mode truncation (modes.jl) ----------------------------
     # The ring projection is a Fourier series in θ over the whole circle on
     # host storage, and the limit table assumes a uniform Δr.

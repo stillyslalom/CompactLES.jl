@@ -134,7 +134,7 @@ export StateGuard, state_guard
 export Trigger, AtTime, EveryStep, EveryTime, WhenState, BeforeWallLimit, Callback,
        ProgressLog
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
-export boundary_plane
+export boundary_plane, boundary_conditions, domain_bounds
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export field_array, line_profile, line_sample, field_slice, cartesian_slice

@@ -114,7 +114,10 @@ metric determines the grid type: a resolved angular dimension produces a
 curvilinear `.pvts` with explicit Cartesian positions and rotated vectors, and
 every other grid produces a rectilinear `.pvtr`. Strided points are selected on
 the global index, so the per-rank pieces sample one common lattice and still
-tile the coarse grid.
+tile the coarse grid. Each dump records the species names, the gas constants,
+the metric, the type of each domain face, the domain bounds, the time, the
+global node count and the stride; see
+[Read the record of an output file](@ref).
 
 `save_hdf5` writes a field dump as one shared file with an XDMF3 sidecar, which
 is the form to use at large rank counts: the VTK path writes one file per rank

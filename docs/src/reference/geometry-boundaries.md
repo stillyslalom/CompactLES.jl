@@ -55,6 +55,19 @@ second phase built by [`setup`](@ref)`(solver, Q; bcs)`; see
 CompositeBC
 ```
 
+## Reading a solver's domain
+
+[`boundary_conditions`](@ref) and [`domain_bounds`](@ref) return the face
+conditions and the bounds of the domain a solver was built on, and
+[`profile_coordinate`](@ref) the node coordinates along one dimension, stretch
+mapping and fold offset included. The output files record the same domain; see
+[Read the record of an output file](@ref).
+
+```@docs
+boundary_conditions
+domain_bounds
+```
+
 ## Developer internals: patch-interface markers
 
 `Solver` places these on internal patch faces itself; they are not

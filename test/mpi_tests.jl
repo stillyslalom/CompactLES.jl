@@ -1121,6 +1121,57 @@ function assemble_container(path)
 end
 
 """
+The `FieldData` record of a VTK file, read from its ASCII arrays: a string
+array as the strings its zero-terminated codes spell, an `Int64` or `Float64`
+array as numbers.
+"""
+function read_vtk_record(path)
+    raw = read(path)
+    stop = findfirst(codeunits("<AppendedData"), raw)
+    head = String(raw[1:(stop === nothing ? length(raw) : first(stop) - 1)])
+    rec = Dict{String,Vector}()
+    block = match(r"<FieldData>(.*?)</FieldData>"s, head)
+    block === nothing && return rec
+    pat = r"<(?:Data)?Array type=\"(\w+)\" Name=\"([^\"]+)\" " *
+          r"NumberOfTuples=\"\d+\" format=\"ascii\">([^<]*)<"
+    for m in eachmatch(pat, block.captures[1])
+        body = split(m.captures[3])
+        if m.captures[1] == "String"
+            # Split the codes at each terminating zero.
+            codes = parse.(UInt8, body)
+            ends = findall(==(0x00), codes)
+            starts = [1; ends[1:end-1] .+ 1]
+            rec[m.captures[2]] = [String(codes[a:b-1]) for (a, b) in zip(starts, ends)]
+        else
+            rec[m.captures[2]] = parse.(m.captures[1] == "Int64" ? Int64 : Float64, body)
+        end
+    end
+    return rec
+end
+
+"""
+Check on every rank that the container at `path` and every piece it lists
+carry the same record, and that the record holds each entry of `expect`.
+"""
+function check_record(label, path, expect)
+    MPI.Barrier(comm)
+    bad = 0
+    if rank == 0
+        rec = read_vtk_record(path)
+        files = [joinpath(dirname(path), m.captures[1])
+                 for m in eachmatch(r"Source=\"([^\"]+)\"", read(path, String))]
+        bad += count(f -> read_vtk_record(f) != rec, files)
+        for (key, value) in expect
+            got = get(rec, key, nothing)
+            ok = got !== nothing && length(got) == length(value) &&
+                 (eltype(value) <: AbstractString ? got == value : isapprox(got, value))
+            bad += !ok
+        end
+    end
+    check("$label: one record, the expected one", gsum(bad), 0.5)
+end
+
+"""
 Check on every rank that the pieces rank 0 reads from `assemble()` cover the
 whole output grid, cells and points, and agree bitwise on every shared plane.
 `expect(fields)`, when given, returns the largest error of the assembled fields
@@ -1199,6 +1250,11 @@ function test_field_writer()
     check("collection written once, by rank 0", abs(gsum(sets) - 4), 0.5)
     check_tiling("frame", () -> assemble_container(joinpath("mpi_frames",
                                                             "field_0000.pvtr")))
+    walls = ["open", "open", "periodic", "periodic", "periodic", "periodic"]
+    check_record("frame", joinpath("mpi_frames", "field_0002.pvtr"),
+                 Dict("TIME" => [writer.times[3]], "boundary" => walls,
+                      "n_global" => [SPLITN, 16, 16],
+                      "domain" => [0.0, 1.0, 0.0, 0.25, 0.0, 0.25]))
 
     MPI.Barrier(comm)
     rank == 0 && rm("mpi_frames"; recursive=true)
@@ -1245,6 +1301,20 @@ function test_field_writer()
               abs(gsum(inside) - 1), 0.5)
         check("stride $sd: whole extent is the coarse grid",
               abs(gsum(whole_ok) - 1), 0.5)
+        # The record of every piece names the full grid and the stride, from
+        # which the period follows: n_global spacings of the written spacing
+        # over the stride.
+        check_record("stride $sd", "mpi_stride.pvtr",
+                     Dict("n_global" => [SPLITN, 16, 16], "stride" => [sd, sd, sd],
+                          "boundary" => fill("periodic", 6)))
+        period_err = 0.0
+        if rank == 0
+            rec = read_vtk_record("mpi_stride.pvtr")
+            x = assemble_container("mpi_stride.pvtr").fields["x"]
+            period_err = abs(rec["n_global"][1] * (x[2] - x[1]) / rec["stride"][1] -
+                             (rec["domain"][2] - rec["domain"][1]))
+        end
+        check("stride $sd: the period from the record", gmax(period_err), 1e-12)
         MPI.Barrier(comm)
         rank == 0 && foreach(rm, filter(startswith("mpi_stride"), readdir()))
         MPI.Barrier(comm)
@@ -1287,6 +1357,11 @@ function test_field_writer()
     check("container lists every angular piece",
           abs(gsum(rank == 0 ? count("<Piece", vts) : 0) - np), 0.5)
     check_tiling("annulus", () -> assemble_container("mpi_annulus.pvts"))
+    check_record("annulus", "mpi_annulus.pvts",
+                 Dict("metric" => ["cylindrical"],
+                      "boundary" => ["open", "open", "periodic", "periodic",
+                                     "periodic", "periodic"],
+                      "domain" => [0.5, 1.5, 0.0, 2π, 0.0, 1.0]))
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_annulus"), readdir()))
     MPI.Barrier(comm)
@@ -1346,6 +1421,21 @@ function test_shared_planes()
         end
         check_tiling("patch layout, level $ℓ", listed; expect=rho_of_x)
     end
+    # The index and every piece carry the root's record, a piece with its
+    # level besides.
+    MPI.Barrier(comm)
+    bad = 0
+    if rank == 0
+        rec = read_vtk_record("mpi_planes_amr.vtm")
+        bad += rec["n_global"] != [400, 1, 1] || haskey(rec, "level")
+        for m in eachmatch(r"file=\"([^\"]+)\"", read("mpi_planes_amr.vtm", String))
+            piece = read_vtk_record(m.captures[1])
+            ℓ = parse(Int, match(r"\.L(\d+)\.", m.captures[1]).captures[1])
+            bad += get(piece, "level", nothing) != [ℓ]
+            bad += delete!(piece, "level") != rec
+        end
+    end
+    check("patch layout: one record in the index and its pieces", gsum(bad), 0.5)
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_planes_amr"), readdir()))
     MPI.Barrier(comm)
@@ -1405,6 +1495,9 @@ function test_slicing()
                  expect=rho_of_x)
     check("every piece is flat in the sliced dimension",
           abs(gsum(inside) - 1), 0.5)
+    check_record("sliced pieces", "mpi_slice_z.pvtr",
+                 Dict("n_global" => [SPLITN, 16, 16], "stride" => [1, 1, 1],
+                      "domain" => [0.0, 1.0, 0.0, 0.25, 0.0, 0.25]))
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_slice_z"), readdir()))
     MPI.Barrier(comm)

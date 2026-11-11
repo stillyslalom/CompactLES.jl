@@ -557,6 +557,196 @@ end
     rm(dir; recursive=true)
 end
 
+# The `FieldData` record of a VTK file, read from its ASCII arrays as a reader
+# would: a string array as the strings its zero-terminated codes spell, an
+# `Int64` or `Float64` array as numbers. The header ends at the appended data.
+function read_vtk_record(path)
+    raw = read(path)
+    stop = findfirst(codeunits("<AppendedData"), raw)
+    head = String(raw[1:(stop === nothing ? length(raw) : first(stop) - 1)])
+    rec = Dict{String,Vector}()
+    block = match(r"<FieldData>(.*?)</FieldData>"s, head)
+    block === nothing && return rec
+    pat = r"<(?:Data)?Array type=\"(\w+)\" Name=\"([^\"]+)\" " *
+          r"NumberOfTuples=\"(\d+)\" format=\"ascii\">([^<]*)<"
+    for m in eachmatch(pat, block.captures[1])
+        kind, name, n, body = m.captures[1], m.captures[2], parse(Int, m.captures[3]),
+                              split(m.captures[4])
+        if kind == "String"
+            strs, cur = String[], UInt8[]
+            for b in parse.(UInt8, body)
+                if b == 0
+                    push!(strs, String(copy(cur)))
+                    empty!(cur)
+                else
+                    push!(cur, b)
+                end
+            end
+            rec[name] = strs
+        else
+            rec[name] = parse.(kind == "Int64" ? Int64 : Float64, body)
+        end
+        length(rec[name]) == n || error("$name: $(length(rec[name])) values, not $n")
+    end
+    return rec
+end
+
+# The three coordinate vectors of a rectilinear piece, the first three
+# appended blocks.
+function vtr_coordinates(path)
+    raw = read(path)
+    pos = last(findfirst(codeunits("<AppendedData encoding=\"raw\">\n_"), raw)) + 1
+    out = Vector{Float64}[]
+    for _ in 1:3
+        n = Int(only(reinterpret(UInt64, raw[pos:pos+7])))
+        push!(out, collect(reinterpret(Float64, raw[pos+8:pos+7+n])))
+        pos += 8 + n
+    end
+    return out
+end
+
+@testset "domain accessors: conditions and bounds of the whole domain" begin
+    walls = (SlipWallBC(), SlipWallBC())
+    s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
+               bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
+    @test boundary_conditions(s) == (walls, io_per, io_per)
+    @test domain_bounds(s) == ((-1.0, 0.5, 0.0), (0.0, 1.5, 1.0))
+    @test CL.boundary_kinds(s) == ((:open, :open), (:periodic, :periodic),
+                                   (:periodic, :periodic))
+    # The folds: the spherical origin and poles are axes, their bounds the
+    # faces half a spacing outside the first and last nodes.
+    sph = Solver(n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
+                 bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), io_per),
+                 art=ArtificialProperties(enabled=false))
+    @test CL.boundary_kinds(sph) == ((:axis, :open), (:axis, :axis),
+                                     (:periodic, :periodic))
+    lo, hi = domain_bounds(sph)
+    @test lo == (0.0, 0.0, 0.0) && hi[1] == 1.0 && hi[2] ≈ π && hi[3] ≈ 2π
+    @test global_xcoord(sph, 2, 1) ≈ lo[2] + sph.h[2] / 2
+    # A stretched dimension's bounds are the mapping's endpoints.
+    st = Solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, io_per, io_per),
+                stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
+                art=ArtificialProperties(enabled=false))
+    @test domain_bounds(st)[1][1] ≈ 0.0 atol = 1e-15
+    @test domain_bounds(st)[2][1] ≈ 1.0
+    # A slab layout: the domain's conditions, not the interface markers on
+    # the slabs' internal faces.
+    slabs = Solver(n_global=(32, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(walls, io_per, io_per), patch_grid=(2, 1, 1),
+                   art=ArtificialProperties(enabled=false))
+    @test any(p -> p.bcs[1][2] isa CL.InterfaceBC, slabs.patches)
+    @test boundary_conditions(slabs) == (walls, io_per, io_per)
+    # Without per-species gas constants, none is recorded.
+    @test CL._gas_constants(StiffenedGas()) === nothing
+    nasa = Nasa9Mixture(["He", "Ar"])
+    @test CL._gas_constants(nasa) == Float64.(nasa.Rk)
+end
+
+@testset "VTK FieldData records the run" begin
+    dir = mktempdir()
+    eos = IdealMixture([IdealSpecies{Float64}("light", 2.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.5, 1.1)])
+    walls = (SlipWallBC(), SlipWallBC())
+    s = Solver(n_global=(24, 12, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
+               eos=eos, bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(0.1, 0, 0), p=1.0, rho=2 + x))
+    s.t = 0.375
+    expected = Dict{String,Vector}(
+        "species_names" => ["light", "heavy"], "gas_constants" => [2.0, 0.5],
+        "metric" => ["cartesian"],
+        "boundary" => ["open", "open", "periodic", "periodic", "periodic", "periodic"],
+        "domain" => [-1.0, 1.0, 0.5, 1.5, 0.0, 1.0], "TIME" => [0.375],
+        "n_global" => [24, 12, 1], "stride" => [1, 1, 1])
+    save_vtk(s, Q, joinpath(dir, "plain"); fields=(:rho, :Y))
+    for f in ("plain.pvtr", "plain.r0000.vtr")
+        @test read_vtk_record(joinpath(dir, f)) == expected
+    end
+    # The arrays in the order the docstring lists them.
+    txt = read(joinpath(dir, "plain.pvtr"), String)
+    @test [m.captures[1] for m in eachmatch(r"Name=\"(\w+)\" NumberOfTuples", txt)] ==
+          ["species_names", "gas_constants", "metric", "boundary", "domain", "TIME",
+           "n_global", "stride"]
+
+    # Strided: from the record and the written coordinates a reader recovers
+    # the spacing, the period of the periodic dimension and the wall bounds.
+    save_vtk(s, Q, joinpath(dir, "coarse"); fields=(:rho,), stride=(3, 2, 1))
+    rec = read_vtk_record(joinpath(dir, "coarse.pvtr"))
+    @test rec["stride"] == [3, 2, 1] && rec["n_global"] == [24, 12, 1]
+    @test read_vtk_record(joinpath(dir, "coarse.r0000.vtr")) == rec
+    cx, cy, _ = vtr_coordinates(joinpath(dir, "coarse.r0000.vtr"))
+    hx, hy = (cx[2] - cx[1]) / rec["stride"][1], (cy[2] - cy[1]) / rec["stride"][2]
+    @test (rec["n_global"][1] - 1) * hx ≈ rec["domain"][2] - rec["domain"][1]
+    @test rec["n_global"][2] * hy ≈ rec["domain"][4] - rec["domain"][3]
+    @test cx[1] == rec["domain"][1] && cy[1] == rec["domain"][3]
+
+    # A slice keeps the record, in the container and the piece.
+    save_vtk(s, Q, joinpath(dir, "cut"); fields=(:rho,), slice=(1, 7), stride=2)
+    for f in ("cut.pvtr", "cut.r0000.vtr")
+        rec = read_vtk_record(joinpath(dir, f))
+        @test rec["stride"] == [2, 2, 2] && rec["domain"] == expected["domain"]
+    end
+
+    # Mirror planes: the bounds are the planes, half a spacing outside the
+    # first and last written nodes of a strided file, with the spacing from
+    # the bounds and the node count (L/N with both ends folded, L/(N - 1/2)
+    # with one).
+    for (bc, folds) in (((SymmetryPlaneBC(), SymmetryPlaneBC()), 2),
+                        ((SymmetryPlaneBC(), SlipWallBC()), 1))
+        m = Solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(bc, io_per, io_per), art=ArtificialProperties(enabled=false))
+        Qm = allocate_state(m)
+        initialize!(m, Qm, (x, y, z) -> Prim(p=1.0, rho=1 + x))
+        stem = joinpath(dir, "mirror$folds")
+        save_vtk(m, Qm, stem; fields=(:rho,), stride=3)
+        rec = read_vtk_record(stem * ".pvtr")
+        @test rec["boundary"][1:2] == (folds == 2 ? ["mirror", "mirror"] :
+                                                    ["mirror", "open"])
+        lo, hi = rec["domain"][1], rec["domain"][2]
+        N = rec["n_global"][1]
+        h = (hi - lo) / (folds == 2 ? N : N - 0.5)
+        cx = vtr_coordinates(stem * ".r0000.vtr")[1]
+        @test cx[1] ≈ lo + h / 2
+        @test cx[2] - cx[1] ≈ rec["stride"][1] * h
+        @test cx[end] ≈ (folds == 2 ? hi - h / 2 : hi)
+    end
+
+    # A resolved angle: the structured piece and container, with the axis.
+    cyl = Solver(n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+                 bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+                 art=ArtificialProperties(enabled=false))
+    Qc = allocate_state(cyl)
+    initialize!(cyl, Qc, (r, θ, z) -> Prim(p=1.0, rho=1 + r^2))
+    save_vtk(cyl, Qc, joinpath(dir, "disk"); fields=(:rho,))
+    for f in ("disk.pvts", "disk.r0000.vts")
+        rec = read_vtk_record(joinpath(dir, f))
+        @test rec["metric"] == ["cylindrical"] && rec["species_names"] == ["gas"]
+        @test rec["boundary"] == ["axis", "open", "periodic", "periodic", "periodic",
+                                  "periodic"]
+        @test rec["domain"] ≈ [0.0, 1.0, 0.0, 2π, 0.0, 1.0]
+    end
+
+    # A refined run: the index and every piece, each piece with its level and
+    # the root grid's node count.
+    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                 bcs=(io_per, io_per, io_per), tile=12,
+                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                 art=ArtificialProperties(enabled=false))
+    states = allocate_state(amr)
+    initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0, rho=1.0))
+    save_vtk(amr, states, joinpath(dir, "amr"); fields=(:rho,), stride=2)
+    rec = read_vtk_record(joinpath(dir, "amr.vtm"))
+    @test !haskey(rec, "level") && rec["n_global"] == [48, 48, 1]
+    @test rec["stride"] == [2, 2, 2] && rec["domain"] ≈ [0, 2π, 0, 2π, 0, 1]
+    for (f, ℓ) in (("amr.L0.T0001.r0000.vtr", 0), ("amr.L1.T0001.r0000.vtr", 1))
+        piece = read_vtk_record(joinpath(dir, f))
+        @test piece["level"] == [ℓ]
+        @test delete!(copy(piece), "level") == rec
+    end
+    @test boundary_conditions(amr) == (io_per, io_per, io_per)
+    rm(dir; recursive=true)
+end
+
 @testset "field_snapshot: the unpadded grid and fields in memory" begin
     # A density linear in the coordinates and a sheared velocity make every
     # gathered value definitional: the snapshot must reproduce them at its

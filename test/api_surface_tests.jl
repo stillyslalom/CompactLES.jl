@@ -29,6 +29,7 @@ Presets SphericalMetric StateFilter StateGuard StepControl StiffenedGas Stretch
 SymmetryPlaneBC Trigger
 TurbulentInflow WhenState Workspace
 ablation_band ablation_pressure ablation_pressure_scale allocate_state binary_diffusivity boundary_plane cartesian_coordinates cartesian_slice
+boundary_conditions domain_bounds
 compact_filter compute_dt conserved_from_prim dissipation_rate domain_volume
 driver_pressure dt_report field_array field_slice field_snapshot fieldheatmap
 fieldheatmap! gaussian_filter initialize! lele_d1_10 lele_d1_6 lele_d1_8
