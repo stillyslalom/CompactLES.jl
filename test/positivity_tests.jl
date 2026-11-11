@@ -803,14 +803,14 @@ end
         end
     end
 
-    @testset "a fill ahead of a strong shock in cold gas stays admissible under :ghost" begin
+    @testset "a fill ahead of a strong shock in cold gas stays admissible" begin
         # Tiles of edge 8 at the axis over the first 25 root nodes, filled
         # again from the root as a regrid fills a new tile, the root holding a
         # jump at r = 0.15 from hot gas at rest to cold gas moving toward the
         # axis, whose ρe is 3e-4 of E. The interpolation of order 8 leaves
         # nodes ahead of the jump with ρe ≤ 0, as the unlimited run's fill
-        # shows; the fill of a limited run under :ghost gives them the
-        # multilinear state of their parent nodes.
+        # shows; the fill of a limited run gives them the multilinear state of
+        # their parent nodes, under either interface flux.
         prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
                        transport=ConstantTransport(mu0=0.0), metric=CylindricalMetric(),
                        domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
@@ -818,21 +818,23 @@ end
                        ic=(r, θ, z) -> r < 0.15 ?
                                        Prim(rho=16.0, u=(0.0, 0.0, 0.0), p=16 / 3) :
                                        Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=NOH_P0))
-        filled(on) = begin
-            s, Q = pos_flux(:ghost) do
+        filled(on, flux) = begin
+            s, Q = pos_flux(flux) do
                 setup(prob, Numerics(n_global=(96, 1, 1),
                                      art=ArtificialProperties(enabled=true),
-                                     patch_interfaces=:ghost, positivity_limiter=on,
+                                     patch_interfaces=flux, positivity_limiter=on,
                                      amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
-                                             tile=8)))
+                                             tile=8, level_interpolation_order=8)))
             end
-            @test s.interface_flux === :ghost
+            @test s.interface_flux === flux
             CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
             report = state_report(s, Q)
             report.inadmissible + report.negative_density
         end
-        @test filled(false) > 0
-        @test filled(true) == 0
+        for flux in (:ghost, :closure)
+            @test filled(false, flux) > 0
+            @test filled(true, flux) == 0
+        end
     end
 
     @testset "Noh through the axis on regridded tiles under :ghost stays admissible" begin

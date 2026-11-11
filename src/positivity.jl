@@ -172,9 +172,9 @@
 # cadence, are limited there. A tile over a partial lattice cell, at a domain
 # face or at the nesting margin, can be too short for the face form: setup
 # refuses such a patch, and a regrid does not create it and leaves the cell
-# to the parent (`_limiter_tile_short`). Under `:ghost` a node the fill of a
-# new patch leaves inadmissible takes the multilinear state of its parent
-# nodes (`_fill_fallback!`), as the shell does.
+# to the parent (`_limiter_tile_short`). A node the fill of a new patch
+# leaves inadmissible takes the multilinear state of its parent nodes
+# (`_fill_fallback!`), as the shell does.
 #
 # Per-point work runs through `pointwise!` bodies over three index boxes: the
 # lines of a direction (the running sums and the θ passes, one sequential sweep

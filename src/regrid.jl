@@ -650,11 +650,11 @@ end
 # admissible base state and does not raise one that enters a stage below its
 # bound, so such a node stays inadmissible for several steps. The halos and
 # the shell are written again before the next step, the shell with its own
-# fallback. Taken where the limiter runs with `interface_flux = :ghost`; a run
-# under the closure rows keeps the chain's values.
+# fallback. Taken where the limiter runs, under either interface flux: the
+# closure rows' fills leave such nodes as well at the same interpolation
+# order. A run without the limiter keeps the chain's values.
 _fill_fallback(solver) =
-    getfield(solver, :positivity) !== nothing &&
-    getfield(solver, :interface_flux) === :ghost && _shell_fallback(solver)
+    getfield(solver, :positivity) !== nothing && _shell_fallback(solver)
 
 function _fill_fallback!(solver, Qf, lt::LevelTransfer, df::Decomp)
     src = _limiter_upload(parent(Qf), lt.box_gather)

@@ -295,15 +295,15 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   and ten times as far as unlimited `:ghost` tiles
   ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)). A node
   the fill of a new tile or box leaves inadmissible takes the multilinear
-  state of its parent nodes, as a shell node does (commit `HASH`): ahead of
+  state of its parent nodes, as a shell node does (commit `8ff3b5a`): ahead of
   a strong shock in cold gas moving fast, ρe is a small difference of large
   terms, the Lagrange chain's error exceeded it on the cylindrical Noh's
   regridded tiles, and the limiter does not raise a node that enters a
   stage below its bound. Regridded tiles of a radial grid keep `:ghost`
-  under the toggle. Only limited runs under `:ghost` take this fallback;
-  fills under the closure rows leave such nodes too at the same
-  interpolation order, and whether they, and unlimited runs, take it is
-  open. The toggle stays off because of two defects. The filter's row at a
+  under the toggle. Every limited run takes this fallback, under either
+  interface flux (commit `HASH`), since fills under the closure rows leave
+  such nodes too at the same interpolation order; whether unlimited runs
+  take it is open. The toggle stays off because of two defects. The filter's row at a
   node two tiles share is the identity, a row that does not conserve, and
   the filter passes carry three quarters of that drift, so the mass budget
   of A21's limited, tiled band waits on a conservative filter row there. On
