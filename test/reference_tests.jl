@@ -18,7 +18,11 @@
 #      instead of deleted;
 #   5. a relative link in a reference file, CLAUDE.md, README.md or a bench/
 #      markdown archive whose file or header anchor does not exist, which is
-#      how a reorganized appendix strands the pointers into it.
+#      how a reorganized appendix strands the pointers into it;
+#   6. a sentence of a reference file carrying more than two numerals outside
+#      a table, a fenced block, a heading or an inline code span, citations
+#      excepted: a figure in a sentence is a measurement recited, and the
+#      prose states the finding in words while the figures sit in a table.
 # The checks read the repository only, so the file runs without the package.
 #
 # Standalone: julia --project=. test/reference_tests.jl
@@ -214,6 +218,115 @@ function broken_links()
     return out
 end
 
+# Reference prose states its findings in words and keeps its figures in
+# tables: a figure in a sentence is a measurement recited, which a reader
+# cannot compare across cases and which later prose copies. A sentence
+# outside a table, a fenced block or a heading may therefore carry at most
+# NUMERAL_LIMIT numerals. A numeral is a maximal number token (integer,
+# decimal, exponent form, with an optional sign and percent sign) that no
+# letter, digit or underscore precedes: "C10" and "N32" hold none, "N = 256"
+# holds one, "64²" one, "1e-14" one. A number written as a word is not a
+# numeral, and an inline code span counts as one word.
+const NUMERAL_LIMIT = 2
+const NUMERAL = r"(?<![A-Za-z_0-9])[−+-]?\d+(?:\.\d+)?(?:e[+−-]?\d+)?%?"
+
+# Reference files whose prose predates the rule; the list empties as each is
+# converted.
+const NUMERAL_PENDING = ["CALIBRATION_APPENDIX.md", "ROADMAP.md"]
+# A local file the repository ignores (`.gitignore`), present in a maintainer's
+# checkout only: questions to a paper's authors, which quote its figures.
+const NUMERAL_LOCAL = ["AUTHOR_QUESTIONS.md"]
+
+# The numbers of a citation do not count. Each pattern replaces one form by a
+# word: a link (its text and a target holding one level of parentheses), an
+# arXiv identifier, the number of an equation, figure, table, theorem, section,
+# page or appendix, a journal's abbreviated title with its volume and pages
+# ("Phys. Rev. Lett. 107, 115004", "Phys. Fluids 23, 024102, 2011"), a
+# journal acronym with its volume and year ("JCP 257, 2014"), a report number,
+# and the year after an author's name.
+const CITED_LABEL = raw"(?:[Ee]qs?\.|[Ee]quations?|[Ff]igs?\.|[Ff]igures?|[Tt]ables?|" *
+                    raw"[Tt]heorems?|[Ll]emmas?|[Ss]ections?|§+|pp?\.|[Aa]ppendix|" *
+                    raw"[Cc]hapters?)"
+const CITED_NUMBER = raw"[A-Z]?\d+(?:\.\d+)*"
+const CITATIONS = [
+    r"\[[^\]]*\]\((?:[^()]|\([^()]*\))*\)" => "Link",
+    r"arXiv:\S+" => "arXiv",
+    Regex(CITED_LABEL * raw"\s*" * CITED_NUMBER *
+          raw"(?:\s*(?:–|-|and|,)\s*" * CITED_NUMBER * ")*") => "Ref",
+    Regex(raw"(?:[A-Z][A-Za-z]*\.\s+){2,}\d+(?:\s*\(\d{4}\))?" *
+          raw"(?:,\s*\d+(?:[–-]\d+)?)?") => "Journal",
+    Regex(raw"\b(?:[A-Z][a-z]*\.\s+)+[A-Z][a-z]+\s+\d+,\s*\d+" *
+          raw"(?:,\s*(?:19|20)\d\d)?") => "Journal",
+    r"\b[A-Z]{2,}\s+\d+,\s*(?:19|20)\d\d\b" => "Journal",
+    r"\b[A-Z]{3,}\s\d+[-–]\d+\b" => "Report",
+    r"((?:[A-Z][\w'’–-]+|al\.),?\s+)\(?(?:19|20)\d\d[a-z]?\)?" => s"\1Year",
+]
+
+const LIST_ITEM = r"^(?:[-*] |\d+\. )"
+
+# The prose paragraphs of a file as (first line, joined text): lines outside
+# fenced blocks that are not blank, table rows or headings, each list item
+# opening a paragraph of its own.
+function prose_paragraphs(path)
+    out = Tuple{Int,String}[]
+    buf = String[]
+    start = 0
+    fenced = false
+    function flush!()
+        isempty(buf) || push!(out, (start, join(buf, " ")))
+        empty!(buf)
+    end
+    for (i, line) in enumerate(eachline(path))
+        s = strip(line)
+        if startswith(s, "```")
+            fenced = !fenced
+            flush!()
+            continue
+        end
+        fenced && continue
+        if isempty(s) || startswith(s, "|") || startswith(s, "#")
+            flush!()
+            continue
+        end
+        occursin(LIST_ITEM, s) && flush!()
+        isempty(buf) && (start = i)
+        push!(buf, s)
+    end
+    flush!()
+    return out
+end
+
+# A sentence ends at ".", ";" or ":" followed by white space and an upper-case
+# letter, a backtick or an opening parenthesis; a code span is replaced before
+# the split, so a sentence opening with one still splits from the one before.
+function numeral_sentences(path)
+    out = String[]
+    for (start, p) in prose_paragraphs(path)
+        q = replace(p, r"`[^`]*`" => "Code")
+        for c in CITATIONS
+            q = replace(q, c)
+        end
+        q = replace(q, LIST_ITEM => "")
+        for s in split(q, r"(?<=[.;:])\s+(?=[A-Z`(])")
+            n = count(_ -> true, eachmatch(NUMERAL, s))
+            n > NUMERAL_LIMIT &&
+                push!(out, "$(rel(path)):$start: $n numerals: $(first(s, 70))")
+        end
+    end
+    return out
+end
+
+function numeral_sentences()
+    out = String[]
+    for f in readdir(REFERENCE; join=true)
+        name = basename(f)
+        endswith(name, ".md") && !(name in NUMERAL_PENDING) &&
+            !(name in NUMERAL_LOCAL) || continue
+        append!(out, numeral_sentences(f))
+    end
+    return out
+end
+
 end # module ReferenceLayout
 
 @testset "reference layout" begin
@@ -248,4 +361,10 @@ end # module ReferenceLayout
         @warn "broken reference link: $line"
     end
     @test isempty(broken)
+
+    recited = RL.numeral_sentences()
+    for line in recited
+        @warn "figures recited in prose: $line"
+    end
+    @test isempty(recited)
 end
