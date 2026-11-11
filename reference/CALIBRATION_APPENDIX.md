@@ -2631,6 +2631,7 @@ julia --project=. -t 1 bench/positivity.jl part=levelcost flux=ghost levels=wc,w
 julia --project=. -t 1 bench/positivity.jl part=tilecost flux=ghost levels=a19,a19tiles a19n=33 reps=3
 julia --project=. -t 1 bench/positivity.jl part=tiledrift
 julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=true
+julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true drift=regridbox pulse= planar=
 julia --project=. -t 1 bench/positivity.jl part=levels conservative=true levels=wcregrid,tiles,tilessub,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
 julia --project=. -t 1 bench/positivity.jl part=levels conservative=true levels=a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
 julia --project=. -t 1 bench/filter_conservation.jl parts=shared N=48
@@ -3060,61 +3061,74 @@ and 400. On the tiles the difference stays at round-off under the closure rows a
 under `:ghost` within 200 steps (80 subcycled), so a limited `:ghost` level depends on its
 decomposition; setup keeps the closure rows unless `LIMITED_GHOST_INTERFACES` is set.
 
-`part=tiledrift ledger=true conservative=true` (package commit `HASH`, Julia 1.13.3) runs the
-same variants under the test toggle `CONSERVATIVE_INTERFACE_FILTER`, which closes the state filter
-at every patch and level interface end, coarse-fine ones included, with two rows in place of the
-identity (`_conservative_filter_rows`, src/kernels.jl). The two faces beside the end node take the
-explicit value g/σ of the filter's face flux, g the face stencil of the residual B − A and σ the
-left-hand side's row sum; the end node takes their difference, an explicit row reading four ghost
-layers; the next node takes the face relation at the face beyond; the rest keep the interior rows.
-A patch's corrections then telescope to g/σ at the face beside the node, and with the node counted
-at h/2 on each side the composite pass conserves Σ h q. A limited filter pass holds the shared
-node, its end face and the face beside it in one part with one θ, which the exchange of a
-same-level interface makes the same on both patches. With the toggle off, sixteen runs (patched,
-tiled, regridded, subcycled, limited and unlimited, host and KA-CPU device) reproduce the base's
-interior arrays bit for bit, and this tree gives the table above to every printed digit. On, with
-the filter passes' share of the drift from the ledger:
+Closing the state filter at a node two same-level patches or two tiles share with conservative
+rows takes the filter passes' share of the tiled level's mass drift down to the box's; what
+remains of the drift under `:closure` enters through the right-hand side at the closure-row
+faces. The rows sit behind the test toggle `CONSERVATIVE_INTERFACE_FILTER` (package commits
+`be418e3` and `HASH`), and `_conservative_filter_rows` in src/kernels.jl describes them: the two
+faces beside the shared node take the explicit value g/σ of the filter's face flux, g the face
+stencil of the residual B − A and σ the left-hand side's row sum, so that a patch's corrections
+telescope to the same face value on both sides. A coarse-fine end keeps the identity row, its node
+overwritten by the shell. A limited filter pass holds the shared node, its end face and the face
+beside it in one part with one θ, which the exchange of a same-level interface makes the same on
+both patches.
+
+With the toggle off the runs reproduce the base bit for bit, and the toggle leaves a level with no
+same-level face bit for bit as it is: boxes at the global step and subcycled, limited and
+unlimited, under either flux, regridded, on the host and under the KernelAbstractions CPU backend.
+The table gives the cylindrical Noh's mass drift against the exact mass, the filter
+passes' share of it from the ledger, and the L1 density difference from the uniform run at the
+level's spacing over the level's region:
 
 ```
-layout, change                 steps  plateau  deficit  shock   mass      split     root      filter
-box                            6641   15.6523  50.9%    0.2033  −9.7e-7   −1.9e-6   +5.5e-4   −4.6e-7
-tiles of 8                     6842   15.7213  50.1%    0.2029  +3.0e-4   +3.0e-4   +1.09e-3  −2.3e-6
-tiles of 16                    6734   15.6907  51.0%    0.2031  +1.25e-4  +1.24e-4  +9.1e-4   −9.9e-7
-tiles of 8, subcycled          2280   15.7214  50.0%    0.2029  +2.9e-4   +2.9e-4   +1.05e-3  −2.0e-6
-regridded tiles of 8           6850   15.7206  50.2%    0.2029  +2.8e-4                       +1.8e-5
-tiles of 8, sensor clamped     6846   15.6971  50.5%    0.2035  +1.94e-4  +1.93e-4  +7.9e-4   −4.4e-6
-tiles of 8, :ghost             6633   15.6526  50.7%    0.2033  −2.5e-6   −3.4e-6   +5.4e-4   −3.3e-7
-box, limited                   9180   15.6675  50.7%    0.2032  −5.2e-7   −1.9e-6   +6.2e-4   −4.6e-7
-tiles of 8, limited            10679  15.6637  51.0%    0.2032  +6.1e-5   +5.9e-5   +7.3e-4   +5.5e-5
-box, limited, :ghost           9229   15.6675  50.8%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4   −4.6e-7
-tiles of 8, limited, :ghost    8869   15.6614  50.8%    0.2032  +6.8e-5   +6.6e-5   +6.8e-4   +6.6e-6
-tiles of 16, limited, :ghost   9005   15.6644  50.9%    0.2032  +4.1e-5   +4.0e-5   +6.7e-4   +5.4e-6
+cylindrical Noh, level over root nodes 1:81, t = 0.6, Julia 1.13.3
+                               toggle off                       toggle on
+layout, change                 mass      filter    L1           steps  plateau  deficit  shock   mass      filter    L1
+box                            −9.7e-7   −4.6e-7   1.105e-5     6641   15.6523  50.9%    0.2033  −9.7e-7   −4.6e-7   1.105e-5
+tiles of 8                     +1.73e-3  +1.32e-3  8.474e-3     6842   15.7202  50.2%    0.2029  +2.97e-4  −2.24e-6  4.894e-3
+tiles of 16                    +9.16e-4  +6.82e-4  4.630e-3     6734   15.6917  50.9%    0.2031  +1.32e-4  −9.36e-7  2.881e-3
+tiles of 8, subcycled          +1.56e-3                         2279   15.7216  50.0%    0.2029  +2.89e-4  −1.95e-6  4.819e-3
+regridded tiles of 8           +1.73e-3  +1.35e-3  8.700e-3     6848   15.7219  50.2%    0.2029  +2.81e-4  +1.63e-5  4.932e-3
+regridded box                  +1.88e-5  +2.93e-5               6647   15.6517  50.7%    0.2033  +1.88e-5  +2.93e-5  4.116e-4
+tiles of 8, sensor clamped     +1.05e-3                         6842   15.6924  50.6%    0.2035  +1.94e-4  −4.16e-6  4.832e-3
+tiles of 8, :ghost             +1.87e-5  +2.38e-5  6.396e-4     6636   15.6526  50.7%    0.2033  −2.45e-6  −3.33e-7  5.416e-4
+box, limited                   −5.18e-7  −4.58e-7  6.436e-4     9217   15.6672  50.8%    0.2032  −5.18e-7  −4.58e-7  6.436e-4
+tiles of 8, limited            +4.14e-4  +3.49e-4  1.741e-3     10497  15.6639  51.0%    0.2032  +6.05e-5  +5.51e-5  1.316e-3
+tiles of 8, limited, :ghost    +2.09e-4  +1.56e-4  7.479e-4     8846   15.6612  50.8%    0.2032  +6.78e-5  +6.62e-6  7.063e-4
+tiles of 16, limited, :ghost   +1.18e-4  +8.78e-5  7.214e-4     9012   15.6647  50.9%    0.2032  +4.12e-5  +5.43e-6  7.678e-4
 ```
 
-The filter passes' share falls from +1.32e-3 to −2.3e-6 on tiles of 8, from +6.8e-4 to −9.9e-7 on
-tiles of 16 and from +2.4e-5 to −3.3e-7 under `:ghost`, the box's order; the regridded tiles' share,
-+1.35e-3 off, is +1.8e-5. What remains under `:closure`, +3.0e-4 on tiles of 8, enters through the
-right-hand side at the closure-row faces. Limited, the tiles of 8 drift +6.1e-5 under `:closure` and
-+6.8e-5 under `:ghost`, against +4.1e-4 and +2.1e-4 off, the filter passes carrying +5.5e-5 and
-+6.6e-6 against +3.5e-4 and +1.56e-4. A limited pass distributes a limited face's correction by the
-divergence's face weights, the closure rows' at a `:closure` interface (0.369 h at the end node)
-and h and h/2 at an open one, and only the second are the composite quadrature's. Against the
-uniform run at the level's spacing the L1 difference over the level's region falls on tiles of 8
-from 8.5e-3 to 4.9e-3 under `:closure` and from 6.4e-4 to 5.5e-4 under `:ghost`, and limited from
-1.74e-3 to 1.32e-3 and from 7.5e-4 to 7.1e-4. The box takes the rows at its coarse-fine face, which
-the shock does not reach: unlimited no printed metric moves and its L1 difference goes from 1.1e-5
-to 9.6e-6; limited it takes 9180 steps against 9217. The planar Noh at t = 0.5 drifts on tiles of 8
-by +4.4e-4 (off +3.9e-3), by −1.0e-5 under `:ghost` (+3.6e-5), by +1.3e-4 limited (+9.1e-4) and by
-+8.9e-5 limited under `:ghost` (+3.0e-4), the box by −7.0e-6 either way. The smooth pulse drifts
-+1.3e-9 on the tiles under `:closure` (−1.9e-9 off) and +1.1e-10 under `:ghost` and on the box.
+The regridded box, which has no same-level face and moves with the shock, takes a larger filter
+share than the regridded tiles do with the toggle on. The filter share left on regridded tiles is
+therefore the moving coarse-fine face's, which a static level's face, never reached by the shock,
+does not see. Limited, the filter share under `:closure` is eight times the one under `:ghost`.
+Under `:closure` a limited face's correction is distributed by the divergence's closure-row
+weights, which are not the composite quadrature's h and h/2; at an open `:ghost` end they are.
 
-`bench/filter_conservation.jl parts=shared N=48` assembles the composite operator of a periodic line
-of 48 nodes held as two patches sharing nodes 1 and 25, each patch's line closed at both ends by
-the filter's interface rows and its ghost layers holding the other patch's nodes, a shared node the
-mean of its two copies: the defect d = Mᵀ V − V relative to V = h, and on the wave
-sin(2π · 3i/n + 0.37) the composite pass against the single line's:
+On the planar Noh, before the shock reaches the level's outer face, the rows take the tiles'
+drift down by about an order of magnitude under `:closure`, limited or not. A smooth pulse at
+rest crossing the tile faces drifts by under a part in a billion either way:
 
 ```
+                                 planar Noh, drift at t = 0.5    smooth pulse, drift to t = 0.3
+layout, change                   off        on                   off        on
+box                              −7.0e-6    −7.0e-6              +1.12e-10  +1.12e-10
+tiles of 8                       +3.9e-3    +4.1e-4              −1.91e-9   +1.29e-9
+tiles of 8, :ghost               +3.6e-5    −1.1e-5              +1.05e-10  +1.05e-10
+tiles of 8, limited              +9.1e-4    +1.2e-4
+tiles of 8, limited, :ghost      +3.0e-4    +8.7e-5
+```
+
+The conservative rows conserve the composite pass to round-off for every filter that takes rows,
+and they converge to the single line's pass one order faster than the identity row.
+`bench/filter_conservation.jl parts=shared N=48` assembles the composite operator of a periodic
+line held as two patches sharing two nodes, each patch's line closed by the interface rows and its
+ghost layers holding the other patch's nodes, a shared node the mean of its two copies. The table
+gives the defect d = Mᵀ V − V relative to V = h and the composite pass against the single line's
+on a smooth wave:
+
+```
+wave sin(2π · 3i/n + 0.37)
 filter                  rows           max |d|/V   Σ|d|/ΣV   composite − single, n = 48, 96, 192   order
 compact_filter()        identity       2.20e-2     7.3e-3    2.4e-8    9.6e-11   3.8e-13           7.99
                         conservative   2.2e-16     7.2e-17   1.1e-8    2.1e-11   4.0e-14           9.02
@@ -3125,71 +3139,88 @@ pyranda_filter()        identity       1.35e-3     9.5e-4    1.9e-9    6.2e-12  
 gaussian_filter()       none           2.2e-16     9.3e-18   0         0         0
 ```
 
-The identity row's defect sits at the shared node and its neighbours with alternating sign, +2.2e-2
-at the node and −2.0e-2 beside it for the default filter. Under either row set the two copies of a
-shared node agree bit for bit. The single line's correction of the wave is 6.7e-8 at n = 48
-(1.1e-9 for the pentadiagonal filter); the conservative rows depart from the single line by a sixth
-of it and converge one order faster than the identity row, whose departure is a third of it, and the
-pentadiagonal row at n = 192 is at round-off. The explicit Gaussian reads the ghosts through its
-interior stencil and is the single line's operator. In the solver one pass over a tiled level of
-four tiles, with a density step at two shared nodes and its ghost layers filled, changes the tiles'
-own mass by −1.1e-16 relative under the rows and by +9.1e-5 under the identity row; over a level of
-six tiles spanning a periodic line the composite mass by 0 and by +6.5e-5.
+The identity row's defect sits at the shared node and its neighbours with alternating sign. Under
+either row set the two copies of a shared node agree bit for bit. The pentadiagonal row's last
+figure is at round-off, and the explicit Gaussian reads the ghosts through its interior stencil
+and is the single line's operator. In the solver, one pass over a level of six tiles spanning a
+periodic line, with a density step at two shared nodes, keeps the tiles' mass to round-off under
+the rows (`test/conservation_tests.jl`).
 
-The filtered interface rows of `test/convergence.jl` with the toggle set, the toggle-off run
-reproducing the recorded orders: two levels under the cascade filter 6.87 (recorded 6.87), under
-the pentadiagonal filter 6.01 (6.01), three levels at a symmetry plane 5.44 (5.49; the finest error
-1.29e-13 against 1.25e-13), two levels at the r-z axis 6.44 and viscous 6.47 (6.43, 6.47), at the
-r-z corner 7.10 (7.11). Rows added for this measurement, off then on: the two-level entropy wave on
-tiles of 4, 6.87 and 6.87; two patches under the cascade filter at k = 1, 6.66 and 6.70 (finest
-error 8.9e-14 and 6.8e-14), and at k = 3, 6.77 and 6.78. Against the one-patch run at the same
-spacing the filtered two-patch run at k = 3 differs by 1.66e-6, 1.49e-8 and 1.11e-10 at N = 48, 96
-and 192 off and by 1.32e-6, 1.04e-8 and 7.8e-11 on, the one-patch run's own error being 5.2e-7,
-5.5e-9 and 9.8e-11. The level rows of `test/validation.jl` (the cylindrical Noh, a box at the axis),
-off and on: over 85 nodes plateau 15.6523 both, deficit 50.9% and 50.8%, shock 0.2033 both, mass
-−9.7e-7 both, max |ρ − ρ_uniform| on the tile 5.3e-3 and 9.2e-3, 6641 steps both; over 43 nodes
-plateau 14.9507 and 14.9320, deficit 50.7% and 50.5%, shock 0.2109 and 0.2110, mass +8.4e-6 and
-+1.12e-5 against the row's bound of 1e-5, 6006 and 6009 steps. Both move through the coarse-fine
-face alone. Tiles of 8 over the 85 nodes drift +1.8e-5 off and −2.4e-6 on.
-
-`part=levels conservative=true` runs the tiled rows of the level tables with the limiter on, toggle
-off and on (steps, then unguaranteed sides). No run leaves an inadmissible point-step, at the shell
-or elsewhere, under either flux and either setting:
+The rows keep the interface order, and a filtered two-patch run comes closer to the one-patch run
+with them than without. The filtered interface rows of `test/convergence.jl` that have no
+same-level face reproduce their recorded orders with the toggle on to every printed digit. The
+table gives the orders of the rows with a shared face, added for this measurement (the entropy
+wave of `test/smooth_cases.jl` under `compact_filter(0.45)` at every step), and the two-patch
+run's maximum density difference from the one-patch run:
 
 ```
-case                                   :closure, off       :closure, on        :ghost, off         :ghost, on
-WC 200, regridded box                  4259, 0             4209, 0             4219, 0             4222, 0
-WC 200, regridded tiles of 8           1420, 0             1425, 0             1429, 0             1427, 0
-WC 200, regridded tiles, subcycled     1440, 0             1421, 0             1459, 0             1434, 0
-blast 64², tiles of 8                  256, 1              257, 1              248, 1              244, 1
-blast 64², tiles of 8, subcycled       219, 0              210, 0              226, 2              227, 2
-Noh ν = 2, tiles of 8                  10094, 4            10679, 0            8890, 0             8869, 0
-Noh ν = 2, tiles of 8, subcycled       3265, 14            3368, 8             2904, 0             2929, 0
-Noh ν = 2, regridded tiles             10265, 34           10399, 56           9322, 38            9201, 0
-Noh ν = 2, regridded, subcycled        3403, 4             3472, 2             3106, 0             3100, 0
-r-z converging shock 33², tiles of 8   330, 31             329, 32             322, 32             322, 34
-the same, subcycled                    201, 50             202, 41             199, 36             200, 45
-the same, regridded tiles              334, 36             333, 37             326, 31             326, 38
-regridded tiles, subcycled             199, 39             199, 33             198, 44             199, 33
+row                                      order, off   order, on
+two levels, tiles of 4                   6.87         6.87
+two patches, k = 1                       6.66         6.70
+two patches, k = 3                       6.77         6.78
+
+two patches against one patch, k = 3     N = 48     N = 96     N = 192
+toggle off                               1.660e-6   1.488e-8   1.109e-10
+toggle on                                1.322e-6   1.036e-8   7.819e-11
+the one-patch run's own error            5.240e-7   5.468e-9   9.848e-11
 ```
 
-The Noh tiles' mass drift falls under `:closure` from +4.1e-4, +4.2e-4, +4.7e-4 and +5.7e-4 (static,
-subcycled, regridded, regridded and subcycled) to +6.1e-5, +6.5e-5, +7.5e-5 and +9.3e-5, and under
-`:ghost` from +2.1e-4, +2.2e-4, +2.3e-4 and +2.5e-4 to +6.8e-5, +6.8e-5, +7.0e-5 and +7.1e-5. The
-limited `:closure` tiles take 6% more steps (10679 against 10094); the other rows move by a few
-percent either way.
+The validation level rows of `test/validation.jl`, a box at the axis, have no same-level face and
+do not move. Tiles over the same nodes drift less with the toggle on:
 
-With the toggle on, the time reached after 10 or 20 steps and the composite mass agree to 5e-15
-relative between 1, 2, 4 and 8 ranks on four tiles of a 2-D periodic square with the artificial
-properties and the filter on, on twelve subcycled tiles of a 1-D level and six limited ones, on two
-root patches whose lines split over the ranks at 4 and 8, unlimited and limited, and on a box level
-split over the ranks, and on the levels the volume integrals of each conserved component's square
-agree as well. The MPI suite's limiter phase passes at 2, 4 and 8 ranks with the toggle off. On
-device storage under the KernelAbstractions CPU backend the patched,
-refined, tiled, stacked and limited testsets of `test/device_tests.jl` reproduce the host bitwise
-with the toggle on, and `test/positivity_tests.jl` passes with it. The step costs 0.999, 0.991 and
-1.013 times the toggle-off step on a blast of 64² with tiles of 8, the same limited, and two
-patches limited (medians of five alternations in one process, whose pairs spread by ±7%).
+```
+cylindrical Noh, level over root nodes 1:85     mass, off    mass, on
+tiles of 8                                      +1.83e-5     −2.56e-6
+```
+
+Under the positivity limiter the rows leave no inadmissible point-step on any tiled row of the
+level tables, under either interface flux, and the Noh tiles' drift falls by a factor of six to
+eight under `:closure` and of three under `:ghost`. `part=levels conservative=true` runs the rows
+with the limiter on; the table gives steps and unguaranteed sides, and the Noh tiles' mass drift:
+
+```
+case                                   :closure, off   :closure, on   :ghost, off   :ghost, on
+WC 200, regridded box                  4259, 0         4259, 0        4219, 0       4219, 0
+WC 200, regridded tiles of 8           1420, 0         1416, 0        1429, 0       1410, 0
+WC 200, regridded tiles, subcycled     1440, 0         1413, 0        1459, 0       1437, 0
+blast 64², tiles of 8                  256, 1          256, 0         248, 1        249, 1
+blast 64², tiles of 8, subcycled       219, 0          216, 0         226, 2        227, 0
+Noh ν = 2, tiles of 8                  10094, 4        10497, 0       8890, 0       8846, 0
+Noh ν = 2, tiles of 8, subcycled       3265, 14        3362, 12       2904, 0       2899, 0
+Noh ν = 2, regridded tiles             10265, 34       10354, 64      9322, 38      9279, 0
+Noh ν = 2, regridded, subcycled        3403, 4         3412, 0        3106, 0       3069, 253
+r-z converging shock 33², tiles of 8   330, 31         329, 31        322, 32       323, 48
+the same, subcycled                    201, 50         201, 41        199, 36       199, 36
+the same, regridded tiles              334, 36         334, 35        326, 31       328, 35
+regridded tiles, subcycled             199, 39         199, 31        198, 44       199, 40
+
+Noh ν = 2, mass drift                  :closure, off   :closure, on   :ghost, off   :ghost, on
+tiles of 8                             +4.14e-4        +6.05e-5       +2.09e-4      +6.78e-5
+tiles of 8, subcycled                  +4.20e-4        +6.23e-5       +2.15e-4      +6.88e-5
+regridded tiles                        +4.66e-4        +7.33e-5       +2.32e-4      +7.59e-5
+regridded, subcycled                   +5.70e-4        +7.12e-5       +2.49e-4      +7.55e-5
+```
+
+The limited `:closure` tiles take a few percent more steps with the rows. The regridded, subcycled
+tiles under `:ghost` leave more unguaranteed sides with the rows than without, a count whose cause
+was not traced; the regridded box, which has no same-level face, is unchanged.
+
+The rows depend neither on the rank count nor on the storage, and cost nothing measurable. With
+the toggle on, the time reached and the composite mass agree to 5e-15 relative between one, two,
+four and eight ranks on four tiles of a periodic square, on twelve subcycled tiles of a level on
+a line and six limited ones, on two root patches whose lines split over the ranks, unlimited
+and limited, and on a box level split over the ranks. Under the KernelAbstractions CPU backend the
+patched, refined, tiled and limited runs of `test/device_tests.jl` reproduce the host bitwise with
+the toggle on, as does a level whose tiles of one extent fall into separate stacks by face kind;
+the testsets' assertions on the number of stacks hold with the toggle off only. The step's cost
+with the toggle on, against off, medians of five alternations in one process:
+
+```
+blast 64²                     on / off
+tiles of 8                    1.011
+tiles of 8, limited           1.014
+two patches, limited          1.000
+```
 
 ## Directional bulk viscosity
 

@@ -309,13 +309,15 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   take it is open. The toggle stays off because of two defects. The filter's row at a
   node two tiles share is the identity, a row that does not conserve, and
   the filter passes carry three quarters of that drift. Conservative rows at
-  every interface end are carried behind the test toggle
-  `CONSERVATIVE_INTERFACE_FILTER` (commit `HASH`): they bring the filter's
-  share to the box's and the limited tiles' drift down sevenfold under
-  `:closure` and threefold under `:ghost`, at the interface order and with no
-  inadmissible point, so the mass budget of A21's limited, tiled band waits
-  on making them the default, which moves every patched, tiled and refined
-  baseline that filters. On
+  a node two same-level patches or tiles share, a coarse-fine end keeping the
+  identity row, are carried behind the test toggle
+  `CONSERVATIVE_INTERFACE_FILTER` (commits `be418e3`, `HASH`): they bring the
+  filter's share to the box's and the limited tiles' drift down sevenfold
+  under `:closure` and threefold under `:ghost`, at the interface order and
+  with no inadmissible point, and leave a level with no same-level face bit
+  for bit as it is. The mass budget of A21's limited, tiled band waits on
+  making them the default, which moves every filtered patched and tiled
+  baseline. On
   a tiled level a perturbation of one unit in the last place grows in the
   limited `:ghost` run to a visible difference within a few hundred steps,
   where under the closure rows it stays at round-off, so the solution
@@ -334,7 +336,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   unheld inadmissible node one first-order flux (commit `6debed0`). Every
   refined case of `bench/positivity.jl part=levels`, the blast with tiles
   included, then leaves no inadmissible point. With the bound on ρe held at
-  least 16 eps |E| (commit `HASH`), so that it stays above the rounding step
+  least 16 eps |E| (commit `fec3e93`), so that it stays above the rounding step
   of E in cold gas moving fast, the planar Noh on four patches and on static
   and regridded tiles (`pnoh81tiles`, `pnoh81regrid`) and a limited Float32
   planar Noh leave none either. Device storage carries it

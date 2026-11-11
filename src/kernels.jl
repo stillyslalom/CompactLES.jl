@@ -529,12 +529,12 @@ end
 # node's correction is the difference of the two pinned faces, and with the
 # node counted at h/2 in each patch the composite pass conserves Σ h q and
 # gives the node one value on both sides. On smooth data F differs from g/σ
-# by O(h²) relative to the correction, so the rows keep the filter's order. At
-# a coarse-fine end the shell overwrites node 1, and the relation holds at
-# face 2½, where the coarse-fine coupling reads the child's filter flux
-# (`_replaced_rows`). The rows are formed in BigFloat and rounded once to the
-# scheme's type. An explicit filter (`gaussian_filter`) reads the ghosts
-# through its interior stencil, the single line's operator, and takes no rows.
+# by O(h²) relative to the correction, so the rows keep the filter's order. A
+# coarse-fine end keeps the identity row: the shell overwrites its node, and
+# composite conservation there is the coarse-fine coupling's. The rows are
+# formed in BigFloat and rounded once to the scheme's type. An explicit filter
+# (`gaussian_filter`) reads the ghosts through its interior stencil, the single
+# line's operator, and takes no rows.
 
 # The two rows from the band `l` (l_1 .. l_q), the centre weight `a0` and the
 # right-hand-side half-stencil `c` (c_m on f_{i±m}): per row the left-hand
@@ -579,13 +579,14 @@ function _conservative_interface_rows(scheme::CompactScheme{T}) where {T}
             for (lhs, rhs, first) in rows]
 end
 
-# Test and benchmark toggle: `true` closes the state filter at every patch and
-# level interface end, coarse-fine ones included, with the conservative rows
-# above, and a limited filter pass then holds a node two patches share
-# (`_filter_ends` in positivity.jl); `false`, the default, keeps the identity
-# row of `interface_closures`. Read where the filter plans and the limiter are
-# built (the constructor, a regrid, a restart, the start of `run!`), so a run
-# sets it before construction and leaves it set.
+# Test and benchmark toggle: `true` closes the state filter with the
+# conservative rows above at a node two same-level patches or two tiles share,
+# and a limited filter pass then holds that node (`_filter_ends` in
+# positivity.jl); `false`, the default, keeps the identity row of
+# `interface_closures` there. A coarse-fine end keeps the identity row either
+# way. Read where the filter plans and the limiter are built (the constructor,
+# a regrid, a restart, the start of `run!`), so a run sets it before
+# construction and leaves it set.
 const CONSERVATIVE_INTERFACE_FILTER = Ref(false)
 
 # The rows of the state filter at a patch or level interface end.

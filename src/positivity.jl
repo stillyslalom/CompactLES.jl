@@ -908,8 +908,9 @@ function PositivityLimiter(solver; separate::Bool=false)
     interface = ntuple(d -> decomp.active[d] ?
                             (shared(solver.bcs[d][1]), shared(solver.bcs[d][2])) :
                             (false, false), 3)
-    # The filter's conservative rows close every interface end of the patch,
-    # and a filter pass holds the end node at a same-level one (`_filter_ends`).
+    # The filter's conservative rows close the faces the patch shares with a
+    # patch of its own level, and a filter pass holds the end node there
+    # (`_filter_ends`).
     conservative = ntuple(d -> CONSERVATIVE_INTERFACE_FILTER[] ? interface[d] :
                                (false, false), 3)
     # The patches of a rank share the workspace by extent, and a stage takes

@@ -1321,7 +1321,8 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
                         interface_divergence, ring, boundary,
                         wall_faces=_sensor_wall_faces(fbcs),
-                        gaussian=smoother === :gaussian, folded, root_folds)
+                        gaussian=smoother === :gaussian, folded, root_folds,
+                        shared=_shared_faces(faces))
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     # `ring` adds the `:d8` ringing buffer; `grad_Q_columns` selects the conserved
@@ -1396,13 +1397,20 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                      wall_faces::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                      gaussian::Bool=true,
                      folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
-                     root_folds=nothing) where {T}
+                     root_folds=nothing,
+                     shared::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
-    icf = ext_f ? _filter_interface_rows(filt) : nothing
+    icf = ext_f ? interface_closures(filt) : nothing
+    # The filter closes a face the patch shares with a tile of its own level
+    # with `_filter_interface_rows` and a coarse-fine face with the identity
+    # row, whose end node the parent's shell overwrites (`shared`, from the
+    # tile's face table).
+    icfs = ext_f ? _filter_interface_rows(filt) : nothing
+    atf(d, side) = boundary[d][side] ? nothing : shared[d][side] ? icfs : icf
     ivd = ext_f || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
     # Every face of a refined patch but one on the domain boundary closes
@@ -1426,7 +1434,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
          mkf(deriv, d; lo_closures=at(d, 1, ivd), hi_closures=at(d, 2, ivd)) :
          dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
-        mkf(filt, d; lo_closures=at(d, 1, icf), hi_closures=at(d, 2, icf)) :
+        mkf(filt, d; lo_closures=atf(d, 1), hi_closures=atf(d, 2)) :
         nothing, 3)
     # The sensor smoother's input is built per patch and its coarse-fine
     # ghosts are never filled, so its plans keep the standard closures even
@@ -1511,7 +1519,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
         dp = pairof(deriv, d, at(d, 1, icd), at(d, 2, icd))
         vp = ivd !== nothing && iface[d] ? pairof(deriv, d, at(d, 1, ivd), at(d, 2, ivd)) :
              nothing
-        fq = pairof(filt, d, at(d, 1, icf), at(d, 2, icf))
+        fq = pairof(filt, d, atf(d, 1), atf(d, 2))
         sw_f(side) = folded[d][side] ? nothing : sw(d, side)
         swg_f(side) = folded[d][side] ? nothing : swg(d, side)
         sp = FoldRingPlans(pairof(smoo, d, swg_f(1), swg_f(2)),
@@ -1642,7 +1650,13 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
     resize!(patches, length(held))
     # One stack per padded extent and set of boundary faces, the tiles of each
     # in `held` order: the batched plans close every member's lines alike.
-    groups = [(fine_extent(tregions[ti], active_g), boundaries[ti]) for ti in held]
+    # Under the conservative filter rows the faces a tile shares with another
+    # tile join the key, since the filter closes those with other rows than a
+    # coarse-fine face.
+    shared_key(ti) = CONSERVATIVE_INTERFACE_FILTER[] ? _shared_faces(faces[ti]) :
+                                                       _NO_BOUNDARY
+    groups = [(fine_extent(tregions[ti], active_g), boundaries[ti], shared_key(ti))
+              for ti in held]
     for key in unique(groups)
         ks = [k for k in eachindex(held) if groups[k] == key]
         members = [id0 + k for k in ks]
@@ -1653,7 +1667,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         grad_Q_columns, level; interface_divergence,
                                         ghost_viscous, gradient_ring, ring,
                                         boundary=key[2], bcs,
-                                        smoother, root_folds, n_sensed)
+                                        smoother, root_folds, n_sensed,
+                                        shared=key[3])
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1675,7 +1690,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, smoother::Symbol=:gaussian,
-                           root_folds=nothing, n_sensed::Int=0) where {T}
+                           root_folds=nothing, n_sensed::Int=0,
+                           shared::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     ntiles = length(tregions)
     # The members share their boundary faces and so fold alike: at a symmetry
     # plane or the r-z axis the spanning patch holds the fold with batched
@@ -1689,7 +1705,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
                              ntiles, stride, interface_divergence, ring, boundary,
                              wall_faces, gaussian=smoother === :gaussian, folded,
-                             root_folds)
+                             root_folds, shared)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1743,7 +1759,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                              (v(a) for a in arrays.sensed_fields)))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, ring, boundary, wall_faces,
-                              gaussian=smoother === :gaussian, folded, root_folds)
+                              gaussian=smoother === :gaussian, folded, root_folds,
+                              shared)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
                                  gradient_deriv=gradient_ring ? deriv : nothing,
@@ -1777,17 +1794,43 @@ _fine_bc(face::Int, on_boundary::Bool, bc) =
 # plan of `p`: what a regrid hands a surviving tile whose neighbors changed.
 # `comm` is the tile group's new communicator over the same ranks: the regrid
 # frees the group `p.comm` belongs to, and `MPI.free` nulls that handle.
+# `plans`, where given (`_survivor_plans`), replaces the filter plans and the
+# folds that hold them.
 function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs,
-                  comm::MPI.Comm)
+                  comm::MPI.Comm, plans=nothing)
     # `field_tuples` is derived, and the junction captures are rebuilt for
     # the new layout, their deferral clear.
     names = filter(f -> f ∉ (:field_tuples, :reflux_captures, :reflux_deferred),
                    fieldnames(typeof(p)))
     args = map(names) do f
         f === :id ? id : f === :faces ? faces : f === :bcs ? bcs :
-        f === :comm ? comm : getfield(p, f)
+        f === :comm ? comm :
+        plans !== nothing && f === :filter_plans ? plans.filter :
+        plans !== nothing && f === :folds ? plans.folds : getfield(p, f)
     end
     return Patch(args...)
+end
+
+# The faces a refined patch shares with a patch of its own level, from its
+# face table (a neighbor's index, 0 at a coarse-fine or domain face).
+_shared_faces(faces::NTuple{3,NTuple{2,Int}}) = map(f -> (f[1] != 0, f[2] != 0), faces)
+
+# The plans of a tile a regrid keeps whose faces change kind, a same-level
+# neighbor appearing or going: under the conservative filter rows its filter
+# plans close the two kinds of face with different rows, so they are rebuilt
+# for the new faces and the rest of the patch stands. `nothing` where the
+# plans stand. A tile is whole on one rank, so the rebuild is rank-local.
+function _survivor_plans(p::Patch, faces::NTuple{3,NTuple{2,Int}}, fbcs,
+                         boundary::NTuple{3,NTuple{2,Bool}}, bcs, root_folds, spec,
+                         smoother::Symbol, ring::Bool)
+    (CONSERVATIVE_INTERFACE_FILTER[] && _shared_faces(p.faces) != _shared_faces(faces)) ||
+        return nothing
+    return _fine_plans(p.decomp, p.h, spec.deriv, spec.filt, spec.smoo, spec.interface_rhs,
+                       spec.backend; interface_divergence=spec.interface_divergence, ring,
+                       boundary, wall_faces=_sensor_wall_faces(fbcs),
+                       gaussian=smoother === :gaussian,
+                       folded=_level_fold_faces(boundary, bcs), root_folds,
+                       shared=_shared_faces(faces))
 end
 
 # Multi-patch construction: the rank set is partitioned over the patch slabs,

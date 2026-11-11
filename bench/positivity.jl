@@ -151,7 +151,7 @@
 #             variant of `pulse`. Not in `part=all`
 #
 # `conservative=true` sets `CONSERVATIVE_INTERFACE_FILTER` for every part: the
-# filter closes each patch and level interface with its conservative rows, and
+# filter closes each same-level interface with its conservative rows, and
 # a limited pass holds the node two patches share.
 #
 # The tallies of `variants`, summed over the steps of a run:
@@ -1449,14 +1449,16 @@ end
 # A drift variant is a layout and an optional change after a hyphen
 # (`tiles8-ghost`): `box`, the level over root nodes 1:DRIFT_M as one patch;
 # `tilesE`, static tiles of edge E (80 is one tile); `regrid8`, tiles of edge 8
-# regridded every 10 steps; `uniform`, the run at the level's spacing. The
+# regridded every 10 steps; `regridbox`, one box regridded every 10 steps;
+# `uniform`, the run at the level's spacing. The
 # changes are `sub` (subcycled), `ghost` (`interface_flux = :ghost`),
 # `noreflux` (`REFLUX` off), `clamp` (`SENSOR_INTERFACE_GHOSTS` off),
 # `nofilter` (no filter pass), `lim` (the positivity limiter on) and
 # `ghostlim` (the limiter on under `:ghost`, `LIMITED_GHOST_INTERFACES` set).
 # The limited runs take no
 # conservative coarse-fine coupling, as `REFLUX` off.
-const DRIFT_LAYOUTS = ("box", "tiles8", "tiles16", "tiles80", "regrid8", "uniform")
+const DRIFT_LAYOUTS = ("box", "tiles8", "tiles16", "tiles80", "regrid8", "regridbox",
+                       "uniform")
 const DRIFT_CHANGES = ("", "sub", "ghost", "noreflux", "clamp", "nofilter", "lim",
                        "ghostlim")
 const DRIFT_M = 81
@@ -1478,6 +1480,7 @@ function drift_numerics(layout, change, N, ν=2)
     amr = layout == "uniform" ? nothing :
           layout == "box" ? AMR(initial=box, subcycle=sub) :
           layout == "regrid8" ? AMR(initial=box, tile=8, regrid_interval=10, subcycle=sub) :
+          layout == "regridbox" ? AMR(initial=box, regrid_interval=10, subcycle=sub) :
           AMR(initial=box, tile=parse(Int, layout[6:end]), subcycle=sub)
     # The level's spacing on the cylinder's half-offset axis is R/(3N − 3/2),
     # on the planar wall's node-centred line R/(3N − 3).
@@ -1606,7 +1609,7 @@ function noh_drift_run(name, ν=2)
     composite = volume_integral(s, Q, :rho) / exact_mass(s.t) - 1
     @printf("  %-17s %5d steps %6.1f s  plateau %.4f  deficit %4.1f%%  shock %.4f\n", name,
             s.step, wall, plat, 100deficit, shock)
-    if layout in ("uniform", "regrid8")
+    if layout in ("uniform", "regrid8", "regridbox")
         @printf("  %-17s mass %+.2e\n", "", composite)
     else
         split_mass, root, restricted = unmasked_masses(s, Q)

@@ -264,13 +264,11 @@ end
     @test defect(gaussian_filter(), CL._conservative_interface_rows(gaussian_filter()))[1] <
           1e-14
 
-    # A tiled level of four tiles, a density step at two of the faces they
-    # share, the state uniform within five fine nodes of the coarse-fine faces.
-    # The rows close the coarse-fine ends too, so a pass changes the tiles'
-    # mass (each tile's own quadrature, a shared node at h/2 on either side) by
-    # the filter's face values at those ends, which vanish on uniform data. One
-    # pass leaves it to round-off under the rows and moves it by the identity
-    # row's defect without them.
+    # A tiled level of six tiles spanning a periodic line, so that every tile
+    # face is shared and none is coarse-fine, a density step at two of them.
+    # One pass changes the tiles' mass (each tile's own quadrature, a shared
+    # node at h/2 on either side) to round-off under the rows and by the
+    # identity row's defect without them.
     function filtered_change(conservative)
         saved = CL.CONSERVATIVE_INTERFACE_FILTER[]
         CL.CONSERVATIVE_INTERFACE_FILTER[] = conservative
@@ -278,14 +276,13 @@ end
             per = (PeriodicBC(), PeriodicBC())
             s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=(per, per, per), filter_cfl=0.0, tile=8,
-                       refine=BlockRegion((8, 0, 0), (32, 1, 1)))
+                       refine=BlockRegion((0, 0, 0), (48, 1, 1)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) ->
                 Prim(rho=1.0 + 0.5 * (abs(x - 0.5) < 0.168), p=1.0, u=(0.3, 0.0, 0.0)))
-            # The ghost layers from the neighbouring tiles and the parent's
-            # shell, as `run!` holds them when it filters.
+            # The ghost layers from the neighbouring tiles, as `run!` holds them
+            # when it filters.
             CL.sync_patches!(s, Q)
-            CL.prolong_level_ghosts!(s, Q)
             lev = s.levels[2]
             tiles_mass() = sum(CL._local_volume_integral(CL.PatchSolver(s, s.patches[i]),
                                                          Q[i][:, :, :, 1], false)
@@ -298,7 +295,48 @@ end
         end
     end
     tiles, change_on = filtered_change(true)
-    @test tiles == 4
+    @test tiles == 6
     @test abs(change_on) < 1e-14
     @test abs(filtered_change(false)[2]) > 1e-6
+
+    # A coarse-fine face keeps the identity row, and a regrid that keeps a tile
+    # while a neighbour appears beside it rebuilds the kept tile's filter plans
+    # for its new faces: every tile's plans are the ones a tile built fresh over
+    # its region with its faces takes.
+    let saved = CL.CONSERVATIVE_INTERFACE_FILTER[]
+        CL.CONSERVATIVE_INTERFACE_FILTER[] = true
+        try
+            per = (PeriodicBC(), PeriodicBC())
+            s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+                       tile=8, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
+                       regrid_interval=1, tag_buffer=0,
+                       tag_predicate=(p, I) ->
+                           0.40 < xcoord(p, 1, interior_index(p, I)[1]) < 0.66)
+            Q = allocate_state(s)
+            initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.3, 0.0, 0.0)))
+            kinds() = Dict(s.patches[i].region => CL._shared_faces(s.patches[i].faces)
+                           for i in s.levels[2].patches)
+            k0 = kinds()
+            run!(s, Q; tfinal=1.0, nmax=2)
+            k1 = kinds()
+            @test length(k1) > length(k0)
+            @test any(r -> haskey(k1, r) && k1[r] != k0[r], keys(k0))
+            spec = getfield(s, :regrid)
+            rows(plan) = (plan.lo_closed, plan.hi_closed, plan.clo, plan.chi)
+            same = map(s.levels[2].patches) do i
+                p = s.patches[i]
+                fresh = CL._fine_plans(p.decomp, p.h, spec.deriv, spec.filt, spec.smoo,
+                                       spec.interface_rhs, spec.backend;
+                                       shared=CL._shared_faces(p.faces))
+                rows(p.filter_plans[1]) == rows(fresh.filter[1])
+            end
+            @test all(same)
+            # The tiles at the level's ends close their coarse-fine face with
+            # the identity row.
+            @test any(i -> s.patches[i].filter_plans[1].clo[1] == [1.0] ||
+                           s.patches[i].filter_plans[1].chi[1] == [1.0], s.levels[2].patches)
+        finally
+            CL.CONSERVATIVE_INTERFACE_FILTER[] = saved
+        end
+    end
 end
