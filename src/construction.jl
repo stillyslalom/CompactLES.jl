@@ -1398,7 +1398,8 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                      gaussian::Bool=true,
                      folded::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                      root_folds=nothing,
-                     shared::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                     shared::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     shared_tiles=nothing) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
@@ -1408,9 +1409,29 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     # The filter closes a face the patch shares with a tile of its own level
     # with `_filter_interface_rows` and a coarse-fine face with the identity
     # row, whose end node the parent's shell overwrites (`shared`, from the
-    # tile's face table).
+    # tile's face table). The batched plans of a stack take every member's
+    # faces (`shared_tiles`), and a dimension along which they differ closes
+    # each tile's lines with its own rows (`device_plan` of the variants).
     icfs = ext_f ? _filter_interface_rows(filt) : nothing
-    atf(d, side) = boundary[d][side] ? nothing : shared[d][side] ? icfs : icf
+    fside(d, side, s) = boundary[d][side] ? nothing : s ? icfs : icf
+    function mkfilt(d; kw...)
+        kinds = shared_tiles === nothing ? nothing :
+                [(!boundary[d][1] && s[d][1], !boundary[d][2] && s[d][2])
+                 for s in shared_tiles]
+        if kinds === nothing || allequal(kinds)
+            k = kinds === nothing ? shared[d] : first(kinds)
+            return mkf(filt, d; kw..., lo_closures=fside(d, 1, k[1]),
+                       hi_closures=fside(d, 2, k[2]))
+        end
+        variants = unique(kinds)
+        hosts = [plan_direction(decomp_f, filt, d, hf[d]; kw...,
+                                lo_closures=fside(d, 1, k[1]),
+                                hi_closures=fside(d, 2, k[2]),
+                                lines_factor=j == 1 ? ntiles : 1)
+                 for (j, k) in enumerate(variants)]
+        return backend_plan(backend, hosts, [findfirst(==(k), variants) for k in kinds];
+                            ntiles, stride)
+    end
     ivd = ext_f || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
     # Every face of a refined patch but one on the domain boundary closes
@@ -1433,9 +1454,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
         (ivd !== nothing && iface[d] ?
          mkf(deriv, d; lo_closures=at(d, 1, ivd), hi_closures=at(d, 2, ivd)) :
          dplans_f[d]), 3)
-    fplans_f = ntuple(d -> decomp_f.active[d] ?
-        mkf(filt, d; lo_closures=atf(d, 1), hi_closures=atf(d, 2)) :
-        nothing, 3)
+    fplans_f = ntuple(d -> decomp_f.active[d] ? mkfilt(d) : nothing, 3)
     # The sensor smoother's input is built per patch and its coarse-fine
     # ghosts are never filled, so its plans keep the standard closures even
     # under `smoother = :compact`, as the same-level patch path does below.
@@ -1519,7 +1538,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
         dp = pairof(deriv, d, at(d, 1, icd), at(d, 2, icd))
         vp = ivd !== nothing && iface[d] ? pairof(deriv, d, at(d, 1, ivd), at(d, 2, ivd)) :
              nothing
-        fq = pairof(filt, d, atf(d, 1), atf(d, 2))
+        fq = (mkfilt(d; fp(1, d)...), mkfilt(d; fp(-1, d)...))
         sw_f(side) = folded[d][side] ? nothing : sw(d, side)
         swg_f(side) = folded[d][side] ? nothing : swg(d, side)
         sp = FoldRingPlans(pairof(smoo, d, swg_f(1), swg_f(2)),
@@ -1649,13 +1668,20 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
     end
     resize!(patches, length(held))
     # One stack per padded extent and set of boundary faces, the tiles of each
-    # in `held` order: the batched plans close every member's lines alike.
-    # Under the conservative filter rows the faces a tile shares with another
-    # tile join the key, since the filter closes those with other rows than a
-    # coarse-fine face.
-    shared_key(ti) = CONSERVATIVE_INTERFACE_FILTER[] ? _shared_faces(faces[ti]) :
-                                                       _NO_BOUNDARY
-    groups = [(fine_extent(tregions[ti], active_g), boundaries[ti], shared_key(ti))
+    # in `held` order: the batched plans close every member's lines alike,
+    # but for the state filter's rows at a face shared with a tile, which the
+    # batched filter plan takes per tile (`_fine_plans`). A dimension along
+    # which the tile's ranks split it has a reduced interface stage taking
+    # one set of rows for every line, so its shared faces join the key.
+    function split_shared(ti)
+        CONSERVATIVE_INTERFACE_FILTER[] || return _NO_BOUNDARY
+        folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundaries[ti], bcs)
+        ext = _fine_region(tregions[ti], active_g, folded).extent
+        dims = _amr_dims(ext, ntuple(d -> ext[d] > 1, 3), MPI.Comm_size(comm))
+        s = _shared_faces(faces[ti])
+        return ntuple(d -> dims[d] > 1 ? s[d] : (false, false), 3)
+    end
+    groups = [(fine_extent(tregions[ti], active_g), boundaries[ti], split_shared(ti))
               for ti in held]
     for key in unique(groups)
         ks = [k for k in eachindex(held) if groups[k] == key]
@@ -1668,7 +1694,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         ghost_viscous, gradient_ring, ring,
                                         boundary=key[2], bcs,
                                         smoother, root_folds, n_sensed,
-                                        shared=key[3])
+                                        shared_tiles=[_shared_faces(faces[held[k]])
+                                                      for k in ks])
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1691,7 +1718,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, smoother::Symbol=:gaussian,
                            root_folds=nothing, n_sensed::Int=0,
-                           shared::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                           shared_tiles=fill(_NO_BOUNDARY, length(tregions))) where {T}
     ntiles = length(tregions)
     # The members share their boundary faces and so fold alike: at a symmetry
     # plane or the r-z axis the spanning patch holds the fold with batched
@@ -1705,7 +1732,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
                              ntiles, stride, interface_divergence, ring, boundary,
                              wall_faces, gaussian=smoother === :gaussian, folded,
-                             root_folds, shared)
+                             root_folds, shared_tiles)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1760,7 +1787,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, ring, boundary, wall_faces,
                               gaussian=smoother === :gaussian, folded, root_folds,
-                              shared)
+                              shared=shared_tiles[slot])
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
                                  gradient_deriv=gradient_ring ? deriv : nothing,

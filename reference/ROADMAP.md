@@ -311,11 +311,10 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   brings the filter's share of the tiled drift to the box's and the limited
   tiles' drift down sevenfold under `:closure` and threefold under `:ghost`,
   at the interface order and with no inadmissible point, and leaves a level
-  with no same-level face bit for bit as it is. The stacks of a device level
-  split by the kind of their tiles' faces, into up to nine on the 2-D bands
-  and blobs measured and one per tile on a 3-D cube of tiles, which
-  multiplies a level's launches; one stack per extent, the filter's end rows
-  chosen per tile inside the batched plan, is open. The toggle stays off
+  with no same-level face bit for bit as it is. A device level keeps one
+  stack per extent and set of boundary faces, its batched filter closing each
+  tile's lines with that tile's rows (commit `HASH`); a dimension along which
+  the tile's ranks split it still splits the stack by face kind. The toggle stays off
   because on a tiled level a perturbation of one unit in the last place grows in the
   limited `:ghost` run to a visible difference within a few hundred steps,
   where under the closure rows it stays at round-off, so the solution

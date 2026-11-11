@@ -324,8 +324,9 @@ plans take `interface_closures` rows whose LHS couples no ghost unknown
 while the RHS reads exchanged ghost layers (`interface_rhs = :extended`, the
 default) or stays one-sided (`:onesided`). At a node two same-level patches
 share the state filter takes two rows under which the composite pass conserves
-(`_filter_interface_rows`), and a device level's stacks split by the kind of
-their tiles' faces for it. The flux divergence follows
+(`_filter_interface_rows`); a stacked device level's batched filter plan
+holds each set of end rows its tiles take and closes each tile's lines with
+its own (`DeviceRowVariants`). The flux divergence follows
 `interface_flux`. Under `:ghost`, the default, the flux is differenced
 through the face with the gradient plans' interface rows, its inviscid part
 from the exchanged ghost state; the ghost values of the rest move in a second

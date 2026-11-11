@@ -98,6 +98,12 @@ backend_plan(::CPUBackend, plan::AbstractDirPlan; ntiles::Int=1, stride::Int=0) 
 backend_plan(backend::DeviceBackend, plan::AbstractDirPlan; ntiles::Int=1,
              stride::Int=0) =
     device_plan(plan, backend.ka; ntiles, stride)
+# A stacked level's batched plan whose tiles close with different end rows,
+# one host plan per variant and the variant of each tile (`device_plan`);
+# only a device backend stacks a level.
+backend_plan(backend::DeviceBackend, plans::Vector{<:AbstractDirPlan}, sel::Vector{Int};
+             ntiles::Int=1, stride::Int=0) =
+    device_plan(plans, sel, backend.ka; ntiles, stride)
 
 # Device mirrors of the Thomas factorization and its spike vectors, plus the
 # interface staging buffers: `ends` packs (y₁, yₙ) per line in the layout of
@@ -145,11 +151,14 @@ A plan built with `ntiles > 1` is the batched plan of a stacked level
 over the tiles, each tile's block sitting `stride` padded slots further along
 the third array dimension, its line buffer holds every tile's lines (the
 wrapped host plan was planned with `lines_factor = ntiles`), and the reduced
-stage solves all of them behind one fence.
+stage solves all of them behind one fence. Where the tiles' ends close with
+different rows, `rows` holds every variant's end rows and factorization and
+each tile's variant (`DeviceRowVariants`), and the closure fields above are
+the first variant's; `rows` is `nothing` otherwise.
 """
 struct DevicePlan{T,P<:AbstractDirPlan,KB,S,MB<:AbstractMatrix{T},
                   VT<:AbstractVector{T},MC<:AbstractMatrix{T},
-                  VI<:AbstractVector{Int}} <: AbstractDirPlan
+                  VI<:AbstractVector{Int},R} <: AbstractDirPlan
     host::P            # wrapped plan: metadata, line_solver, reduced-stage workspaces
     backend::KB
     dim::Int
@@ -173,6 +182,47 @@ struct DevicePlan{T,P<:AbstractDirPlan,KB,S,MB<:AbstractMatrix{T},
     chi_first::VI
     chi_len::VI
     sweep::S
+    rows::R            # per-tile end rows of a batched plan, or `nothing`
+end
+
+# The end rows of a batched plan whose tiles close their lines differently, a
+# tile's two faces along the plan's dimension each shared with a tile of its
+# level or not (the state filter's rows, `_fine_plans`). Every variant's closure
+# stencils, padded to one rectangle per end with a trailing variant dimension,
+# its row counts, and its factorization (`DeviceThomasRows`, `DeviceBandedRows`);
+# `sel[t]` is tile t's variant, and a line's tile is its index over
+# `lines_per_tile`. The interior rows, the scheme and the closedness of both
+# ends are the same in every variant, and no variant has a reduced interface
+# stage, so a line's arithmetic is the one-variant plan's with its own
+# coefficients.
+struct DeviceRowVariants{VS<:AbstractVector{Int},A3<:AbstractArray,
+                         MI<:AbstractMatrix{Int},S}
+    sel::VS
+    lines_per_tile::Int
+    nclo::VS
+    nchi::VS
+    clo::A3            # width × rows × variants
+    clo_first::MI      # rows × variants
+    clo_len::MI
+    chi::A3
+    chi_first::MI
+    chi_len::MI
+    sweep::S
+end
+
+# The tridiagonal factorization per variant, `n × variants`.
+struct DeviceThomasRows{MT}
+    l::MT
+    dinv::MT
+    c::MT
+end
+
+# The banded factorization per variant: `L` (q × n × variants), `U`
+# ((q+1) × n × variants).
+struct DeviceBandedRows{AT}
+    q::Int
+    L::AT
+    U::AT
 end
 
 # Pad the ragged closure stencils to a dense (width × rows) rectangle; the
@@ -235,8 +285,95 @@ function _device_plan(plan::AbstractDirPlan, backend, sweep, ntiles::Int, stride
                       adapt(backend, clo_len),
                       adapt(backend, chi_pad), adapt(backend, plan.chi_first),
                       adapt(backend, chi_len),
-                      sweep)
+                      sweep, nothing)
 end
+
+"""
+    device_plan(plans, sel, backend; ntiles, stride) -> DevicePlan
+
+The batched plan of a stacked level whose tiles close their lines with
+different end rows: `plans` holds one host plan per variant of the rows, the
+first planned with `lines_factor = ntiles` and the others for their
+coefficients alone, and `sel[t]` is the variant of tile `t`. Variants with
+equal rows and factorization merge, and a plan left with one variant is the
+ordinary [`device_plan`](@ref) of the first.
+"""
+function device_plan(plans::Vector{<:AbstractDirPlan}, sel::Vector{Int}, backend;
+                     ntiles::Int=1, stride::Int=0)
+    base = device_plan(plans[1], backend; ntiles, stride)
+    length(sel) == ntiles || error("one variant per tile is needed")
+    reps = Int[]
+    merged = map(eachindex(plans)) do j
+        k = findfirst(r -> _same_rows(plans[r], plans[j]), reps)
+        k === nothing ? (push!(reps, j); length(reps)) : k
+    end
+    length(reps) == 1 && return base
+    variants = plans[reps]
+    p1 = plans[1]
+    for p in variants
+        (p.n == p1.n && p.dim == p1.dim && p.lo_closed == p1.lo_closed &&
+         p.hi_closed == p1.hi_closed && p.a0 == p1.a0 && p.ci == p1.ci &&
+         p.scheme.symmetric == p1.scheme.symmetric && !p.line_solver.hasred &&
+         _explicit(p) == _explicit(p1)) ||
+            error("closure variants of a batched plan differ only in their end " *
+                  "rows, on lines one rank holds")
+    end
+    T = eltype(p1.ci)
+    function stencils(get)
+        rows = [get(p) for p in variants]
+        width = max(maximum(r -> isempty(r) ? 0 : maximum(length, r), rows), 1)
+        m = max(maximum(length, rows), 1)
+        pad = zeros(T, width, m, length(rows))
+        len = zeros(Int, m, length(rows))
+        for (v, r) in enumerate(rows), (j, s) in enumerate(r)
+            pad[1:length(s), j, v] .= s
+            len[j, v] = length(s)
+        end
+        return pad, len
+    end
+    function firsts(get)
+        f = zeros(Int, max(maximum(p -> length(get(p)), variants), 1), length(variants))
+        for (v, p) in enumerate(variants)
+            f[1:length(get(p)), v] .= get(p)
+        end
+        return f
+    end
+    clo, clo_len = stencils(p -> p.clo)
+    chi, chi_len = stencils(p -> p.chi)
+    rows = DeviceRowVariants(adapt(backend, merged[sel]), p1.lines ÷ ntiles,
+                             adapt(backend, [length(p.clo) for p in variants]),
+                             adapt(backend, [length(p.chi) for p in variants]),
+                             adapt(backend, clo), adapt(backend, firsts(p -> p.clo_first)),
+                             adapt(backend, clo_len),
+                             adapt(backend, chi), adapt(backend, firsts(p -> p.chi_first)),
+                             adapt(backend, chi_len),
+                             _sweep_rows(variants, backend))
+    return DevicePlan((getfield(base, f) for f in fieldnames(typeof(base))[1:end-1])...,
+                      rows)
+end
+
+_explicit(p::DirPlan) = p.line_solver.explicit
+_explicit(p::BandPlan) = false
+
+# Whether two host plans close their lines with the same rows and factor them
+# alike.
+_same_rows(a::AbstractDirPlan, b::AbstractDirPlan) =
+    a.clo == b.clo && a.clo_first == b.clo_first && a.chi == b.chi &&
+    a.chi_first == b.chi_first && _same_factor(a.line_solver, b.line_solver)
+_same_factor(a::LineSolver, b::LineSolver) =
+    a.explicit == b.explicit && a.F.l == b.F.l && a.F.dinv == b.F.dinv && a.F.c == b.F.c
+_same_factor(a::BandLineSolver, b::BandLineSolver) =
+    a.q == b.q && a.F.L == b.F.L && a.F.U == b.F.U
+_same_factor(a, b) = false
+
+_sweep_rows(variants::Vector{<:DirPlan}, backend) =
+    DeviceThomasRows(adapt(backend, reduce(hcat, [p.line_solver.F.l for p in variants])),
+                     adapt(backend, reduce(hcat, [p.line_solver.F.dinv for p in variants])),
+                     adapt(backend, reduce(hcat, [p.line_solver.F.c for p in variants])))
+_sweep_rows(variants::Vector{<:BandPlan}, backend) =
+    DeviceBandedRows(variants[1].line_solver.q,
+                     adapt(backend, cat((p.line_solver.F.L for p in variants)...; dims=3)),
+                     adapt(backend, cat((p.line_solver.F.U for p in variants)...; dims=3)))
 
 # --- Kernels ----------------------------------------------------------------
 # The fill and scatter iterate (a, b, i, t): the two orthogonal coordinates in
@@ -275,6 +412,53 @@ end
             acc = zero(eltype(B))
             for κ in 1:chi_len[jr]
                 acc += chi[κ, jr] * f[_gidx(Val(D), i0 - κ, a, b, pad, ks)]
+            end
+            B[l, i] = acc
+        elseif sym
+            acc = a0 * f[_gidx(Val(D), i, a, b, pad, ks)]
+            for m in eachindex(ci)
+                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad, ks)] +
+                                f[_gidx(Val(D), i - m, a, b, pad, ks)])
+            end
+            B[l, i] = acc
+        else
+            acc = zero(eltype(B))
+            for m in eachindex(ci)
+                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad, ks)] -
+                                f[_gidx(Val(D), i - m, a, b, pad, ks)])
+            end
+            B[l, i] = acc
+        end
+    end
+end
+
+# The fill of a plan with per-tile end rows (`DeviceRowVariants`): the kernel
+# above with tile t's variant `v` indexing the end stencils and row counts, so
+# every line runs the one-variant fill's operations in the same order.
+@kernel function _dev_fill_rows_kernel!(B, f, ci, sel, nclo, nchi, clo,
+                                        clo_first, clo_len,
+                                        chi, chi_first,
+                                        chi_len, n, a0, sym,
+                                        lo_closed, hi_closed, n_o1, n_o2, stride, pad,
+                                        ::Val{D}) where {D}
+    a, b, i, t = @index(Global, NTuple)
+    @inbounds begin
+        l = ((t - 1) * n_o2 + (b - 1)) * n_o1 + a
+        ks = (t - 1) * stride
+        v = sel[t]
+        if lo_closed && i <= nclo[v]
+            i0 = clo_first[i, v] - 1
+            acc = zero(eltype(B))
+            for κ in 1:clo_len[i, v]
+                acc += clo[κ, i, v] * f[_gidx(Val(D), i0 + κ, a, b, pad, ks)]
+            end
+            B[l, i] = acc
+        elseif hi_closed && i > n - nchi[v]
+            jr = n + 1 - i
+            i0 = n + 2 - chi_first[jr, v]
+            acc = zero(eltype(B))
+            for κ in 1:chi_len[jr, v]
+                acc += chi[κ, jr, v] * f[_gidx(Val(D), i0 - κ, a, b, pad, ks)]
             end
             B[l, i] = acc
         elseif sym
@@ -353,6 +537,45 @@ end
     end
 end
 
+# The two sweeps with the factorization of the line's variant: line l is in
+# tile (l − 1) ÷ lpt + 1, whose variant `sel` holds. The arithmetic is the
+# one-variant kernels' above.
+@kernel function _dev_thomas_rows_kernel!(B, lmul, dinv, c, sel, lpt, n)
+    l = @index(Global, Linear)
+    @inbounds begin
+        v = sel[_unchecked_div(l - 1, lpt) + 1]
+        for i in 2:n
+            B[l, i] -= lmul[i, v] * B[l, i-1]
+        end
+        B[l, n] *= dinv[n, v]
+        for i in (n-1):-1:1
+            B[l, i] = (B[l, i] - c[i, v] * B[l, i+1]) * dinv[i, v]
+        end
+    end
+end
+
+@kernel function _dev_banded_rows_kernel!(B, Lm, U, sel, lpt, n, q)
+    l = @index(Global, Linear)
+    @inbounds begin
+        v = sel[_unchecked_div(l - 1, lpt) + 1]
+        for k in 1:(n-1)
+            xk = B[l, k]
+            for m in 1:min(q, n - k)
+                lm = Lm[m, k, v]
+                iszero(lm) && continue
+                B[l, k+m] -= lm * xk
+            end
+        end
+        for i in n:-1:1
+            acc = B[l, i]
+            for t in 1:min(q, n - i)
+                acc -= U[1+t, i, v] * B[l, i+t]
+            end
+            B[l, i] = acc * inv(U[1, i, v])
+        end
+    end
+end
+
 @kernel function _dev_pack_ends2_kernel!(ends, B, n)
     l = @index(Global, Linear)
     @inbounds begin
@@ -400,7 +623,24 @@ end
 
 # --- Application ------------------------------------------------------------
 
-function _dev_fill!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D}
+_dev_fill!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D} =
+    _dev_fill!(plan, plan.rows, f, decomp, Val(D))
+
+function _dev_fill!(plan::DevicePlan, rows::DeviceRowVariants, f, decomp::Decomp,
+                    ::Val{D}) where {D}
+    o1, o2 = _odims(Val(D))
+    n_o1 = decomp.n_local[o1]
+    n_o2 = decomp.n_local[o2]
+    _dev_fill_rows_kernel!(plan.backend)(
+        plan.B, _kernel_arg(f), plan.ci, rows.sel, rows.nclo, rows.nchi, rows.clo,
+        rows.clo_first, rows.clo_len, rows.chi, rows.chi_first, rows.chi_len, plan.n,
+        plan.a0, plan.sym, plan.lo_closed, plan.hi_closed, n_o1, n_o2, plan.stride,
+        decomp.n_halo_d, Val(D); ndrange=(n_o1, n_o2, plan.n, plan.ntiles))
+    _maybe_sync(plan.backend)
+    return nothing
+end
+
+function _dev_fill!(plan::DevicePlan, ::Nothing, f, decomp::Decomp, ::Val{D}) where {D}
     o1, o2 = _odims(Val(D))
     n_o1 = decomp.n_local[o1]
     n_o2 = decomp.n_local[o2]
@@ -433,6 +673,30 @@ function _dev_gather!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D}
     _dev_gather_kernel!(plan.backend)(
         plan.B, _kernel_arg(f), n_o1, n_o2, plan.stride, decomp.n_halo_d, Val(D);
         ndrange=(n_o1, n_o2, plan.n, plan.ntiles))
+    _maybe_sync(plan.backend)
+    return nothing
+end
+
+_dev_solve!(plan::DevicePlan) = _dev_solve!(plan, plan.sweep, plan.rows)
+_dev_solve!(plan::DevicePlan, sweep, ::Nothing) = _dev_solve!(plan, sweep)
+
+# A plan with per-tile end rows has no reduced stage (`device_plan` of the
+# variants checks it): the sweep is the whole solve.
+function _dev_solve!(plan::DevicePlan, ::DeviceThomas, rows::DeviceRowVariants)
+    plan.host.line_solver.explicit && return nothing
+    f = rows.sweep
+    _dev_thomas_rows_kernel!(plan.backend)(plan.B, f.l, f.dinv, f.c, rows.sel,
+                                           rows.lines_per_tile, plan.n;
+                                           ndrange=plan.lines)
+    _maybe_sync(plan.backend)
+    return nothing
+end
+
+function _dev_solve!(plan::DevicePlan, ::DeviceBanded, rows::DeviceRowVariants)
+    f = rows.sweep
+    _dev_banded_rows_kernel!(plan.backend)(plan.B, f.L, f.U, rows.sel,
+                                           rows.lines_per_tile, plan.n, f.q;
+                                           ndrange=plan.lines)
     _maybe_sync(plan.backend)
     return nothing
 end
@@ -500,15 +764,15 @@ function apply_along!(out, plan::DevicePlan, f, decomp::Decomp)
     d = plan.dim
     if d == 1
         _dev_fill!(plan, f, decomp, Val(1))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(1))
     elseif d == 2
         _dev_fill!(plan, f, decomp, Val(2))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(2))
     else
         _dev_fill!(plan, f, decomp, Val(3))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(3))
     end
     return out
@@ -518,15 +782,15 @@ function solve_along!(out, plan::DevicePlan, rhs, decomp::Decomp)
     d = plan.dim
     if d == 1
         _dev_gather!(plan, rhs, decomp, Val(1))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(1))
     elseif d == 2
         _dev_gather!(plan, rhs, decomp, Val(2))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(2))
     else
         _dev_gather!(plan, rhs, decomp, Val(3))
-        _dev_solve!(plan, plan.sweep)
+        _dev_solve!(plan)
         _dev_scatter!(out, plan, decomp, Val(3))
     end
     return out
