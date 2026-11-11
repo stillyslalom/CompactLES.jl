@@ -648,6 +648,16 @@ end
             @test size(h["fields/velocity"]) == (3, nx, ny, nz)
             @test size(h["grid/x"]) == (nx,)
             @test read(h["meta/t"]) == 0.75
+            # The record of the run beside the frame's own entries, as the VTK
+            # FieldData carries it; `n_global` stays the written grid's count.
+            @test read(h["meta/species_names"]) == ["gas"]
+            @test read(h["meta/gas_constants"]) == [1.0]
+            @test read(h["meta/metric"]) == ["cartesian"]
+            @test read(h["meta/boundary"]) == fill("periodic", 6)
+            @test read(h["meta/domain"]) == [0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+            @test Int.(read(h["meta/solver_n_global"])) == [nx, ny, nz]
+            @test Int.(read(h["meta/n_global"])) == [nx, ny, nz]
+            @test Int.(read(h["meta/stride"])) == [1, 1, 1]
 
             # Every rank's hyperslab landed where the global index says it
             # should. A misplaced block would still be self-consistent within
@@ -700,6 +710,14 @@ end
             @test size(h["grid/x"]) == (36,)
             # The retained stations are the odd global ones, not a re-spacing.
             @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, i) for i in 1:2:nx]
+            # The written count, the solver's count and the stride, from which
+            # the period follows: solver_n_global spacings of the written
+            # spacing over the stride.
+            @test Int.(read(h["meta/n_global"])) == [36, 8, 12]
+            @test Int.(read(h["meta/solver_n_global"])) == [nx, ny, nz]
+            @test Int.(read(h["meta/stride"])) == [2, 2, 1]
+            x, dom = read(h["grid/x"]), read(h["meta/domain"])
+            @test nx * (x[2] - x[1]) / 2 ≈ dom[2] - dom[1]
         end
         @test occursin("Dimensions=\"12 8 36\"",
                        read(joinpath(dir, "coarse.xmf"), String))
@@ -734,6 +752,10 @@ end
                                          vel[2, i, j, k] * y) / hypot(x, y))
             end
             @test radial < 1e-6
+            @test read(h["meta/metric"]) == ["cylindrical"]
+            @test read(h["meta/boundary"]) ==
+                  ["open", "open", "periodic", "periodic", "periodic", "periodic"]
+            @test read(h["meta/domain"]) ≈ [0.5, 1.5, 0.0, 2π, 0.0, 1.0]
         end
         xmf = read(joinpath(dir, "annulus.xmf"), String)
         @test occursin("TopologyType=\"3DSMesh\"", xmf)

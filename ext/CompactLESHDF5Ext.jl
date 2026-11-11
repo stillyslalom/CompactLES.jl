@@ -675,6 +675,19 @@ function write_field_frame(solver::Solver, Q, prefix::AbstractString;
             write_meta!(g, "n_global", Int64[nglobal...], rank)
             write_meta!(g, "stride", Int64[st...], rank)
             write_meta!(g, "curvilinear", Int64(curvilinear), rank)
+            # The record of the run that `save_vtk` writes as FieldData, under
+            # the names this group already gives two of its entries: `t` is
+            # the time, and `n_global` the written grid's node count, so the
+            # solver's own node count is `solver_n_global`.
+            for (name, value) in CompactLES.output_record(solver, st)
+                name in ("TIME", "stride") && continue
+                key = name == "n_global" ? "solver_n_global" : name
+                if eltype(value) <: AbstractString
+                    write_strings!(g, key, value, rank)
+                else
+                    write_meta!(g, key, value, rank)
+                end
+            end
             if !curvilinear
                 # The coordinate vectors are global, so every rank holds
                 # the same values and none of this needs communication.

@@ -101,6 +101,11 @@ refined run add `level`, and their `stride` is in the patch's own node space.
 A solver answers the same questions through [`boundary_conditions`](@ref),
 [`domain_bounds`](@ref) and [`profile_coordinate`](@ref).
 
+A [`save_hdf5`](@ref) frame carries the same record in its `meta` group,
+beside its `t`, `step`, `n_global` and `stride` entries. There the time is
+`t` and `n_global` is the node count of the written grid, so the solver's
+global node count is `solver_n_global`.
+
 ## Restart with the same decomposition
 
 The dependency-free checkpoint path writes one file per rank:
