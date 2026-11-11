@@ -333,7 +333,11 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   (commit `c85a315`); the correction pass gives both nodes of a face beside an
   unheld inadmissible node one first-order flux (commit `6debed0`). Every
   refined case of `bench/positivity.jl part=levels`, the blast with tiles
-  included, then leaves no inadmissible point. Device storage carries it
+  included, then leaves no inadmissible point. With the bound on ρe held at
+  least 16 eps |E| (commit `HASH`), so that it stays above the rounding step
+  of E in cold gas moving fast, the planar Noh on four patches and on static
+  and regridded tiles (`pnoh81tiles`, `pnoh81regrid`) and a limited Float32
+  planar Noh leave none either. Device storage carries it
   (commits `222894a`, `bacc29f`) on one patch, the radial lines, the r-z plane,
   same-level patches and refined boxes, bitwise against the host under the
   KernelAbstractions CPU backend and on an RX 6800 XT; a θ pass's tallies,

@@ -69,6 +69,20 @@
 # cells settle below the run's ε, where the artificial conductivity sizes the
 # step, and added up to half the steps on Woodward–Colella and planar Noh.
 #
+# The bound on ρe is at least `LIMITER_ENERGY_ULPS` eps(T) |E|. At a node the
+# flow keeps pushing down, as in the cold gas ahead of the planar Noh shock
+# (ρe/E = 3e-4), every limited write lands on the cell's bound, and a bound of
+# a fraction of the cell's own ρe falls a hundredfold per write until it is
+# below the rounding step of E; the last write then leaves ρe at zero or a
+# unit or two in the last place below it. The floor keeps the bound 16 to 32
+# units in the last place of E above zero: on the planar Noh on patches and
+# tiles, under one-ulp perturbations of the initial state, the multiple 4 left
+# no inadmissible point and the multiples 1 and 2 did. In Float32 the cold
+# gas there holds about 2500 eps(T) |E|, so the floor stays below its 1%
+# bound. A cell whose ρe lies under the floor is below its own bound: its
+# faces take the first-order flux where its half states need it, and it is
+# counted unguaranteed.
+#
 # Radial lines. On the radial lines of `CylindricalMetric` (θ collapsed) and
 # `SphericalMetric` (θ and φ collapsed), folded at r = 0 by `AxisBC` or
 # `OriginBC`, the folded divergence is the interior scheme on the mirrored
@@ -206,6 +220,9 @@
 const LIMITER_FRACTION = 0.01
 # A cell's bound is at most this fraction of its own base ρ and ρe.
 const LIMITER_CELL_FRACTION = LIMITER_FRACTION
+# A cell's bound on ρe is at least this many times eps(T) |E|, between this
+# many and twice as many units in the last place of its total energy E.
+const LIMITER_ENERGY_ULPS = 16
 # The share of the face at r = 0 on a radial line, against the cell's outer
 # face. It bounds the first-order step at the fold's node: at the spherical
 # origin τ (|u| + c)/h < 1/(4 (1 + AXIS_SHARE)). The cylindrical axis face
@@ -1016,11 +1033,12 @@ Adapt.adapt_structure(to, s::_LinearState) = _LinearState(adapt(to, s.data), s.s
 # communicator. Returns whether the limiter acts in this run. A limited run
 # can end with a point marginally below zero, a cell whose node terms alone
 # took it there, and the next run starts from that state; the point's bound is
-# zero (`_limiter_cell_bound`), so its faces take the first-order flux where
-# its half states need it and it is counted unguaranteed, and the rest of the
-# grid keeps the scale of its own state. Only a state without a positive
-# density or internal energy anywhere gives no scale, and the run then
-# proceeds unlimited with a warning, as the failsafe does.
+# the floor relative to its E (`_limiter_cell_bound`), above its own ρe, so its
+# faces take the first-order flux where its half states need it and it is
+# counted unguaranteed, and the rest of the grid keeps the scale of its own
+# state. Only a state without a positive density or internal energy anywhere
+# gives no scale, and the run then proceeds unlimited with a warning, as the
+# failsafe does.
 _positivity_setup!(solver, Q) = false
 function _positivity_setup!(solver, Q::Union{ConservedState,Vector{<:ConservedState}})
     lim = getfield(solver, :positivity)
@@ -1808,15 +1826,19 @@ function _filter_ends(lim, decomp, d)
 end
 
 # The bound of a cell whose base state aggregates to q: the smaller of the run's
-# ε and the fraction ε[3] of the cell's own ρ and ρe, at least zero.
+# ε and the fraction ε[3] of the cell's own ρ and ρe, at least zero, and for ρe
+# at least ε[4] |E|, ε[4] = `LIMITER_ENERGY_ULPS` eps(T) (see The bound, above).
 @inline function _limiter_cell_bound(q, ε)
     ρ = q[1]
     e = ρ > 0 ? _limiter_internal(q) : zero(ρ)
-    return (min(ε[1], ε[3] * max(ρ, zero(ρ))), min(ε[2], ε[3] * max(e, zero(e))))
+    return (min(ε[1], ε[3] * max(ρ, zero(ρ))),
+            max(min(ε[2], ε[3] * max(e, zero(e))), ε[4] * abs(q[5])))
 end
 
-# The run's bounds and the cell fraction, as the per-point bodies take them.
-_limiter_bounds(lim) = (lim.eps_rho, lim.eps_e, oftype(lim.eps_rho, LIMITER_CELL_FRACTION))
+# The run's bounds, the cell fraction and the relative floor of the bound on
+# ρe, as the per-point bodies take them.
+_limiter_bounds(lim) = (lim.eps_rho, lim.eps_e, oftype(lim.eps_rho, LIMITER_CELL_FRACTION),
+                        LIMITER_ENERGY_ULPS * eps(typeof(lim.eps_rho)))
 
 # θ per face of direction d into `lim.theta`, a line per body, then the faces and
 # the unguaranteed sides of this rank counted. Returns the number of faces

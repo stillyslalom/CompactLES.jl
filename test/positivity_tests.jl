@@ -7,14 +7,16 @@
 # while conserving, and the Noh implosions under strict validity; on
 # same-level patches and on refined levels, under either interface flux
 # (`:ghost` under `LIMITED_GHOST_INTERFACES`), a run it never acts in and a
-# strong shock it keeps admissible, there with the shell's admissible fallback
-# on subcycled tiles, and on tiles at the cylindrical axis and the r-z corner,
-# a run it never acts in and the strong shocks, there with the admissible
-# fallback of a regrid's fill on regridded tiles under :ghost; the face values
-# of an open interface end on a smooth field, the interface flux setup takes,
-# and a tile too short for its face form, refused at setup and left out by a
-# regrid. The rejected configurations are in capability_tests.jl, the
-# decomposed run in the MPI suite's "positivity limiter" phase.
+# strong shock it keeps admissible (the planar Noh too, on four patches and
+# in Float32 on one, whose cold gas takes the floor of the bound on ρe), there
+# with the shell's admissible fallback on subcycled tiles, and on tiles at the
+# cylindrical axis and the r-z corner, a run it never acts in and the strong
+# shocks, there with the admissible fallback of a regrid's fill on regridded
+# tiles under :ghost; the face values of an open interface end on a smooth
+# field, the interface flux setup takes, and a tile too short for its face
+# form, refused at setup and left out by a regrid. The rejected
+# configurations are in capability_tests.jl, the decomposed run in the MPI
+# suite's "positivity limiter" phase.
 #
 # Serial. Included by runtests.jl, and runnable on its own:
 #
@@ -535,6 +537,42 @@ end
             L1(a, b) = sum(abs, a .- b) / sum(abs, b)
             @test L1(ρ1, ρs1) < 2 * L1(ρ0, ρs0)
         end
+    end
+
+    @testset "planar Noh on four patches leaves no inadmissible point" begin
+        # Ahead of the shock the cold gas has ρe/E = 3e-4. At a node the flow
+        # keeps pushing down, every limited write lands on the cell's bound,
+        # and a bound of 1% of the cell's own ρe falls a hundredfold per
+        # write, below the rounding step of E within a few writes; the floor
+        # of the bound at `LIMITER_ENERGY_ULPS` eps |E| keeps the last write
+        # above it.
+        s, Q = setup(noh_problem(1; N=256, t0=0.0),
+                     Numerics(n_global=(256, 1, 1), art=ArtificialProperties(enabled=true),
+                              cfl=NOH_CFL, positivity_limiter=true,
+                              control=StepControl(validity=:permissive),
+                              execution=Execution(patch_grid=(4, 1, 1)),
+                              patch_interfaces=:closure))
+        @test pos_bad_points(s, Q; tfinal=NOH_T) == 0
+        @test completed(s, NOH_T)
+        counts = CL.positivity_counts(s)
+        @test counts.stage_limited > 0 && counts.filter_limited > 0
+    end
+
+    @testset "planar Noh in Float32 leaves no inadmissible point" begin
+        # In Float32 the cold gas holds a few thousand rounding steps of E, so
+        # a bound of a fraction of the cell's own ρe passes below the rounding
+        # step after two limited writes, and without the floor the run on one
+        # patch leaves more than ten thousand inadmissible point-steps.
+        s, Q = setup(noh_problem(1; N=256, t0=0.0),
+                     Numerics(n_global=(256, 1, 1), art=ArtificialProperties(enabled=true),
+                              cfl=NOH_CFL, positivity_limiter=true,
+                              control=StepControl(validity=:permissive),
+                              execution=Execution(storage=Float32)))
+        @test eltype(Q) === Float32
+        @test pos_bad_points(s, Q; tfinal=NOH_T) == 0
+        @test isapprox(s.t, NOH_T; rtol=1e-5)
+        counts = CL.positivity_counts(s)
+        @test counts.stage_limited > 0 && counts.filter_limited > 0
     end
 
     @testset "the interface flux setup takes under the limiter" begin

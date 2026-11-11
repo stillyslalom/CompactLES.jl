@@ -15,6 +15,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,noh43
 #   julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles a19n=33
+#   julia --project=. -t 1 bench/positivity.jl part=levels levels=pnoh81tiles,pnoh81regrid
 #   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tiledrift
 #   julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=true
@@ -116,6 +117,8 @@
 #             and `noh81tiles`, `noh81regrid` (each also with `sub`): a box
 #             over 81 nodes, ten lattice cells of edge 8, and the same as
 #             static tiles of edge 8 and as tiles regridded every 10 steps;
+#             `pnoh81tiles`, `pnoh81regrid` (each also with `sub`): the planar
+#             Noh (ν = 1) on the same 256 root nodes and the same tiles;
 #             `a19`: the converging shock of the r-z plane, `a19n`² nodes
 #             (64), with a box at the corner of the axis and the plane, to
 #             t = 0.165, and `a19tiles`, `a19regrid` (each also with `sub`)
@@ -1264,7 +1267,8 @@ level_numerics(n, amr, on; kw...) =
 
 const LEVEL_CASES = ("wc", "wcsub", "wcregrid", "noh85", "noh43", "noh85sub", "noh43sub",
                      "nohuniform", "noh81", "noh81tiles", "noh81tilessub", "noh81regrid",
-                     "noh81regridsub", "a19", "a19tiles", "a19tilessub", "a19regrid",
+                     "noh81regridsub", "pnoh81tiles", "pnoh81tilessub", "pnoh81regrid",
+                     "pnoh81regridsub", "a19", "a19tiles", "a19tilessub", "a19regrid",
                      "a19regridsub", "tiles", "tilessub")
 
 # The refinement of a Noh level case named noh<m>, then `tiles` for static tiles
@@ -1303,13 +1307,18 @@ function level_runs(name; a19n=64)
                 for (label, a) in (("regridded box", amr()),
                                    ("regridded tiles", amr(tile=8)),
                                    ("regridded tiles, subcycled", amr(tile=8, subcycle=true)))]
-    elseif startswith(name, "noh")
+    elseif startswith(name, "noh") || startswith(name, "pnoh")
+        # The planar rows take the cylindrical rows' 256 root nodes.
+        ν = startswith(name, "p") ? 1 : 2
         N = Dict(NOH_N)[2]
         uniform = name == "nohuniform"
-        amr, label = uniform ? (nothing, "uniform, $(3N - 1) nodes") : noh_level(name)
+        amr, label = uniform ? (nothing, "uniform, $(3N - 1) nodes") :
+                     noh_level(ν == 1 ? name[2:end] : name)
         metric = (s, Q) -> begin
             x, ρ = level_profile(s, Q)
-            plat, deficit, shock, _ = noh_metrics(x, ρ, 2)
+            plat, deficit, shock, epre = noh_metrics(x, ρ, ν)
+            ν == 1 && return @sprintf("plateau %.4f, deficit %.1f%%, shock %.4f, \
+                                       pre-shock L1 %.2e", plat, 100deficit, shock, epre)
             drift = volume_integral(s, Q, :rho) / noh_cylinder_mass(NOH_T) - 1
             @sprintf("plateau %.4f, deficit %.1f%%, shock %.4f, mass %+.2e", plat,
                      100deficit, shock, drift)
@@ -1318,7 +1327,7 @@ function level_runs(name; a19n=64)
                                art=ArtificialProperties(enabled=true), cfl=NOH_CFL,
                                positivity_limiter=on, patch_interfaces=FLUX[],
                                control=StepControl(validity=:permissive), amr=amr)
-        return [(label, noh_problem(2; N, t0=0.0), noh_num, NOH_T, metric)]
+        return [(label, noh_problem(ν; N, t0=0.0), noh_num, NOH_T, metric)]
     elseif startswith(name, "a19")
         rz = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=1.4), metric=CylindricalMetric(),
                      domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),

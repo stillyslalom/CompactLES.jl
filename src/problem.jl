@@ -1047,11 +1047,14 @@ keywords the ones given after it override.
   restart and after a phase change, so a cell the flow has emptied, as in the
   core of a blast, is held to a fraction of its own state, and a cell that
   enters a run inadmissible takes first-order fluxes where it needs them
-  while the rest of the grid keeps its bound. The partial densities are
-  not bounded. On a Cartesian grid source terms and the NSCBC boundary terms
-  are outside the guarantee; on a radial grid they are a part of each cell's
-  update and inside it, except where they alone would take the cell below
-  its bound, and the cell then takes first-order fluxes. A cell whose
+  while the rest of the grid keeps its bound. The bound on ρe is at least
+  16 `eps(T)` |E|, with E the cell's total energy, so that in cold gas moving
+  fast, where ρe is a small part of E, the bound stays above the rounding
+  step of E. The partial densities are not bounded. On a Cartesian grid
+  source terms and the NSCBC boundary terms are outside the guarantee; on a
+  radial grid they are a part of each cell's update and inside it, except
+  where they alone would take the cell below its bound, and the cell then
+  takes first-order fluxes. A cell whose
   first-order step violates its own CFL bound is outside it too, which at a
   wall node under the default closure rows happens above a CFL of about
   0.32, and at the spherical origin above about 0.6. The limiter acts in
