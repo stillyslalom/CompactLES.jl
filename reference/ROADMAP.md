@@ -623,7 +623,7 @@ promotion.
      more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
      0.75 rather than the solver's (commit `f1d420c`; excluding them made
      the axis shock run away). The Sod level then takes the fine run's step
-     count, the tiled Sod tube runs at 0.73 of the fine wall, and the
+     count, the tiled Sod tube runs at 0.64 of the fine wall, and the
      shock's root steps fall by a third. On the box blobs and the
      three-dimensional box the level's step count is held by the artificial
      rate at 2.2 to 2.6 times the fine count, and on most steps the

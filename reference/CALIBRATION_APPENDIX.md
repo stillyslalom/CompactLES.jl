@@ -9379,16 +9379,20 @@ near-discontinuous interface.
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
 process, one rank and one thread on the i9-12900K. The runs use Julia 1.11.4
 and the package at the commit that records this table and the overhead
-profile; the root-step account below says at which commits it was taken. Each
-problem runs warm as the root grid alone (coarse), the root with one
-subcycled regridded box, the same with lattice tiles, and the uniform grid at
-the refined spacing (fine). The error is the composite L1 norm of ρ
+profile; the root-step account below says at which commits it was taken. The
+Sod tube's rows and profile columns were re-measured under Julia 1.13.3 at
+`17c3ee3`. There a second process gave the tiles 0.640 of the fine wall
+against the table's 0.638. Each problem runs warm as the root grid alone (coarse), the root with
+one subcycled regridded box, the same with lattice tiles, and the uniform
+grid at the refined spacing (fine). The error is the composite L1 norm of ρ
 against the fine run at coincident nodes. Single runs; read the ratios to two
 figures.
 
 Of the four problems only the Sod tube gains clearly in time to solution: its
-box and tiles reach under a thirtieth of the coarse error at under half the
-fine wall. On the blobs and the shock the refined runs take longer than the
+box and tiles reach under a thirtieth of the coarse error, the box at about a
+third of the fine wall and the tiles at under two thirds. The tiles' cost per
+point-step, more than twice the fine run's, accounts for most of the
+difference. On the blobs and the shock the refined runs take longer than the
 uniform fine grid. On the blobs the level takes up to twice the fine run's
 steps, and on the shock each point-step costs more than twice the fine run's.
 On the 3-D blob the box beats the fine wall, but at eleven times the tiles'
@@ -9396,7 +9400,7 @@ error.
 
 | problem | root / fine grid | end time | fine wall | fine steps |
 |---|---|---|---|---|
-| sod | 201 × 17 / 601 × 49, slip walls, cfl 0.2, tile 8 | 0.1 | 33.6 s | 1347 |
+| sod | 201 × 17 / 601 × 49, slip walls, cfl 0.2, tile 8 | 0.1 | 18.6 s | 1347 |
 | blobs | 64² / 192², periodic, edge 0.01 (0.64 root spacings), tile 16 | 0.2 | 8.75 s | 213 |
 | shock | 256 / 767, r-z axis, tile 16 | 0.221 | 1.40 s | 2023 |
 | blob3d | 24³ / 72³, periodic, tile 8 | 1.0 | 81.3 s | 104 |
@@ -9407,9 +9411,9 @@ substep, and its points are the time average of the level-1 nodes.
 
 | problem | run | wall / fine | point-steps / fine | per point-step / fine | level steps / fine | level points / fine | L1 ρ |
 |---|---|---|---|---|---|---|---|
-| sod | coarse | 0.042 | 0.041 | 1.03 | | | 2.6e-3 |
-| sod | box | 0.294 | 0.261 | 1.13 | 1.04 | 0.21 | 7.03e-5 |
-| sod | tiles | 0.435 | 0.289 | 1.51 | 1.01 | 0.25 | 8.07e-5 |
+| sod | coarse | 0.047 | 0.041 | 1.14 | | | 2.6e-3 |
+| sod | box | 0.368 | 0.240 | 1.53 | 0.996 | 0.203 | 3.75e-5 |
+| sod | tiles | 0.638 | 0.284 | 2.25 | 0.996 | 0.247 | 6.89e-5 |
 | blobs | coarse | 0.049 | 0.047 | 1.04 | | | 4.5e-2 |
 | blobs | box | 2.01 | 1.59 | 1.27 | 2.03 | 0.75 | 7.74e-3 |
 | blobs | tiles | 2.01 | 1.47 | 1.37 | 1.65 | 0.86 | 3.18e-4 |
@@ -9508,7 +9512,7 @@ steps. On the tiles it rarely bounds the step.
 | tiles | 2.3% of the level's | 52.2 | 1.13 | 1.50, at the ceiling |
 
 **Where the tiled overhead goes.** On tiles the level-wide artificial
-coefficients and the ghost-flux divergence take nearly three fifths of the
+coefficients and the ghost-flux divergence take about three fifths of the
 step. Per level point the tiles cost within a factor of two of the box in
 every phase but Sod's ghost-flux divergence, whose tiles have two interface
 dimensions where the box spanning the channel has one. The same-level
@@ -9519,24 +9523,24 @@ point over the box's.
 
 | phase | sod box | sod tiles | per point | blobs box | blobs tiles | per point | blob3d box | blob3d tiles | per point |
 |---|---|---|---|---|---|---|---|---|---|
-| level RHS and artificial coefficients | 12.0 | 16.2 | 1.17 | 70.8 | 92.2 | 1.13 | 407 | 1380 | 0.98 |
-| Hermite shell fill | 0.52 | 0.78 | 1.29 | 4.61 | 4.87 | 0.92 | 127 | 255 | 0.58 |
-| ghost-flux divergence | 2.83 | 7.82 | 2.39 | 28.3 | 33.1 | 1.02 | 168 | 608 | 1.05 |
-| post-step shell | 0.05 | 0.10 | 1.78 | 0.45 | 0.51 | 1.00 | 11.9 | 23.5 | 0.58 |
-| same-level sync | 0 | 0.90 | | 0.04 | 1.68 | | 0.2 | 79.5 | |
-| level filter | 0.53 | 0.90 | 1.47 | 3.42 | 3.61 | 0.92 | 18.4 | 60.7 | 0.96 |
-| level stage update | 0.51 | 0.77 | 1.31 | 1.71 | 2.56 | 1.30 | 8.0 | 37.9 | 1.38 |
-| root RHS and Hermite endpoint | 3.22 | 3.13 | | 5.17 | 5.52 | | 31.9 | 30.5 | |
-| regrid | 0.36 | 0.27 | | 5.19 | 3.85 | | 17.2 | 24.9 | |
-| whole step | 21.2 | 32.2 | | 122 | 151 | | 801 | 2530 | |
-| level points | 6278 | 7274 | | 27528 | 31623 | | 85778 | 295139 | |
+| level RHS and artificial coefficients | 6.71 | 10.0 | 1.23 | 70.8 | 92.2 | 1.13 | 407 | 1380 | 0.98 |
+| Hermite shell fill | 0.53 | 1.24 | 1.93 | 4.61 | 4.87 | 0.92 | 127 | 255 | 0.58 |
+| ghost-flux divergence | 3.09 | 9.11 | 2.42 | 28.3 | 33.1 | 1.02 | 168 | 608 | 1.05 |
+| post-step shell | 0.06 | 0.10 | 1.35 | 0.45 | 0.51 | 1.00 | 11.9 | 23.5 | 0.58 |
+| same-level sync | 0.01 | 0.64 | | 0.04 | 1.68 | | 0.2 | 79.5 | |
+| level filter | 0.51 | 0.82 | 1.34 | 3.42 | 3.61 | 0.92 | 18.4 | 60.7 | 0.96 |
+| level stage update | 0.41 | 0.82 | 1.64 | 1.71 | 2.56 | 1.30 | 8.0 | 37.9 | 1.38 |
+| root RHS and Hermite endpoint | 2.53 | 2.70 | | 5.17 | 5.52 | | 31.9 | 30.5 | |
+| regrid | 0.31 | 0.15 | | 5.19 | 3.85 | | 17.2 | 24.9 | |
+| whole step | 15.3 | 26.6 | | 122 | 151 | | 801 | 2530 | |
+| level points | 5967 | 7260 | | 27528 | 31623 | | 85778 | 295139 | |
 | tiles on average | | 11.6 | | | 13.2 | | | 18.9 | |
 
 | share of the tiles' step | sod | blobs | blob3d |
 |---|---|---|---|
-| level-wide artificial coefficients | 34.5% | 37.0% | 34.5% |
-| ghost-flux divergence | 24.3% | 22.0% | 24.1% |
-| Hermite shell fill | 2.4% | 3.2% | 10.1% |
+| level-wide artificial coefficients | 28.5% | 37.0% | 34.5% |
+| ghost-flux divergence | 34.3% | 22.0% | 24.1% |
+| Hermite shell fill | 4.7% | 3.2% | 10.1% |
 
 The shell is filled only on a tile with a parent-fed face, and there only
 over the boxes of the interpolation chain its slots read. Each tile's
