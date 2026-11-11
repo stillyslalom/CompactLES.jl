@@ -23,7 +23,11 @@ vectors of the grid and one array per field, for postprocessing or plotting a
 desktop-scale run in memory. A refined or patch-partitioned solver gives one
 snapshot per patch, each with its level, offset and the nodes a finer level
 covers; `normal` and `index` restrict the gather to one plane, returned for
-each patch at its own spacing. [`cartesian_coordinates`](@ref) maps a
+each patch at its own spacing, and `window` to a box of nodes given by index
+or by coordinate, so that a decomposed run gathers only the box to rank 0.
+Each snapshot carries the record of the run that the output files hold: the
+species names, the gas constants, the type of each domain face, the domain
+bounds and the global node count. [`cartesian_coordinates`](@ref) maps a
 curvilinear snapshot's nodes to Cartesian positions.
 
 The plotting functions live in a package extension and require a Makie backend

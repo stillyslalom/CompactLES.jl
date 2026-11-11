@@ -822,6 +822,88 @@ end
     @test snapc[:rho][:, 1, 1] ≈ 1 .+ r .^ 2
 end
 
+@testset "field_snapshot: the record of the run and a window" begin
+    eos = IdealMixture([IdealSpecies{Float64}("light", 2.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.5, 1.1)])
+    walls = (SlipWallBC(), SlipWallBC())
+    s = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), eos=eos,
+               bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3 + 0.1x, 0.7 - 0.1x), u=(sin(2π * y), 0, 0),
+                                        p=1.0, rho=1 + 0.1x + 0.2y))
+    fields = (:rho, :velocity, :X, :vorticity_magnitude)
+    full = field_snapshot(s, Q; fields)
+    @test full.species_names == ["light", "heavy"] && full.gas_constants == [2.0, 0.5]
+    @test full.boundary == ((:open, :open), (:periodic, :periodic), (:periodic, :periodic))
+    @test full.domain == domain_bounds(s) && full.n_global == (24, 16, 12)
+
+    # An index window is the same block of the whole snapshot, placed by its
+    # offset; a BlockRegion and a coordinate box select the same nodes.
+    box = field_snapshot(s, Q; fields, window=(5:12, nothing, 3:3))
+    @test size(box) == (8, 16, 1) && box.offset == (4, 0, 2)
+    @test box.coords == (full.coords[1][5:12], full.coords[2], full.coords[3][3:3])
+    for name in fields
+        f = full[name]
+        @test box[name] == f[5:12, :, 3:3, ntuple(_ -> Colon(), ndims(f) - 3)...]
+    end
+    @test (box.species_names, box.boundary, box.domain, box.n_global) ==
+          (full.species_names, full.boundary, full.domain, full.n_global)
+    region = field_snapshot(s, Q; fields=(:rho,), window=BlockRegion((4, 0, 2), (8, 16, 1)))
+    @test region[:rho] == box[:rho] && region.offset == box.offset
+    x, z = full.coords[1], full.coords[3]
+    coord = field_snapshot(s, Q; fields=(:rho,), window=((x[5], x[12]), nothing, (z[3], z[3])))
+    @test coord[:rho] == box[:rho] && coord.offset == box.offset
+    # With a plane.
+    cut = field_snapshot(s, Q; fields=(:rho,), normal=2, index=5,
+                         window=(5:12, nothing, nothing))
+    @test size(cut) == (8, 1, 12) && cut[:rho] == full[:rho][5:12, 5:5, :]
+    @test_throws ArgumentError field_snapshot(s, Q; window=(0:3, nothing, nothing))
+    @test_throws ArgumentError field_snapshot(s, Q; window=((5.0, 6.0), nothing, nothing))
+    @test_throws ArgumentError field_snapshot(s, Q; window=(5:12, nothing, nothing),
+                                              normal=1, index=2)
+    @test_throws ArgumentError field_snapshot(s, Q; window=(1:3,))
+
+    # The patch-layout form: a window of root nodes takes every node of a
+    # level inside it. Root nodes 10 to 20 are level-1 nodes 28 to 58, which
+    # reach the first tile (nodes 37 to 73) and no other.
+    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                 bcs=(io_per, io_per, io_per), tile=12,
+                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                 art=ArtificialProperties(enabled=false))
+    states = allocate_state(amr)
+    initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0,
+                                               rho=1 + 0.1 * sin(x) * sin(y)))
+    whole = field_snapshot(amr, states; fields=[:rho])
+    part = field_snapshot(amr, states; fields=[:rho], window=(10:20, 10:20, nothing))
+    @test [p.level for p in part] == [0, 1]
+    @test part[1][:rho] == whole[1][:rho][10:20, 10:20, :]
+    @test part[1].covered == whole[1].covered[10:20, 10:20, :]
+    @test part[2].offset == whole[2].offset == (36, 36, 0) && size(part[2]) == (22, 22, 1)
+    @test part[2][:rho] == whole[2][:rho][1:22, 1:22, :]
+    @test all(p -> p.n_global == (48, 48, 1) && p.boundary == whole[1].boundary, part)
+
+    # A level across a periodic seam: an index window of every root node leaves
+    # out the level's nodes between root node 48 and the seam, which splits the
+    # tile into two runs and two snapshots; a coordinate window over the whole
+    # period keeps it whole.
+    seam = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                  bcs=(io_per, io_per, io_per), refine=BlockRegion((44, 0, 0), (8, 1, 1)),
+                  art=ArtificialProperties(enabled=false))
+    seam_states = allocate_state(seam)
+    initialize!(seam, seam_states, (x, y, z) -> Prim(p=1.0, rho=1 + 0.1 * sin(2π * x)))
+    level1(snaps) = [p for p in snaps if p.level == 1]
+    tile = only(level1(field_snapshot(seam, seam_states; fields=[:rho])))
+    runs = level1(field_snapshot(seam, seam_states; fields=[:rho],
+                                 window=(1:48, nothing, nothing)))
+    @test length(runs) == 2 && sum(p -> size(p)[1], runs) == size(tile)[1] - 2
+    @test vcat((p[:rho][:, 1, 1] for p in runs)...) ==
+          tile[:rho][[1:(runs[1].offset[1] - tile.offset[1] + size(runs[1])[1]);
+                      (runs[2].offset[1] - tile.offset[1] + 1):size(tile)[1]], 1, 1]
+    kept = only(level1(field_snapshot(seam, seam_states; fields=[:rho],
+                                      window=((0.0, 1.0), nothing, nothing))))
+    @test kept[:rho] == tile[:rho] && kept.offset == tile.offset
+end
+
 @testset "VTK headers declare the byte order actually written" begin
     # The appended blocks go out in native order, so the declaration follows
     # ENDIAN_BOM rather than asserting little-endian.

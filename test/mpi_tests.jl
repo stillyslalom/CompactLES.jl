@@ -1518,6 +1518,20 @@ function test_slicing()
     end
     check("snapshot assembles the decomposed grid", gmax(e), 1e-14)
 
+    # A window across the split dimension gathers its nodes from every rank
+    # holding a part of it, and equals that block of the whole snapshot.
+    lo, hi = SPLITN ÷ 4, SPLITN ÷ 2 + 3
+    box = field_snapshot(solver, Q; fields=(:rho, :velocity),
+                         window=(lo:hi, 3:10, nothing))
+    e = 0.0
+    if rank == 0
+        e = max(maximum(abs, box[:rho] .- snap[:rho][lo:hi, 3:10, :]),
+                maximum(abs, box[:velocity] .- snap[:velocity][lo:hi, 3:10, :, :]),
+                box.offset == (lo - 1, 2, 0) ? 0.0 : 1.0,
+                box.n_global == (SPLITN, 16, 16) ? 0.0 : 1.0)
+    end
+    check("windowed snapshot is the block of the whole one", gmax(e), 1e-300)
+
     # An out-of-range plane is rejected on every rank, not only the one that
     # would have held it.
     threw = try

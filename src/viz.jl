@@ -463,7 +463,8 @@ end
 
 The unpadded fields of one block of nodes and the grid they sit on, as
 [`field_snapshot`](@ref) returns them on rank 0. The block is the whole grid
-for a single-patch solver and one patch for the patch-layout form.
+for a single-patch solver and one patch for the patch-layout form, or the part
+of either inside a plane or a window.
 
 - `coords`: three coordinate vectors; `coords[d][i]` is the metric coordinate
   of node `i` along dimension `d`, stretch mapping and fold offset included.
@@ -476,10 +477,25 @@ for a single-patch solver and one patch for the patch-layout form.
 - `t`, `step`: the solver clock and step count when the snapshot was taken.
 - `metric`: the solver's metric, which [`cartesian_coordinates`](@ref) reads.
 - `level`, `offset`: the refinement level (0 is the root) and the block's node
-  offset in that level's index space; `0` and `(0, 0, 0)` for a single patch.
+  offset in that level's index space; `0` and `(0, 0, 0)` for the whole grid
+  of a single patch.
 - `covered`: `true` at a node whose quadrature cell a finer level covers
   entirely, where a composite view shows the finer block instead. All `false`
   on the finest level and for a single-patch solver.
+
+The record of the run that [`save_vtk`](@ref) writes into its files:
+
+- `species_names`: the species along the fourth dimension of `:Y` and `:X`,
+  in order.
+- `gas_constants`: the per-species gas constants R as a `Vector{Float64}` for
+  an `IdealMixture` or a `Nasa9Mixture`, and `nothing` for an EOS without
+  them.
+- `boundary`: the type of each domain face, `(low, high)` per dimension, one
+  of `:open`, `:periodic`, `:mirror` and `:axis`.
+- `domain`: the domain's `(lo, hi)` bounds, as [`domain_bounds`](@ref) gives
+  them.
+- `n_global`: the root grid's global node count, which with `level` and
+  `offset` places the block in the whole grid.
 
 `snap[name]` is `snap.fields[name]`, `keys(snap)` lists the names, and
 `size(snap)` gives the node counts.
@@ -493,6 +509,11 @@ struct FieldSnapshot{T,M<:Metric}
     level::Int
     offset::NTuple{3,Int}
     covered::BitArray{3}
+    species_names::Vector{String}
+    gas_constants::Union{Nothing,Vector{Float64}}
+    boundary::NTuple{3,NTuple{2,Symbol}}
+    domain::NTuple{2,NTuple{3,T}}
+    n_global::NTuple{3,Int}
 end
 
 Base.getindex(snap::FieldSnapshot, name::Symbol) = snap.fields[name]
@@ -532,9 +553,10 @@ end
 
 """
     field_snapshot(solver, Q; fields = DEFAULT_VTK_FIELDS, normal = nothing,
-                   index = 1) -> FieldSnapshot or nothing
+                   index = 1, window = nothing) -> FieldSnapshot or nothing
     field_snapshot(solver, states::Vector; fields = DEFAULT_VTK_FIELDS,
-                   normal = nothing, index = 1) -> Vector{FieldSnapshot} or nothing
+                   normal = nothing, index = 1, window = nothing)
+        -> Vector{FieldSnapshot} or nothing
 
 Every interior node of the named fields, without halo padding, gathered with the
 grid coordinates into a [`FieldSnapshot`](@ref) on rank 0, in the solver's
@@ -574,25 +596,59 @@ coinciding with the root node, so the snapshots of a refined run hold each
 patch's plane at its own spacing, where the composite `field_slice` keeps only
 the root's nodes.
 
+`window` restricts the gather to a box, and a decomposed run sends rank 0 only
+the nodes inside it. It is a [`BlockRegion`](@ref) of root global nodes, an
+offset and an extent as a patch layout gives them, or a 3-tuple with one entry
+per dimension: `nothing` for every node, a range of root global node indices
+such as `20:40`, or a closed interval `(lo, hi)` of the metric's own
+coordinate, which on a periodic dimension is read within the period starting
+at the domain's low bound. The snapshot then holds the box's nodes, its
+`offset` placing them, and equals that block of the unrestricted snapshot.
+`window` composes with `normal`. On a refined level the box holds every node of
+the level inside it, so an index range `a:b` takes the level's nodes from the
+one coinciding with root node `a` to the one coinciding with root node `b`; a
+tile across a periodic seam whose nodes in the box form two runs gives one
+snapshot per run. The fields are still computed over every rank's whole block,
+so a window reduces the gather and not the cost of the fields. A window that
+holds no node of a single-patch solver throws `ArgumentError`; the patch-layout
+form returns the snapshots of the patches the window meets.
+
+The snapshot carries the record of the run that `save_vtk` writes into its
+files: the species names, the gas constants, the type of each domain face, the
+domain bounds and the global node count, as [`FieldSnapshot`](@ref) lists them.
+
 Every rank of `solver.comm` must call this function with the same `fields`,
-`normal` and `index`, since the derived fields run distributed solves in the
-order given.
+`normal`, `index` and `window`, since the derived fields run distributed solves
+in the order given.
 """
 function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS,
-                        normal::Union{Nothing,Int}=nothing, index::Int=1)
+                        normal::Union{Nothing,Int}=nothing, index::Int=1,
+                        window=nothing)
     patches = getfield(solver, :patches)
     length(patches) == 1 && nlevels(solver) == 1 &&
         only(patches).region.extent == solver.n_global ||
         throw(ArgumentError("field_snapshot: this solver holds several patches; " *
                             "pass the state vector allocate_state returns"))
-    snaps = _snapshot(solver, [Q], fields, _snapshot_plane(solver, normal, index))
+    plane = _snapshot_plane(solver, normal, index)
+    win = _snapshot_window(solver, window)
+    # Decided on the global coordinates, which every rank holds, so every rank
+    # throws together.
+    taken(d, g) = (plane === nothing || plane[1] != d || plane[2] == g) &&
+                  (win === nothing ||
+                   _in_window(solver, 0, d, g, win[d], m -> global_xcoord(solver, d, m)))
+    all(d -> any(g -> taken(d, g), 1:solver.n_global[d]), 1:3) ||
+        throw(ArgumentError("field_snapshot: the window $window holds no node of " *
+                            "the grid" * (plane === nothing ? "" : " on the plane")))
+    snaps = _snapshot(solver, [Q], fields, plane, win)
     return snaps === nothing ? nothing : only(snaps)
 end
 
 function field_snapshot(solver::Solver, states::Vector{<:ConservedState};
                         fields=DEFAULT_VTK_FIELDS,
-                        normal::Union{Nothing,Int}=nothing, index::Int=1)
-    return _snapshot(solver, states, fields, _snapshot_plane(solver, normal, index))
+                        normal::Union{Nothing,Int}=nothing, index::Int=1,
+                        window=nothing)
+    return _snapshot(solver, states, fields, _snapshot_plane(solver, normal, index),
+                     _snapshot_window(solver, window))
 end
 
 const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :X, :D_art)
@@ -615,7 +671,90 @@ end
 _level_node(n_global::NTuple{3,Int}, level::Int, d::Int, g::Int) =
     n_global[d] > 1 ? (g - 1) * 3^level + 1 : g
 
-function _snapshot(solver::Solver, states, fields, plane=nothing)
+# The validated window of a snapshot, per dimension `nothing` (every node),
+# `(:index, a, b)` (root global nodes a to b) or `(:coordinate, lo, hi)`; or
+# `nothing` for no window. Every rank holds the same window, so a throw here
+# is raised on every rank.
+function _snapshot_window(solver::Solver, window)
+    window === nothing && return nothing
+    window isa BlockRegion &&
+        (window = ntuple(d -> window.offset[d] .+ (1:window.extent[d]), 3))
+    window isa Tuple && length(window) == 3 ||
+        throw(ArgumentError("field_snapshot: window must be a BlockRegion or a " *
+                            "3-tuple of nothing, index ranges and (lo, hi) " *
+                            "coordinate pairs, got $window"))
+    n = solver.n_global
+    return ntuple(3) do d
+        w = window[d]
+        w === nothing && return nothing
+        if w isa AbstractUnitRange{<:Integer}
+            !isempty(w) && 1 <= first(w) && last(w) <= n[d] ||
+                throw(ArgumentError("field_snapshot: window $w along dimension $d " *
+                                    "is empty or outside 1:$(n[d])"))
+            return (:index, Int(first(w)), Int(last(w)))
+        elseif w isa Tuple{Real,Real}
+            w[1] <= w[2] ||
+                throw(ArgumentError("field_snapshot: window $w along dimension $d " *
+                                    "has its low end above its high end"))
+            return (:coordinate, Float64(w[1]), Float64(w[2]))
+        end
+        throw(ArgumentError("field_snapshot: window entry $w along dimension $d is " *
+                            "neither nothing, an index range nor a (lo, hi) pair"))
+    end
+end
+
+# Whether node `m` of a level-`level` patch's node space along `d` lies in the
+# window entry `w`, with `x(m)` its coordinate. A root node g coincides with
+# level node 3^level (g - 1) + 1. A node past a periodic seam, where a refined
+# tile numbers its nodes on beyond the period, is read a period back, in
+# index and in coordinate alike.
+function _in_window(solver::Solver, level::Int, d::Int, m::Int, w, x)
+    w === nothing && return true
+    n = solver.n_global[d]
+    periodic = _root_periodic(solver, d)
+    if first(w) === :index
+        n == 1 && return true
+        s = 3^level
+        q = periodic ? mod(m - 1, s * n) : m - 1
+        return s * (w[2] - 1) <= q <= s * (w[3] - 1)
+    end
+    c = Float64(x(m))
+    if periodic
+        lo, hi = _domain_bounds(solver, d)
+        c = lo + mod(c - lo, hi - lo)
+    end
+    return w[2] <= c <= w[3]
+end
+
+# Per dimension, the runs of the patch's own nodes (1 to its extent) that a
+# snapshot of `ps` takes: every node, or the plane's node, less the nodes
+# outside the window, as maximal contiguous ranges.
+function _snapshot_runs(ps::PatchSolver, d::Int, plane, win)
+    region = ps.patch.region
+    keep = trues(region.extent[d])
+    if plane !== nothing && plane[1] == d
+        p = plane[2] - region.offset[d]
+        keep .= false
+        1 <= p <= length(keep) && (keep[p] = true)
+    end
+    if win !== nothing && win[d] !== nothing
+        x = m -> global_xcoord(ps, d, m)
+        for p in eachindex(keep)
+            keep[p] && (keep[p] = _in_window(ps.solver, ps.patch.level, d,
+                                             region.offset[d] + p, win[d], x))
+        end
+    end
+    runs = UnitRange{Int}[]
+    p = findfirst(keep)
+    while p !== nothing
+        q = something(findnext(!, keep, p), length(keep) + 1) - 1
+        push!(runs, p:q)
+        p = findnext(keep, q + 1)
+    end
+    return runs
+end
+
+function _snapshot(solver::Solver, states, fields, plane=nothing, win=nothing)
     names = Tuple(fields)
     for name in names
         name in SCALAR_FIELD_NAMES || name in _SNAPSHOT_STACKED ||
@@ -638,32 +777,42 @@ function _snapshot(solver::Solver, states, fields, plane=nothing)
             # The plane as the node of this patch's level coinciding with it.
             at = plane === nothing ? nothing :
                  (plane[1], _level_node(solver.n_global, patches[li].level, plane...))
-            _snapshot_block(ps, states[li], names, at)
+            _snapshot_blocks(ps, states[li], names, at, win)
         end
     end
-    # A rank whose blocks miss the plane contributes none.
-    gathered = MPI.gather(filter(!isnothing, blocks), solver.comm; root=0)
+    # A rank whose blocks miss the plane or the window contributes none.
+    gathered = MPI.gather(reduce(vcat, blocks; init=Any[]), solver.comm; root=0)
     MPI.Comm_rank(solver.comm) == 0 || return nothing
-    return _assemble_snapshots(solver, reduce(vcat, gathered), names)
+    return _assemble_snapshots(solver, reduce(vcat, gathered; init=Any[]), names)
 end
 
-# This rank's interior block of one patch, with its placement in the patch;
-# with a `plane`, a `(normal, node)` pair in the patch level's node space, the
-# block's nodes on that plane, or nothing where the block misses it.
-function _snapshot_block(ps::PatchSolver, Q, names, plane=nothing)
+# This rank's interior blocks of one patch, each with its placement: per box
+# of the patch's nodes that `_snapshot_runs` selects, the part this rank holds.
+# A `plane` is a `(normal, node)` pair in the patch level's node space. Without
+# a plane or a window the one box is the whole patch.
+function _snapshot_blocks(ps::PatchSolver, Q, names, plane=nothing, win=nothing)
     decomp = ps.decomp
     region = ps.patch.region
     n = decomp.n_local
-    ranges = ntuple(d -> 1:n[d], 3)
-    offset, extent, lo = region.offset, region.extent, decomp.offset
-    if plane !== nothing
-        normal, node = plane
-        il = node - region.offset[normal] - decomp.offset[normal]
-        1 <= il <= n[normal] || return nothing
-        ranges = Base.setindex(ranges, il:il, normal)
-        offset = Base.setindex(offset, node - 1, normal)
-        extent = Base.setindex(extent, 1, normal)
-        lo = Base.setindex(lo, 0, normal)
+    runs = ntuple(d -> _snapshot_runs(ps, d, plane, win), 3)
+    held = ntuple(d -> decomp.offset[d] .+ (1:n[d]), 3)
+    boxes = Tuple{NTuple{3,UnitRange{Int}},NTuple{3,UnitRange{Int}}}[]
+    for box in Iterators.product(runs...)
+        span = ntuple(d -> intersect(box[d], held[d]), 3)
+        all(!isempty, span) && push!(boxes, (box, span))
+    end
+    if isempty(boxes)
+        # `:schlieren` runs a distributed derivative, which every rank of the
+        # patch reaches whether or not it holds a node of the snapshot.
+        foreach(name -> name === :schlieren && scalar_field(ps, name), names)
+        return Any[]
+    end
+    # The patch nodes this rank takes, as local interior indices: the hull of
+    # its parts of the boxes.
+    ranges = ntuple(3) do d
+        lo = minimum(first(span[d]) for (_, span) in boxes)
+        hi = maximum(last(span[d]) for (_, span) in boxes)
+        (lo:hi) .- decomp.offset[d]
     end
     interior = ntuple(d -> decomp.n_halo_d[d] .+ ranges[d], 3)
     # Device storage is copied to the host whole before the interior is cut.
@@ -701,15 +850,32 @@ function _snapshot_block(ps::PatchSolver, Q, names, plane=nothing)
     end
     T = eltype(ps.rho)
     coords = ntuple(d -> T[xcoord(ps, d, i) for i in ranges[d]], 3)
-    return (level=ps.patch.level, offset=offset, extent=extent,
-            lo=lo, coords=coords, data=collect(data),
-            covered=BitArray(ps.covered[interior...] .== 0xff))
+    covered = BitArray(ps.covered[interior...] .== 0xff)
+    data = collect(data)
+    out = Any[]
+    for (box, span) in boxes
+        # The part's indices within the hull; the arrays are taken whole when
+        # the part is the hull, as it is without a window.
+        rel = ntuple(d -> span[d] .- (first(ranges[d]) + decomp.offset[d] - 1), 3)
+        whole = all(d -> length(rel[d]) == length(ranges[d]), 1:3)
+        cut(a) = whole ? a : a[rel..., ntuple(_ -> Colon(), ndims(a) - 3)...]
+        push!(out, (level=ps.patch.level, offset=region.offset .+ first.(box) .- 1,
+                    extent=length.(box), lo=first.(span) .- first.(box),
+                    coords=ntuple(d -> coords[d][rel[d]], 3), data=map(cut, data),
+                    covered=cut(covered)))
+    end
+    return out
 end
 
-# Rank 0: the blocks of every rank written into one snapshot per patch. A
-# patch is named by its level and offset, which no two patches share.
+# Rank 0: the blocks of every rank written into one snapshot per box of a
+# patch, named by its level and offset, which no two boxes share, and each
+# carrying the record of the run.
 function _assemble_snapshots(solver::Solver, blocks, names)
-    T = eltype(first(blocks).coords[1])
+    T = _precision(solver)
+    species = String.(species_names(solver.eos))
+    R = _gas_constants(solver.eos)
+    kinds = boundary_kinds(solver)
+    bounds = domain_bounds(solver)
     groups = Dict{Tuple{Int,NTuple{3,Int}},Vector{Any}}()
     for b in blocks
         push!(get!(() -> Any[], groups, (b.level, b.offset)), b)
@@ -737,7 +903,9 @@ function _assemble_snapshots(solver::Solver, blocks, names)
             covered[span...] = b.covered
         end
         push!(snaps, FieldSnapshot(coords, fields, T(solver.t), Int(solver.step),
-                                   solver.metric, key[1], key[2], covered))
+                                   solver.metric, key[1], key[2], covered, species,
+                                   R === nothing ? nothing : copy(R), kinds, bounds,
+                                   solver.n_global))
     end
     return snaps
 end
