@@ -39,8 +39,8 @@ example they block is held until the item closes.
 - Close implementation tasks with the stated regression checks and the applicable
   repository validation gate. A numerical change requires an explained baseline
   update, not a relaxed test tolerance.
-- Historical references to model debts 1/2/3 correspond to N1 / R3+N3 / V1;
-  former Phase 2 items correspond to H1–H8, and G4b to S4.
+- Historical references to model debts one, two and three correspond to N1,
+  R3 with N3, and V1; former Phase 2 items correspond to H1–H8, and G4b to S4.
 
 ## Order of work
 
@@ -78,9 +78,9 @@ subject to one heavy run at a time.
    2. **A20**, the conservative coarse-fine correction under the limiter
       and on device storage; it runs today on host storage without the
       limiter.
-   3. **A17** items 1 and 4, the root step set by covered nodes and the
-      tiles near the r-z axis, which A21 items 1 and 2 cite as its
-      blockers.
+   3. **A17**'s first and fourth items, the root step set by covered nodes
+      and the tiles near the r-z axis, which A21's first two items cite as
+      its blockers.
 
    Then the physics:
 
@@ -111,15 +111,15 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 ## Numerics and calibration
 
 - [ ] **N4 — Decide the artificial shear viscosity.** Scored on the history
-  misfit, Taylor–Green at Re = 1600 fits best at `C_mu = 0` at 64³ and at 128³,
-  under both the default and the near-off filter, and at 128³ a fifth of
-  the physical dissipation lies off the grid
+  misfit, Taylor–Green at Re = 1600 fits best at `C_mu = 0` on both grids
+  measured and under both the default and the near-off filter. On the finer
+  grid, 128³, a fifth of the physical dissipation lies off the grid
   ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green); commits `c3f4f82`,
   `7e37a04`). One-dimensional shocks cannot determine the shear channel, so no
-  case in the repository supports a positive value. Cook's 0.002 was never
-  fitted: its evidence is decaying turbulence at Re_λ ≈ 720 on 192³ (Kang et
-  al.), under a 2/3-rule dealiasing or the sharp `pyranda_filter()`, not the
-  default filter
+  case in the repository supports a positive value. Cook's value of 0.002 was
+  never fitted. Its evidence is decaying turbulence at Re_λ ≈ 720 on 192³
+  (Kang et al.), under two-thirds-rule dealiasing or the sharp
+  `pyranda_filter()`, not the default filter
   ([where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)).
   Either set the default to zero once the one-dimensional battery and a
   shocked three-dimensional case clear it, or rerun that decaying-turbulence
@@ -180,17 +180,19 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   (u, p, T) state uniform, with gated and regularized normals, its rate in
   `max_rate`, and the default path bit-identical. It thins the interface at
   density ratio 100 at a cost in ringing and steps, improves nothing at 1000,
-  and acts on the plateaus of a smooth slab, so `C_sharpen` defaults to 0
+  and acts on the plateaus of a smooth slab, so the flux is off by default
   ([the sharpening flux](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux)).
   Remaining: fix the localization on the smooth slab, then qualify at
   density ratio 1000; the discretization, normal
   regularization and step-limit questions to the authors; the He/CO2 tube
   and the N20 budgets with the flux on; MPI and GPU coverage.
-  **Depends on:** nothing. **Gate:** the shocked interface at
-  density ratios 100 and 1000 against the unsharpened channel (width in
-  volume and mass fraction, TV−1, worst Y), the smooth-slab deposit of
-  `bench/falseactivation.jl`, the He/CO2 tube, the N20 budgets, and
-  `test/validation.jl` baselines explained.
+  **Depends on:** nothing. **Gate:**
+  - the shocked interface at density ratio 100 against the unsharpened
+    channel: width in volume and mass fraction, TV−1 and worst Y;
+  - the same at density ratio 1000;
+  - the smooth-slab deposit of `bench/falseactivation.jl`, the He/CO2 tube
+    and the N20 budgets;
+  - `test/validation.jl` baselines explained.
 
 - [ ] **N24 — Remove the grid-scale growth at the coordinate folds.**
   The area form of a fold's pressure term differs from the gradient at the
@@ -201,12 +203,12 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   the spherical radial and polar momenta (commit `da0c733`); the axis runaway,
   the αf dependence of Noh's axis deficit and the origin's resolution
   requirement are gone, and Noh's origin ceiling rises from 0.3 to 0.5.
-  Remaining: a strong blast through the origin still has a CFL ceiling of
-  0.2 to 0.3 in either form, where the axis and the plane take 0.5, and the
-  mechanism is open. The unstretched resolved-θ axis keeps the area form,
+  Remaining: a strong blast through the origin has a CFL ceiling of 0.2 to
+  0.3 in either form, by a mechanism still open. A blast at the axis or the
+  plane runs at 0.5. The unstretched resolved-θ axis keeps the area form,
   and with the filter off the isentropic vortex of the Axis-crossing vortex
-  tutorial (`docs/literate/axis_crossing_vortex.jl`, 32 × 64) runs away from
-  the first rings until its step collapses before t = 0.9. Under ∂p/∂r it
+  tutorial (`docs/literate/axis_crossing_vortex.jl`) runs away from the
+  first rings until its step collapses before t = 0.9. Under ∂p/∂r it
   grows more slowly but still runs away, and filtered its largest error is 2%
   larger; on a Cartesian square and on an annulus without the axis the same
   vortex completes unfiltered, so the runaway belongs to the axis and its
@@ -256,13 +258,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   parity with the uniform Cartesian run on every supported configuration, and
   on the refined and device paths a run time below it. The one-dimensional
   radial lines folded at r = 0, the spherical origin and the θ-collapsed
-  axis, carry it (commits `4d7fc5a`, `71f4fb1`): Sedov, Noh ν = 2, 3 and the
-  Supernova remnant tutorial run under strict validity with no inadmissible
-  point, at about 1.4 times the unlimited step. The r-z plane carries it with
-  the axis, a symmetry plane at z = 0 and their corner (commits `d50697d`,
-  `451285c`): Sedov leaves no inadmissible point and its shock radius is
-  within 0.25% of the spherical line's in every direction, at about 1.7
-  times the unlimited step. Same-level patches carry it under
+  axis, carry it (commits `4d7fc5a`, `71f4fb1`): Sedov, the cylindrical and
+  spherical Noh and the Supernova remnant tutorial run under strict validity
+  with no inadmissible point, at about 1.4 times the unlimited step. The
+  r-z plane carries it with the axis, a symmetry plane at z = 0 and their
+  corner (commits `d50697d`, `451285c`): Sedov leaves no inadmissible point
+  and its shock radius is within 0.25% of the spherical line's in every
+  direction, at about 1.7 times the unlimited step. Same-level patches carry it under
   `interface_flux = :closure` (commit `7a191c3`): the face at the shared
   node is limited by one θ on both patches and carries its own register,
   and Woodward–Colella and planar Noh on two and three patches leave no
@@ -304,7 +306,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   interface flux (commit `adf5732`), since fills under the closure rows leave
   such nodes too at the same interpolation order; whether unlimited runs
   take it is open. The filter's row at a node two same-level patches or
-  tiles share conserves by default (commits `be418e3`, `5853b90`, `HASH`),
+  tiles share conserves by default (commits `be418e3`, `5853b90`, `b4388f9`),
   a coarse-fine end keeping the identity row: against the identity row it
   brings the filter's share of the tiled drift to the box's and the limited
   tiles' drift down sevenfold under `:closure` and threefold under `:ghost`,
@@ -361,15 +363,26 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 - [ ] **N27 — Decide the artificial species diffusivity's scale in slow flows.**
   The artificial species diffusivity scales with the sound speed times the
   spacing, so on a coarse grid a slow instability loses growth as the sound
-  speed rises at fixed flow: in the Rayleigh–Taylor tutorial's setup
-  (`docs/literate/rayleigh_taylor.jl`) on 73 × 12 nodes the growth rate
-  falls by about 1.5% between ambient pressures 20 and 160, and turning the
-  artificial diffusivity off removes the fall. A related effect at a shock:
-  in the Richtmyer–Meshkov tutorial (`docs/literate/richtmyer_meshkov.jl`)
-  the diffusivity widens an interface the shock has compressed below about
-  three cells, the 5 mm layer compressed to 3.1 mm spreading to 4.5–4.9 mm
-  on 24 rows and staying at 3.5 mm on 36, which lowers the growth rate by
-  2%. Decide whether the species
+  speed rises at fixed flow. In the Rayleigh–Taylor tutorial's setup
+  (`docs/literate/rayleigh_taylor.jl`) on a coarse grid the growth rate
+  falls by about 1.5% over an eightfold rise of the ambient pressure, and
+  turning the artificial diffusivity off removes the fall. A related effect
+  appears at a shock. In the Richtmyer–Meshkov tutorial
+  (`docs/literate/richtmyer_meshkov.jl`) the diffusivity widens an
+  interface the shock has compressed below about three cells, and the
+  widening lowers the growth rate by 2%.
+
+  ```
+  Rayleigh–Taylor tutorial on 73 × 12 nodes, ambient pressure 20 to 160
+
+  Richtmyer–Meshkov tutorial     layer width, mm
+  before the shock               5
+  compressed by the shock        3.1
+  afterwards, on 24 rows         4.5–4.9
+  afterwards, on 36 rows         3.5
+  ```
+
+  Decide whether the species
   channel's scale should follow the flow speed where the flow is slow, or
   whether the dependence stays and is documented with its size.
   **Gate:** the tutorial's growth rate on the coarse grid independent of the
@@ -379,15 +392,27 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 ## Validation and verification
 
 - [ ] **V4 — Cut the gate's wall time.**
-  CI built the package image twice per job; with one build (commit
-  `8ea9ebf`) each Julia 1.13 serial job fell by about 6 min and the
-  numerics job from 49.1 to 44.5 min. The `allocate_state` barrier
+  CI built the package image twice per job, and building it once (commit
+  `8ea9ebf`) cut each Julia 1.13 serial job by about 6 min and the
+  numerics job by about a tenth. The `allocate_state` barrier
   (commit `a8812af`) cut the serial testsets by 3–6%, and
   `runtests.jl timing=true` (commit `725bf7d`) prints each testset's
-  compile and run time. Splitting the numerics job (commit `fa10874`) cut a
-  CI run from 44.5 min to a median of 26.4 (20 runs, 22.3 to 32.2); the
-  eight-rank job is the longest in 13 of 20 (median 24.1 min), the serial
-  Julia 1 and pre jobs follow at 24.0. The eight-rank selection is
+  compile and run time. Splitting the numerics job (commit `fa10874`) cut
+  the wall of a CI run to about three fifths. The eight-rank job is then
+  the longest in about two runs of three, with the serial jobs close
+  behind.
+
+  ```
+  CI wall, min                            before   after
+  one image build (8ea9ebf)
+    numerics job                          49.1     44.5
+  numerics job split (fa10874), 20 runs
+    whole run                             44.5     median 26.4, range 22.3 to 32.2
+    eight-rank job                                 median 24.1, longest in 13 of 20
+    serial Julia 1 and pre jobs                    24.0
+  ```
+
+  The eight-rank selection is
   `RANK_SHAPE_PHASES` in `test/mpi_tests.jl` (`rank_shape=true`), and the
   uniform half of the phase change at eight ranks, the C10 two-slab device
   layout and the Float32 NASA-9 device run are cut (commit `14c4c15`).
@@ -497,8 +522,8 @@ promotion.
      refined HDF5 dump (a spatial collection per patch with blanking, which
      the HDF5 `FieldWriter` rejects today).
   **Gate:** per-rank level memory and coupling wall flat in the weak-scaling
-  table at the largest count available, the MPI suite at 2, 4 and 8 ranks,
-  and bitwise agreement of every stage that only moves data.
+  table at the largest count available, the MPI suite at two, four and
+  eight ranks, and bitwise agreement of every stage that only moves data.
 
 - [ ] **A15 — Nest each refined patch inside one parent patch.**
   A level-ℓ ≥ 2 patch lies within one parent patch, and its box reads that
@@ -550,7 +575,7 @@ promotion.
 
 - [ ] **A20 — Carry the conservative coarse-fine coupling to every
   configuration.** The A14 correction runs on host storage without the
-  positivity limiter, and across a 2-D or 3-D face only on lines where the
+  positivity limiter, and in more than one dimension only on lines where the
   parent's density beside the face holds an unresolved feature, since the
   two grids' tangential quadratures differ at order H³ per line and
   corrected everywhere they took a 2-D entropy wave from sixth order to
@@ -596,15 +621,17 @@ promotion.
   1. The level's step count. A parent's nodes that restriction overwrites,
      more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
      0.75 rather than the solver's (commit `f1d420c`; excluding them made
-     the axis shock run away): the Sod level takes the fine run's step count,
-     the tiled Sod tube runs at 0.73 of the fine wall, the shock falls from
-     1115 to 763 root steps. On the box blobs and the 3-D box the artificial
-     rate holds the level at 2.2 to 2.6 times the fine count, the 3-D box's
-     root step bounded by its covered root nodes on most steps; the 3-D
-     tiles take 1.56 times it under the level's hyperbolic rate.
-  2. The tiles' cost per point, 1.3 to 1.5 times the fine grid's (2.4 on
-     the shock): the shell fill runs only where a tile has a parent-fed
-     face, each tile's right-hand side reads the level pass's velocity
+     the axis shock run away). The Sod level then takes the fine run's step
+     count, the tiled Sod tube runs at 0.73 of the fine wall, and the
+     shock's root steps fall by a third. On the box blobs and the
+     three-dimensional box the level's step count is held by the artificial
+     rate at 2.2 to 2.6 times the fine count, and on most steps the
+     three-dimensional box's root step is bounded by its covered root nodes.
+     The three-dimensional tiles take 1.56 times the fine count under the
+     level's hyperbolic rate.
+  2. The tiles' cost per point, 1.3 to 1.5 times the fine grid's and more
+     than twice it on the shock: the shell fill runs only where a tile has
+     a parent-fed face, each tile's right-hand side reads the level pass's velocity
      gradients, `Patch` is mutable (commit `3c2bc6a`) and the ghost-flux
      split runs one body per kind of component over the region the line
      fills read (commit `74343a7`). The level-wide artificial coefficients cost
@@ -613,8 +640,8 @@ promotion.
      dimension, whose one-sided rows carry their own left-hand side, so
      removing it is a change of numerics. Differencing the remainder through
      the gradient rows, now the default, removes it, raises an interface's
-     order on exact data from 3 to 6 and moves every shock measure by under
-     2%
+     order on exact data from third to sixth and moves every shock measure
+     by under 2%
      ([measurements](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
   3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
      blob problems; revisit `tag_buffer`, the tag threshold and the tile
@@ -652,25 +679,39 @@ promotion.
   runs on r-z and 3-D Cartesian levels, and `ablation_band` tags a band that
   follows the front. A 1 µm shell is only practical refined, and the band runs
   are blocked by the hierarchy, not the source:
-  1. The root's covered nodes set its step (A17.1): with a 10–20 µm band over
-     a 30–60 µm root, the root's rate was 3865 against the band's 958 at
-     0.15 ns, about 8 times a uniform fine grid's steps; the 3-D band run
-     reached 0.1 ns in 30 minutes.
-  2. Tiles near the r-z axis: edge 10 failed within 0.1 ns, edge 8 at
-     0.62 ns, a single box ran (A17.4).
+  1. The root's covered nodes set its step (A17's first item). In a band run
+     the root's rate was about four times the band's, and the root's steps
+     were about 8 times a uniform fine grid's.
+  2. Tiles near the r-z axis: runs at both tile edges tried failed, and a
+     single box ran (A17's fourth item).
   3. Cold start: multi-D runs from the cold, uniform-pressure ablator need
-     CFL ≤ 0.25 (r-z at 15 µm failed within 0.035 ns at 0.4, undriven).
-  4. The direction bins must span several coarsest-level cells (32 × 128
-     bins on a 60 µm 3-D root failed at 0.03 ns).
+     CFL ≤ 0.25, and an undriven r-z run failed at 0.4.
+  4. The direction bins must span several coarsest-level cells; finer bins
+     on a three-dimensional root failed.
+
+  ```
+  band run, 10–20 µm band over a 30–60 µm root, at 0.15 ns
+    rate of the root                    3865
+    rate of the band                    958
+  3-D band run                          0.1 ns in 30 minutes
+  r-z tiles near the axis, edge 10      failed within 0.1 ns
+  r-z tiles near the axis, edge 8       failed at 0.62 ns
+  undriven r-z cold start at 15 µm      failed within 0.035 ns
+  3-D root at 60 µm, 32 × 128 bins      failed at 0.03 ns
+  ```
+
   Not yet exercised: a regrid following the shell with `ablation_band`, the
-  binned source on MPI and GPU, and r-z or 3-D at 1–2 µm.
-  **Gate:** an r-z quadrant and a 3-D octant with a 2 µm band, driven by a
-  Briareus `CapsuleDrive` to peak velocity, matching the 1-D shell trajectory
-  to grid error for a spherical drive, at a wall below the uniform 2 µm grid's.
+  binned source on MPI and GPU, and r-z or three-dimensional runs at 1–2 µm.
+  **Gate:**
+  - an r-z quadrant and a three-dimensional octant with a 2 µm band, driven
+    by a Briareus `CapsuleDrive` to peak velocity;
+  - the one-dimensional shell trajectory matched to grid error for a
+    spherical drive;
+  - a wall below the uniform 2 µm grid's.
 
 - [ ] **A22 — Replace the effective ablation rate of the Briareus-driven shell.**
   Stage 0's `AblationDrive` takes ṁ = A T³ with an effective A fitted to the
-  ablator remaining at peak velocity (5–6.6 %, PRE 109 Table I and HYDRA;
+  ablator remaining at peak velocity (PRE 109 Table I and HYDRA;
   Briareus research notes, "Capsule drive hand-over and CompactLES
   stage 0"); peak velocity, kinetic energy and bang time are the checks it
   leaves. With the fitted rate the shell peaks below 380–400 km/s and
@@ -685,14 +726,16 @@ promotion.
   3. Grid robustness: at the fitted rate two of three grids fail on
      `dt_collapse`, so the velocity is not grid-converged.
   4. The stagnation lag (Briareus research notes, "Where the stagnation lag
-     comes from", 2026-10-27): of eight one-closure variants, those that
-     bring the first shock to the keyhole timing slow the shell, leave more
-     ablator and stagnate later, and only more ablation closes the late lag,
-     leaving less ablator than the 5–6.6 % band. No fitted A gives v,
-     remaining mass and timing together with ideal-gas carbon, so items 1–2
-     come first; the drive is not the cause.
-  **Gate:** a measured HDC rate (no fitted A) reaching 5–6.6 % remaining and
-  380–400 km/s on a converged grid, with stagnation timing explained.
+     comes from", 27 October 2026): of eight one-closure variants, those
+     that bring the first shock to the keyhole timing slow the shell, leave
+     more ablator and stagnate later. Only more ablation closes the late
+     lag, and it leaves less ablator than the 5–6.6 % band of the fit. No
+     fitted A gives v, remaining mass and timing together with ideal-gas
+     carbon, so the first two items come first; the drive is not the cause.
+  **Gate:** a measured HDC rate, with no fitted A, on a converged grid:
+  - 5–6.6 % of the ablator remaining at peak velocity;
+  - a peak velocity of 380–400 km/s;
+  - the stagnation timing explained.
 
 ## HED physics
 
@@ -832,10 +875,10 @@ limiter.
   that interface. Declare frozen/equilibrium derivatives and supported
   temperature partitions; a 1T table alone does not supply a 2T EOS or the
   populations required by transport.
-  Delivered, standalone and unexported: the IONMIX4/6 reader and writer
-  with bilinear (ln T, ln ρ) interpolation, its own derivatives, column
+  Delivered, standalone and unexported: the IONMIX4 and IONMIX6 reader and
+  writer with bilinear (ln T, ln ρ) interpolation, its own derivatives, column
   inversion and the `TABLE_` statuses (commit `5598c9c`), and the SESAME
-  ASCII 2 reader and writer for records 201 and 301–306 on the same table
+  ASCII 2 reader and writer for tables 201 and 301–306 on the same table
   machinery, with an opt-in free-energy-consistent bicubic Hermite route
   (commit `44ca2f8`). Remaining: the SP5 HDF5 form in the HDF5 extension, a
   check against a real table of each format, the A7 adapters and the
@@ -1046,13 +1089,20 @@ under [the refinement track](#refinement-for-the-production-geometry).
 
 - [ ] **S12 — Measure the replicated interface solve at many ranks.**
   The reduced interface matrix of a line decomposed over P ranks is
-  block-tridiagonal of order 2qP (block-cyclic on a periodic line); every
+  block-tridiagonal of order 2qP (block-cyclic on a periodic line). Every
   rank holds it and solves it for its own lines through a pivoted band LU,
-  O(q²P) operations per line against 9qn for the local sweep, where a dense
-  LU would cost 8q²P² and is kept only at P = 1 (stage 2;
-  [DESIGN.md](DESIGN.md#the-distributed-compact-solve)). On a uniform 3-D
-  grid of N³ points with P ranks per direction, the reduced stage's share
-  of a solve therefore grows as P²/N. Per-step collective latency is not
+  and a dense LU is kept only at P = 1 (stage 2;
+  [DESIGN.md](DESIGN.md#the-distributed-compact-solve)):
+
+  ```
+  operations per line
+  local sweep               9qn
+  reduced, band LU          O(q²P)
+  reduced, dense LU         8q²P²
+  ```
+
+  On a uniform 3-D grid of N³ points with P ranks per direction, the
+  reduced stage's share of a solve therefore grows as P²/N. Per-step collective latency is not
   the limit: Allgathers span one direction's P ranks and the measured node
   scaling holds to four nodes ([CLUSTER.md](CLUSTER.md)). What remains is
   stage 1's run on rzhound, and stage 3 only if that run shows the
@@ -1075,11 +1125,11 @@ under [the refinement track](#refinement-for-the-production-geometry).
   costing O(q²P_d), so for a fixed rank count the per-rank reduced cost is
   proportional to the sum of the squares of the per-direction rank counts:
   near-uniform grids minimize it and slabs maximize it, by a smaller margin
-  than under the dense solve's sum of cubes. No cluster measurement yet
-  places a crossover against the local sweep under the band solve, since
-  stage 1's run is the open part. **Depends on:** system-MPI cluster time
-  for stage 1. **Gate:**
-  the MPI suite at 2, 4 and 8 ranks, `bench/tgv_energy.jl` reproducing serial
+  than under the dense solve's sum of cubes. No crossover against the local
+  sweep under the band solve has been measured on a cluster yet, since the
+  first stage's run is the open part. **Depends on:** system-MPI cluster
+  time for the first stage. **Gate:**
+  the MPI suite at two, four and eight ranks, `bench/tgv_energy.jl` reproducing serial
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
 
@@ -1092,8 +1142,8 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `Nasa9Mixture` step there too with `bench/device_nasa9.jl`, which has run only
   on the workstation GPU. The LLVM 22.1.8 `llc` in `AMDGPU_LLVM_Backend_jll`
   miscompiles a short-circuit choice between two kernel arguments on gfx942 as
-  on gfx1030 ([amdgpu_shortcircuit_bug_report.md](bugreports/amdgpu_shortcircuit_bug_report.md));
-  a target run uses an AMDGPU.jl release on the version-23 backend, or relies on
+  on gfx1030 ([amdgpu_shortcircuit_bug_report.md](bugreports/amdgpu_shortcircuit_bug_report.md)).
+  A target run uses an AMDGPU.jl release on the version-23 backend, or relies on
   the `ifelse` rule holding in every kernel.
   **Gate:** full single/refined/tiled runs on target hardware, including real device
   communication paths; report measured reproducibility rather than universal
@@ -1144,9 +1194,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
   `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). The
-  convergence criterion is eps^(2/3), floored at 1e-10 (commit `dc67f71`), which
-  saves most of one iteration, and the iterates stay inside the fitted range
-  (commit `3ede230`). What remains is a warm start from the stored
+  convergence criterion is eps^(2/3), which saves most of one iteration. Its
+  floor is 1e-10 (commit `dc67f71`), and the iterates stay inside the fitted
+  range (commit `3ede230`). What remains is a warm start from the stored
   `T_ion` field, which would cut the Newton iterations per point. It trades away
   the state-only seed that `mixture_temperature_status` documents for
   bit-for-bit agreement between serial and decomposed runs and for restart
@@ -1170,7 +1220,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   [CLUSTER.md](CLUSTER.md) (hybrid-desktop paragraph), measured when a solve
   took three regions, re-measured pinned; then the threading backend, whose
   `@threaded` docstring names this reorganization as the condition for
-  re-measuring it. Low priority: on that 2-D case `mpiexec -n 8 -t 1` beat
+  re-measuring it. Low priority: on that two-dimensional case `mpiexec -n 8 -t 1` beat
   eight threads, so the result matters where threads are the only
   parallelism, such as the host-side interface stage of a device plan.
   **Gate:** the 768×48 table at `-t 8` pinned and at `-n 8 -t 1`, and the
@@ -1187,9 +1237,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
   cap also caps the θ rate that `filter_weight` reads, so the θ filter pass
   weakens wherever the inner rings set that rate; the calibration measures it.
   On the axis-crossing vortex (`bench/axisvortex.jl`) the error grows with the
-  number of truncated steps, and at κ = 2 the second ring's limit of 2 holds
-  the density error near 45 times the untruncated run's where κ = 1 comes
-  within a factor 1.33 ([the measurement](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
+  number of truncated steps. At κ = 1 the density error comes within a
+  factor 1.33 of the untruncated run's. At κ = 2, with the second ring
+  truncated as well, it stays near 45 times the untruncated run's
+  ([the measurement](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.
@@ -1272,7 +1323,7 @@ and the production configuration they lead to are in
   (commit `51d7b2a`).
 - [x] **N28** — `NSCBCOutflowBC` carries the first-order Bayliss–Turkel
   curvature term at an outer radial face, and the oscillating-sphere dipole
-  reflects 0.05 of the plane form's 1/(2kR) (commit `6c97f4f`).
+  reflects about a twentieth of what the plane form reflects (commit `6c97f4f`).
 - [x] **N29** — The inflow face's transverse terms carry the u_r/r of the
   collapsed θ, so the r-z face beside the axis no longer grows vorticity
   after a shock leaves through it (commit `f74b76f`).
@@ -1282,7 +1333,7 @@ and the production configuration they lead to are in
   transverse terms now takes the weight min(β_t, M) (commit `7187b27`).
 - [x] **N33** — The r-z axis face carries −h² ρ u_r′(0)/12, a twelfth of the
   first node's mass rate and the rate of change of the midpoint rule's own
-  error at the axis; the scheme is unchanged, and with an (h²/24) q₁ end
+  error at the axis. The scheme is unchanged, and with an (h²/24) q₁ end
   correction the r-z mass is conserved to fourth order (commit `3742897`).
 - [x] **N30** — The outflow's transverse terms carry a collapsed transverse
   dimension's curvature row, as the inflow's do; the default dipole
@@ -1415,13 +1466,13 @@ and the production configuration they lead to are in
   interfaces and inert without one; `:closure` remains for shock-dominated and
   Float32 runs, and a configuration `:ghost` does not support raises an
   `ArgumentError` naming it (commit `e9a91ed`).
-- [x] **N16** — `level_interpolation_order` (2, 4, 6 or 8) sets the live
-  transfer order; 6 stays the default, which the default interface rows
-  saturate, and 8 is the opt-in for viscous, filtered, multidimensional or
-  `interface_divergence` runs (commit `c7d26e3`).
+- [x] **N16** — `level_interpolation_order` sets the live transfer order to
+  second, fourth, sixth or eighth; sixth stays the default, which the default
+  interface rows saturate, and eighth is the opt-in for viscous, filtered,
+  multidimensional or `interface_divergence` runs (commit `c7d26e3`).
 - [x] **N17** — `level_interpolation_order` defaults to the derivative
-  operator's interior order, two more under `interface_flux = :ghost` up to 10;
-  order 10 is exact to degree 9 behind the four-node buffer, and a C6 run under
+  operator's interior order, two more under `interface_flux = :ghost` up to 10.
+  Order 10 is exact to degree 9 behind the four-node buffer, and a C6 run under
   the closure rows is unchanged (commit `decf45a`).
 - [x] **V5** — A tile takes only the rank counts its process grid admits,
   which is not monotone in the count, so the full MPI suite passes at eight
@@ -1475,7 +1526,8 @@ and the production configuration they lead to are in
 - [x] **A25** — VTK files, HDF5 frames and snapshots record the species, the
   gas constants, the metric, each face's type, the domain bounds, the time
   and the node count with the stride; `field_snapshot` takes a window, and
-  `boundary_conditions` and `domain_bounds` are exported (commits `HASH`).
+  `boundary_conditions` and `domain_bounds` are exported (commits `f8342da`,
+  `88abf8a`, `ab7a9aa`, `f8d3551`).
 
 ### Scale, devices and I/O
 
@@ -1496,7 +1548,7 @@ and the production configuration they lead to are in
 
 ### HED physics
 - [x] **H2** — `ImplicitConduction` integrates the molecular conduction in
-  the implicit half of ARK4(3)6L[2]SA on one host-storage patch, decomposed
+  the implicit half of `ARK4(3)6L[2]SA` on one host-storage patch, decomposed
   or not, with collective rollback of a failed stage; a `cfl` chosen for the
   default integrator carries over (commits `9fd6365`, `9c2edd8`).
 

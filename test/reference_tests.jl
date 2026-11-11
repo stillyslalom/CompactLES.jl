@@ -232,7 +232,7 @@ const NUMERAL = r"(?<![A-Za-z_0-9])[−+-]?\d+(?:\.\d+)?(?:e[+−-]?\d+)?%?"
 
 # Reference files whose prose predates the rule; the list empties as each is
 # converted.
-const NUMERAL_PENDING = ["CALIBRATION_APPENDIX.md", "ROADMAP.md"]
+const NUMERAL_PENDING = ["CALIBRATION_APPENDIX.md"]
 # A local file the repository ignores (`.gitignore`), present in a maintainer's
 # checkout only: questions to a paper's authors, which quote its figures.
 const NUMERAL_LOCAL = ["AUTHOR_QUESTIONS.md"]

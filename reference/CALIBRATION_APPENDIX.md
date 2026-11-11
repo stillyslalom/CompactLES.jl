@@ -7329,7 +7329,7 @@ base row       C6, subcycled, one tile, filter_cfl = 0.35, the default rows,
                ghost taps, interface_flux = :closure
 ```
 
-Each other row changes one setting. Package at `HASH`, Julia 1.13.3, from
+Each other row changes one setting. Package at `b4388f9`, Julia 1.13.3, from
 `julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
 transcript is `bench/results/interfacesensor.txt`. The noise is the momentum
 ahead of the shock at t = 0.1 and x > 0.85, the level suite's gate quantity,
@@ -7678,7 +7678,7 @@ interface window's error equals the interior's, and at a coarse-fine face every 
 or leads the Brady–Livescu (BL) rows. The polynomial row, `polynomial_case(96)` with every
 inviscid flux component of degree at most five, is differenced to round-off in the interface
 window by the ghost path alone. The closure-row and BL columns are those of the section
-above, which this study reproduces to every digit. Package at `HASH`, Julia 1.13.3; the
+above, which this study reproduces to every digit. Package at `b4388f9`, Julia 1.13.3; the
 transcript of the first command is `bench/results/boundaryorder.txt`.
 
 ```text
@@ -7765,7 +7765,7 @@ two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049
 under both, and they complete the run with the diaphragm on a shared plane, which fails under
 the closure rows. The case is the Sod crossing, root N = 201, `cfl = 0.4`, the artificial
 properties and the filter live, inviscid, at the ghost path's default order 8. Package at
-`HASH`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
+`b4388f9`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
 `bench/results/interfacesensor.txt`. Shell and root are the density errors against the
 uniform run at the fine spacing at t = 0.2, p_min the smallest pressure on any step. In the
 default ghost column the remainder goes through the gradient rows (the transcript's
@@ -8505,7 +8505,7 @@ the only monotone choice.
 
 `julia --project=. test/runtests.jl` (the patch testsets). The rows under the
 default ghost fluxes and the viscous rows are the testsets' output at
-`743fdb4b` under Julia 1.13.3, and the drift is at `HASH`. The two rows reading "the same under
+`743fdb4b` under Julia 1.13.3, and the drift is at `b4388f9`. The two rows reading "the same under
 `:closure`" are the closure-row figures the test file records and no longer
 runs (the C6 entropy orders are the `gflux` table's), and the row of the
 ninth-degree polynomial is `test/serial_suite.jl`'s.
