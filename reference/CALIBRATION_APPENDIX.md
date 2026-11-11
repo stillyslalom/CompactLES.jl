@@ -523,8 +523,10 @@ rows ([the filter's wall rows](#the-filters-wall-rows)).
 right-hand side, and its own symmetric and antisymmetric boundary closures. `artificial.jl`
 uses the undivided fourth difference δ⁴, following [Cook
 (2007)](https://doi.org/10.1063/1.2728937) literally. `ArtificialProperties.detector` selects between
-them: `:delta4` is the default and `:d8` is [`compact_d8`](../src/kernels_banded.jl), the
-reference operator transcribed. The interior rows of the two are
+them: `:delta4` is δ⁴ and `:d8` is [`compact_d8`](../src/kernels_banded.jl), the reference
+operator transcribed. The default, `:species_d8`, applies `:d8` to the mass and mole
+fractions and δ⁴ to every other sensed field, so on a single-species case it is `:delta4`
+exactly. The interior rows of the two are
 
 ```
 :delta4   δ⁴f_i = f_{i-2} − 4 f_{i-1} + 6 f_i − 4 f_{i+1} + f_{i+2}
@@ -550,7 +552,7 @@ intermittency at a symmetry cell, and a sharper high-pass makes narrower sensor 
 
 ```
 detector    Noh1 plat  deficit   Noh3 plat   Lax L1   contact   Shu train   WC peak
-delta4*      0.9993     +64%      0.9751     5.0e-3   0.0053     1.6180     6.6049
+delta4       0.9993     +64%      0.9751     5.0e-3   0.0053     1.6180     6.6049
 d8           0.9997     +53%      0.9951     4.7e-3   0.0044     1.6360     6.3953
 ```
 
@@ -640,12 +642,14 @@ the per-step operation in the loop is the compact filter ([the filter's
 dissipation](#the-filters-dissipation)). The sign of the dependence is the evidence; the
 accumulation itself has not been measured step by step.
 
-**Recommendation:** `:delta4` remains the default. The battery favours `:d8`, as do the
+**Recommendation:** δ⁴ for the sensors of μ\*, β\* and κ\*, which the default `:species_d8`
+keeps on every field but the mass and mole fractions. The battery favours `:d8`, as do the
 planar and cylindrical ceilings, but the general guidance for converging shocks rests on the
 spherical case, where `:d8` costs 40% of the timestep. The four constants are also the δ⁴
 fit, and a detector that changes the sensor's spatial support by this much has no claim on
 them. Nothing is shown wrong with `:d8`; `:delta4` survives the origin excursion at a larger
-timestep.
+timestep. The species fields under `:d8` are measured under [false activation on smooth
+fields](#false-activation-on-smooth-fields).
 
 ### The sensor fields and the compression switch
 
@@ -930,16 +934,16 @@ when the smoother default moved. Six tests whose assertions are recorded traject
 
 ### The Brill 2025 parameter set
 
-The coefficient families and their original values come from [Cook
-(2007)](https://doi.org/10.1063/1.2728937). The later set of [Brill, Olson &
-Bokman](https://arxiv.org/abs/2503.12680), their eqs. 22–29, has an eighth-derivative
+The coefficient families and their original values come from [Cook (2007, eqs.
+15–18)](https://doi.org/10.1063/1.2728937). [Brill, Olson & Bokman (2025, eqs.
+22–29)](https://arxiv.org/abs/2503.12680) use a later set with an eighth-derivative
 detector, the max over directions, μ\* from the velocity components and β\* from the ungated
 dilatation. Their detector F (eq. 22) is the eighth derivative times Δ⁸, which is Pyranda's
-`c10d8` with a two-point response of 3840. This code's `compact_d8` is the same operator
-divided by 240 ([Pyranda's implementation](#the-partial-density-species-channel)). Their μ\*
-and β\* (eqs. 25 and 26) contain no Δt. The species diffusivity c_s F Δ of their new method
-(eqs. 34–37) contains none either. Only the traditional D\* of eq. 24 carries Δ²/Δt, so each
-constant multiplying a detector output converts by 240:
+`c10d8` with a two-point response of 3840, and `compact_d8` is the same operator divided by
+240 ([Pyranda's implementation](#the-partial-density-species-channel)). μ\* (eq. 25), β\*
+(eq. 26) and the species diffusivity of their new method (eqs. 34–37, c_s F Δ) contain no
+Δt; only the traditional D\* of eq. 24 carries Δ²/Δt. Each constant multiplying a detector
+output therefore converts by 240:
 
 ```
 constant   Cook (2007, eqs. 15–18)   Brill et al. (2025)      converted, ×240
@@ -1236,8 +1240,9 @@ paths are under `pyranda/`, deck paths under `examples/`.
   One D\* serves both species, and h_min is `gridLen`, min_d h_d (`parcop/mesh.f90:211`).
 - *Species flux.* Cook's Fickian form for two species with no enthalpy flux: J = ρD\*∇Y_A,
   subtracted from ρY_A and added to ρY_B, with no term in momentum or energy
-  (`shockBubble.py:65–69,106–108`). None of the terms of Brill's section 4 is present
-  (the table below), nor any positivity treatment beyond the C_Y term.
+  (`shockBubble.py:65–69,106–108`). Brill's partial-density flux (eqs. 32–40), the
+  maximum over Y and V (eqs. 33–37) and the sharpening flux (eq. 68) are absent, as is any
+  positivity treatment beyond the C_Y term.
 - *Filter.* `fbar` is `sfilter`, spec `sfspec = 2` (`parcop/compact.f90:28`), `c8ff8`, a
   pentadiagonal eighth-order filter with α = 0.66624 and β = 0.16688
   (`parcop/stencils.f90:713–835`). Its transfer function integrates to nine tenths, which
@@ -1246,21 +1251,11 @@ paths are under `pyranda/`, deck paths under `examples/`.
   rows (`:763–786`). The decks put `fbar` in the equation block, so it runs after every
   Runge–Kutta stage (`pyranda.py:800–810`, `updateVars` at 396).
 
-Pyranda therefore carries the traditional method of Brill's section 3 and none of section 4:
-
-```
-Brill, Olson & Bokman (2025)                  in Pyranda
-traditional method, section 3, eqs. 16–27     present, with Pyranda's Fickian flux in place
-                                              of eq. 16's enthalpy flux
-partial-density flux, eqs. 32–40              absent
-maximum over Y and V, eqs. 33–37              absent
-sharpening flux, eq. 68                       absent
-```
-
-The source settles the detector's normalization, the sensed fields, the Gaussian, the
-filter and its cadence, and the meaning of Δt in Pyranda. Which Δt Miranda uses in eq. 24,
-how Miranda discretizes the partial-density and sharpening fluxes, and how eq. 27 reads are
-not in it.
+Pyranda therefore carries the traditional method of Brill's section 3 (eqs. 16–27, with
+Pyranda's Fickian flux in place of eq. 16's enthalpy flux) and none of section 4. The source
+settles the detector's normalization, the sensed fields, the Gaussian, the filter and its
+cadence, and the meaning of Δt in Pyranda. Which Δt Miranda uses in eq. 24, how Miranda
+discretizes eqs. 32–40 and 68, and how eq. 27 reads are not in it.
 
 **Recommendation:** `:partial_density` as the default, with C_D = 0.1; `:bulk` at a density
 ratio of 100 or more, where its viscosity holds the ringing; `:fickian` only to reproduce
@@ -1330,12 +1325,14 @@ reference is the tabulated 512³ pseudo-spectral solution vendored at
 ([provenance](../data/README.md#taylor-green-reference-solution)). Its peak is 1.28575e-2
 at t = 8.97, and every comparison passes that solution through the run's own boxcar.
 
-**Read the rate over a window.** The instantaneous rate is `(filter loss)/dt + physical`, so
-it carries the full `dt` jitter, while `C_mu` is ranked on differences well under 1%. At 128³
-with the artificial properties on, `dt` swings ±12% step to step. Against the filter's 37%
-share of the sink that predicts the ∓4% one-step scatter. The 501-step windowed rate holds
-within-run scatter near 0.3%, and a boxcar over a curved peak reads low by an amount that
-grows with its width in time:
+**Read the rate over a window.** The instantaneous rate scatters by several times the
+differences on which `C_mu` is ranked, and a window wide enough to remove the scatter reads
+a curved peak low by an amount that grows with its width in time. The instantaneous rate is
+`(filter loss)/dt + physical`, so it carries the full `dt` jitter. At 128³ with the
+artificial properties on, `dt` swings ±12% step to step. Against the filter's 37% share of
+the sink this predicts a one-step scatter of ∓4%, where `C_mu` is ranked on differences well
+under a percent. The 501-step windowed rate holds within-run scatter near 0.3%. The bias of
+the boxcar on the peak:
 
 ```
 window                 width              reads low by
@@ -1468,12 +1465,12 @@ art off                -0.40%        -0.02      3.446e-2       1.593e-1
 
 The histories are worse with μ\* in both arms, whether it carries a large or a small share
 of the sink, so the best-fitting `C_mu` here is zero. The budget does not close exactly, and
-its deficit grows as the damping is removed:
+in the near-off filter's arm its deficit grows as the damping is removed:
 
 ```
 budget closure at 64³
 across the α = 0.45 arm                    −3.0% to +1.1%
-deficit as the damping is removed, to      −12.8%
+α = 0.499: full, C_mu = 0, art off         −3.8%, −6.1%, −12.8%
 ```
 
 The cause is either grid-scale energy from a central compact scheme without dealiasing or a
@@ -1875,8 +1872,9 @@ N = 400
  4                      3.9956    62%       0.2046
 ```
 
-At N = 400 the two milder aspect ratios read the battery's ν = 1 row, and the step counts
-are the same to within the trajectory's change.
+At N = 400 the two milder aspect ratios agree to the fourth digit of the plateau and in
+deficit and shock position. The step is sized as under the scalar weight, so the step counts
+are the scalar weight's to within the change of trajectory.
 
 The directional weight lowers the shear layer's relaxed loss by 1.5%, from 2.351e-3:
 `u_x(y)` is filtered only by the `y` pass, whose weight reads `√3 c / h` rather than a total
@@ -1890,7 +1888,7 @@ rises and the misfits improve:
 ```
 Taylor–Green at the reference CFL, scalar weight → directional weight
 art off, 32³    peak moved 0.08%, misfits 0.06% and 0.03%
-art on          filter share       misfit             peak time
+art on          filter share       KE misfit          peak time
 32³             83.7% → 81.2%      0.157 → 0.147
 64³             67.2% → 62.2%      0.0492 → 0.0435    8.35 → 9.05, reference 8.97
 ```
@@ -2150,7 +2148,7 @@ origin during the excursion and no ceiling moves:
 ```
 area form                                   β* on ρ              β* on ρ̃
 origin β*/line max, cfl 0.4, step 100       0.43                 0.61
-wall, cfl 0.3                               wrong state          fails at step 659
+wall, cfl 0.3                               completes wrong      fails at step 659
 axis, cfl 0.25                              fails at step 110    fails at step 386
 origin, cfl 0.4                             fails at step 106    fails at step 109
 ```
@@ -2199,11 +2197,11 @@ step    x_sh/h | rho_min   i | e/e0_min   i  n_e<0 | b*@e/b*max  reach/h
 the failing cfl = 0.3, first 125 steps:     b*@e/b*max 0.84–1.00
 ```
 
-Reach holds at 14.2–14.8 cells over the run. The worst cell sits only 3–5 cells ahead of
-the front, well inside that reach, so a wider sensor stencil would address a deficit that is
-not present, and the affected cell carries a sixth of the domain's peak artificial bulk
-viscosity throughout. At the failing CFL it carries nearly the full maximum from the start
-(the table's last line).
+Reach holds between 14.2 and 14.7 cells over the run. The worst cell sits only 3–5 cells
+ahead of the front, well inside that reach, so a wider sensor stencil would address a
+deficit that is not present, and the affected cell carries a sixth of the domain's peak
+artificial bulk viscosity throughout. At the failing CFL it carries nearly the full maximum
+from the start (the table's last line).
 
 **Not the fold closure**, which is sixth to seventh order and the most accurate region of
 the line ([fold order](#fold-order-and-geometry-limits)). **Not sensor blindness at the
@@ -2264,7 +2262,7 @@ spreads each spike widely enough that no trough remains. A measurement of the de
 therefore be taken on top of the Gaussian smoother, since a sharper high-pass produces
 narrower spikes; Pyranda pairs `:d8` with the Gaussian and never with a near-identity
 filter. The planar probe above is sampled too coarsely for an alternation of this period,
-so its steady 0.14–0.21 is consistent with either a steady sensor or the average of an
+so its steady 0.14–0.19 is consistent with either a steady sensor or the average of an
 alternation; re-running it at `every = 25` would settle that and has not been done.
 
 ### The origin cell is a startup transient
@@ -2354,7 +2352,8 @@ shock](#negative-internal-energy-ahead-of-a-shock).
 
 **Repairing those cells is a percent-level intervention and terminates the run.** Under the
 failsafe that repairs negative internal energy, the run gains mass and energy and loses
-momentum until it fails:
+momentum until it fails. The planar case at cfl 0.15, measured at commit `7a24584`, before
+`run!` primed the first step:
 
 ```
 StepControl(floor_ratio = 1e-8, floor_scope = :internal_energy)
@@ -2368,7 +2367,8 @@ end                           :dt_collapse at step 19
 
 The repair damps the velocity where the total energy is still positive and raises the total
 energy where no kinetic energy is left to convert, so the cost belongs to the case and not
-to the choice of repair. The three geometries at cfl 0.15 under each policy:
+to the choice of repair. The three geometries at cfl 0.15 under each policy, with the first
+step primed (commit `c407e0b`):
 
 ```
 nu  policy                  end                 steps   plateau   deficit  shock    cells e<0 (max, span)  low-e cell-steps  repairs   mass added  energy added  momentum removed
@@ -2469,11 +2469,12 @@ nu  t0    blend   N      steps   plateau/exact   deficit   shock
 The plateau error is made while the shock is within a few cells of the origin. From
 t₀ = 0.1, where the shock starts at 8.5 cells, the plateau converges under refinement at
 first order. From t₀ = 0.3, where it starts at 26 cells, the error is an order of magnitude
-smaller at every resolution. The blend width moves the plateau by 3% either way at 4h, and
-the wider blend costs the shock position. The width of 4h is therefore retained. The battery
-starts the cylindrical case singular at t = 0, which the axis takes, and its plateau of
-0.938 is a startup error of the same kind. The warm start at t₀ = 0.3 returns the shock
-position exact (the last row) and completes through cfl 0.5 even unprimed.
+smaller at every resolution. Halving the blend width from 4h lowers the plateau by 3%, and
+doubling it raises the plateau by a third of a percent at the cost of the shock position.
+The width of 4h is therefore retained. The battery starts the cylindrical case singular at
+t = 0, which the axis takes, and its plateau of 0.938 is a startup error of the same kind.
+The warm start at t₀ = 0.3 returns the shock position exact (the last row) and completes
+through cfl 0.5 even unprimed.
 
 ## Negative internal energy ahead of a shock
 
@@ -3611,9 +3612,10 @@ dt measure at N = 192    global step     subcycled
                          0.001–0.006     0.01–0.02
 ```
 
-The filter lowers the interface error of the default closure and raises Brady–Livescu's six
-to twelve times; at a level interface the filter's closed rows act at the fine spacing, and
-the 1.8 cap of the wall rows does not appear within these grids.
+The filter lowers the interface error of the cascade rows and raises Brady–Livescu's, up to
+twofold at a same-level interface and six to twelve times at a level interface; at a level
+interface the filter's closed rows act at the fine spacing, and the 1.8 cap of the wall rows
+does not appear within these grids.
 
 **The other components.** The momentum and energy of the inviscid wall and the two-level
 entropy wave, unfiltered:
@@ -3670,18 +3672,19 @@ the planes, interpolated along the other dimension. Under the default coupling
 order 6 is saturated everywhere but the viscous row, where order 4 happens to
 measure lower. The 2-D case is `entropy2d_case`.
 
-Under Brady–Livescu interface rows, which stand in here for a sixth-order
-interface divergence, the filtered, viscous and two-dimensional rows fall short
-of the closure's order under the sixth-order transfer, and the eighth-order
-transfer lowers their errors 3 to 47 times on the finest grid. There the 2-D
-filtered rows read a `dt` measure of 0.066, the time error beginning to show.
+With Brady–Livescu interface rows, which stand in here for a sixth-order
+interface divergence, the transfer order sets the interface error: under the
+sixth-order transfer the filtered, viscous and two-dimensional rows fall short
+of the closure's order, and the eighth-order transfer lowers their errors 3 to
+47 times on the finest grid. There the 2-D filtered rows read a `dt` measure of
+0.066, the time error beginning to show.
 C8 Brady–Livescu at a level interface is unstable at every order: the inviscid
 error grows between the two finest grids and the filtered runs lose positivity
 by t = 0.4. The C10 interior under the C8 filter reads the C6 rows.
 
-Under the default closure rows the C8 and C10 levels read the same at every
-transfer order to the second digit. The closure rows bind, so matching the
-order to the operator costs nothing there:
+Under the cascade rows the C8 and C10 levels read the same at every transfer
+order to the second digit. The closure rows bind, so matching the order to the
+operator costs nothing there:
 
 ```
 derivs=c8,c10 orders=6,8,10, any order      interface window   orders
@@ -3709,8 +3712,8 @@ viscous, 2 levels, C10                      3.646e-13 at N = 96  1.932e-14 at N 
 2 levels subcycled, C8 or C10               orders 7.2–7.8 over N = 48 / 96; dt 0.4–0.9 at N = 192
 ```
 
-C6 is saturated at order 8; C8 and C10 reach their own orders only at order
-10, below which the shell sets the constant. The viscous rows reach the
+C6 is saturated at order 8; C8 reaches its eighth order and C10 its tenth only
+at order 10, below which the shell sets the constant. The viscous rows reach the
 round-off floor at N = 96. The filtered rows read the C8 filter. The subcycled
 C8 and C10 rows turn to the Hermite shell's time error on the finest grid.
 
@@ -3826,9 +3829,9 @@ subcycled, steps                     14         20         28         40        
   ghost fluxes, restrict=none        6.007e-9   1.427e-9   3.689e-10  8.807e-11  2.282e-11  5.436e-12  3.015e-13   4.03 / 4.02 / 4.02 / 4.01 / 4.02 / 4.17
 ```
 
-The `total` rows measure the same nest under the default ghost fluxes against the exact
-solution, so the spatial and temporal errors add, and set the unrefined root beside it. The
-maximum density error, the fine patch's and the composite's:
+The script's `total` study, below, measures the same nest under the default ghost fluxes
+against the exact solution, so the spatial and temporal errors add, and sets the unrefined
+root beside it. The maximum density error, the fine patch's and the composite's:
 
 ```
                  cfl 0.5                                cfl 0.125
@@ -4105,13 +4108,13 @@ species masses to six digits.
 
 ### Float32
 
-In single precision the wider one-sided rows carry more round-off than the cascade rows but
-no floor of the Brady–Livescu kind. Planar Noh at N = 400 reads the same in single
-precision as in double to every digit printed under both sets. The smooth pulse against its
-mirror floors near 1e-5 from N = 97 under both sets. At N = 193 the one-sided wall window is
-three times the cascade's, and its interior and `l2` below the cascade's. Woodward–Colella
-at N = 800 completes in single precision under neither set, losing positivity in the first
-blast, a limitation of the 10⁵ pressure ratio, so Noh alone carries the comparison.
+In Float32 the wider one-sided rows carry more round-off than the cascade rows but no floor
+of the Brady–Livescu kind. Planar Noh at N = 400 in Float32 reads the Float64 rows to every
+digit printed under both sets. The smooth pulse against its mirror floors near 1e-5 from
+N = 97 under both sets. At N = 193 the one-sided wall window is three times the cascade's,
+and its interior and `l2` below the cascade's. Woodward–Colella at N = 800 completes in
+Float32 under neither set, losing positivity in the first blast, a limitation of the 10⁵
+pressure ratio, so Noh alone carries the comparison.
 
 ### The decision
 
@@ -4149,9 +4152,9 @@ search](#the-fifth-order-closure-search).
 
 ### Smooth walls with the artificial properties on
 
-With the artificial properties on under `beta_sensor = :dilatation`, the neutral rows hold
-fourth order at every smooth wall and the Brady–Livescu rows a higher one, and halving the
-step barely moves an order. These are
+With the artificial properties on under `beta_sensor = :dilatation`, the neutral rows
+converge at about fourth order at every smooth wall and the Brady–Livescu rows at fifth to
+seventh, and halving the step moves no order by more than a tenth. These are
 field-specific evolution orders; the derivative rows retain their formal boundary moments.
 All 450 derivative-only paired comparisons reach t = 0.4.
 
@@ -4273,7 +4276,7 @@ C6 neutral3                                                              1.906e-
 At the wall window the C6 Brady–Livescu rows are more accurate than the cascade at N = 385 by
 a factor of fifty on the smooth pulse and two hundred on the steepening one. In the
 interior, where the reflected pulse sits at the end, the closures agree within a factor of
-two above the coarsest grid, the error there being the filter's and the time integrator's;
+three above the coarsest grid, the error there being the filter's and the time integrator's;
 the exception is C8 Brady–Livescu on the finest steepening grid, at four times the cascade's
 error. On the coarsest grid, where the pulse is 2.4 cells wide, every closure reads the same
 1e-4. The `C6 neutral3` lines give the default closure at the finest grid of each amplitude,
@@ -4392,9 +4395,9 @@ added (roadmap N6m).
 
 ### The round-off floor
 
-In double precision the Brady–Livescu rows floor where the cascade does not, but remain the
-more accurate set at any resolution a run uses. One derivative of `exp(sin(3x))` on the
-closed line, double precision, wall window:
+In Float64 the Brady–Livescu rows floor where the cascade does not, but remain the more
+accurate set at any resolution a run uses. One derivative of `exp(sin(3x))` on the closed
+line, Float64, wall window:
 
 ```
 N        C6 cascade3   C6 BL        C8 BL
@@ -4412,21 +4415,21 @@ floor rises with N as the condition number does. That floor is four orders below
 cascade's error there, and the cascade would reach it only near N = 10⁴. The interior sits
 20–100 times below the wall.
 
-The conditioning does show in single precision on the same derivative, where the
-Brady–Livescu rows floor between 1e-3 and 5e-3 absolute and rise with N. From N = 48 up the
-cascade is therefore the more accurate closure in single precision, the precision the device
-path runs at, which `test/float32_validation.jl` pins:
+The conditioning does show in Float32 on the same derivative, where the C6 Brady–Livescu
+rows floor between 1e-3 and 5e-3 absolute and rise with N. From N = 48 up the cascade is
+therefore the more accurate closure in Float32, the precision the device path runs at,
+which `test/float32_validation.jl` pins:
 
 ```
-single precision, wall window   N=24       48         96         192
+Float32, wall window            N=24       48         96         192
 C6 BL                           1.02e-3    1.21e-3    2.80e-3    4.52e-3
 C6 cascade3                     6.24e-3    6.88e-4    8.99e-5    9.82e-5
 ```
 
-That floor does not reach the solution: a reflected pulse in single precision floors near
-3e-5 from N = 97 under every closure, and on the steepening pulse the C6 Brady–Livescu wall
-window is half the cascade's. Single precision is neither a reason to avoid the rows nor a
-reason to prefer them.
+That floor does not reach the solution: a reflected pulse in Float32 floors near 3e-5 from
+N = 97 under every closure, and on the steepening pulse the C6 Brady–Livescu wall window is
+half the cascade's. Float32 is neither a reason to avoid the rows nor a reason to prefer
+them.
 
 ### The minimum extent
 
@@ -4557,7 +4560,7 @@ neutral rows the entropy-wave interface-window errors were two to five times lar
 injected condition, and the interface baselines are unchanged to every printed digit.
 
 **C6 `:brady_livescu` with the default `compact_filter` is a supported wall configuration**
-within these limits: any CFL number the default closure completes a resolved case at, a
+within these limits: any CFL number the cascade rows complete a resolved case at, a
 lower ceiling on the singular planar Noh start ([the stable CFL range](#the-stable-cfl-range)),
 which the rows complete at that case's CFL number, Float64 or Float32, block extents no
 smaller than the filter requires, serial or decomposed. Its wall solution is sixth order with
@@ -4591,7 +4594,7 @@ species enthalpy transport while retaining pressure and viscous traction. On the
 linear-temperature probe the two energy fluxes change from `[-0.005, -0.005]` to exactly
 `[0.0, 0.0]`; the regression also compares the second compact right-hand-side row with the
 uncorrected slip-wall case, so an endpoint-only patch cannot satisfy it. The suite
-`test/wall_flux_tests.jl` runs in double precision with the default C6 closure, unit length
+`test/wall_flux_tests.jl` runs in Float64 with the default C6 closure, unit length
 and density, ideal gas R = 1 and gamma = 1.4, and no filtering or artificial transport:
 
 | Check | Measurement | Regression guard |
@@ -5070,8 +5073,9 @@ sweep: every N from 301 to 600 and every tenth to 1200
 (0, 3/5, 3/10)       below 3e-12                      every N from 12 to 1200
 ```
 
-Within the a = 0 band the error constants fall with b, so the adopted member is the one at
-the band's low-b edge that passes the sweep:
+Within the a = 0 band the wall error constants rise with b, so the adopted member is the one
+at the band's low-b edge that passes the sweep, the neutral member with the smallest
+truncation constants:
 
 ```
 row 1  (0, 1, 0)        [-11/6, 3, -3/2, 1/3]                 explicit, third order
@@ -5249,8 +5253,9 @@ neighbour                              394    0.008
 Two conditions were solved exactly, at a four-node wall depth. First, a symmetric H with H D
 + Dᵀ H supported on the two wall corners, the admissible set the null space of the support
 constraint taken by SVD, and the minimum eigenvalue maximized over it at tr H = N. A
-well-conditioned positive-definite H within 15% of the identity exists for all three
-closures, the cascade included, so the support condition does not separate a neutral
+well-conditioned positive-definite H exists for all three closures, the cascade included,
+with its extreme eigenvalues within a factor of two of each other for the cascade and within
+20% for the two neutral members, so the support condition does not separate a neutral
 closure from an unstable one. A least-squares projection of the same problem stalls at a
 relative residual of 1e-4 and reads as a separation that the exact solution does not show.
 
@@ -5267,9 +5272,9 @@ V⁻¹) is symmetric positive definite with P L + Lᵀ P = 0 to round-off, and �
 residual, since the cascade's spectrum is not imaginary. It has no structure. P is block
 diagonal in (p, u) with dense blocks, and its interior diagonal varies by a factor of seven
 without settling. A corner of the N = 51 solution padded with the identity interior leaves
-an off-corner residual falling like 1/N and never vanishing, nearly independent of the
-corner's depth, so the solution gives no fixed-depth corner block of the Sharan, Brady and
-Livescu form.
+an off-corner residual, relative to the norms of the padded matrix and of D, that neither
+falls with N nor vanishes and is nearly independent of the corner's depth, so the solution
+gives no fixed-depth corner block of the Sharan, Brady and Livescu form.
 
 ```
 Lyapunov certificate      cond(P)                         residual of P L + Lᵀ P
@@ -5282,40 +5287,34 @@ change from depth 6 to 10                 under 4%
 ```
 
 **Prior art.** The recipe is published; the result is not. Carpenter, Gottlieb and Abarbanel
-(CGA) widened compact closure rows into three- and four-parameter families and searched for
-a left-half-plane spectrum on scalar advection with a Dirichlet inflow. Zingg and Lederle
-widened the two boundary rows of explicit schemes by one point each and fixed the
-two-parameter family by the spectrum. Brady and Livescu fixed free boundary coefficients by
-the stability of the injected nonlinear Euler problem, with conservation constraints, at one
-order below the interior. Row 1 of the neutral set is Lele's third-order one-sided family at
-α = 0, the explicit difference.
+(ICASE 91-71; J. Comput. Phys. 108, 1993, §7) widened compact closure rows into three- and
+four-parameter families and searched for a left-half-plane spectrum on scalar advection with
+a Dirichlet inflow. Zingg and Lederle widened the two boundary rows of explicit schemes by
+one point each and fixed the two-parameter family by the spectrum. Brady and Livescu
+(Computers & Fluids 183, 2019) fixed free boundary coefficients by the stability of the
+injected nonlinear Euler problem, with conservation constraints, at one order below the
+interior. Row 1 of the neutral set is Lele's (1992, eq. 4.1.3) third-order one-sided family
+at α = 0, the explicit difference.
 
-Sharan, Brady and Livescu treat strongly imposed boundary conditions by the energy method.
-Their test system, below, is the slip-wall acoustic pair in characteristic variables, and at
-τ = 1 a figure of theirs shows the CGA closures, Strand's SBP stencils and the Cook–Riley C6
-compact scheme with eigenvalues in the right half-plane, the mode measured here. Their
-remedy, for explicit interiors, is a nonsquare operator with full-norm corner blocks and a
-skew Q = HD outside them, and a theorem of the paper is the Lyapunov certificate above.
+Sharan, Brady and Livescu (SIAM J. Numer. Anal. 60, 2022) treat strongly imposed boundary
+conditions by the energy method. Their test system, below, is the slip-wall acoustic pair in
+characteristic variables, and at τ = 1 their Figure 2 shows the CGA closures, Strand's SBP
+stencils and the Cook–Riley C6 compact scheme with eigenvalues in the right half-plane, the
+mode measured here. Their remedy, for explicit interiors, is a nonsquare operator with
+full-norm corner blocks and a skew Q = HD outside them, and their Theorem 1 is the Lyapunov
+certificate above.
 
 Not found in any of these: a compact interior with exactly neutral closures, the reflecting
 two-wall injected operator as the selection problem, a two-parameter neutral set, or an
 instability at particular line lengths only. The literature expects the boundary-dependent
-spectrum to be independent of N (Beam and Warming); the nearest frameworks are CGA's
-N-parity-dependent neutral example and Bonnet-Eymard, Coulombel and Faye on wave packets
-coupling two boundaries. A neutral spectrum of a non-normal operator is necessary and not
-sufficient.
+spectrum to be independent of N (Beam and Warming 1993); the nearest frameworks are CGA's
+N-parity-dependent neutral example (eqs. 78–80) and Bonnet-Eymard, Coulombel and Faye
+(arXiv:2504.00667) on wave packets coupling two boundaries. A neutral spectrum of a
+non-normal operator is necessary and not sufficient.
 
 ```
-Carpenter, Gottlieb and Abarbanel   ICASE 91-71; J. Comput. Phys. 108, 1993, §7;
-                                    the N-parity-dependent example, eq. 78–80
-Brady and Livescu                   Computers & Fluids 183, 2019
-Lele                                1992, eq. 4.1.3
-Sharan, Brady and Livescu           SIAM J. Numer. Anal. 60, 2022; Figure 2 at τ = 1;
-                                    Theorem 1; explicit interiors up to 3-6-3
-Beam and Warming                    1993
-Bonnet-Eymard, Coulombel and Faye   arXiv:2504.00667
-
 test system   U_t + U_x = 0, V_t − V_x = 0, U(0) = τ₁ V(0), V(1) = τ₂ U(1)
+their remedy  explicit interiors up to 3-6-3
 ```
 
 ### The C8 family
@@ -5432,7 +5431,8 @@ Widening row 3 buys accuracy and no neutrality. The lowest interior error consta
 the (d, e) of the last three rows of the table, where the interior error at N = 97 falls to
 3.5e-8, two orders below the selected rows'. Every one of the ten lowest fails a staged
 sweep, the best at N = 226 and seven further node counts. A seeded random search over all
-nine coordinates found nothing below 1.2e-7:
+nine coordinates, ranked by the interior error at N = 97 among the members passing every
+stage, found none below 1.2e-7:
 
 ```
 seeded random search      draws 40,000; neutral at N = 51: 1956; passing every stage: 121
@@ -5673,12 +5673,13 @@ the filter.
 julia --project=. -t 1 bench/sensorwall.jl
 ```
 
-Three operators around the artificial-property sensors carried closure rows that do not
-reproduce a reflecting wall: `delta4_sum!`, which read its taps past a closed edge by
-clamping the index; the `:gaussian` smoother, whose rows fold onto the half-offset mirror
-and so sit half a cell out at a node-centred wall; and `ring_sum!`, the `:d8` detector. All
-three now use node-centred rows at a wall and the half-offset mirror at a fold; the accuracy
-gained is in [wall closures in production](#wall-closures-in-production).
+Three operators around the artificial-property sensors take node-centred rows at a wall and
+the half-offset mirror at a fold: `delta4_sum!`, the `:gaussian` smoother and `ring_sum!`,
+the `:d8` detector. The section measures these rows against closures that do not reproduce
+a reflecting wall: taps read past a closed edge by clamping the index, and smoother rows
+folded onto the half-offset mirror, which sit half a cell out at a node-centred wall. Their
+effect on the wall solution is in [wall closures in
+production](#wall-closures-in-production).
 
 ### The extensions
 
@@ -6213,7 +6214,9 @@ damps the completed run's mode.
 
 | unseeded | |
 |---|---|
-| endpoint variations under the same ablations | 9.78e-11, 1.57e-10, 4.47e-10 |
+| endpoint variation, beta only | 9.78e-11 |
+| endpoint variation, beta + mu | 1.57e-10 |
+| endpoint variation, beta + kappa | 4.47e-10 |
 | filter off | negative density at step 1,335 |
 | all artificial properties off, or beta off | negative density near t = 0.074 |
 
@@ -6310,7 +6313,7 @@ over the pulse's acoustic velocity over its radius, at the default relaxation ra
 ### The vortex at the inflow
 
 The vortex enters only under a fast enough relaxation, and at every rate the full share
-admits it best. At the default rates (0.28) the vortex does not enter at all under any
+admits it best. At the default rates, η = 0.28, the vortex does not enter at all under any
 weight: the error is the vortex itself. A relaxation admits a structure only when its time
 L_ref/(η c) is short against the passage time r_v/u_0, and the error then falls as 1/η up
 to the largest rate run, with no stiffness at η = 1024. At every rate the full share is the
@@ -6739,14 +6742,15 @@ process-to-process spread
 `bench/reducedsolve.jl` (`48 derivs=c6,c10` serially, `96` at np = 2, `-t 1`, fully
 periodic) splits a line solve into the local sweep, the reduced interface stage, and the spike
 correction (total − sweep − reduced). On the x layout, where a line is a column of the n ×
-lines block, the C10 spike correction costs as much as the sweep when its point loop, an
-inner sum over the q coupling columns with a runtime trip count, reloads the interface
-values for every point. The compiler cannot rule out aliasing between them and the stores
-into the block, and `code_llvm` shows no vector instruction. The back substitution of the
-band sweep reloads its U coefficients once per column for the same reason. Taking q = 2 as
-a compile-time constant and reading those values once per line and once per row gives
-bitwise-identical results, cuts the correction by an order of magnitude and halves the
-whole x solve. Times in µs:
+lines block, the cost of the C10 spike correction is set by whether its interface values
+stay in registers. Its point loop is an inner sum over the q coupling columns. With a
+runtime trip count the loop reloads the interface values for every point, since the
+compiler cannot rule out aliasing between them and the stores into the block, and
+`code_llvm` shows no vector instruction; the back substitution of the band sweep reloads
+its U coefficients once per column for the same reason. The solver takes q = 2 as a
+compile-time constant and reads those values once per line and once per row, which gives
+bitwise-identical results, a correction an order of magnitude cheaper and half the whole
+x solve. Times in µs:
 
 ```
                                 sweep   correction    total
@@ -7325,14 +7329,14 @@ base row       C6, subcycled, one tile, filter_cfl = 0.35, the default rows,
 
 Each other row changes one setting. Package at `743fdb4b`, Julia 1.13.3, from
 `julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
-transcript is `bench/results/interfacesensor.txt`.
-
-| column | quantity |
-|---|---|
-| noise | the momentum ahead of the shock at t = 0.1 (x > 0.85, the level suite's gate quantity) |
-| ρ_min, p_min | the minimum density and pressure over every patch on any step |
-| shell number | the artificial diffusivity number ((μ\* + β\*)/ρ + κ\*/(ρc_p) + max D\*)/(ch) over the four fine nodes nearest each face, at t = 0.03 before the shock arrives and at t = 0.1 |
-| shell error | the density error against the uniform run at the fine spacing over those nodes at t = 0.2 |
+transcript is `bench/results/interfacesensor.txt`. The noise is the momentum
+ahead of the shock at t = 0.1 and x > 0.85, the level suite's gate quantity,
+and ρ_min and p_min are the minimum density and pressure over every patch on
+any step. The shell number is the artificial diffusivity number
+((μ\* + β\*)/ρ + κ\*/(ρc_p) + max D\*)/(ch) over the four fine nodes nearest
+each face, at the times of its two columns, the first before the shock
+arrives; the shell error is the density error against the uniform run at the
+fine spacing over those nodes.
 
 | row | noise | ρ_min | p_min | shell number, t = 0.03 | t = 0.1 | shell error, t = 0.2 |
 |---|---|---|---|---|---|---|
@@ -7782,17 +7786,19 @@ one-sided rows, both toggles off (the transcript's `gflux` rows):
 The reversed tube reproduces every printed digit of the forward ghost rows under either
 remainder.
 
-A Sod diaphragm on the plane between two tiles exercises the positivity failsafe. The count
-of flagged cells measures the start-up undershoot of an ideal jump, which the scheme
-produces without an interface, and the interface paths differ in how far that transient is
-damped. The failsafe's case in `test/level_tests.jl` places the diaphragm on that plane:
+A Sod diaphragm on the plane between two tiles exercises the positivity failsafe, which
+repairs half again as many cells under the ghost fluxes as under the closure rows. The
+flagged cells are the start-up undershoot of an ideal jump, which the scheme produces
+without an interface; the interface paths differ in how far they damp that transient. The
+failsafe's case in `test/level_tests.jl` places the diaphragm on that plane, and the
+columns are the `low_energy`, `steps` and `cells` fields of the solver's `floor_tally`:
 
 ```text
 root N = 81, level-1 tiles of 8 over root nodes 24–56, cfl = 0.2, 20 steps,
 floor_ratio = 0.999
 ```
 
-| failsafe at `743fdb4b` | cells below the internal-energy floor | on steps | repaired |
+| failsafe at `743fdb4b` | cells below the internal-energy floor | steps on which it acted | repaired |
 |---|---|---|---|
 | ghost fluxes (default) | 116 | 20 | 113 |
 | ghost, remainder on the one-sided rows | 133 | | 141 |
@@ -7824,14 +7830,16 @@ being the default:
 | | closure | 106, 0.556, 8.20e-3 | 2804, 0.556, 1.46e-2 |
 | | ghost, remainder, coarse-fine ends extrapolated | 173, 0.556, 9.67e-3 | 2893, 0.556, 1.40e-2 |
 
-On the uniform grid the start-up minimum is reached at step 8. A jump on a tile plane under
-the closure rows starts through the one-sided inviscid and remainder rows, whose dissipation
-damps that transient. The ghost fluxes with the remainder on the one-sided rows difference
-the inviscid flux there with interior accuracy, and keep their start-up minimum to t = 0.12.
-With the remainder through the gradient rows as well, the default, the transient is damped
-at least as much as under the closure rows, and at t = 0.12 the minimum of both is a later
-one on the root. A diaphragm inside a tile or on a coarse-fine face gives the same minima
-under every path.
+On a tile plane the default ghost path and the closure rows damp the start-up transient to
+about the same minimum density, and the ghost path with the remainder on the one-sided rows
+damps it least. On the uniform grid the start-up minimum is reached at step 8. A jump on a
+tile plane under the closure rows starts through the one-sided inviscid and remainder rows,
+whose dissipation damps that transient. The ghost fluxes with the remainder on the
+one-sided rows difference the inviscid flux there with interior accuracy, and keep their
+start-up minimum to t = 0.12. With the remainder through the gradient rows as well, the
+default, the transient is damped at least as much as under the closure rows, and at
+t = 0.12 the minimum of both is a later one on the root. A diaphragm inside a tile or on a
+coarse-fine face gives the same minima under every path.
 
 The Brady–Livescu rows on the remainder have failed since `1fc1fdb`, which computes a tiled
 level's artificial coefficients over the whole level. At `c78eee8` they completed with a
@@ -8123,8 +8131,10 @@ instrument=sensors parts=crossing N=201
 **Rank coverage.** The candidates' results agree across every rank count
 tried. The normalized three-level global-step layer was run over both
 transits at one, two, four and eight ranks. Every run took 10568 steps,
-with maximum sampled conserved drift 7.578e-5, zero species excursion,
-and matching printed width and molecular-mixing histories. The
+with zero species excursion, matching printed width and molecular-mixing
+histories, and the serial run's maximum sampled conserved drift. That drift
+is 7.578e-5 in the quadrature of commit `fbb3ad3`, before the junction
+correction Ω entered it; the budget table above is the later measurement. The
 conservation, initial-sampling and mixing-comparison checks all pass.
 
 All three policies' smooth and reflection matrices were repeated at four
@@ -8147,9 +8157,10 @@ two-transit comparison above was measured in serial.
 **Decision.** Retain the production default and subcycling as the supported
 workaround. The normalized envelope is a viable benchmark-only candidate
 for the fixed Cartesian layer: it removes that undershoot and preserves
-the declared conservation and reflection budgets, but raises the finest-grid
-error in the measured smooth case and does not ensure species positivity after
-moving refinement. The cadence comparator offers no demonstrated general
+the declared conservation and reflection budgets and lowers the finest-grid
+error in the measured smooth case, but brings the global step's L2 order down to
+the subcycled one and does not ensure species positivity after moving
+refinement. The cadence comparator offers no demonstrated general
 advantage over rate normalization and needs elapsed-time and phase handling
 before it could become a production policy. This qualification is bounded
 to the tested Float64 CPU cases; it does not identify an operator mode or
@@ -8460,10 +8471,15 @@ order-independent.
 | steps | 628 |
 
 **Budgets.** Orders 8 and 10 keep every conservation figure inside its
-budget. At order 8 every figure matches order 6 to the digits the
-conservation section prints. The run is `bench/interfaceconservation.jl`,
-serial, `layouts=uniform,depth2`, otherwise the command of that section;
-the pairs are global step / subcycled.
+budget. The run is `bench/interfaceconservation.jl`, serial,
+`layouts=uniform,depth2`, otherwise the command of that section; the pairs
+are global step / subcycled, the order in which the script runs them. The
+order-8 figures were taken at `c7d26e3`, where the conservation section's
+order-6 run read the same to two digits in every figure but the final drift.
+The order-10 figures were recorded at `decf45a`. Both precede the
+re-measurement of that section in the quadrature with the junction
+correction Ω (`d346d35`), so they compare with each other and not with its
+current figures.
 
 | `interpolation_order` | 8 | 10 |
 |---|---|---|
@@ -8531,13 +8547,20 @@ solution are 3.46 / 3.64. The invertible pair as the live coupling reaches
 only 1.3–1.7 at errors three decades higher, since prolongation's input must
 be samples of the filtered field and the live coarse solution is not.
 
-**Buffers.** Restricting to the fine boundary closes an amplifying loop
-through the imposed shell, gain ≈ 2 per step, and `RESTRICT_MARGIN = 2` makes
-the growth flat. Settled: the constants stay at 4 and 2. The sweep below
-varies `RESTRICT_MARGIN` on the two-level entropy wave and the subcycled Sod
+**Buffers.** The restriction margin shows no amplifying loop on the two-level
+entropy wave: at every margin swept the error grows by at most a few times
+over the run. The two smallest margins give the same figures, and the default
+margin of 2 gives the largest error and the largest growth at both schemes.
+The loop of gain ≈ 2 per step that `RESTRICT_MARGIN` was introduced against
+(`772e304`) does not appear at margin 0 under the coupling of this sweep
+(`8271bd7`). The restriction holds `RESTRICT_MARGIN` region nodes back from a
+parent-fed face (`_restrict_window`), and the derivative mask and the
+parent's overwritten nodes count their depth past those nodes. The sweep varies
+`RESTRICT_MARGIN` on the two-level entropy wave and the subcycled Sod
 crossing, with `LEVEL_BUFFER` at its default and at 6. The wider buffer
 reproduces the default buffer's numbers to the last digit at both schemes,
-and the Sod noise stays between 3.5e-10 and 8.8e-10 throughout.
+and the Sod noise stays between 3.5e-10 and 8.8e-10 throughout. The constants
+stay at 4 and 2.
 
 | margin | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
@@ -8582,10 +8605,10 @@ dimension-phased:
 | before the pass | 1 | 2 | 3 | 4 |
 | after a flat pairwise pass | 2.23 | 2.68 | 2.41 | 2.68 |
 
-**Moving regions.** A moving level puts the composite error well below the
-uniform coarse grid's: on Sod with fine resolution over a third of the domain,
-and on Shu–Osher at about half the reference's steps. The tiled regrid
-reproduces the Sod gate.
+**Moving regions.** A moving level puts the composite error about an order of
+magnitude below the uniform coarse grid's: on Sod with fine resolution over a
+third of the domain, and on Shu–Osher at about half the reference's steps. The
+tiled regrid reproduces the Sod gate.
 
 | case | composite | uniform coarse | improvement | coarse steps | reference steps |
 |---|---|---|---|---|---|
@@ -9186,7 +9209,9 @@ The workstation smoke at eight ranks (bench/rmicost.jl, P-cores, two runs a
 tree alternated, base `593f673`) shows the new decision at the base's step in
 three dimensions, on the same lattice and at the same W. In two dimensions
 the new tree's median step and steady wall are lower, the difference lying in
-the regrid checks and not resolved further.
+the regrid checks and not resolved further. A lattice is three edges in every
+dimensionality; in two dimensions the third is the collapsed dimension's
+configured edge, which the subdivision leaves alone.
 
 | leg | tree | lattice at the end | ms per root step | median ms | steady wall s | regrid checks s | W mm |
 |---|---|---|---|---|---|---|---|
@@ -9593,9 +9618,9 @@ every covered node:
 "Unchanged" is every printed digit of every row from the interface window to
 the temporal order section; under the overwritten-node ceiling the default
 leaves them unchanged as well. This table predates the derivative mask. The
-first of the shock's two figures varies between 1.1e-2 and 4.5e-2 over these
-settings without a trend. It is the precursor the parent's derivatives place
-ahead of the shock, which the next paragraphs attribute.
+first of the shock's two figures varies about fourfold over these settings
+without a trend. It is the precursor the parent's derivatives place ahead of
+the shock, which the next paragraphs attribute.
 
 **The parent's derivatives.** The precursor ahead of a moving shock's level
 is the alternating tail of the root's compact derivative across the
@@ -9691,7 +9716,11 @@ correction returns nearly all of it. The table gives the relative mass drift
 at t = 0.2 in the conserved quadrature of the Sod shocks of
 `test/level_tests.jl`, which cross a level in both directions, with the
 coarse-fine correction and without it (the uncorrected columns without Ω,
-since that coupling builds no captures):
+since that coupling builds no captures). The table was taken at `d346d35`,
+with the correction's gate testing either side of the face; under the default
+gate, which tests the uncovered nodes alone, the masked crossings drift by the
+figure in the default row of the gate table of
+[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling):
 
 | case | plain | mask | plain, uncorrected | mask, uncorrected |
 |---|---|---|---|---|
@@ -9772,7 +9801,7 @@ smoothing tile by tile left, and twice the difference the tiles carry without
 the flux. The table gives the mean and largest difference of the helium mass
 fraction from the uniform run over the band:
 
-| configuration (48² root, w = 10 mm, `C_sharpen = 1`, tiles of 8, 980 steps in every run, 500 band nodes; uniform 144² pattern 3.066e-2) | ratio | mean | largest |
+| configuration (48² root, w = 10 mm, tiles of 8, `C_sharpen = 1` and 980 steps unless the row says otherwise, 500 band nodes; uniform 144² pattern 3.066e-2) | ratio | mean | largest |
 |---|---|---|---|
 | box | 1.00 | 1.03e-7 | 9.23e-7 |
 | tiles, gradients smoothed per tile (`7d6b0ba`) | 0.98 | 1.79e-2 | 4.60e-2 |
@@ -10365,13 +10394,21 @@ mixed state       | (p̄−p0)/p0 = 0.359 under NASA-9 and 0.237 under the contr
                   | zero to round-off at 300 K
 ```
 
-The measured velocity drift of each channel is the convective one ("none") plus about its
-continuous U_LM, as the N = 256 NASA-9 columns of the two tables show. The pressure deviation
-is of order ρcU_LM/p0 over the He, 5e-4 for the default at N = 256. The mean pressure moves
-toward the mixed value in every channel, fastest under bulk, whose added conduction
-exchanges the most heat. The one failure is the NASA-9 slab at N = 128 with the artificial
-properties off. The rows without a species channel at N = 128 take `StepControl` retries
-near the end of the transit and complete.
+The measured velocity drift of each channel is about the convective one ("none") plus its
+continuous U_LM:
+
+```
+N = 256, NASA-9, m/s     "none" + U_LM     measured max|u−U|
+partial_density          0.25 + 0.31       0.58
+bulk                     0.25 + 0.24       0.45
+fickian                  0.25 + 0.88       1.03
+```
+
+The pressure deviation is of order ρcU_LM/p0 over the He, 5e-4 for the default at
+N = 256. The mean pressure moves toward the mixed value in every channel, fastest under
+bulk, whose added conduction exchanges the most heat. The one failure is the NASA-9 slab
+at N = 128 with the artificial properties off. The rows without a species channel at
+N = 128 take `StepControl` retries near the end of the transit and complete.
 
 The identities are checked on a shocked contact, a Mach 1.5 shock in the He into the CO2
 at 900 K between Dirichlet ends. The rest of the setup and the ranges of Φ and Π, against
@@ -11376,7 +11413,7 @@ of wall heating on the planar wall and the axis, 0.2% on the Woodward–Colella 
 0.1% on the Shu–Osher train; the
 D\* half cannot, since it is not computed without species. At `C_D = 0.1` the split
 detector passes the period-four trail behind the shocked interface that δ⁴ damps. TV − 1
-returns to 0.076, its value at `C_D = 0.01` under δ⁴ ([the partial-density species
+rises nearly to its value at `C_D = 0.01` under δ⁴ ([the partial-density species
 channel](#the-partial-density-species-channel)), and the passive width is the D\*-off width
 of [C_D](#c_d-the-species-diffusivity). At `C_D = 1` the split holds the shocked interface
 tighter than the default in both TV − 1 and worst Y and narrows the passive width by 10%.

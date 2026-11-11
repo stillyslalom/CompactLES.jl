@@ -71,8 +71,8 @@
 #   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass -4.45e-7, 6640 steps):
 #     level over 85 nodes   plateau 15.6523  deficit 50.8%  shock 0.2033
 #                           mass -9.7e-7  max |rho - uniform| 5.7e-3  6639 steps
-#     level over 43 nodes   plateau 14.906   deficit 51.8%  shock 0.2094
-#                           mass -3.6e-7  6029 steps
+#     level over 43 nodes   plateau 14.9507  deficit 50.7%  shock 0.2109
+#                           mass +8.4e-6  6006 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no

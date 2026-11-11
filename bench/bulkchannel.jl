@@ -1,5 +1,5 @@
 # The artificial species channel in three dimensions: `species_flux = :bulk`
-# against the default `:fickian`. The one-dimensional battery
+# against the per-species `:fickian` flux. The one-dimensional battery
 # (`test/cases.jl`, `brill_slab` and `shock_interface`) is what the channel was
 # built on; nothing has measured it on a three-dimensional case, where the
 # artificial viscosities are active and the interface is curved. Four parts:

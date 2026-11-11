@@ -171,9 +171,8 @@ _two_level_mass(solver, states) = volume_integral(solver, states, :rho)
     run!(solver, states; tfinal=0.2, nmax=40000)
     drift = abs(_two_level_mass(solver, states) - m0) / m0
     @info "two-level Sod mass drift" drift
-    # Measured 6.2e-8 under the coarse-fine correction, 8.5e-5 without it
-    # (`REFLUX[] = false`); 8.9e-7 under the parent's derivative mask. The
-    # unrefined run drifts 5e-11.
+    # Measured 7.0e-6 under the defaults, the coarse-fine correction and the
+    # parent's derivative mask. The unrefined run drifts 5e-11.
     @test drift < 1e-5
 
     # The :d8 detector and the pentadiagonal filter at the same faces. The
