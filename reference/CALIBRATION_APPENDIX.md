@@ -2485,13 +2485,20 @@ julia --project=. -t 1 bench/shockfoot.jl part=defaults cases=sedov
 
 The transcript of the first command is `bench/results/shockfoot.txt`.
 
-Woodward–Colella (N = 800), planar Noh (N = 400, cfl 0.15) and Sedov (N = 256) from
-`test/cases.jl` carry points with ρe = E − ½|m|²/ρ ≤ 0 under the defaults from step 9 of
-4380, step 1 of 3512 and step 89 of 3146. The script applies the filter pass from a step
-callback and reads the state on both sides of it. The trajectories are the production
-cases': under `part=identity` the final densities agree with those of `woodward()`,
-`noh_case(1)` and `sedov()` exactly, and the closing state reports agree for Noh and Sedov
-(`woodward()` returns none).
+Woodward–Colella, planar Noh and Sedov from `test/cases.jl` carry points with
+ρe = E − ½|m|²/ρ ≤ 0 under the defaults from early in each run:
+
+```
+case                     N     first step with ρe ≤ 0   steps
+Woodward–Colella         800   9                        4380
+planar Noh, cfl 0.15     400   1                        3512
+Sedov                    256   89                       3146
+```
+
+The script applies the filter pass from a step callback and reads the state on both sides of
+it. The trajectories are the production cases': under `part=identity` the final densities agree
+with those of `woodward()`, `noh_case(1)` and `sedov()` exactly, and the closing state reports
+agree for Noh and Sedov (`woodward()` returns none).
 
 ### Where they sit
 
@@ -2506,82 +2513,89 @@ Noh      30596 / 30308        11             1604 / 825 / 1113     −0.138 → 
 Sedov    20869 / 20981        12             75 / 955 / 843        −0.162 → −0.213         1–26
 ```
 
-All but 397 of the bad point-steps on Noh and 30 on Woodward–Colella lie ahead of the
-nearest front, in the undisturbed gas, in an odd-even pattern; none of these is at a wall.
-The exceptions lie behind a front or in a step with no front: Noh's first bad points, at
-step 1, precede its front, and 29 of Woodward–Colella's 30 fall after the collision of the
-blasts, when it has none. Sedov has no exception. On Noh the first bad points appear at
-step 1, at cells 3, 5 and 7, before any filter pass. On Woodward–Colella and Sedov the
-first appears after a pass, at steps 9 and 89, and over each run the passes lower the
-minimum, while on Noh they raise it slightly. A pass turns about as many points bad as it
-cures.
+Nearly all the bad point-steps lie ahead of the nearest front, in the undisturbed gas, in an
+odd-even pattern, and none of them is at a wall. The exceptions lie behind a front or in a
+step with no front:
 
-The points are not a rounding effect. At Noh's median bad point K exceeds E by 0.35% of K,
-and on Woodward–Colella and Sedov 98% of the bad points have E < 0, which no cancellation
-produces. Noh ends on ten inadmissible points, 2 to 21 cells ahead of the front at
-x = 0.206 to 0.253, each with E > 0 and e_min −0.0293. Sedov ends on four, 2, 4, 7 and 10
-cells ahead of the front at r = 0.815 to 0.852, each with E < 0 and e_min −0.0023.
-Woodward–Colella ends on none.
+```
+case     bad point-steps not ahead of a front
+WC       30, all but one after the collision of the blasts
+Noh      397, among them the first step's, which precede the front
+Sedov    0
+```
+
+On Noh the first bad points appear at the first step, at the odd cells 3 to 7, before any filter
+pass. On Woodward–Colella and Sedov the first appears after a pass, and over each run the passes
+lower the minimum there, while on Noh they raise it slightly. A pass turns about as many points
+bad as it cures.
+
+The points are not a rounding effect. At Noh's median bad point K exceeds E by 0.35% of K. On
+Woodward–Colella and Sedov 98% of the bad points have a negative total energy, which no
+cancellation produces. Noh and Sedov end on a few inadmissible points ahead of the front, and
+Woodward–Colella on none:
+
+```
+closing state   points   cells ahead of the front   front at            E     e_min
+Noh             10       2 to 21                    x = 0.206 to 0.253  > 0   −0.0293
+Sedov           4        2, 4, 7 and 10             r = 0.815 to 0.852  < 0   −0.0023
+WC              0
+```
 
 ### Scale
 
-Woodward–Colella to the collision of the blasts, at three ambient pressures:
+The undershoot does not scale with the ambient state. Woodward–Colella to the collision of the
+blasts at three ambient pressures, and Noh and Sedov at their own:
 
 ```
-ambient p   bad after the pass   min ρe after   depth     ambient ρe
-0.01        37085                −31.1          −5.1%     2.3e-4
-0.1         20668                −30.9          −4.8%     2.3e-3
-1           4628                 −27.9          −2.5%     2.3e-3
+case, ambient p   bad after the pass   min ρe after   depth     ambient ρe
+WC, 0.01          37085                −31.1          −5.1%     2.3e-4
+WC, 0.1           20668                −30.9          −4.8%     2.3e-3
+WC, 1             4628                 −27.9          −2.5%     2.3e-3
+Noh                                                   −2.3%     7.8e-5
+Sedov                                                 −3.6%     1.4e-4
 ```
 
 The depth is the lowest ρe of a bad point ahead of a front over ρe three cells behind that
-front, and the last column is the ambient ρe over that same reference. Across a
-hundredfold change of the ambient pressure the lowest ρe stays between −28 and −31 while
-the ambient ρe rises from 0.025 to 2.5: the undershoot does not scale with the ambient
-state, and the count falls as the ambient energy rises. The depth is −2.3% on Noh against an
-ambient 7.8e-5, and −3.6% on Sedov against 1.4e-4. The undershoot is 11 to 300 times the
-ambient internal energy in every case, so a floor scaled to the ambient state is one to two
-orders of magnitude smaller than the deficit it repairs.
+front, and the last column is the ambient ρe over that same reference. Across a hundredfold
+change of the ambient pressure the lowest ρe stays between −28 and −31 and the count of bad
+points falls. Over the same range the ambient ρe rises from 0.025 to 2.5. The undershoot is 11
+to 300 times the ambient internal energy in every case. A floor scaled to the ambient state is
+therefore one to two orders of magnitude smaller than the deficit it repairs.
 
 ### Ablations and coefficients
 
-Bad point-steps after the pass and the lowest ρe after it, Woodward–Colella to the
-collision of the blasts and Noh and Sedov to their end times. "Cap" marks a run stopped by
-the 4000-step cap short of that time: at t = 0.0216 for Woodward–Colella without the
-artificial properties, at t = 0.549 and 0.579 for Noh at `C_beta = 4` and
-`C_kappa = 0.1`.
+No ablation and no coefficient removes the points. Bad point-steps after the pass and the
+lowest ρe after it, Woodward–Colella to the collision of the blasts and Noh and Sedov to their
+end times; "cap" marks a run stopped by the 4000-step cap at the time given, short of that end:
 
 ```
-variant                Woodward–Colella          Noh                       Sedov
-default                37085, −31.1              30308, −0.132             20981, −0.213
-filter off             17931, −9.72              fails @242, ρ < 0         fails @109, ρ < 0
-artificial props off   64019, −277 (cap)         fails @68, ρ < 0          26771, −5.10
-C_beta = 2             30765, −12.3              25514, −0.113             18314, −0.0539
-C_beta = 4             23514, −6.17              20996, −0.0881 (cap)      14550, −0.0223
-C_kappa = 0.1          35435, −17.4              31226, −0.104 (cap)       19510, −0.210
-ungated dilatation     37232, −33.7              31083, −0.137             21192, −0.344
+variant                Woodward–Colella             Noh                            Sedov
+default                37085, −31.1                 30308, −0.132                  20981, −0.213
+filter off             17931, −9.72                 fails @242, ρ < 0              fails @109, ρ < 0
+artificial props off   64019, −277 (cap, t 0.0216)  fails @68, ρ < 0               26771, −5.10
+C_beta = 2             30765, −12.3                 25514, −0.113                  18314, −0.0539
+C_beta = 4             23514, −6.17                 20996, −0.0881 (cap, t 0.549)  14550, −0.0223
+C_kappa = 0.1          35435, −17.4                 31226, −0.104 (cap, t 0.579)   19510, −0.210
+ungated dilatation     37232, −33.7                 31083, −0.137                  21192, −0.344
 ```
 
-Without the filter, Woodward–Colella still has 2332 points made bad by the step, and Noh
-and Sedov lose positivity at steps 242 and 109; the step produces the points without any
-filter pass. Without the artificial properties Woodward–Colella reaches −277 before the
-cap, Noh loses positivity at step 68 and Sedov reaches −5.10. From the default
-`C_beta = 1`, the lowest ρe is 2.5 and 5.0 times shallower on Woodward–Colella at
-`C_beta = 2` and 4, and 3.9 and 9.6 times shallower on Sedov, faster than 1/C_beta; on Noh
-it is 15% and 33% shallower, the second over a run stopped short. A tenfold `C_kappa`
-(0.1 against 0.01) raises Woodward–Colella's lowest ρe from −31.1 to −17.4 and leaves
-Sedov's at −0.21. The ungated dilatation sensor deepens the minimum on all three cases. No
-variant removes the points, and both constants are fitted to the battery's accuracy
-([C_beta](#c_beta-the-shock-constant)).
+Without the filter points still turn bad in the step, 2332 of them on Woodward–Colella, and
+Noh and Sedov lose positivity. Without the artificial properties the minimum is nine times deeper
+on Woodward–Colella and 24 times deeper on Sedov, and Noh loses positivity. Raising `C_beta`
+from its default of one makes the lowest ρe shallower faster than 1/C_beta on Woodward–Colella
+and Sedov. On Noh it is 15% and 33% shallower at the two larger values, the second over a run
+stopped short. A tenfold `C_kappa` nearly halves the depth on Woodward–Colella and leaves
+Sedov's unchanged. The ungated dilatation sensor deepens the minimum on all three cases. Both
+constants are fitted to the battery's accuracy ([C_beta](#c_beta-the-shock-constant)).
 
 ### Repairs
 
-Each repair to the case's end time against the guards of `test/validation.jl`: L1 ρ below
-6e-2 on Woodward–Colella, R_s within 3% on Sedov, the Noh plateau within 1% of 4. The bad
-counts are point-steps after the pass (after the failsafe for the two floors), and the
-energy is what the repair added, as a fraction of the case's initial total:
+No repair holds all three guards of `test/validation.jl`. Each repair runs to the case's end
+time; the bad counts are point-steps after the pass (after the failsafe for the two floors), and
+the energy is what the repair added, as a fraction of the case's initial total:
 
 ```
+guards: L1 ρ below 6e-2 (WC), R_s within 3% (Sedov), plateau within 1% of 4 (Noh)
                            Woodward–Colella           Sedov                      Noh
 repair                     bad     L1 ρ     energy    bad     R_s      energy    bad     plateau  energy
 none                       37114   3.15e-2  –         20981   +1.04%   –         30308   3.9988   –
@@ -2593,22 +2607,26 @@ failsafe :internal_energy  0       9.06e-2  +2.4%     0       +1.41%   +13.5%   
 
 The limits stop a filter pass from lowering a point's internal energy below a half, or a
 hundredth, of its value before the pass; the failsafe rows run at `floor_ratio = 0.01`
-under each `floor_scope`. On Noh the representable floor repairs none of the 30371
-point-steps below the floor, all with E > 0, so its row is the unrepaired run. The internal-energy floor
-completes Noh at this ratio, while at `floor_ratio = 1e-8` it fails at step 15
-([above](#negative-internal-energy-in-completed-runs)); it adds no energy there and removes
+under each `floor_scope`. On Noh the representable floor repairs none of the 30371 point-steps
+below the floor, all with E > 0, so its row is the unrepaired run. The internal-energy floor
+completes Noh at this ratio and fails at step 15 at `floor_ratio = 1e-8`
+([above](#negative-internal-energy-in-completed-runs)). On Noh it adds no energy and removes
 0.025 of momentum, converting kinetic energy into internal energy.
 
-Every repair moves Woodward–Colella's L1 past its guard. The two limits also fail Sedov's
-radius and Noh's plateau. The representable floor passes Sedov at +2.95%, and the
-internal-energy floor passes Sedov at +1.41% and fails Noh's plateau at 3.9055. Where a
-repair changes the total energy it adds 1.7% to 17% of the case's initial energy, since a
-floor or a limit raises the negative half of the oscillation about the ambient state and
-leaves the positive half. The limits also change the mass, by +0.5% to +0.6% on
-Woodward–Colella, +0.2% on Noh and −0.1% on Sedov, since a limit scales the whole
-correction of the conserved state at a point. A blend toward a first-order
-positivity-preserving flux (Hu, Adams & Shu 2013), which needs the compact divergence in
-face-flux form, is measured below.
+Every repair moves Woodward–Colella's L1 past its guard. The two limits also fail Sedov's radius
+and Noh's plateau. Both floors pass Sedov, and the internal-energy floor fails Noh's plateau.
+Where a repair changes the total energy it adds 1.7% to 17% of the case's initial energy, since a
+floor or a limit raises the negative half of the oscillation about the ambient state and leaves
+the positive half. The limits also change the mass, since a limit scales the whole correction of
+the conserved state at a point:
+
+```
+mass change under the two limits   Woodward–Colella   Noh     Sedov
+                                   +0.5% to +0.6%     +0.2%   −0.1%
+```
+
+A blend toward a first-order positivity-preserving flux (Hu, Adams & Shu 2013), for which the
+compact divergence is written in face-flux form, is measured below.
 
 ### The face-flux limiter
 
@@ -2618,6 +2636,7 @@ julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none
 julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,noh2,noh3 steps=1000
 julia --project=. -t 1 bench/positivity.jl part=cost cases=rz,blast steps=300 N=64
 julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
+julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80
 julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
 julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,nohuniform,a19,tiles,tilessub
 julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
@@ -2640,16 +2659,22 @@ julia --project=. -t 1 bench/filter_conservation.jl parts=shared N=48
 
 On a closed line the collocated divergence is a difference of face fluxes under node
 weights W with Σ W_i (D f)_i = f_N − f_1, so the face flux is a running sum of the
-derivative and needs no line solve. Solved from the solver's own `:neutral3` plan, W/h is
-0.2149, 1.5887, 0.6547, 0.9793, 1.0646, 0.9977, 1.0001 from either wall and 1 to 1.7e-13
-beyond the twelfth node; the running sum of a stage increment meets the far wall's flux to
-1e-14 with the artificial fluxes included. The limiter blends each face of a Runge–Kutta
-stage's increment toward the Lax–Friedrichs flux times the stage's time advance
-(c_{k+1} − c_k) Δt (variant A), and each face of a filter pass's correction toward zero
-(variant B), with θ per face from the half states of its two cells. Both act only at the
-faces they limit: a smooth acoustic pulse between slip walls with A + B on limits no face
-in 474 steps and is identical to the unlimited run. ε is the bound kept on ρ and ρe, the
-limiter's 1e-13 or a fraction of the initial minimum. Under the defaults, one dimension:
+derivative, computed without a line solve. The weights solved from the solver's own `:neutral3` plan
+depart from h only within a few nodes of a wall:
+
+```
+node from either wall   1        2        3        4        5        6        7        beyond 12
+W/h                     0.2149   1.5887   0.6547   0.9793   1.0646   0.9977   1.0001   1 to 1.7e-13
+```
+
+The running sum of a stage increment meets the far wall's flux to 1e-14 with the artificial
+fluxes included. The limiter blends each face of a Runge–Kutta stage's increment toward the
+Lax–Friedrichs flux times the stage's time advance (c_{k+1} − c_k) Δt (variant A), and each face
+of a filter pass's correction toward zero (variant B), with θ per face from the half states of
+its two cells. Both act only at the faces they limit: a smooth acoustic pulse between slip walls
+with A + B on limits no face in 474 steps and is identical to the unlimited run. ε is the bound
+kept on ρ and ρe, the limiter's 1e-13 or a fraction of the initial minimum. Under the defaults,
+one dimension:
 
 ```
 case  variant          bad points    min ρe       metric                        steps  faces limited
@@ -2675,51 +2700,70 @@ leaves the base states the other half makes bad. `A-rhs` limits only the stage's
 right-hand side and leaves the low-storage history unlimited, the form that needs no face
 register in several dimensions; it carries no guarantee, leaves bad points, and moves Noh's
 wall deficit and shock. The extra steps at ε = 1e-13 come from cells held near ε, whose
-artificial conductivity κ\* = ρc/T sets the step on 2091 Noh and 1989 Woodward–Colella
-steps; ε at a fraction of the initial minimum removes them on Woodward–Colella and halves
-them on Noh. The first-order bound 2τα/W reaches 0.938 at the wall node at cfl 0.3
-(0.31 inside) and 0.33 on Noh at cfl 0.15, so at the default cfl 0.5 it fails at a
-`:neutral3` wall node.
+artificial conductivity κ\* = ρc/T sizes more than a third of the steps. ε at a fraction of
+the initial minimum removes those steps on Woodward–Colella and halves them on Noh:
+
+```
+A+B, ε = 1e-13                     WC     Noh
+steps sized by κ* at a held cell   1989   2091
+```
+
+The first-order bound 2τα/W is largest at the wall node, where the weight is smallest:
+
+```
+first-order bound 2τα/W   wall node   inside
+WC, cfl 0.3               0.938       0.31
+Noh, cfl 0.15             0.33
+```
+
+At the default cfl 0.5 the bound therefore fails at a `:neutral3` wall node.
 
 `part=src` runs the cases through `run!` with `Numerics(positivity_limiter = true)`, the
-package's A + B with each cell's bound 1% of the smaller of the initial minimum and its own
-base value. Woodward–Colella takes 5557 steps with no inadmissible point after any step and
-L1 ρ 3.1564e-2, limiting 0.83% of stage faces and 1.4% of pass faces; Noh takes 5140 steps
-with none, plateau 3.9989, wall deficit 24.4% and shock 0.2021, limiting 1.4% and 1.7%.
-Neither leaves an unguaranteed cell side. With the bound at 1% of the initial minimum alone
-they took 4366 and 4759 steps: the cell bound lets cells settle below that minimum, where
-κ\* sizes the step. The cell fraction, swept with the limiter on (steps, and on the 2-D
-Cartesian Sedov quadrant of N = 96 at cfl 0.4, the unguaranteed sides and the point-steps
-left inadmissible):
+package's A + B. A cell's bound is 1% of the smaller of the initial minimum and its own base
+value, and on ρe at least 16 eps |E| (`LIMITER_ENERGY_ULPS`). The minimum is taken over the
+interior points where ρ and ρe are positive, so that a state entering `run!` with a point at or
+below zero internal energy still sets a positive bound. Both cases end with no inadmissible
+point after any step and no unguaranteed cell side, and both guards hold:
 
 ```
-fraction        WC steps   Noh steps   quadrant: steps   unguaranteed   bad points
-none (old)      4366       4759        1497              185391         76
-0.5             5632       6487        1507              2185           72
-0.1             6277       7029        1719              2375           74
-0.01            5557       5140        1203              1450           33
-0.001           4942       4545        1185              830            49
+part=src, limiter on   steps   metric                                      faces limited, stage / pass
+WC                     5512    L1 ρ 3.1550e-2                               0.829% / 1.38%
+Noh                    5160    plateau 3.9988, deficit 24.4%, shock 0.2021  1.36% / 1.70%
 ```
 
-Every fraction keeps both one-dimensional guards, and every one takes the quadrant's
-unguaranteed sides from 185391 to under 2400.
+The bench's `A+B` with the bound at 1% of the initial minimum alone takes fewer steps on both
+cases: the cell bound lets cells settle below that minimum, where κ\* sizes the step.
 
-`part=src cases=sedov,noh2,noh3` runs the radial cases of the validation battery through
-the fold. Sedov takes 3362 steps (3146 off) with no inadmissible point, R_s 0.8083
-(+1.04%) and peak ρ 5.162 (5.140 off); Noh ν = 2 takes 2633 (2188) with plateau 15.054
-(15.010), wall deficit 55% and shock 0.2087; ν = 3 1148 (1080), plateau 62.708 (62.581),
-deficit 25%, shock 0.2086. Unlimited, the three leave 20981, 14249 and 8542 point-steps
-inadmissible. Sedov conserves Σ W J ρ and Σ W J E to 1.2e-13 and 1.5e-13 of the totals
-(7.7e-14 and 1.5e-13 off) once a limited filter pass weights the components even at the
-origin by J; weighted by W alone, the pass moved the mass by 1.8e-4. Noh ν = 2 and 3
-leave no unguaranteed side. Sedov leaves 2904, nearly all (2640 of 2644 at a cell fraction
-of 0.1) at a cell whose node terms alone would take it below its bound: the hoop stress of
-β\* at the shock accelerates the cold gas past its internal energy. Those cells take
-first-order fluxes at both faces; given the shares without the node part instead, the run
-left 748 inadmissible point-steps behind the front. The face at the axis was limited at 7 of 13165 stages on Noh ν = 2, and never on
-ν = 3 or Sedov. The Supernova remnant tutorial completes with the limiter on under strict
-validity in 2126 steps (2009 off), inferring 0.963, 0.975 and 0.982 × 10⁵¹ erg at 5, 10
-and 20 kyr against 0.963, 0.976 and 0.982 off.
+`part=src cases=sedov,noh2,noh3` runs the radial cases of the validation battery through the
+fold. The limiter leaves no inadmissible point on any of them, at most about a fifth more steps,
+and moves the plateaus and the peak density by under half a percent:
+
+```
+limiter on (off)   steps         metric                                                bad unlimited
+Sedov              3362 (3146)   R_s 0.8083 (+1.04%), peak ρ 5.162 (5.140)             20981
+Noh ν = 2          2633 (2188)   plateau 15.054 (15.010), deficit 55%, shock 0.2087    14249
+Noh ν = 3          1148 (1080)   plateau 62.708 (62.581), deficit 25%, shock 0.2086    8542
+
+Sedov, relative change of the total   Σ W J ρ    Σ W J E
+limiter on                            1.2e-13    1.5e-13
+limiter off                           7.7e-14    1.5e-13
+```
+
+Sedov conserves mass and energy to round-off with the limiter on, since a limited filter pass
+weights the components by J even at the origin. The cylindrical and spherical Noh leave no
+unguaranteed side. Sedov leaves 2904, nearly all at a cell whose node terms alone would take it
+below its bound: the hoop stress of β\* at the shock accelerates the cold gas past its internal
+energy. Those cells take first-order fluxes at both faces. The face at the axis was limited at
+7 of 13165 stages on the cylindrical Noh, and never on the spherical Noh or Sedov.
+
+The Supernova remnant tutorial completes with the limiter on under strict validity, and its
+inferred explosion energy moves by at most one unit in the third digit:
+
+```
+Supernova remnant tutorial   steps   energy at 5, 10 and 20 kyr, 10⁵¹ erg
+limiter on                   2126    0.963, 0.975, 0.982
+limiter off                  2009    0.963, 0.976, 0.982
+```
 
 `part=rz N=96` (and `N=128`) runs the same Sedov on the r-z quarter plane, folded at the
 axis and by a symmetry plane at z = 0, against the spherical line at the same spacing:
@@ -2735,29 +2779,40 @@ sphere 128, on        1719    0                 0.8137                        4.
 ```
 
 The limited r-z radii agree with the sphere's to 0.25% along every direction. The face at the
-axis is limited at 18705 of 982560 axis line-stages at N = 96 and 26245 of 1838720 at 128
-(1.9% and 1.4%), and kept within the guarantee: that face carries the scheme's own O(h²)
-flux, up to a twelfth of node 1's rate, and the radius along the axis is the sphere's. The
-307011 unguaranteed sides at N = 128 (183977 at 96) are, as on the line, cells whose node
-terms alone leave their bound; a diagnostic run at N = 64 found every one of them there,
-none at the plane, the axis or a first-order half state. The spherical line at N = 64, the
-deposit three nodes wide, fails at step 28 unlimited and at step 43 limited: the node terms
-at the origin need the whole cell from step 15.
-
-`part=cost` times a step with the limiter off and on over the first steps of each case from
-fresh solvers, three off/on pairs alternated in one process, the medians of the times and of
-the pairs' ratios (the 1-D cases over 1000 steps, the planes at N = 64 over 300, the blast a periodic square
-with the Sedov deposit at its centre):
+axis is limited at under 2% of the axis line-stages and kept within the guarantee: that face
+carries the scheme's own O(h²) flux, up to a twelfth of node 1's rate, and the radius along the
+axis is the sphere's.
 
 ```
-case                  off, ms/step   on, ms/step   on/off
-Woodward–Colella      0.621          0.731         1.18
-Noh                   0.326          0.374         1.14
-Sedov                 0.254          0.368         1.45
-Noh ν = 2             0.241          0.341         1.42
-Noh ν = 3             0.253          0.359         1.42
-r-z Sedov 64²         4.04           6.75          1.67
-blast 64²             3.16           4.89          1.56
+r-z, limited   axis line-stages limited    unguaranteed sides
+96²            18705 of 982560 (1.9%)      183977
+128²           26245 of 1838720 (1.4%)     307011
+
+spherical line, N = 64, deposit three nodes wide   fails at step
+unlimited                                          28
+limited                                            43
+```
+
+The unguaranteed sides are, as on the line, cells whose node terms alone leave their bound: a
+diagnostic run at N = 64 found every one of them there, none at the plane, the axis or a
+first-order half state. The spherical line at N = 64 fails limited as unlimited, since the node
+terms at the origin need the whole cell from step 15.
+
+The limited step costs about 1.3 times the unlimited one on the planar line cases, 1.6 on the
+radial lines and about twice on the planes. `part=cost` times a step with the limiter off and on
+over the first steps of each case from fresh solvers, three off/on pairs alternated in one
+process, and takes the medians of the times and of the pairs' ratios. The blast is a periodic
+square with the Sedov deposit at its centre:
+
+```
+case, steps timed        off, ms/step   on, ms/step   on/off
+Woodward–Colella, 1000   0.429          0.547         1.29
+Noh, 1000                0.219          0.279         1.28
+Sedov, 1000              0.178          0.285         1.60
+Noh ν = 2, 1000          0.162          0.273         1.67
+Noh ν = 3, 1000          0.177          0.284         1.61
+r-z Sedov 64², 300       2.299          4.838         2.11
+blast 64², 300           2.026          3.875         1.91
 ```
 
 A θ pass indexing the fields by a node's linear index runs in two thirds of the time of
@@ -2765,155 +2820,200 @@ one indexing them by a Cartesian index, whose stride arithmetic each array repea
 r-z plane the radial pass that forms each face's speed and each cell's rate with its node
 terms is about two fifths of the limiter's time in a sampling profile, its largest part.
 
-A limited run can end with a point a little below zero internal energy: the periodic blast
-of 64² limited at cfl 0.2, 0.25 and 0.3, `run!` called for one step at a time, returned one at
-ρe ≈ −1e-20 after 11, 10 and 8 steps, and the next call then ran unlimited while ε was
-scaled by a non-positive minimum. With ε taken over the points where ρ and ρe are positive,
-all three run 200 steps limited.
-
 `part=patches` runs the two line cases on two and three same-level patches along x under
-`patch_interfaces = :closure`. A patch's line closes at an interface with the `:cascade3`
-rows, end weight 0.369 h against 0.215 h at a `:neutral3` wall, and the shared node is the
-end node of both patches; the averaging after each stage makes it the mean of the two
-patches' updates. With the end face at the shared node left unlimited, as at a wall,
-Woodward–Colella at N = 400 left 16 and 76 inadmissible point-steps on two and three patches,
-every one at the shared node, and none with the artificial properties off: the two patches'
-sensors give the artificial fluxes there different values. Limiting the end face as well,
-toward the point flux of the node's state, by one θ on both patches, removes them; at the
+`patch_interfaces = :closure`. A patch's line closes at an interface with the `:cascade3` rows,
+end weight 0.369 h against 0.215 h at a `:neutral3` wall, and the shared node is the end node of
+both patches; the averaging after each stage makes it the mean of the two patches' updates. The
+end face at the shared node is limited as well, toward the point flux of the node's state, by
+one θ on both patches. Left unlimited, as at a wall, it let inadmissible points form at the
+shared node, where the two patches' sensors give the artificial fluxes different values. At the
 battery's resolution:
 
 ```
 case   patches   steps off / on   bad point-steps off / on   L1 ρ against one patch, off / on
-WC     2         4384 / 5569      37042 / 0                  8.84e-4 / 1.64e-3
-WC     3         4385 / 5527      36808 / 0                  4.75e-3 / 5.65e-3
-Noh    2         3511 / 5202      30297 / 0                  7.89e-6 / 2.07e-4
-Noh    3         3511 / 5112      30307 / 0                  1.13e-5 / 2.40e-4
+WC     1         4380 / 5512
+WC     2         4383 / 5540      36965 / 0                  8.49e-4 / 1.53e-3
+WC     3         4385 / 5500      36727 / 0                  4.17e-3 / 4.97e-3
+Noh    1         3512 / 5160
+Noh    2         3511 / 5164      30295 / 0                  9.10e-6 / 2.62e-4
+Noh    3         3511 / 5123      30315 / 0                  9.01e-6 / 2.47e-4
+
+one patch, L1 ρ after a relative change of 1e-15 to the initial energy, off / on
+WC     3.48e-8 / 3.66e-4
+Noh    1.07e-5 / 2.95e-4
 ```
 
-No limited run leaves an unguaranteed side. A relative change of 1e-15 to the initial energy
-moves the limited one-patch runs by 3.6e-4 (Woodward–Colella) and 2.3e-4 (Noh) in L1 and the
-unlimited ones by 3.5e-8 and 1.1e-5, since θ is not continuous in round-off; the limited Noh
-runs differ from one patch at that level, at the wall and the shock, and agree to 1e-12 within
-eight nodes of an interface. The interface test of `test/positivity_tests.jl`, a periodic blast
-on two patches with the artificial properties and the filter off, conserves the composite
-Σ W Q to 2.6e-14 of the totals once the end face carries the face register at that end, with
-its corrections entered there; the running sum's end, which meets the register to round-off,
-and corrections left out of the low patch's anchor gave 8.5e-11. On the periodic blast of 80²
-the limited step costs 1.54 times the unlimited one on one patch and 1.49 on two.
+No limited run leaves an inadmissible point-step or an unguaranteed side. A limited run is far
+more sensitive to round-off than an unlimited one, since θ is not continuous in round-off, and
+the limited Noh runs on patches differ from one patch by less than the 1e-15 change moves the
+one-patch run. The interface test of `test/positivity_tests.jl`, a periodic
+blast on two patches with the artificial properties and the filter off, conserves the composite
+Σ W Q to 2.6e-14 of the totals, with the end face carrying the face register at that end and
+its corrections entered there. On the periodic blast of 80² the limited step costs as much
+relative to the unlimited one on two patches as on one:
+
+```
+periodic blast 80², 300 steps   off, ms/step   on, ms/step   on/off
+one patch                       3.251          6.100         1.88
+two patches                     3.567          6.544         1.85
+```
 
 By default setup closes a limited run's interfaces with the closure rows. Under
 `LIMITED_GHOST_INTERFACES` (`flux=ghost` sets it) it keeps `patch_interfaces = :ghost`, the
 gradient plans difference the whole flux of an interface dimension from ghost values, and the
-limiter takes the line as open there:
-weight h up to the end node and h/2 at it, the end face at the node, and the face values
-anchored by the derivative's interior face relation measured at the third face from the low
-end. On a smooth periodic flux of two patches (64 nodes, ρu = 0.5(1 + 0.2 sin 2πx)), one
-stage's face values at the two shared nodes meet the point flux to 1.3e-11 on both patches, and
-every interior face the exact flux to 1.7e-5, where the closure rows' faces beside an interface
-are 1.3e-3 off. The same cases:
+limiter takes the line as open there: weight h up to the end node and h/2 at it, the end face
+at the node, and the face values anchored by the derivative's interior face relation measured at
+the third face from the low end. On a smooth periodic flux of two patches the open end's face
+values meet the point flux at the shared nodes to round-off, and its interior faces come nearly
+two orders of magnitude closer to the exact flux than the closure rows' faces beside an
+interface:
+
+```
+ρu = 0.5(1 + 0.2 sin 2πx), 64 nodes in two patches, one stage   error of the face values
+:ghost, at the two shared nodes, against the point flux          1.3e-11
+:ghost, every interior face, against the exact flux              1.7e-5
+:closure, faces beside an interface, against the exact flux      1.3e-3
+```
+
+The same cases under `:ghost`:
 
 ```
 case   patches   steps off / on   bad point-steps off / on   L1 ρ against one patch, off / on
-WC     2         4382 / 5541      36930 / 0                  7.04e-4 / 1.03e-3
-WC     3         4383 / 5557      36701 / 0                  2.36e-3 / 2.61e-3
-Noh    2         3511 / 5120      30304 / 0                  7.98e-6 / 2.49e-4
-Noh    3         3511 / 5216      30305 / 0                  1.37e-5 / 2.01e-4
+WC     2         4382 / 5480      36922 / 0                  8.16e-4 / 9.74e-4
+WC     3         4383 / 5560      36661 / 0                  2.72e-3 / 2.72e-3
+Noh    2         3512 / 5134      30312 / 0                  9.48e-6 / 2.69e-4
+Noh    3         3511 / 5122      30312 / 0                  1.21e-5 / 2.75e-4
 ```
 
-No limited run leaves an unguaranteed side. On device storage under the KernelAbstractions CPU
-backend the limited runs on two patches and through a box, at the global step and subcycled,
-reproduce the host bitwise under `:ghost` as under `:closure` (`test/device_tests.jl`).
+No limited run leaves an inadmissible point-step or an unguaranteed side. Woodward–Colella on
+patches comes closer to the one-patch run under `:ghost` than under `:closure`, limited or not.
+On device storage under the KernelAbstractions CPU backend the limited runs on two patches and
+through a box, at the global step and subcycled, reproduce the host bitwise under `:ghost` as
+under `:closure` (`test/device_tests.jl`).
 
-`part=levels` runs refined levels under `patch_interfaces = :closure`. A refined patch closes its
-lines at a coarse-fine face with the same interface rows, and its end node there, which the
-parent's shell overwrites, is not held. Held to their cell bounds, the parent's nodes the
-restriction overwrites fell to temperatures of 1e-12 under subcycling, where the parent steps
-them at up to the CFL number 0.75, and κ\* = ρc/T there set the root step: Woodward–Colella with a
-box took 3055 root steps against 1133 unlimited. Exempt, and kept out of their held neighbours'
-first-order fluxes where not admissible, they took 1561; held at the global step, where they
-advance at the fine level's CFL number, the same run took 2632 steps against 2349 exempt, and
-Noh ν = 2 over 43 nodes 20782 unguaranteed sides against 3410. Both nodes of a face beside such
-a node take one first-order flux, with the node replaced by its held neighbour. Replaced only when
-the neighbour's correction was taken, the two corrections of the face differed, and the face
-register carried the difference to the far end of the line: of 31 perturbations of the subcycled
-box's initial pressure by 1e-14 to 3e-13, two left the right wall node at ρe ≈ −100 for about 50
-steps, and none do now. A shell node the interpolation leaves inadmissible between admissible
-parent nodes takes the multilinear, linear-in-time interpolant of the parent. The inadmissible
-point-steps after every step, those on a refined patch's coarse-fine plane apart:
+The limiter leaves no inadmissible point-step on any refined layout, the parent's shell
+included. `part=levels` runs refined levels under `patch_interfaces = :closure`. A refined patch
+closes its lines at a coarse-fine face with the same interface rows, and its end node there,
+which the parent's shell overwrites, is not held. The parent's nodes the restriction overwrites
+are exempt from their cell bounds and kept out of their held neighbours' first-order fluxes where
+not admissible. Held to their bounds under subcycling, where the parent steps them at up to the
+CFL number 0.75, they fell to temperatures near zero, and κ\* = ρc/T there sized the root step.
+Both nodes of a face beside such a node take one first-order flux, with the node replaced by its
+held neighbour, so that the two corrections of the face agree and the face register carries no
+difference to the far end of the line. A shell node the interpolation leaves inadmissible
+between admissible parent nodes takes the multilinear, linear-in-time interpolant of the parent.
+The inadmissible point-steps after every step, those on a refined patch's coarse-fine plane
+apart:
 
 ```
 case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
 WC 200, box, global step               1985 / 2349      145, 14950             0, 0
 WC 200, box, subcycled                 1133 / 1561      130, 10341             0, 0
 WC 200, regridded box                  3202 / 4259      0, 32845               0, 0
-WC 200, regridded tiles of 8           1094 / 1420      0, 8432                0, 0
-WC 200, regridded tiles, subcycled     1085 / 1440      0, 8441                0, 0
+WC 200, regridded tiles of 8           1094 / 1416      0, 8433                0, 0
+WC 200, regridded tiles, subcycled     1085 / 1413      0, 8442                0, 0
 Noh ν = 2, box over 85 nodes           6640 / 9220      0, 56700               0, 0
 Noh ν = 2, box over 43 nodes           6024 / 8155      176, 50648             0, 0
 Noh ν = 2, 85 nodes, subcycled         2214 / 2989      0, 18925               0, 0
 Noh ν = 2, 43 nodes, subcycled         2330 / 4167      73, 19809              0, 0
 r-z converging shock, corner box       628 / 627        0, 911                 0, 0
-blast 64², tiles of 8                  227 / 256        1485, 9767             0, 0
-blast 64², tiles of 8, subcycled       136 / 219        1496, 6955             0, 0
+blast 64², tiles of 8                  231 / 256        1539, 9877             0, 0
+blast 64², tiles of 8, subcycled       137 / 216        1517, 6902             0, 0
 ```
 
-On the Noh level rows the limited box over 85 nodes gives plateau 15.6672, deficit 50.9%, shock
-0.2032 and mass −5.2e-7 against the limited uniform run at the level's spacing, 15.6674, 50.7%,
-0.2032 and −4.4e-7 (unlimited, both 15.6523, 50.9%, 0.2033); over 43 nodes 14.8280, 50.6%,
-0.2086 and −1.2e-4 (unlimited 14.9258, 50.2%, 0.2104, +3.7e-6). The 3410 unguaranteed sides
-there are the parent's, from the shock's arrival in its covered nodes. Unlimited, the shell
-nodes left inadmissible lie between parent nodes that are inadmissible themselves, which no
-interpolant repairs; the fallback took 2852 shell entries on the validation battery's Noh row
-over 43 nodes (6014 steps) and none over 85. `part=levelcost`, as `part=cost` (before the
-fallback, which costs a pass over the shell entries and is within the run-to-run spread on a
-tiled 2-D level, 1.01 subcycled and 0.93 at the global step over three process pairs):
+A limited box that holds the shock's whole path reproduces the limited uniform run at the
+level's spacing. A box shorter than the final front radius, which the shock leaves through the
+coarse-fine face, loses a twentieth of the plateau with or without the limiter.
 
 ```
-case                                   off, ms/step   on, ms/step   on/off
-WC 200, box, global step               0.360          0.459         1.33
-WC 200, box, subcycled                 0.787          0.906         1.15
-Noh ν = 2, box over 85 nodes           0.928          1.180         1.28
-blast 64², tiles of 8                  16.0           21.9          1.37
-r-z converging shock 64², corner box   31.2           51.0          1.59
+cylindrical Noh at t = 0.6        plateau   deficit  shock    mass
+uniform at the level's spacing    15.6674   50.7%    0.2032   −4.4e-7
+box over 85 nodes                 15.6672   50.9%    0.2032   −5.2e-7
+uniform, unlimited                15.6523   50.9%    0.2033
+box over 85 nodes, unlimited      15.6523   50.9%    0.2033
+box over 43 nodes                 14.8280   50.6%    0.2086   −1.2e-4
+box over 43 nodes, unlimited      14.9258   50.2%    0.2104   +3.7e-6
 ```
 
-Tiles on the radial grids limit a face two tiles share along r as a same-level interface is
-limited: the end cell takes both its faces and its geometric part in one part, its end face
-blended toward the node's area-weighted point flux and pressure by the θ of the face beside it,
-and the exchange gives both tiles the smaller θ. On the cylindrical Noh of the level rows, the
-level over the first 81 root nodes (ten lattice cells of edge 8), and on the A19 converging
-shock at 33², tiles over the three by three cells within the corner box:
+The 3410 unguaranteed sides of the shorter box are the parent's, from the shock's arrival in its
+covered nodes. Unlimited, the shell nodes left inadmissible lie between parent nodes that are
+inadmissible themselves, which no interpolant repairs.
+
+On a refined level the limiter costs least on the one-dimensional boxes and most on the r-z
+corner box, under either interface flux. `part=levelcost` times the first steps of the same cases
+as `part=cost` does, and `part=levelcost flux=ghost` the same under `:ghost`:
+
+```
+                                       :closure                              :ghost
+case                                   off, ms/step   on, ms/step   on/off   off, ms/step   on, ms/step   on/off
+WC 200, box, global step               0.351          0.346         1.04     0.356          0.389         1.04
+WC 200, box, subcycled                 0.582          0.714         1.23     0.693          0.774         1.12
+Noh ν = 2, box over 85 nodes           0.487          0.641         1.30     0.520          0.671         1.30
+blast 64², tiles of 8                  12.266         17.500        1.43     16.212         22.056        1.33
+r-z converging shock 64², corner box   18.439         34.507        1.86     23.890         39.322        1.65
+```
+
+On the radial grids a face two tiles share along r is limited as a same-level interface is: the
+end cell takes both its faces and its geometric part in one part, its end face blended toward
+the node's area-weighted point flux and pressure by the θ of the face beside it, and the
+exchange gives both tiles the smaller θ. The cases are the cylindrical Noh of the level rows,
+the level over the first 81 root nodes in ten lattice cells of edge 8, and the A19 converging
+shock with tiles over the three by three lattice cells within the corner box:
 
 ```
 case                                   steps off / on   bad off: shell, rest   bad on: shell, rest
 Noh ν = 2, box over 81 nodes           6641 / 9217      0, 56681               0, 0
-Noh ν = 2, tiles of 8                  6837 / 10094     0, 76672               0, 0
-Noh ν = 2, tiles of 8, subcycled       2277 / 3265      0, 25627               0, 0
-Noh ν = 2, regridded tiles             6836 / 10265     0, 76655               0, 0
-Noh ν = 2, regridded tiles, subcycled  2282 / 3403      10, 25771              0, 0
+Noh ν = 2, tiles of 8                  6842 / 10180     0, 77151               0, 0
+Noh ν = 2, tiles of 8, subcycled       2279 / 3422      0, 25696               0, 0
+Noh ν = 2, regridded tiles             6848 / 10292     0, 77094               0, 0
+Noh ν = 2, regridded tiles, subcycled  2285 / 3447      10, 26016              0, 0
 r-z converging shock 33², corner box   322 / 322        0, 105                 0, 0
-r-z converging shock 33², tiles of 8   330 / 330        0, 339                 0, 0
-the same, subcycled                    131 / 201        0, 119                 0, 0
-the same, regridded tiles              331 / 334        0, 321                 0, 0
-regridded tiles, subcycled             121 / 199        0, 139                 0, 0
+r-z converging shock 33², tiles of 8   329 / 329        0, 389                 0, 0
+the same, subcycled                    132 / 201        0, 146                 0, 0
+the same, regridded tiles              329 / 334        0, 366                 0, 0
+regridded tiles, subcycled             120 / 199        0, 156                 0, 0
+regridded tiles at 32²                 321 / 325        0, 344                 0, 0
 ```
 
-At 32² the last lattice cell at the outer faces spans 7 of the 31 root spacings, and the line of
-a tile over it, 22 nodes between its interface and the wall, takes no face form. Under the limiter
-a regrid does not create that tile and the cell stays at the root's resolution (8 tiles at step
-60 against the unlimited run's 14), and setup refuses a level given over it. The regridded row at
-32² then takes 322 / 326 steps, with 0, 292 inadmissible point-steps unlimited, 0, 0 limited and
-32 unguaranteed sides. On the Noh rows, limited, the tiles give plateau 15.6808,
-deficit 50.4%, shock 0.2033 and mass +4.1e-4 (15.6833, 50.3%, 0.2033, +4.2e-4 subcycled;
-15.6816, 50.5%, 0.2033, +4.7e-4 regridded; 15.6986, 50.2%, 0.2033, +5.7e-4 regridded and
-subcycled) against the limited box's 15.6672, 50.8%, 0.2032 and
-−5.2e-7. Unlimited, the tiles give 15.8915, 49.6%, 0.2024 and +1.73e-3 against the box's
-15.6523, 50.9%, 0.2033 and −9.7e-7: the tiled level's own mass drift, which the limited runs
-reduce to a quarter and `part=tiledrift` below attributes. The limited tiled runs leave 4 to 50
-unguaranteed sides. `part=tilecost` over 150 steps of the converging shock, three alternations
-of the four runs in one process: the box takes 5.35 ms per step unlimited and 9.18 limited, the
-tiles 6.87 and 11.43, so the limited tiled step costs 1.67 times the unlimited tiled one and
-1.25 times the limited box's.
+At 32² the last lattice cell at the outer faces spans only 7 root spacings. The line of a tile
+over it, 22 nodes between its interface and the wall, takes no face form. Under the limiter
+a regrid does not create that tile and the cell stays at the root's resolution, and setup
+refuses a level given over it. The limited converging-shock tiles leave 25 to 41 unguaranteed
+sides.
+
+On the cylindrical Noh the limited tiles reproduce the limited box's plateau and shock, and the
+limiter reduces the tiled level's own mass drift, which `part=tiledrift` below attributes, to
+between a fifth and a third:
+
+```
+Noh ν = 2, level over 81 nodes         plateau   deficit   shock    mass       unguaranteed
+box, limited                           15.6672   50.8%     0.2032   −5.2e-7
+tiles of 8, limited                    15.6637   51.1%     0.2032   +5.92e-5   0
+tiles of 8, subcycled, limited         15.6645   50.6%     0.2032   +6.32e-5   8
+regridded tiles, limited               15.6645   51.3%     0.2032   +7.57e-5   18
+regridded, subcycled, limited          15.6680   51.0%     0.2032   +9.07e-5   18
+box, unlimited                         15.6523   50.9%     0.2033   −9.7e-7
+tiles of 8, unlimited                  15.7202   50.2%     0.2029   +2.97e-4
+tiles of 8, subcycled, unlimited       15.7216   50.0%     0.2029   +2.89e-4
+regridded tiles, unlimited             15.7219   50.2%     0.2029   +2.81e-4
+regridded, subcycled, unlimited        15.7315   49.9%     0.2028   +3.24e-4
+```
+
+On the converging shock the limited tiled step costs about a quarter more than the limited box's
+under either interface flux. `part=tilecost` times the first 150 steps of the box and the tiles,
+the four runs alternated three times in one process:
+
+```
+converging shock 33²        off, ms/step   on, ms/step
+:closure, corner box        5.341          9.277
+:closure, tiles of 8        6.898          11.830
+:ghost, corner box          7.377          11.127
+:ghost, tiles of 8          9.226          14.220
+
+limited tiles against       unlimited tiles   limited box
+:closure                    1.72              1.28
+:ghost                      1.54              1.27
+```
 
 `part=levels flux=ghost` runs the same refined cases under `patch_interfaces = :ghost`, a
 refined patch's lines open at its coarse-fine and shared faces:
@@ -2923,52 +3023,56 @@ case                                   steps off / on   bad off: shell, rest   b
 WC 200, box, global step               1993 / 2355      148, 15096             0, 0
 WC 200, box, subcycled                 1133 / 1578      130, 10354             0, 0
 WC 200, regridded box                  3201 / 4219      0, 32821               0, 0
-WC 200, regridded tiles of 8           1094 / 1429      0, 8433                0, 0
-WC 200, regridded tiles, subcycled     1085 / 1459      0, 8444                0, 0
+WC 200, regridded tiles of 8           1094 / 1410      0, 8433                0, 0
+WC 200, regridded tiles, subcycled     1085 / 1437      0, 8443                0, 0
 Noh ν = 2, box over 85 nodes           6641 / 9242      0, 56695               0, 0
 Noh ν = 2, box over 43 nodes           6006 / 8191      108, 50224             0, 0
 Noh ν = 2, 85 nodes, subcycled         2214 / 2985      0, 18929               0, 0
 Noh ν = 2, 43 nodes, subcycled         2321 / 4190      24, 19540              0, 0
-Noh ν = 2, tiles of 8 over 81 nodes    6634 / 8890      0, 63103               0, 0
-the same, subcycled                    2211 / 2904      0, 20984               0, 0
-the same, regridded                    6639 / 9322      5, 63315               0, 0
-regridded and subcycled                2214 / 3106      7, 21246               0, 0
-blast 64², tiles of 8                  221 / 248        1477, 9429             0, 0
-blast 64², tiles of 8, subcycled       135 / 226        1503, 6722             0, 0
+Noh ν = 2, tiles of 8 over 81 nodes    6636 / 8846      0, 64289               0, 0
+the same, subcycled                    2212 / 2897      0, 21440               0, 0
+the same, regridded                    6641 / 9279      5, 64730               0, 0
+regridded and subcycled                2213 / 3075      7, 21663               0, 0
+blast 64², tiles of 8                  224 / 249        1530, 9589             0, 0
+blast 64², tiles of 8, subcycled       136 / 227        1539, 6752             0, 0
 r-z converging shock 33², corner box   322 / 322        0, 109                 0, 0
-r-z converging shock 33², tiles of 8   323 / 322        0, 376                 0, 0
-the same, subcycled                    130 / 199        0, 143                 0, 0
-the same, regridded tiles              323 / 326        0, 349                 0, 0
-regridded tiles, subcycled             118 / 198        0, 152                 0, 0
+r-z converging shock 33², tiles of 8   322 / 323        0, 365                 0, 0
+the same, subcycled                    130 / 199        0, 136                 0, 0
+the same, regridded tiles              323 / 328        0, 336                 0, 0
+regridded tiles, subcycled             118 / 199        0, 137                 0, 0
 ```
 
-The limited Noh box over 85 nodes gives plateau 15.6673, deficit 50.8%, shock 0.2032 and mass
-−5.2e-7, against the closure rows' 15.6672, 50.9%, 0.2032 and −1.9e-6; over 43 nodes 14.8038,
-50.6%, 0.2086 and −1.2e-4 with 3786 unguaranteed sides (unlimited 14.9507, 50.7%, 0.2109,
-+8.4e-6). The tiles of 8 over 81 nodes give 15.6628, 50.9%, 0.2033 and +2.1e-4, against
-+4.1e-4 under the closure rows and +1.9e-5 unlimited (`part=tiledrift` below). The regridded
-tiles on the cylindrical line give plateau 15.6637, deficit 50.5%, shock 0.2033 and mass
-+2.3e-4. Without the fill's admissible fallback (`_fill_fallback!`) they leave 8 inadmissible
-point-steps: the fills after the regrids at steps 5570 and 8840 (t = 0.380 and 0.571) put a
-node of the new tile, 4 and 1 fine nodes inside its face with the tile below, at
-ρe = −5.6e-5 and −1.3e-4, in the cold gas 9 and 8 parent nodes ahead of the shock, where the
-parent's ρe is 3e-5 to 5e-3 against E ≈ 1.7. Both faces of the node's cell then take θ = 0,
-its sides counted unguaranteed, for the 3 and 5 steps it stays inadmissible. The fallback
-gives the two nodes ρe = +5.1e-4 and +4.6e-4. The tiled rows leave 0 to 44 unguaranteed
-sides. Under `part=levelcost flux=ghost` the limited step costs 1.05 times the unlimited one
-on Woodward–Colella with a box, 1.13 subcycled, 1.19 on the Noh box over 85 nodes, 1.27 on the
-blast's tiles and 1.64 on the r-z corner box; under `part=tilecost flux=ghost` the box takes
-7.17 ms per step unlimited and 10.72 limited, the tiles 9.01 and 13.20, so the limited tiled
-step costs 1.47 times the unlimited tiled one and 1.24 times the limited box's.
+Under `:ghost` the limited Noh box over 85 nodes reproduces the closure rows' metrics, and the
+limited tiles, static or regridded, drift by about as much as under `:closure`:
 
-`part=tiledrift ledger=true` (package commit `2d5178f5`, Julia 1.13.3; transcript
-`bench/results/tiledrift.txt`) runs the same cylindrical Noh, the level over root nodes 1:81,
-unlimited and under `patch_interfaces = :closure` except where a row says otherwise, on one layout
-and with one change at a time.
-Beside the composite mass it prints two that use no covered mask and no junction weight: each
-refined patch's single-patch quadrature plus the root's from node 81 out (split), and the
-root's alone over the whole line, which holds the restricted level (root). Drift is against
-the exact mass at t = 0.6:
+```
+:ghost, Noh ν = 2                    plateau   deficit   shock    mass       unguaranteed
+box over 85 nodes, limited           15.6673   50.8%     0.2032   −5.2e-7
+the same under :closure              15.6672   50.9%     0.2032   −5.2e-7
+box over 43 nodes, limited           14.8038   50.6%     0.2086   −1.2e-4    3786
+box over 43 nodes, unlimited         14.9507   50.7%     0.2109   +8.4e-6
+tiles of 8 over 81 nodes, limited    15.6612   50.8%     0.2032   +6.78e-5   0
+tiles of 8 over 81 nodes, unlimited  15.6526   50.7%     0.2033   −2.45e-6
+regridded tiles, limited             15.6614   50.4%     0.2032   +7.59e-5   0
+regridded tiles, unlimited           15.6532   50.7%     0.2033   −1.56e-5
+```
+
+The tiled rows leave 0 to 48 unguaranteed sides, the most on the converging shock. A regrid's
+fill takes the shell's admissible fallback (`_fill_fallback!`) in every limited run, since a
+fill can otherwise put a node of a new tile at negative ρe in the cold gas ahead of the shock,
+whose cell then takes θ = 0 at both faces until it recovers. The costs under `:ghost` are in the
+two cost tables above.
+
+With the identity filter row at a node two tiles share, a tiled level's mass drift enters at
+the shared faces as the shock crosses them, and the filter passes carry most of it.
+`part=tiledrift ledger=true` runs the same cylindrical Noh, the level over the first 81 root
+nodes, unlimited and under `patch_interfaces = :closure` except where a row says otherwise, on
+one layout and with one change at a time. The table below was taken with the identity row
+(`conservative=false` on the current tree) at package commit `2d5178f5` on Julia 1.13.3
+(transcript `bench/results/tiledrift.txt`). Beside the composite mass it prints two that use no
+covered mask and no junction weight: each refined patch's single-patch quadrature plus the
+root's from the level's last node out (split), and the root's alone over the whole line, which
+holds the restricted level (root). Drift is against the exact mass at t = 0.6:
 
 ```
 layout, change                 steps  plateau  deficit  shock   mass      split     root
@@ -2985,87 +3089,69 @@ tiles of 8, REFLUX off         6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e
 tiles of 8, sensor clamped     6827   15.8429  49.9%    0.2026  +1.05e-3  +1.05e-3  +1.84e-3
 tiles of 8, :ghost             6634   15.6554  50.8%    0.2033  +1.9e-5   +1.8e-5   +5.7e-4
 box, limited                   9217   15.6672  50.8%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4
-tiles of 8, limited            10094  15.6808  50.4%    0.2033  +4.1e-4   +4.1e-4   +1.12e-3
+tiles of 8, limited            10221  15.6815  50.5%    0.2033  +4.15e-4  +4.13e-4  +1.14e-3
 box, limited, :ghost           9225   15.6674  50.7%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4
-tiles of 8, limited, :ghost    8890   15.6628  50.9%    0.2033  +2.1e-4   +2.1e-4   +8.5e-4
+tiles of 8, limited, :ghost    8881   15.6628  50.9%    0.2033  +2.09e-4  +2.08e-4  +8.50e-4
 tiles of 16, limited, :ghost   9019   15.6674  50.7%    0.2032  +1.2e-4   +1.2e-4   +7.6e-4
 ```
 
 The drift is in the solution. The split mass agrees with the composite to 1e-6 on every static
-layout, and the root's mass, +5.5e-4 on the box from its quadrature of the shock, is 2.0e-3
-higher on the tiles. The mass enters at the faces two tiles share, where each tile's divergence
-closes with the closure rows of `:closure`, as the shock crosses one. A single tile reproduces
-the box in every printed digit. The composite drift's history rises in steps at the times the
-shock reaches a tile face (t ≈ 0.188, 0.28, 0.375, 0.47 and 0.56 for edge 8; 0.188, 0.375 and
-0.56 for edge 16), by about 2e-4 at each, and more slowly between them, so doubling the edge
-halves the drift. Up to t = 0.16 it stays within 3e-5. The coarse-fine face at r = 0.313 is not
-involved: the shock does not reach it, and with `REFLUX` off every printed digit of the final
-state is unchanged. Subcycling and regridding change the drift by a tenth or less, and clamping
-the sensor at the faces (`SENSOR_INTERFACE_GHOSTS` off) lowers it by two fifths. Under
+layout. The root's mass, which carries the root's own quadrature of the shock on the box, is
+2.0e-3 higher on the tiles. The mass enters at the faces two tiles share, where each tile's
+divergence closes with the closure rows of `:closure`, as the shock crosses one. A single tile
+reproduces the box in every printed digit. The composite drift's history rises in steps of about
+2e-4 at the times the shock reaches a tile face, and more slowly between them, so doubling the
+edge halves the drift:
+
+```
+times of the drift history's steps   t
+tiles of 8                           0.188, 0.28, 0.375, 0.47, 0.56
+tiles of 16                          0.188, 0.375, 0.56
+```
+
+Up to t = 0.16 the drift stays within 3e-5. The coarse-fine face at r = 0.313 is not involved:
+the shock does not reach it, and with `REFLUX` off every printed digit of the final state is
+unchanged. Subcycling and regridding change the drift by a tenth or less, and clamping the
+sensor at the faces (`SENSOR_INTERFACE_GHOSTS` off) lowers it by two fifths. Under
 `interface_flux = :ghost`, where the flux through the face is differentiated from ghost values
-with the interior stencil, the drift is 1% of its value under `:closure`. A smooth density
-pulse at rest crossing the same faces to t = 0.3 drifts by −1.9e-9 on the tiles under
-`:closure` against 1.1e-10 on the box, so the closure-row faces conserve mass on resolved data.
-Without the filter the tiles stop at t = 0.021 and the box at 0.104, but the budget ledger
-attributes the drift: the filter passes carry +1.32e-3 of the +1.73e-3 on tiles of 8, +6.8e-4
-of the +9.2e-4 on tiles of 16, +2.4e-5 of the +1.9e-5 under `:ghost`, and −4.6e-7 on the box.
-The filter's row at a node two tiles share is the identity on both, a row that does not
-conserve, as a closure row at a wall does not.
+with the interior stencil, the drift is 1% of its value under `:closure`. A smooth density pulse
+at rest crossing the same faces to t = 0.3 drifts by −1.9e-9 on the tiles under `:closure`, so
+the closure-row faces conserve mass on resolved data. Without the filter the tiles stop at
+t = 0.021 and the box at 0.104. The budget ledger attributes the drift instead: on the tiles
+under `:closure` the filter passes carry about three quarters of it (the off columns of the
+toggle table below). The identity row at a node two tiles share does not conserve, as a closure
+row at a wall does not.
 
-Under the positivity limiter the tiles drift +4.1e-4 under `:closure` and +2.1e-4 under
-`:ghost`, of which the filter passes carry +3.5e-4 and +1.56e-4; the limited box drifts −5.2e-7
-under either. The limited `:ghost` tiles are half the limited `:closure` tiles' drift and closer
-to the uniform run in L1 (7.5e-4 against 1.7e-3), but ten times the unlimited `:ghost` tiles':
-the filter's share grows sixfold under the limiter, the stage's from −5e-6 to +5e-5. Two
-changes to the limited filter pass at a shared node were measured and
-removed: one θ on both tiles' faces beside the node, by the exchange the stage takes, drifted
-+1.9e-4 with the filter passes carrying +1.4e-4; the node taking the correction of the face
-beside it on both tiles, which makes each tile's correction telescope, drifted +2.0e-4 and left
-1389 inadmissible point-steps and 6914 unguaranteed sides, its half state at weight h/2 failing
-the bound.
+Under the positivity limiter with the identity row the filter passes still carry most of the
+tiles' drift, and the limited box drifts by under 1e-6, as the unlimited one does. The limited
+`:ghost` tiles drift half as much as the limited `:closure` tiles and lie closer to the uniform
+run, but ten times as much as the unlimited `:ghost` tiles. The filter's share there grows
+sixfold under the limiter, and the stage's changes from −5e-6 to +5e-5.
 
-On the planar Noh (ν = 1, 400 root nodes, the level over the first 81) the mass drift at
-t = 0.5, before the shock reaches the level's outer face at x = 0.2005, is −7.0e-6 on the box,
-+3.9e-3 on tiles of 8 and +3.6e-5 on tiles of 8 under `:ghost`; limited, +9.1e-4 under
-`:closure` and +3.0e-4 under `:ghost`. At t = 0.6 the shock lies on
-that face, so the planar runs' final metrics and unmasked masses there measure the coarse-fine
-face and not the tiles.
+The planar Noh (ν = 1) on the same layouts shows the same drift on the tiles with the identity
+row, limited or not (the off column of the planar table below). Its root has 400 nodes and the
+level covers the first 81. The drift there is read at t = 0.5, before the shock reaches the
+level's outer face at x = 0.2005. At t = 0.6 the shock lies on that face, so the planar runs'
+final metrics and unmasked masses measure the coarse-fine face and not the tiles.
 
-Against the exact solution the tiles are closer in two metrics and in the plateau's mean, and
-further in its flatness. Over the level's region the L1 error ∫|ρ − ρ_exact| r dr is 1.398e-2
-for the tiles against 1.456e-2 for the box, and the shock lies at 0.2024 against 0.2033 (exact
-0.2), but the mean |ρ − 16| over the plateau core is 0.377 against 0.348: the core's mean rises
-by 0.24 and its spread grows, with the mass gained at the faces. Against the uniform run at the
-level's spacing, which the box matches to 1.1e-5 in the same norm, the tiles differ by 8.5e-3,
-61% of their own error against the exact solution; under `:ghost` by 6.4e-4.
-
-Round-off sensitivity, measured on one rank as the L1 density difference between a limited run
-and the same run with one unit in the last place added to one node's initial density, on the
-blasts of the MPI phase's patched case (96 × 32 nodes) and refined case (48², tiles of 8 over
-the centre 24²; the subcycled steps are root steps):
+With the identity row the tiles are closer than the box to the exact solution in the L1 error
+and the shock position, and further from it in the plateau's flatness:
 
 ```
-run                          step 40    step 80    step 200   step 400
-one patch                    1.6e-5     1.2e-3     3.4e-3     1.6e-3
-two patches, :closure        5.4e-13    8.4e-4     4.8e-3     4.7e-4
-two patches, :ghost          1.7e-9     1.5e-3     1.8e-2     1.8e-2
-tiles, :closure              1.5e-15    8.8e-14    3.4e-11
-tiles, :ghost                1.5e-15    1.1e-11    1.6e-2
-subcycled tiles, :closure    7.0e-12    1.2e-8     1.5e-8 at step 100
-subcycled tiles, :ghost      1.1e-11    6.7e-3     6.4e-3 at step 100
+identity row, against the exact solution   L1 ∫|ρ − ρ_exact| r dr over the level   shock    mean |ρ − 16|, plateau core
+tiles of 8                                 1.398e-2                                0.2024   0.377
+box                                        1.456e-2                                0.2033   0.348
+exact                                                                              0.2
 ```
 
-On the patched blast round-off grows on one patch as on two: the difference reaches 1e-3 by
-step 80 under either flux, and the relative maximum 0.2 to 0.4 by step 300, against the 2.7e-3
-to 9.6e-3 by which the `:ghost` and `:closure` patches differ from each other between steps 100
-and 400. On the tiles the difference stays at round-off under the closure rows and reaches 1e-2
-under `:ghost` within 200 steps (80 subcycled), so a limited `:ghost` level depends on its
-decomposition; setup keeps the closure rows unless `LIMITED_GHOST_INTERFACES` is set.
+The plateau core's mean rises by 0.24 and its spread grows, with the mass gained at the faces.
+Against the uniform run at the level's spacing, which the box matches closely, the tiles differ
+by 61% of their own error against the exact solution (the L1 column of the toggle table below).
 
 Closing the state filter at a node two same-level patches or two tiles share with conservative
 rows takes the filter passes' share of the tiled level's mass drift down to the box's; what
 remains of the drift under `:closure` enters through the right-hand side at the closure-row
-faces. The rows are the default (package commits `be418e3`, `5853b90` and `HASH`), the test
+faces. The rows are the default (package commits `be418e3`, `5853b90` and `b4388f9`), the test
 toggle `CONSERVATIVE_INTERFACE_FILTER` off restoring the identity row for the off columns below,
 and `_conservative_filter_rows` in src/kernels.jl describes them: the two
 faces beside the shared node take the explicit value g/σ of the filter's face flux, g the face
@@ -3095,8 +3181,8 @@ regridded box                  +1.88e-5  +2.93e-5               6647   15.6517  
 tiles of 8, sensor clamped     +1.05e-3                         6842   15.6924  50.6%    0.2035  +1.94e-4  −4.16e-6  4.832e-3
 tiles of 8, :ghost             +1.87e-5  +2.38e-5  6.396e-4     6636   15.6526  50.7%    0.2033  −2.45e-6  −3.33e-7  5.416e-4
 box, limited                   −5.18e-7  −4.58e-7  6.436e-4     9217   15.6672  50.8%    0.2032  −5.18e-7  −4.58e-7  6.436e-4
-tiles of 8, limited            +4.14e-4  +3.49e-4  1.741e-3     10497  15.6639  51.0%    0.2032  +6.05e-5  +5.51e-5  1.316e-3
-tiles of 8, limited, :ghost    +2.09e-4  +1.56e-4  7.479e-4     8846   15.6612  50.8%    0.2032  +6.78e-5  +6.62e-6  7.063e-4
+tiles of 8, limited            +4.15e-4  +3.49e-4  1.729e-3     10180  15.6637  51.1%    0.2032  +5.92e-5  +5.43e-5  1.315e-3
+tiles of 8, limited, :ghost    +2.09e-4  +1.56e-4  7.407e-4     8846   15.6612  50.8%    0.2032  +6.78e-5  +6.62e-6  7.063e-4
 tiles of 16, limited, :ghost   +1.18e-4  +8.78e-5  7.214e-4     9012   15.6647  50.9%    0.2032  +4.12e-5  +5.43e-6  7.678e-4
 ```
 
@@ -3109,7 +3195,7 @@ weights, which are not the composite quadrature's h and h/2; at an open `:ghost`
 
 On the planar Noh, before the shock reaches the level's outer face, the rows take the tiles'
 drift down by about an order of magnitude under `:closure`, limited or not. A smooth pulse at
-rest crossing the tile faces drifts by under a part in a billion either way:
+rest crossing the tile faces drifts by under two parts in a billion either way:
 
 ```
                                  planar Noh, drift at t = 0.5    smooth pulse, drift to t = 0.3
@@ -3117,8 +3203,8 @@ layout, change                   off        on                   off        on
 box                              −7.0e-6    −7.0e-6              +1.12e-10  +1.12e-10
 tiles of 8                       +3.9e-3    +4.1e-4              −1.91e-9   +1.29e-9
 tiles of 8, :ghost               +3.6e-5    −1.1e-5              +1.05e-10  +1.05e-10
-tiles of 8, limited              +9.1e-4    +1.2e-4
-tiles of 8, limited, :ghost      +3.0e-4    +8.7e-5
+tiles of 8, limited              +8.7e-4    +1.2e-4
+tiles of 8, limited, :ghost      +3.1e-4    +8.5e-5
 ```
 
 The conservative rows conserve the composite pass to round-off for every filter that takes rows,
@@ -3177,7 +3263,7 @@ tiles of 8                                      +1.83e-5     −2.56e-6
 
 Under the positivity limiter the rows leave no inadmissible point-step on any tiled row of the
 level tables, under either interface flux, and the Noh tiles' drift falls by a factor of six to
-eight under `:closure` and of three under `:ghost`. `part=levels` runs the rows with the limiter
+seven under `:closure` and of three under `:ghost`. `part=levels` runs the rows with the limiter
 on, `conservative=false` giving the off columns; the table gives steps and unguaranteed sides,
 and the Noh tiles' mass drift:
 
@@ -3188,25 +3274,26 @@ WC 200, regridded tiles of 8           1420, 0         1416, 0        1429, 0   
 WC 200, regridded tiles, subcycled     1440, 0         1413, 0        1459, 0       1437, 0
 blast 64², tiles of 8                  256, 1          256, 0         248, 1        249, 1
 blast 64², tiles of 8, subcycled       219, 0          216, 0         226, 2        227, 0
-Noh ν = 2, tiles of 8                  10094, 4        10497, 0       8890, 0       8846, 0
-Noh ν = 2, tiles of 8, subcycled       3265, 14        3362, 12       2904, 0       2899, 0
-Noh ν = 2, regridded tiles             10265, 34       10354, 64      9322, 38      9279, 0
-Noh ν = 2, regridded, subcycled        3403, 4         3412, 0        3106, 0       3069, 253
+Noh ν = 2, tiles of 8                  10221, 0        10180, 0       8881, 0       8846, 0
+Noh ν = 2, tiles of 8, subcycled       3217, 12        3422, 8        2903, 0       2897, 0
+Noh ν = 2, regridded tiles             10114, 28       10292, 18      9329, 38      9279, 0
+Noh ν = 2, regridded, subcycled        3420, 8         3447, 18       3139, 264     3075, 0
 r-z converging shock 33², tiles of 8   330, 31         329, 31        322, 32       323, 48
 the same, subcycled                    201, 50         201, 41        199, 36       199, 36
 the same, regridded tiles              334, 36         334, 35        326, 31       328, 35
 regridded tiles, subcycled             199, 39         199, 31        198, 44       199, 40
 
 Noh ν = 2, mass drift                  :closure, off   :closure, on   :ghost, off   :ghost, on
-tiles of 8                             +4.14e-4        +6.05e-5       +2.09e-4      +6.78e-5
-tiles of 8, subcycled                  +4.20e-4        +6.23e-5       +2.15e-4      +6.88e-5
-regridded tiles                        +4.66e-4        +7.33e-5       +2.32e-4      +7.59e-5
-regridded, subcycled                   +5.70e-4        +7.12e-5       +2.49e-4      +7.55e-5
+tiles of 8                             +4.15e-4        +5.92e-5       +2.09e-4      +6.78e-5
+tiles of 8, subcycled                  +4.25e-4        +6.32e-5       +2.16e-4      +6.90e-5
+regridded tiles                        +4.48e-4        +7.57e-5       +2.32e-4      +7.59e-5
+regridded, subcycled                   +5.59e-4        +9.07e-5       +2.35e-4      +7.73e-5
 ```
 
-The limited `:closure` tiles take a few percent more steps with the rows. The regridded, subcycled
-tiles under `:ghost` leave more unguaranteed sides with the rows than without, a count whose cause
-was not traced; the regridded box, which has no same-level face, is unchanged.
+With the rows the limited `:closure` tiles take within 6% of the steps they take without. The
+regridded, subcycled tiles under `:ghost` leave many more unguaranteed sides with the identity row
+than with the rows, a count whose cause was not traced; the regridded box, which has no
+same-level face, is unchanged.
 
 The rows depend neither on the rank count nor on the storage, and cost nothing measurable. With
 the toggle on, the time reached and the composite mass agree to 5e-15 relative between one, two,
