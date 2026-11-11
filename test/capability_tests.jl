@@ -170,7 +170,12 @@ include("capability_cases.jl")
                  "refined level supports IdealMixture, Nasa9Mixture and StiffenedGas",
                  "use interface_flux = :closure for this EOS"],
                 C.problem(eos=C.EOSES[5][2], transport=ConstantTransport(mu0=1e-3)),
-                Numerics(n_global=n1, amr=box))
+                Numerics(n_global=n1, amr=box, art=ArtificialProperties(enabled=false)))
+        # With the artificial properties on, the default, no coarse-fine face
+        # reads the gradient ring and the same level is accepted.
+        @test C.advances(C.problem(eos=C.EOSES[5][2],
+                                   transport=ConstantTransport(mu0=1e-3)),
+                         Numerics(n_global=n1, amr=box))
         rejects("polar_truncation applies to CylindricalMetric", sph,
                 Numerics(n_global=(16, 16, 1), polar_truncation=2.0))
         rejects("polar_truncation requires θ resolved and periodic over 2π",

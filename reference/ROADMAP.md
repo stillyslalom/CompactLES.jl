@@ -309,7 +309,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   The filter pass a parent takes beside a child measures its face relation
   relative to the middle face of the line, from the residual the pass
   drops, so the faces it limits do not depend on the decomposition (commit
-  `HASH2`).
+  `212559f`).
   The parent's shell falls back to the
   multilinear, linear-in-time interpolant of the parent wherever the
   Lagrange chain or the Hermite blend leaves a node inadmissible and the

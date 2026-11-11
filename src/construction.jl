@@ -787,16 +787,20 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 "interface_flux = :ghost (the default) requires an unstretched " *
                 "CartesianMetric, or CylindricalMetric with θ collapsed, at a patch " *
                 "or level interface; pass interface_flux = :closure on this grid"))
-        # A coarse-fine face's molecular ghost flux recovers the temperature
-        # gradient from the conserved ones through the internal energy, which
-        # `_temperature_gradient` inverts for the built-in models only.
-        nlev == 1 || !_ghost_viscous(interface_flux, transport) ||
+        # A coarse-fine face whose molecular ghost flux is read from the shell's
+        # gradient ring recovers the temperature gradient from the conserved
+        # ones through the internal energy, which `_temperature_gradient`
+        # inverts for the built-in models only. With the artificial properties
+        # on, no face reads the ring (`_gradient_ring_built`): the gradient
+        # plans difference the whole flux, its ghost layers at a coarse-fine
+        # face extrapolated from the interior, and any EOS runs.
+        nlev == 1 || !_gradient_ring_built(interface_flux, transport, art) ||
             _ghost_gradient_eos(eos) ||
             throw(ArgumentError(
                 "interface_flux = :ghost (the default) with molecular transport at " *
                 "a refined level supports IdealMixture, Nasa9Mixture and " *
-                "StiffenedGas; got $(typeof(eos)); use interface_flux = :closure " *
-                "for this EOS"))
+                "StiffenedGas when the artificial properties are off; got " *
+                "$(typeof(eos)); use interface_flux = :closure for this EOS"))
     end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or

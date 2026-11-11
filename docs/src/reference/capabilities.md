@@ -24,7 +24,7 @@ caveats.
 | [`IdealMixture`](@ref), any species count | yes | yes | yes | yes |
 | [`StiffenedGas`](@ref), one species | yes | yes | yes | yes |
 | [`Nasa9Mixture`](@ref), any species count | yes | yes | yes | yes |
-| a user subtype of [`EOS`](@ref) | yes | see below | constructed at the run's type | yes; a refined level with molecular transport takes `patch_interfaces = :closure` |
+| a user subtype of [`EOS`](@ref) | yes | see below | constructed at the run's type | yes; a refined level with molecular transport and the artificial properties off takes `patch_interfaces = :closure` |
 
 `Execution(storage = Float32)` in [`Numerics`](@ref), or an array type with a
 `Float32` element type, converts the built-in equations of
@@ -185,7 +185,7 @@ text below.
 | `rebalance` without a tiled, regridded level | `rebalance repartitions a tiled level at the regrid cadence` |
 | `interface_flux = :ghost`, the default, at an interface of a spherical, resolved-θ cylindrical or stretched grid | `interface_flux = :ghost (the default) requires an unstretched CartesianMetric, or CylindricalMetric with θ collapsed, at a patch or level interface` |
 | `interface_flux = :ghost`, the default, with `interface_rhs = :onesided` | `interface_flux = :ghost (the default) reads the gradient plans' interface rows, which exist under interface_rhs = :extended only` |
-| `interface_flux = :ghost`, the default, with molecular transport at a refined level and a user EOS | `interface_flux = :ghost (the default) with molecular transport at a refined level supports IdealMixture, Nasa9Mixture and StiffenedGas` |
+| `interface_flux = :ghost`, the default, with molecular transport at a refined level, the artificial properties off and a user EOS | `interface_flux = :ghost (the default) with molecular transport at a refined level supports IdealMixture, Nasa9Mixture and StiffenedGas` |
 | `polar_truncation` on a spherical or Cartesian metric | `polar_truncation applies to CylindricalMetric` |
 | `polar_truncation` with θ collapsed or not over 2π | `polar_truncation requires θ resolved and periodic over 2π` |
 | `polar_truncation` with a stretched radius | `polar_truncation requires an unstretched radial dimension` |

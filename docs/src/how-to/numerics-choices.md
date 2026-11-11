@@ -153,7 +153,7 @@ Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
   an `ArgumentError` naming `interface_flux = :closure`: a patch or level
   interface on a stretched grid, a cylindrical grid with θ resolved or a
   spherical grid, `rhs = :onesided`, and a user equation of state at a
-  refined level with molecular transport;
+  refined level with molecular transport and the artificial properties off;
 - runs where the step cost matters more than the interface error. The ghost
   fluxes add about 17% to the step of two same-level patches without
   molecular transport and 17 to 53% with it, the most on a refined level of

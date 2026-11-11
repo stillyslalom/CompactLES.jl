@@ -283,6 +283,16 @@ include("capability_cases.jl")
                    (; amr=AMR(initial=feature, regrid_interval=1)))
             @test C.advances(C.problem(; eos, ic), Numerics(; n_global=(48, 1, 1), kw...))
         end
+        # A user EOS at a refined level with molecular transport: under the
+        # default ghost fluxes with the artificial properties on, and under the
+        # closure rows with them off.
+        viscous_user = C.problem(eos=C.EOSES[5][2], transport=ConstantTransport(mu0=1e-3))
+        refined = AMR(initial=feature, regrid_interval=1)
+        @test C.advances(viscous_user, Numerics(n_global=(48, 1, 1), amr=refined))
+        @test C.advances(viscous_user,
+                         Numerics(n_global=(48, 1, 1), amr=refined,
+                                  patch_interfaces=:closure,
+                                  art=ArtificialProperties(enabled=false)))
         # Slabs on a cylindrical annulus and along a uniform dimension of a
         # stretched grid, which take the closure rows; the ghost-flux
         # interface, the default, on slabs and on a viscous level.

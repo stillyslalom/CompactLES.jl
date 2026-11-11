@@ -827,8 +827,8 @@ and `interface_divergence`.
   to the step without lowering the error, and wherever `:ghost` is not
   supported: a stretched grid, a cylindrical grid with θ resolved, a
   spherical grid, `rhs = :onesided`, or a user EOS at a refined level with
-  molecular transport, each of which setup rejects under `:ghost` with an
-  `ArgumentError`. Under
+  molecular transport and the artificial properties off, each of which setup
+  rejects under `:ghost` with an `ArgumentError`. Under
   `Numerics(positivity_limiter = true)` setup takes `:closure` in place of
   `:ghost` and warns. See
   [Choose numerics](@ref).
