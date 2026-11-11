@@ -31,6 +31,8 @@
 #      couples no ghost unknown (`interface_closures` in kernels.jl); whether
 #      their right-hand sides read the exchanged ghosts (`:extended`) or stay
 #      one-sided (`:onesided`) is the Solver's `interface_rhs` setting. The
+#      state filter takes `_filter_interface_rows` there, two rows under which
+#      the composite pass conserves (kernels.jl). The
 #      flux divergence through the face follows `interface_flux`. Under
 #      `:ghost`, the default, the inviscid flux is evaluated on the exchanged
 #      ghost state and differenced through the face with the gradient plans'

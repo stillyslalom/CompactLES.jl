@@ -18,7 +18,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=pnoh81tiles,pnoh81regrid
 #   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tiledrift
-#   julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=true
+#   julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=false
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,noh81tiles flux=ghost
 #
 # The collocated compact divergence on a closed line is a difference of face
@@ -150,9 +150,9 @@
 #             and a smooth pulse at rest on the cylindrical line under each
 #             variant of `pulse`. Not in `part=all`
 #
-# `conservative=true` sets `CONSERVATIVE_INTERFACE_FILTER` for every part: the
-# filter closes each same-level interface with its conservative rows, and
-# a limited pass holds the node two patches share.
+# `conservative=false` clears `CONSERVATIVE_INTERFACE_FILTER` for every part:
+# the filter closes each same-level interface with the identity row in place
+# of its conservative rows, the reference those rows are measured against.
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -1694,7 +1694,7 @@ function main(args)
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
                                 patches="1", levels="wc,wcsub,noh43", a19n=64,
-                                flux="closure", ledger=false, conservative=false,
+                                flux="closure", ledger=false, conservative=true,
                                 drift="uniform,box,tiles8,tiles16,tiles80,box-sub," *
                                       "tiles8-sub,regrid8,tiles8-ghost,box-ghost," *
                                       "tiles8-noreflux,tiles8-clamp,tiles8-nofilter," *
@@ -1734,8 +1734,8 @@ function main(args)
     end
     variants = variant_flags.(split(opt.variants, ','))
     # A limited run keeps :ghost at its interfaces only under the toggle;
-    # `conservative=true` closes the filter at every interface with the
-    # conservative rows (`CONSERVATIVE_INTERFACE_FILTER`).
+    # `conservative=false` closes the filter at a same-level interface with the
+    # identity row (`CONSERVATIVE_INTERFACE_FILTER`).
     saved = (CL.LIMITED_GHOST_INTERFACES[], CL.CONSERVATIVE_INTERFACE_FILTER[])
     CL.LIMITED_GHOST_INTERFACES[] = FLUX[] === :ghost
     CL.CONSERVATIVE_INTERFACE_FILTER[] = opt.conservative

@@ -2631,10 +2631,10 @@ julia --project=. -t 1 bench/positivity.jl part=levels flux=ghost levels=a19,a19
 julia --project=. -t 1 bench/positivity.jl part=levelcost flux=ghost levels=wc,wcsub,noh85,tiles,a19
 julia --project=. -t 1 bench/positivity.jl part=tilecost flux=ghost levels=a19,a19tiles a19n=33 reps=3
 julia --project=. -t 1 bench/positivity.jl part=tiledrift
-julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=true
+julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=false
 julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true drift=regridbox pulse= planar=
-julia --project=. -t 1 bench/positivity.jl part=levels conservative=true levels=wcregrid,tiles,tilessub,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
-julia --project=. -t 1 bench/positivity.jl part=levels conservative=true levels=a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/positivity.jl part=levels conservative=false levels=wcregrid,tiles,tilessub,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/positivity.jl part=levels conservative=false levels=a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
 julia --project=. -t 1 bench/filter_conservation.jl parts=shared N=48
 ```
 
@@ -3065,8 +3065,9 @@ decomposition; setup keeps the closure rows unless `LIMITED_GHOST_INTERFACES` is
 Closing the state filter at a node two same-level patches or two tiles share with conservative
 rows takes the filter passes' share of the tiled level's mass drift down to the box's; what
 remains of the drift under `:closure` enters through the right-hand side at the closure-row
-faces. The rows sit behind the test toggle `CONSERVATIVE_INTERFACE_FILTER` (package commits
-`be418e3` and `HASH`), and `_conservative_filter_rows` in src/kernels.jl describes them: the two
+faces. The rows are the default (package commits `be418e3`, `5853b90` and `HASH`), the test
+toggle `CONSERVATIVE_INTERFACE_FILTER` off restoring the identity row for the off columns below,
+and `_conservative_filter_rows` in src/kernels.jl describes them: the two
 faces beside the shared node take the explicit value g/σ of the filter's face flux, g the face
 stencil of the residual B − A and σ the left-hand side's row sum, so that a patch's corrections
 telescope to the same face value on both sides. A coarse-fine end keeps the identity row, its node
@@ -3074,9 +3075,9 @@ overwritten by the shell. A limited filter pass holds the shared node, its end f
 beside it in one part with one θ, which the exchange of a same-level interface makes the same on
 both patches.
 
-With the toggle off the runs reproduce the base bit for bit, and the toggle leaves a level with no
-same-level face bit for bit as it is: boxes at the global step and subcycled, limited and
-unlimited, under either flux, regridded, on the host and under the KernelAbstractions CPU backend.
+The rows leave a level with no same-level face bit for bit as it is: boxes at the global step and
+subcycled, limited and unlimited, under either flux, regridded, on the host and under the
+KernelAbstractions CPU backend.
 The table gives the cylindrical Noh's mass drift against the exact mass, the filter
 passes' share of it from the ledger, and the L1 density difference from the uniform run at the
 level's spacing over the level's region:
@@ -3176,8 +3177,9 @@ tiles of 8                                      +1.83e-5     −2.56e-6
 
 Under the positivity limiter the rows leave no inadmissible point-step on any tiled row of the
 level tables, under either interface flux, and the Noh tiles' drift falls by a factor of six to
-eight under `:closure` and of three under `:ghost`. `part=levels conservative=true` runs the rows
-with the limiter on; the table gives steps and unguaranteed sides, and the Noh tiles' mass drift:
+eight under `:closure` and of three under `:ghost`. `part=levels` runs the rows with the limiter
+on, `conservative=false` giving the off columns; the table gives steps and unguaranteed sides,
+and the Noh tiles' mass drift:
 
 ```
 case                                   :closure, off   :closure, on   :ghost, off   :ghost, on
@@ -3558,14 +3560,14 @@ ends are interfaces), interface window, t = 0.5:
 ```
                                    N=48        96          192         orders          l2 orders
 k=3, C6, unfiltered                5.682e-4    1.653e-5    6.315e-7    5.10 / 4.71     5.21 / 4.61
-k=3, C6, cascade filter            2.997e-4    1.330e-5    3.698e-7    4.49 / 5.17     5.02 / 4.80
+k=3, C6, cascade filter            2.677e-4    1.109e-5    4.201e-7    4.59 / 4.72     4.99 / 4.75
 k=3, C6 BL, unfiltered             1.381e-4    1.394e-6    1.119e-8    6.63 / 6.96     6.92 / 7.34
-k=3, C6 BL, cascade filter         1.771e-4    2.534e-6    2.334e-8    6.13 / 6.76     6.52 / 7.24
+k=3, C6 BL, cascade filter         1.472e-4    1.883e-6    1.945e-8    6.29 / 6.60     6.74 / 7.13
 k=3, C10, unfiltered               5.800e-4    1.639e-5    5.941e-7    5.14 / 4.79     5.13 / 4.65
 k=1, C6, unfiltered                8.105e-7    9.544e-8    8.262e-9    3.09 / 3.53     4.00 / 4.32
-k=1, C6, cascade filter            1.077e-6    4.235e-8    3.553e-9    4.67 / 3.58     4.73 / 4.58
+k=1, C6, cascade filter            8.731e-7    4.501e-8    3.799e-9    4.28 / 3.57     4.52 / 4.50
 k=1, C6 BL, unfiltered             7.105e-8    7.909e-10   8.611e-12   6.49 / 6.52     6.95 / 7.03
-k=1, C6 BL, cascade filter         1.141e-7    1.744e-9    1.700e-11   6.03 / 6.68     6.59 / 7.11
+k=1, C6 BL, cascade filter         9.362e-8    1.343e-9    1.502e-11   6.12 / 6.48     6.80 / 7.02
 k=1, C10, unfiltered               8.173e-7    9.800e-8    8.523e-9    3.06 / 3.52     4.04 / 4.35
 ```
 
@@ -7025,7 +7027,7 @@ mass-fraction excursion outside [0, 1] seen at any sample.
 | layout | root steps | max drift | species excursion |
 |---|---|---|---|
 | uniform | 1184 | 5e-14 (round-off) | 0 |
-| two same-level patches | 1185 | 1.5e-9 | 2.6e-4 |
+| two same-level patches | 1187 | 5.5e-10 | 3.4e-4 |
 | two levels, global step | 3532 | 7.1e-7 | 0 |
 | two levels, subcycled | 1184 | 4.9e-7 | 0 |
 | three levels, global step | 10568 | 8.5e-7 | 3.6e-4 |
@@ -7130,14 +7132,14 @@ columns are the sample of largest drift and the end of the run.
 | three levels, global step | −5.94e-7 | −1.79e-7 | | |
 | three levels, subcycled | −3.63e-7 | −4.05e-8 | | |
 
-Without a coarse-fine junction the filter carries the larger share. Under
-moving refinement the right-hand side's part, all of it mismatch under the
+Without a coarse-fine junction the filter's share is round-off, and the drift
+of the same-level patches is the right-hand side's. Under moving refinement the right-hand side's part, all of it mismatch under the
 global step, outweighs the sum of the regrid jumps.
 
 | species 1 | right-hand side | filter | same-level averaging | regrid jumps, summed |
 |---|---|---|---|---|
 | uniform | 3e-15 | 5e-14 | | |
-| two same-level patches | 5.6e-10 | 9.0e-10 | 1e-16 | |
+| two same-level patches | 5.5e-10 | 2.7e-14 | 2e-15 | |
 | moving refinement, global step | +1.38e-5 | +8.9e-7 | | +1.0e-6 |
 | moving refinement, subcycled | +5.9e-6 | +3.0e-6 | | +1.65e-6 |
 
@@ -7327,7 +7329,7 @@ base row       C6, subcycled, one tile, filter_cfl = 0.35, the default rows,
                ghost taps, interface_flux = :closure
 ```
 
-Each other row changes one setting. Package at `743fdb4b`, Julia 1.13.3, from
+Each other row changes one setting. Package at `HASH`, Julia 1.13.3, from
 `julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
 transcript is `bench/results/interfacesensor.txt`. The noise is the momentum
 ahead of the shock at t = 0.1 and x > 0.85, the level suite's gate quantity,
@@ -7344,13 +7346,13 @@ fine spacing over those nodes.
 | clamped taps | 5.1e-12 | 0.061 | 0.040 | 7.6e-5 | 2.4e-2 | 9.8e-3 |
 | C10 | 1.5e-10 | 0.067 | 0.043 | 2.0e-4 | 3.6e-2 | 1.2e-2 |
 | global step | 6.7e-12 | 0.062 | 0.038 | 1.6e-4 | 1.9e-2 | 1.0e-2 |
-| tile 8 | 5.2e-12 | 0.061 | 0.035 | 7.7e-5 | 4.4e-1 | 7.5e-2 |
+| tile 8 | 5.1e-12 | 0.061 | 0.040 | 7.7e-5 | 4.5e-1 | 7.5e-2 |
 | three levels | 5.0e-12 | 0.061 | 0.039 | 7.3e-5 | 3.4e-2 | 9.7e-3 |
 | `filter_cfl = 0` | 7.4e-12 | 0.054 | 0.033 | 1.7e-4 | 2.6e-2 | 9.1e-3 |
 | `:cascade4` rows | 4.9e-12 | 0.061 | 0.040 | 9.7e-5 | 2.3e-2 | 8.4e-3 |
 | `:brady_livescu` rows | 5.0e-12 | 0.061 | 0.040 | 4.6e-5 | 5.8e-2 | 7.8e-3 |
 | artificial properties off | 2.6e-12 | 0.090 | 0.054 | 0 | 0 | 3.3e-3 |
-| three same-level patches | 3.6e-10 | 0.062 | 0.041 | 1.8e-5 | 4.5e-1 | 7.4e-2 |
+| three same-level patches | 2.6e-10 | 0.062 | 0.041 | 6.9e-6 | 4.3e-1 | 7.5e-2 |
 | two species, ghost taps | 5.3e-12 | 0.084 | 0.036 | 2.1e-4 | 3.0e-2 | 9.3e-3 |
 | two species, clamped taps | 5.3e-12 | 0.084 | 0.036 | 2.0e-4 | 1.0e-1 | 9.3e-3 |
 
@@ -7554,7 +7556,7 @@ RHS on exact data, 2 levels, k=3            1.849e-6  3.03 / 3.02  1.815e-8  4.2
 two patches, entropy k=3                    6.315e-7  5.10 / 4.71  2.716e-7  5.23 / 5.02  1.119e-8  6.63 / 6.96
 two patches, entropy k=1                    8.262e-9  3.09 / 3.53  1.078e-9  5.64 / 4.97  8.611e-12 6.49 / 6.52
 two patches, standing wave                  1.949e-8  3.41 / 3.87  6.000e-9  5.45 / 2.39  4.504e-11 5.77 / 5.82
-two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  9.671e-9  4.32 / 2.00  4.196e-11 5.97 / 5.45
+two patches, standing wave, filtered        1.162e-8  3.61 / 3.85  1.183e-8  5.42 / time  5.129e-11 5.49 / 5.52
 2 levels, entropy k=3                       9.408e-8  3.41 / 3.83  4.428e-10 5.71 / 3.92  6.401e-11 6.02 / 6.01
 2 levels subcycled, entropy k=3             9.198e-8  3.43 / 3.84  4.475e-10 5.74 / 3.88  6.480e-11 6.02 / 5.99
 3 levels, entropy k=3                       7.407e-8  3.50 / 3.89  4.481e-10 5.72 / 3.89  6.391e-11 6.02 / 6.01
@@ -7564,7 +7566,7 @@ two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  9.671e-9  4.3
 2 levels, entropy k=1                       7.380e-10 3.37 / 3.76  8.036e-12 4.31 / 4.93  5.174e-14 5.33 / time
 2 levels, standing wave                     1.030e-9  3.37 / 3.47  9.571e-12 4.76 / 4.59  4.998e-13 5.13 / 5.11
 walls and an interface, two patches         4.234e-10 5.04 / 5.66  1.322e-7  2.38 / 1.20  2.375e-9  4.56 / 5.19
-walls and an interface, filtered            1.860e-10 4.26 / 4.86  9.169e-8  2.72 / −3.01 1.211e-10 5.20 / 4.03
+walls and an interface, filtered            1.804e-10 4.41 / 4.88  1.056e-7  2.52 / −2.88 1.217e-10 5.21 / 4.00
 viscous, two patches, extended gradients    2.469e-8  3.62 / 3.87  1.419e-9  4.87 / 4.99  6.850e-11 4.92 / 5.66
 viscous, two patches, one-sided gradients   2.470e-6  1.91 / 0.91  4.788e-6  0.49 / 0.23  4.770e-6  0.84 / 0.16
 viscous, 2 levels, extended gradients       8.597e-10 3.61 / 3.65  7.309e-12 4.85 / 4.75  3.511e-13 5.57 / 5.34
@@ -7625,7 +7627,7 @@ longer serve as a workaround for a discontinuity on a shared plane.
 
 **Conservation.** The nests and the regrid histories agree across the three sources to the
 second digit, all within the budget. At a same-level face the Brady–Livescu rows drift least
-and raise the largest mass-fraction excursion thirteenfold. The case is the layer of
+and leave no mass-fraction excursion, and `:cascade4` drifts most. The case is the layer of
 [the conservation instrument](#benchinterfaceconservationjl-composite-conservation-budgets)
 on that section's grid to t = 8.
 
@@ -7637,15 +7639,15 @@ on that section's grid to t = 8.
 
 | same-level layout, layer to t = 8 | default | `:cascade4` | Brady–Livescu |
 |---|---|---|---|
-| drift | 5.2e-10 | 5.9e-10 | 9.8e-11 |
-| largest mass-fraction excursion | 3.1e-5 | 2.2e-4 | 4.0e-4 |
+| drift | 2.9e-10 | 3.3e-9 | 1.5e-11 |
+| largest mass-fraction excursion | 1.6e-4 | 1.6e-3 | 0 |
 
 **Decision.** The default stays. `:cascade4` is rejected: the undamped mode it carries at an
 inviscid wall appears at an interface on the standing wave and grows between walls and an
 interface. The Brady–Livescu rows reach about sixth order on the entropy waves at every
 interface, but 5.1 on the acoustic standing wave at a coarse-fine face, their formal fifth
 order, below the 5.5 target. They halve the minimum pressure of a shock crossing a
-same-level face and raise the same-level mass-fraction excursion thirteenfold. The option
+same-level face. The option
 stays experimental, a Float64 smooth-flow setting.
 
 ### bench/boundaryorder.jl gflux: the divergence through interface ends from ghost fluxes
@@ -7676,7 +7678,7 @@ interface window's error equals the interior's, and at a coarse-fine face every 
 or leads the Brady–Livescu (BL) rows. The polynomial row, `polynomial_case(96)` with every
 inviscid flux component of degree at most five, is differenced to round-off in the interface
 window by the ghost path alone. The closure-row and BL columns are those of the section
-above, which this study reproduces to every digit. Package at `743fdb4b`, Julia 1.13.3; the
+above, which this study reproduces to every digit. Package at `HASH`, Julia 1.13.3; the
 transcript of the first command is `bench/results/boundaryorder.txt`.
 
 ```text
@@ -7694,7 +7696,7 @@ RHS on exact data, 2 levels, k=3            1.849e-6  3.03 / 3.02  2.435e-9  5.0
 two patches, entropy k=3                    6.315e-7  5.10 / 4.71  1.119e-8  6.63 / 6.96  1.416e-10 6.75 / 6.78
 two patches, entropy k=1                    8.262e-9  3.09 / 3.53  8.611e-12 6.49 / 6.52  6.950e-14 6.88 / 6.70
 two patches, standing wave                  1.949e-8  3.41 / 3.87  4.504e-11 5.77 / 5.82  4.308e-12 5.44 / time
-two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  4.196e-11 5.97 / 5.45  4.516e-12 5.35 / time
+two patches, standing wave, filtered        1.162e-8  3.61 / 3.85  5.129e-11 5.49 / 5.52  4.440e-12 5.34 / time
 2 levels, entropy k=3                       9.408e-8  3.41 / 3.83  6.401e-11 6.02 / 6.01  6.380e-11 6.02 / 6.01
 2 levels subcycled, entropy k=3             9.198e-8  3.43 / 3.84  6.480e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
 3 levels, entropy k=3                       7.407e-8  3.50 / 3.89  6.391e-11 6.02 / 6.01  6.379e-11 6.02 / 6.01
@@ -7705,7 +7707,7 @@ two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  4.196e-11 5.9
 2 levels, standing wave                     1.030e-9  3.37 / 3.47  4.998e-13 5.13 / 5.11  1.666e-13 6.12 / 5.94
 2 levels subcycled, standing wave           9.640e-10 3.37 / 3.47  1.519e-11 4.70 / time  1.938e-11 4.84 / time
 walls and an interface, two patches         4.234e-10 5.04 / 5.66  2.375e-9  4.56 / 5.19  1.525e-10 4.27 / 4.98
-walls and an interface, filtered            1.860e-10 4.26 / 4.86  1.211e-10 5.20 / 4.03  1.316e-10 4.89 / 4.12
+walls and an interface, filtered            1.804e-10 4.41 / 4.88  1.217e-10 5.21 / 4.00  1.317e-10 4.90 / 4.12
 viscous, two patches                        2.469e-8  3.62 / 3.87  6.850e-11 4.92 / 5.66  3.164e-13 6.75 / 6.43
 viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.57 / 5.34  1.070e-13 6.29 / 6.04
 viscous, 2 levels subcycled                 8.529e-10 3.61 / 3.64  3.400e-13 5.53 / 5.39  1.057e-13 6.28 / 6.06
@@ -7763,7 +7765,7 @@ two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049
 under both, and they complete the run with the diaphragm on a shared plane, which fails under
 the closure rows. The case is the Sod crossing, root N = 201, `cfl = 0.4`, the artificial
 properties and the filter live, inviscid, at the ghost path's default order 8. Package at
-`743fdb4b`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
+`HASH`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
 `bench/results/interfacesensor.txt`. Shell and root are the density errors against the
 uniform run at the fine spacing at t = 0.2, p_min the smallest pressure on any step. In the
 default ghost column the remainder goes through the gradient rows (the transcript's
@@ -7776,11 +7778,11 @@ one-sided rows, both toggles off (the transcript's `gflux` rows):
 | global dt: steps, p_min, shell | — | 708, 0.0382, 9.1e-3 | 707, 0.0382, 8.7e-3 |
 | three levels: p_min, shell | — | 0.0348, 8.9e-3 | 0.0348, 7.9e-3 |
 | three levels global dt: p_min, shell | 0.0253, 7.4e-3 | 0.0253, 7.9e-3 | 0.0253, 7.7e-3 |
-| tile 8: p_min, shell | — | 0.0405, 7.6e-2 | 0.0391, 7.6e-2 |
-| three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.8e-2 | 0.0412, 7.9e-2, 2.7e-2 |
-| diaphragm on the shared plane | negative density, step 2 | completes: 303 steps, p_min 0.072, shell 1.0e-2, root 1.0e-1 | completes: 305 steps, p_min 0.080, shell 8.3e-3, root 8.6e-2 |
+| tile 8: p_min, shell | — | 0.0405, 7.6e-2 | 0.0387, 7.6e-2 |
+| three patches: p_min, shell, root | 0.0412, 7.5e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.9e-2 | 0.0412, 7.9e-2, 2.7e-2 |
+| diaphragm on the shared plane | negative density, step 2 | completes: 304 steps, p_min 0.075, shell 1.1e-2, root 9.6e-2 | completes: 306 steps, p_min 0.088, shell 1.0e-2, root 8.2e-2 |
 | the same, one-sided gradient workaround | completes: p_min 0.097, shell 4.6e-2, root 2.35e-1 | | |
-| the same, art off (the toggles inert) | — | negative density, step 20 | negative density, step 20 |
+| the same, art off (the toggles inert) | — | completes: 236 steps, p_min 0.053, shell 2.9e-2, root 8.9e-2 | the same |
 | two species: shell Y excursion, elsewhere | — | 1.1e-9, 1.6e-4 | 1.3e-9, 1.6e-4 |
 
 The reversed tube reproduces every printed digit of the forward ghost rows under either
@@ -7817,15 +7819,15 @@ being the default:
 | diaphragm | path | 20 steps: flagged, min ρ/ρ0, L1(ρ) | t = 0.12: flagged, min ρ/ρ0, L1(ρ) |
 |---|---|---|---|
 | none (uniform, fine spacing) | — | 173, 0.671, — | 890, 0.671, — |
-| on the tile plane | ghost | 164, 0.697, 2.85e-3 | 2006, 0.697, 2.33e-3 |
-| | closure | 122, 0.934, 9.20e-4 | 1727, 0.762, 2.52e-3 |
+| on the tile plane | ghost | 150, 0.745, 3.31e-3 | 1965, 0.745, 2.35e-3 |
+| | closure | 114, 0.970, 1.35e-3 | 1708, 0.762, 2.81e-3 |
 | | ghost, BL remainder rows | negative density, step 3 | — |
-| | ghost, gradient-row remainder | 152, 0.942, 2.61e-3 | 1906, 0.760, 2.72e-3 |
-| | the same, coarse-fine ends extrapolated | 152, 0.942, 2.61e-3 | 1899, 0.760, 2.70e-3 |
-| mid-tile | ghost | 144, 0.671, 4.96e-5 | 2270, 0.671, 6.02e-4 |
-| | closure | 151, 0.671, 8.04e-5 | 2350, 0.671, 1.42e-3 |
-| | ghost, gradient-row remainder | 144, 0.671, 4.96e-5 | 2232, 0.671, 6.25e-4 |
-| | the same, coarse-fine ends extrapolated | 144, 0.671, 4.96e-5 | 2236, 0.671, 5.73e-4 |
+| | ghost, gradient-row remainder | 165, 0.988, 2.91e-3 | 1926, 0.760, 3.00e-3 |
+| | the same, coarse-fine ends extrapolated | 165, 0.988, 2.91e-3 | 1922, 0.760, 3.02e-3 |
+| mid-tile | ghost | 145, 0.671, 6.36e-5 | 2246, 0.671, 6.03e-4 |
+| | closure | 156, 0.671, 9.58e-5 | 2300, 0.671, 1.44e-3 |
+| | ghost, gradient-row remainder | 145, 0.671, 6.36e-5 | 2210, 0.671, 6.13e-4 |
+| | the same, coarse-fine ends extrapolated | 145, 0.671, 6.36e-5 | 2226, 0.671, 5.73e-4 |
 | on a coarse-fine face | ghost | 176, 0.556, 9.93e-3 | 2903, 0.556, 1.39e-2 |
 | | closure | 106, 0.556, 8.20e-3 | 2804, 0.556, 1.46e-2 |
 | | ghost, remainder, coarse-fine ends extrapolated | 173, 0.556, 9.67e-3 | 2893, 0.556, 1.40e-2 |
@@ -7897,10 +7899,10 @@ the transcript above, np = 1, at t = 0.2. On the untiled nests the shell error f
 | base | root | 2.768e-2 | 2.761e-2 |
 | three levels | shell | 8.90e-3 | 7.88e-3 |
 | global step | shell | 9.07e-3 | 8.66e-3 |
-| tile 8 | level-1 error (`fine` column) | 9.70e-3 | 9.07e-3 |
-| two patches | shell | 1.02e-2 | 8.25e-3 |
-| two patches | root | 1.00e-1 | 8.60e-2 |
-| three patches | shell | 7.95e-2 | 7.87e-2 |
+| tile 8 | level-1 error (`fine` column) | 9.76e-3 | 9.04e-3 |
+| two patches | shell | 1.05e-2 | 1.01e-2 |
+| two patches | root | 9.55e-2 | 8.19e-2 |
+| three patches | shell | 7.95e-2 | 7.86e-2 |
 
 On `test/validation.jl`'s Noh with a level at the axis and the coarse-fine correction on, the
 toggles leave the run holding the shock unchanged in plateau and mass drift. The run passing
@@ -7922,8 +7924,8 @@ the third digit. The case is the layer on that section's grid to t = 8, inviscid
 
 | layer to t = 8 | ghost, inviscid | closure, inviscid | ghost, `mu=1e-3` | closure, `mu=1e-3` |
 |---|---|---|---|---|
-| same-level drift | 6.2e-13 | 5.2e-10 | 5.3e-13 | 2.2e-10 |
-| same-level mass-fraction excursion | 0 | 3.1e-5 | none outside [0, 1] | |
+| same-level drift | 3.9e-13 | 2.9e-10 | 3.9e-13 | 2.8e-10 |
+| same-level mass-fraction excursion | 0 | 1.6e-4 | 0 | 6.0e-5 |
 | nest drift | | | 6.75e-5 to 6.92e-5 | 6.76e-5 to 6.93e-5 |
 | regrid histories, summed | | | 2.24e-4 | 2.24e-4 |
 
@@ -8502,8 +8504,8 @@ the only monotone choice.
 ### test/patch_tests.jl: same-level patch interfaces
 
 `julia --project=. test/runtests.jl` (the patch testsets). The rows under the
-default ghost fluxes, the viscous rows and the drift are the testsets' output
-at `743fdb4b` under Julia 1.13.3. The two rows reading "the same under
+default ghost fluxes and the viscous rows are the testsets' output at
+`743fdb4b` under Julia 1.13.3, and the drift is at `HASH`. The two rows reading "the same under
 `:closure`" are the closure-row figures the test file records and no longer
 runs (the C6 entropy orders are the `gflux` table's), and the row of the
 ninth-degree polynomial is `test/serial_suite.jl`'s.
@@ -8528,7 +8530,7 @@ interface, since the bit-exact oracle does not survive it.
 | viscous errors at 48 / 96 / 192 | 6.1e-5, 3.0e-6, 1.9e-7 | 6.0e-5, 4.0e-6, 2.6e-7 |
 | the same with `:onesided` | 1.92 / 1.97 (1.3e-4, 3.4e-5, 8.6e-6) | 2.14 / 1.93 (1.4e-4, 3.1e-5, 8.2e-6) |
 | degree-9 polynomial through both closed ends | — | 2e-12, against 1e-4 for the cascade rows |
-| conservation drift, long periodic run | 1.6e-11 relative (single patch 4.2e-15) | — |
+| conservation drift, long periodic run | 1.2e-11 relative (single patch 4.2e-15) | — |
 
 Rank partitioning reproduces the serial two-patch answer bitwise at one rank
 per patch. Once a patch itself decomposes, the agreement is round-off, with
@@ -8617,14 +8619,14 @@ tiled regrid reproduces the Sod gate.
 | Shu–Osher, L1 | | | 6.7× | | |
 
 **Three regridded levels.** Three subcycled levels put the composite density
-error at the root stations sixteen times below the root's alone, on a shock
+error at the root stations a hundred times below the root's alone, on a shock
 driven through a contact into heavy gas. Decomposed runs at two, four and
 eight ranks match the serial tile sets and density to 1e-14 to 7e-13.
 
 | run: shock from x = 0.25 through a contact at x = 0.5, densities 1 / 0.125 / 0.5, N = 81, tile 8, subcycled, CFL 0.2, t = 0.25 | density L1 error at the root stations, against a 721-node uniform reference |
 |---|---|
-| `max_levels = 3` | 1.44e-3 |
-| root alone | 2.37e-2 |
+| `max_levels = 3` | 2.18e-4 |
+| root alone | 2.36e-2 |
 
 With the first discontinuity moved to x = 0.3 the case fails at its first
 step at the table's CFL number, at two levels as at three, and runs at
@@ -9744,15 +9746,14 @@ beyond each bubble's radius, helium / SF6 / krypton.
 
 **Regrid churn.** The mask of the covered nodes' residual quiets the tag
 history: tiles beside a survivor are created later, and the leading tile is
-no longer dropped and re-created. The MPI suite's deep regrid therefore runs
-the plain pass, since under the mask no tile of its second level changes
-owner.
+no longer dropped and re-created. The MPI suite's deep regrid runs the masked
+pass, under which a tile of its second level still changes owner.
 
 | case | plain pass | mask |
 |---|---|---|
 | tiled Sod fixture of the level tests (201 nodes, tiles of 8, checks every 5 steps): first check to create a tile beside a survivor | after step 8 | after step 65 |
 | tiled run whose first tiles a Dirichlet inflow's shock creates | the leading tile dropped and re-created four times in 160 steps (at `d5fd609`) | a tile added at the checks after steps 20, 40, 95, 140 and 185, none dropped |
-| MPI suite's deep regrid (121-node Sod tube, tiles of 4, three levels, np = 8): second-level tiles changing owner within 240 steps | | none |
+| MPI suite's deep regrid (121-node Sod tube, diaphragm at x = 0.35, tiles of 4, three levels, np = 8): checks within 240 steps at which a second-level tile changes owner | 5 | 2 |
 | refined Advected bubbles tutorial, single runs: wall, tiles at the end | 40 s, 25 | 35 s, 23 |
 
 ### bench/levelpattern.jl: the grid-scale pattern of a refined level

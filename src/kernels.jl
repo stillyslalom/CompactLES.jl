@@ -479,13 +479,16 @@ end
 Closure rows for a patch-interface end of `scheme`, per the extended-data
 convention above. For a derivative the single replacement row is an explicit
 central difference of order `2(M+1)` (the interior formal order) whose stencil
-reads `M+1` ghost points; for a filter it is the identity, leaving the shared
-interface-plane node to the post-stage averaging; and a scheme that is explicit
-throughout (`gaussian_filter`) needs no closure at all, since the interior
-stencil reads the exchanged ghosts. `plan_direction` verifies the ghost reach
-against the halo width. A [`BandedCompactScheme`](@ref) takes `q` compact
-rows per end, one per left-hand-side band that would reach a ghost unknown;
-see the method in `kernels_banded.jl`.
+reads `M+1` ghost points; for a symmetric scheme it is the identity on the end
+node, the row the sensor smoother takes and the state filter takes at a
+coarse-fine end, where the parent's shell overwrites the node (at a node two
+same-level patches share the state filter takes rows that conserve instead);
+and a scheme that is explicit throughout (`gaussian_filter`) needs no closure
+at all, since the interior stencil reads the exchanged ghosts.
+`plan_direction` verifies the ghost reach against the halo width. A
+[`BandedCompactScheme`](@ref) takes `q` compact rows per end, one per
+left-hand-side band that would reach a ghost unknown; see the method in
+`kernels_banded.jl`.
 """
 function interface_closures(scheme::CompactScheme{T}) where {T}
     lhs = (zero(T), one(T), zero(T))
@@ -501,14 +504,15 @@ end
 
 # --- Conservative filter rows at an interface ----------------------------------
 #
-# With the identity row at a node two patches share, the composite pass does
-# not conserve. A pass of a symmetric filter A f̄ = B f is f + δ with
-# A δ = R f, R = B − A a symmetric zero-sum stencil, and R f is the difference
-# of an explicit face stencil, (R f)_i = g_{i+½} − g_{i−½} (`t` in
-# `_conservative_filter_rows`). On an unbounded line δ is then a difference of
-# face fluxes, δ_i = F_{i+½} − F_{i−½}, F the solution of the face relation
-# Σ_{|s|≤q} l_s F_{j+½+s} = g_{j+½}, l the left-hand side's band (l_0 = 1),
-# and the pass conserves Σ h q.
+# The state filter closes a patch's line at a node it shares with another
+# patch of its level with two rows under which the composite pass conserves;
+# an identity row there would not. A pass of a symmetric filter A f̄ = B f is
+# f + δ with A δ = R f, R = B − A a symmetric zero-sum stencil, and R f is the
+# difference of an explicit face stencil, (R f)_i = g_{i+½} − g_{i−½} (`t` in
+# `_conservative_filter_rows`). On an unbounded line δ is then a difference
+# of face fluxes, δ_i = F_{i+½} − F_{i−½}, F the solution of the face
+# relation Σ_{|s|≤q} l_s F_{j+½+s} = g_{j+½}, l the left-hand side's band
+# (l_0 = 1), and the pass conserves Σ h q.
 #
 # At an interface the two faces beside the end node are pinned to the
 # explicit value F = g/σ, σ = 1 + 2Σ l the left-hand side's row sum. The
@@ -579,15 +583,15 @@ function _conservative_interface_rows(scheme::CompactScheme{T}) where {T}
             for (lhs, rhs, first) in rows]
 end
 
-# Test and benchmark toggle: `true` closes the state filter with the
-# conservative rows above at a node two same-level patches or two tiles share,
-# and a limited filter pass then holds that node (`_filter_ends` in
-# positivity.jl); `false`, the default, keeps the identity row of
-# `interface_closures` there. A coarse-fine end keeps the identity row either
-# way. Read where the filter plans and the limiter are built (the constructor,
-# a regrid, a restart, the start of `run!`), so a run sets it before
-# construction and leaves it set.
-const CONSERVATIVE_INTERFACE_FILTER = Ref(false)
+# Test and benchmark toggle: `true`, the default, closes the state filter with
+# the conservative rows above at a node two same-level patches or two tiles
+# share, and a limited filter pass then holds that node (`_filter_ends` in
+# positivity.jl); `false` takes the identity row of `interface_closures` there,
+# the reference the rows are measured against. A coarse-fine end keeps the
+# identity row either way. Read where the filter plans and the limiter are
+# built (the constructor, a regrid, a restart, the start of `run!`), so a run
+# sets it before construction and leaves it set.
+const CONSERVATIVE_INTERFACE_FILTER = Ref(true)
 
 # The rows of the state filter at a patch or level interface end.
 _filter_interface_rows(filt) = CONSERVATIVE_INTERFACE_FILTER[] ?

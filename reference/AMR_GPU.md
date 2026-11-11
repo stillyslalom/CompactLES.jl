@@ -322,7 +322,10 @@ cross-patch communication may sit inside `compute_rhs!`.
 The interface closure rows follow the public Pyranda precedent: gradient and filter
 plans take `interface_closures` rows whose LHS couples no ghost unknown
 while the RHS reads exchanged ghost layers (`interface_rhs = :extended`, the
-default) or stays one-sided (`:onesided`). The flux divergence follows
+default) or stays one-sided (`:onesided`). At a node two same-level patches
+share the state filter takes two rows under which the composite pass conserves
+(`_filter_interface_rows`), and a device level's stacks split by the kind of
+their tiles' faces for it. The flux divergence follows
 `interface_flux`. Under `:ghost`, the default, the flux is differenced
 through the face with the gradient plans' interface rows, its inviscid part
 from the exchanged ghost state; the ghost values of the rest move in a second
@@ -1516,7 +1519,11 @@ time, after the one exchange that initializes every fresh tile by
 interpolation, so one tag suffices and the `Waitall` of each precedes the
 next tile's posts; the old decompositions are freed after the last, in the
 same order on every rank. Transient memory per rank is the rank's received blocks
-rather than a replica of the tile's whole state per moved tile.
+rather than a replica of the tile's whole state per moved tile. In a deeper
+regridded hierarchy the moved tile also takes the ghost layers beyond its
+faces, which the next level's tag sweep reads before any exchange, as a tile
+left in place holds them; the tags then do not depend on the ranks holding
+the tile.
 
 The replicated gather of the box regrid doubles as the migration's
 reference: under the `MIGRATION_AUDIT` test hook a tiled regrid gathers

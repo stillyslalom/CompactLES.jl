@@ -2595,8 +2595,7 @@ end
     rho_fine = rho_fine[1:9:end]
     e_composite = sum(abs, rho .- rho_fine) / N
     e_root = sum(abs, rho_root .- rho_fine) / N
-    # Measured: 9.1e-4 (1.44e-3 under the closure rows) against 2.37e-2 for
-    # the root alone.
+    # Measured: 2.2e-4 against 2.36e-2 for the root alone.
     @info "three-level shock and interface" e_composite e_root
     @test e_composite < 3e-3
     @test e_root > 8 * e_composite

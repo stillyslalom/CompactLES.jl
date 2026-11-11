@@ -34,12 +34,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 1.582e-04  fine 5.861e-05  covered 4.358e-04  root 4.747e-01
       diffusivity number t=0.1   shell 1.933e-02  fine 4.446e-01  covered 1.018e-01  root 1.165e-01
       diffusivity number t=0.2   shell 2.364e-02  fine 6.381e-02  covered 1.278e-01  root 4.233e-01
-  tile 8                 patches 6  steps   327  noise(x>0.85, t=0.1) 5.158e-12  rho_min 0.06099  p_min 0.03494  inadmissible steps 0
-      rho error t=0.1   shell 4.788e-02  fine 7.981e-02  covered 4.788e-02  root 6.039e-02
-      rho error t=0.2   shell 7.545e-02  fine 1.048e-02  covered 7.545e-02  root 2.762e-02
+  tile 8                 patches 6  steps   327  noise(x>0.85, t=0.1) 5.126e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
+      rho error t=0.1   shell 4.793e-02  fine 7.995e-02  covered 4.793e-02  root 6.039e-02
+      rho error t=0.2   shell 7.543e-02  fine 1.052e-02  covered 7.543e-02  root 2.760e-02
       diffusivity number t=0.03   shell 7.741e-05  fine 2.599e-05  covered 1.929e-04  root 4.793e-01
-      diffusivity number t=0.1   shell 4.439e-01  fine 4.544e-01  covered 1.278e-01  root 1.633e-01
-      diffusivity number t=0.2   shell 1.630e-02  fine 4.640e-02  covered 1.753e-01  root 4.414e-01
+      diffusivity number t=0.1   shell 4.455e-01  fine 4.565e-01  covered 1.280e-01  root 1.635e-01
+      diffusivity number t=0.2   shell 2.549e-02  fine 5.420e-02  covered 1.864e-01  root 4.400e-01
   three levels           patches 3  steps   331  noise(x>0.85, t=0.1) 4.974e-12  rho_min 0.06099  p_min 0.03926  inadmissible steps 0
       rho error t=0.1   shell 1.385e-02  fine 1.143e-01  covered 1.143e-01  root 6.039e-02
       rho error t=0.2   shell 9.728e-03  fine 7.537e-02  covered 7.537e-02  root 2.773e-02
@@ -83,12 +83,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.1   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
       diffusivity number t=0.2   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
   two patches            FAILED negative_density at step 2, t = 0.0017
-  three patches          patches 3  steps   308  noise(x>0.85, t=0.1) 3.646e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
-      rho error t=0.1   shell 3.888e-02  fine 0.000e+00  covered 0.000e+00  root 6.672e-02
-      rho error t=0.2   shell 7.392e-02  fine 0.000e+00  covered 0.000e+00  root 2.684e-02
-      diffusivity number t=0.03   shell 1.806e-05  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
-      diffusivity number t=0.1   shell 4.480e-01  fine 0.000e+00  covered 0.000e+00  root 3.170e-01
-      diffusivity number t=0.2   shell 9.902e-03  fine 0.000e+00  covered 0.000e+00  root 4.316e-01
+  three patches          patches 3  steps   308  noise(x>0.85, t=0.1) 2.639e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
+      rho error t=0.1   shell 3.994e-02  fine 0.000e+00  covered 0.000e+00  root 6.672e-02
+      rho error t=0.2   shell 7.512e-02  fine 0.000e+00  covered 0.000e+00  root 2.709e-02
+      diffusivity number t=0.03   shell 6.871e-06  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
+      diffusivity number t=0.1   shell 4.283e-01  fine 0.000e+00  covered 0.000e+00  root 3.087e-01
+      diffusivity number t=0.2   shell 7.260e-03  fine 0.000e+00  covered 0.000e+00  root 4.331e-01
   idiv cascade4          patches 2  steps   326  noise(x>0.85, t=0.1) 4.923e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.380e-02  fine 7.946e-02  covered 4.778e-02  root 6.060e-02
       rho error t=0.2   shell 8.411e-03  fine 7.585e-02  covered 7.585e-02  root 2.755e-02
@@ -107,12 +107,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 9.203e-05  fine 3.028e-05  covered 1.919e-04  root 4.793e-01
       diffusivity number t=0.1   shell 3.226e-02  fine 5.284e-01  covered 1.320e-01  root 1.639e-01
       diffusivity number t=0.2   shell 3.214e-02  fine 3.710e-02  covered 1.942e-01  root 4.415e-01
-  idiv cascade4 tile 8   patches 6  steps   327  noise(x>0.85, t=0.1) 5.006e-12  rho_min 0.06099  p_min 0.03614  inadmissible steps 0
-      rho error t=0.1   shell 4.770e-02  fine 7.939e-02  covered 4.770e-02  root 6.060e-02
-      rho error t=0.2   shell 8.464e-02  fine 1.226e-02  covered 8.464e-02  root 2.814e-02
-      diffusivity number t=0.03   shell 9.723e-05  fine 3.082e-05  covered 1.919e-04  root 4.793e-01
-      diffusivity number t=0.1   shell 4.404e-01  fine 4.473e-01  covered 1.313e-01  root 1.648e-01
-      diffusivity number t=0.2   shell 1.294e-01  fine 9.143e-02  covered 1.807e-01  root 4.429e-01
+  idiv cascade4 tile 8   patches 6  steps   327  noise(x>0.85, t=0.1) 4.971e-12  rho_min 0.06099  p_min 0.03570  inadmissible steps 0
+      rho error t=0.1   shell 4.772e-02  fine 7.950e-02  covered 4.772e-02  root 6.060e-02
+      rho error t=0.2   shell 7.737e-02  fine 9.417e-03  covered 6.924e-02  root 2.798e-02
+      diffusivity number t=0.03   shell 9.723e-05  fine 3.081e-05  covered 1.919e-04  root 4.793e-01
+      diffusivity number t=0.1   shell 4.415e-01  fine 4.506e-01  covered 1.313e-01  root 1.648e-01
+      diffusivity number t=0.2   shell 1.152e-01  fine 9.573e-02  covered 2.109e-01  root 4.422e-01
   idiv cascade4 reversed patches 2  steps   326  noise(x>0.85, t=0.1) 4.923e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.380e-02  fine 7.946e-02  covered 4.778e-02  root 6.060e-02
       rho error t=0.2   shell 8.411e-03  fine 7.585e-02  covered 7.585e-02  root 2.755e-02
@@ -121,12 +121,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.2   shell 4.305e-02  fine 4.861e-02  covered 2.178e-01  root 4.391e-01
   idiv cascade4 two patches FAILED negative_density at step 1, t = 0.0017
   idiv cascade4 two patches onesided FAILED negative_density at step 113, t = 0.0653
-  idiv cascade4 three patches patches 3  steps   308  noise(x>0.85, t=0.1) 2.437e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
-      rho error t=0.1   shell 3.571e-02  fine 0.000e+00  covered 0.000e+00  root 6.671e-02
-      rho error t=0.2   shell 7.707e-02  fine 0.000e+00  covered 0.000e+00  root 2.698e-02
-      diffusivity number t=0.03   shell 3.145e-05  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
-      diffusivity number t=0.1   shell 5.285e-01  fine 0.000e+00  covered 0.000e+00  root 3.016e-01
-      diffusivity number t=0.2   shell 8.924e-02  fine 0.000e+00  covered 0.000e+00  root 4.326e-01
+  idiv cascade4 three patches patches 3  steps   308  noise(x>0.85, t=0.1) 1.682e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
+      rho error t=0.1   shell 3.674e-02  fine 0.000e+00  covered 0.000e+00  root 6.671e-02
+      rho error t=0.2   shell 7.410e-02  fine 0.000e+00  covered 0.000e+00  root 2.719e-02
+      diffusivity number t=0.03   shell 3.901e-05  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
+      diffusivity number t=0.1   shell 5.067e-01  fine 0.000e+00  covered 0.000e+00  root 2.936e-01
+      diffusivity number t=0.2   shell 7.603e-02  fine 0.000e+00  covered 0.000e+00  root 4.331e-01
   idiv brady_livescu     patches 2  steps   326  noise(x>0.85, t=0.1) 5.014e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.457e-02  fine 7.994e-02  covered 4.789e-02  root 5.986e-02
       rho error t=0.2   shell 7.829e-03  fine 7.767e-02  covered 7.729e-02  root 2.723e-02
@@ -145,12 +145,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 4.718e-05  fine 2.122e-05  covered 1.873e-04  root 4.793e-01
       diffusivity number t=0.1   shell 6.179e-02  fine 5.301e-01  covered 1.233e-01  root 1.553e-01
       diffusivity number t=0.2   shell 3.577e-02  fine 3.772e-02  covered 2.295e-01  root 4.369e-01
-  idiv brady_livescu tile 8 patches 6  steps   332  noise(x>0.85, t=0.1) 4.731e-12  rho_min 0.06099  p_min 0.02364  inadmissible steps 0
-      rho error t=0.1   shell 4.758e-02  fine 8.090e-02  covered 4.758e-02  root 5.983e-02
-      rho error t=0.2   shell 7.440e-02  fine 6.759e-02  covered 7.277e-02  root 3.457e-02
-      diffusivity number t=0.03   shell 4.602e-05  fine 1.867e-05  covered 1.873e-04  root 4.793e-01
-      diffusivity number t=0.1   shell 6.259e-01  fine 3.931e-01  covered 1.240e-01  root 1.553e-01
-      diffusivity number t=0.2   shell 1.421e-01  fine 1.027e-01  covered 2.210e-01  root 4.488e-01
+  idiv brady_livescu tile 8 patches 6  steps   328  noise(x>0.85, t=0.1) 5.560e-12  rho_min 0.06099  p_min 0.02146  inadmissible steps 0
+      rho error t=0.1   shell 4.763e-02  fine 8.052e-02  covered 4.763e-02  root 5.985e-02
+      rho error t=0.2   shell 7.753e-02  fine 2.345e-02  covered 7.740e-02  root 2.883e-02
+      diffusivity number t=0.03   shell 4.604e-05  fine 1.868e-05  covered 1.873e-04  root 4.793e-01
+      diffusivity number t=0.1   shell 6.272e-01  fine 4.050e-01  covered 1.248e-01  root 1.562e-01
+      diffusivity number t=0.2   shell 1.635e-02  fine 3.002e-02  covered 2.276e-01  root 4.448e-01
   idiv brady_livescu reversed patches 2  steps   326  noise(x>0.85, t=0.1) 5.014e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.457e-02  fine 7.994e-02  covered 4.789e-02  root 5.986e-02
       rho error t=0.2   shell 7.829e-03  fine 7.767e-02  covered 7.729e-02  root 2.723e-02
@@ -159,12 +159,12 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.2   shell 3.353e-02  fine 3.492e-02  covered 2.274e-01  root 4.387e-01
   idiv brady_livescu two patches FAILED negative_density at step 1, t = 0.0017
   idiv brady_livescu two patches onesided FAILED negative_density at step 2, t = 0.0017
-  idiv brady_livescu three patches patches 3  steps   313  noise(x>0.85, t=0.1) 1.112e-09  rho_min 0.06179  p_min 0.02045  inadmissible steps 0
-      rho error t=0.1   shell 6.414e-02  fine 0.000e+00  covered 0.000e+00  root 6.663e-02
-      rho error t=0.2   shell 6.788e-02  fine 0.000e+00  covered 0.000e+00  root 5.517e-02
-      diffusivity number t=0.03   shell 1.559e-04  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
-      diffusivity number t=0.1   shell 6.476e-01  fine 0.000e+00  covered 0.000e+00  root 3.580e-01
-      diffusivity number t=0.2   shell 7.118e-02  fine 0.000e+00  covered 0.000e+00  root 4.411e-01
+  idiv brady_livescu three patches patches 3  steps   309  noise(x>0.85, t=0.1) 1.466e-09  rho_min 0.06179  p_min 0.02128  inadmissible steps 0
+      rho error t=0.1   shell 3.048e-02  fine 0.000e+00  covered 0.000e+00  root 6.667e-02
+      rho error t=0.2   shell 7.419e-02  fine 0.000e+00  covered 0.000e+00  root 2.870e-02
+      diffusivity number t=0.03   shell 1.072e-04  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
+      diffusivity number t=0.1   shell 2.671e-01  fine 0.000e+00  covered 0.000e+00  root 2.939e-01
+      diffusivity number t=0.2   shell 3.977e-02  fine 0.000e+00  covered 0.000e+00  root 4.348e-01
   gflux                  patches 2  steps   326  noise(x>0.85, t=0.1) 5.026e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.374e-02  fine 7.943e-02  covered 4.778e-02  root 6.055e-02
       rho error t=0.2   shell 9.496e-03  fine 7.571e-02  covered 7.571e-02  root 2.768e-02
@@ -213,18 +213,18 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 8.557e-04  fine 3.808e-04  covered 1.889e-03  root 4.600e-01
       diffusivity number t=0.1   shell 3.433e-02  fine 4.413e-01  covered 8.248e-02  root 9.494e-02
       diffusivity number t=0.2   shell 2.289e-02  fine 5.072e-02  covered 7.518e-02  root 3.771e-01
-  gflux tile 8           patches 6  steps   326  noise(x>0.85, t=0.1) 4.605e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
-      rho error t=0.1   shell 4.778e-02  fine 7.945e-02  covered 4.778e-02  root 6.055e-02
-      rho error t=0.2   shell 7.566e-02  fine 9.698e-03  covered 7.566e-02  root 2.758e-02
+  gflux tile 8           patches 6  steps   326  noise(x>0.85, t=0.1) 4.568e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
+      rho error t=0.1   shell 4.780e-02  fine 7.943e-02  covered 4.780e-02  root 6.055e-02
+      rho error t=0.2   shell 7.567e-02  fine 9.757e-03  covered 7.567e-02  root 2.757e-02
       diffusivity number t=0.03   shell 7.152e-05  fine 5.324e-05  covered 2.203e-04  root 4.793e-01
-      diffusivity number t=0.1   shell 4.408e-01  fine 4.475e-01  covered 1.261e-01  root 1.611e-01
-      diffusivity number t=0.2   shell 2.154e-02  fine 6.475e-02  covered 1.879e-01  root 4.404e-01
-  gflux tile 8 rem-extrap patches 6  steps   327  noise(x>0.85, t=0.1) 4.959e-12  rho_min 0.06099  p_min 0.03911  inadmissible steps 0
-      rho error t=0.1   shell 4.782e-02  fine 7.966e-02  covered 4.782e-02  root 6.054e-02
-      rho error t=0.2   shell 7.569e-02  fine 9.066e-03  covered 7.569e-02  root 2.762e-02
+      diffusivity number t=0.1   shell 4.426e-01  fine 4.493e-01  covered 1.263e-01  root 1.612e-01
+      diffusivity number t=0.2   shell 2.287e-02  fine 6.514e-02  covered 1.911e-01  root 4.403e-01
+  gflux tile 8 rem-extrap patches 6  steps   327  noise(x>0.85, t=0.1) 4.964e-12  rho_min 0.06099  p_min 0.03872  inadmissible steps 0
+      rho error t=0.1   shell 4.784e-02  fine 7.963e-02  covered 4.784e-02  root 6.054e-02
+      rho error t=0.2   shell 7.568e-02  fine 9.044e-03  covered 7.568e-02  root 2.762e-02
       diffusivity number t=0.03   shell 7.152e-05  fine 5.325e-05  covered 2.203e-04  root 4.793e-01
-      diffusivity number t=0.1   shell 4.371e-01  fine 4.450e-01  covered 1.257e-01  root 1.599e-01
-      diffusivity number t=0.2   shell 3.620e-02  fine 4.231e-02  covered 2.083e-01  root 4.369e-01
+      diffusivity number t=0.1   shell 4.399e-01  fine 4.474e-01  covered 1.258e-01  root 1.600e-01
+      diffusivity number t=0.2   shell 3.627e-02  fine 4.225e-02  covered 2.087e-01  root 4.369e-01
   gflux reversed         patches 2  steps   326  noise(x>0.85, t=0.1) 5.026e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.374e-02  fine 7.943e-02  covered 4.778e-02  root 6.055e-02
       rho error t=0.2   shell 9.496e-03  fine 7.571e-02  covered 7.571e-02  root 2.768e-02
@@ -243,31 +243,36 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
       diffusivity number t=0.1   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
       diffusivity number t=0.2   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
-  gflux two patches      patches 2  steps   303  noise(x>0.85, t=0.1) 2.030e-10  rho_min 0.10343  p_min 0.07163  inadmissible steps 0
-      rho error t=0.1   shell 1.792e-02  fine 0.000e+00  covered 0.000e+00  root 8.907e-02
-      rho error t=0.2   shell 1.016e-02  fine 0.000e+00  covered 0.000e+00  root 1.001e-01
-      diffusivity number t=0.03   shell 1.117e-01  fine 0.000e+00  covered 0.000e+00  root 5.213e-01
-      diffusivity number t=0.1   shell 3.446e-02  fine 0.000e+00  covered 0.000e+00  root 4.217e-01
-      diffusivity number t=0.2   shell 2.458e-02  fine 0.000e+00  covered 0.000e+00  root 4.292e-01
-  gflux two patches grad-rem patches 2  steps   305  noise(x>0.85, t=0.1) 2.719e-10  rho_min 0.10300  p_min 0.08002  inadmissible steps 0
-      rho error t=0.1   shell 1.330e-02  fine 0.000e+00  covered 0.000e+00  root 7.502e-02
-      rho error t=0.2   shell 8.252e-03  fine 0.000e+00  covered 0.000e+00  root 8.603e-02
-      diffusivity number t=0.03   shell 8.821e-02  fine 0.000e+00  covered 0.000e+00  root 5.276e-01
-      diffusivity number t=0.1   shell 3.277e-02  fine 0.000e+00  covered 0.000e+00  root 5.133e-01
-      diffusivity number t=0.2   shell 1.252e-02  fine 0.000e+00  covered 0.000e+00  root 4.429e-01
-  gflux two patches art off FAILED negative_density at step 20, t = 0.0140
-  gflux three patches    patches 3  steps   307  noise(x>0.85, t=0.1) 2.065e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
-      rho error t=0.1   shell 3.749e-02  fine 0.000e+00  covered 0.000e+00  root 6.669e-02
-      rho error t=0.2   shell 7.948e-02  fine 0.000e+00  covered 0.000e+00  root 2.844e-02
-      diffusivity number t=0.03   shell 1.541e-06  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
-      diffusivity number t=0.1   shell 4.828e-01  fine 0.000e+00  covered 0.000e+00  root 3.184e-01
-      diffusivity number t=0.2   shell 8.045e-03  fine 0.000e+00  covered 0.000e+00  root 4.362e-01
-  gflux three patches grad-rem patches 3  steps   308  noise(x>0.85, t=0.1) 4.188e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
-      rho error t=0.1   shell 3.647e-02  fine 0.000e+00  covered 0.000e+00  root 6.670e-02
-      rho error t=0.2   shell 7.868e-02  fine 0.000e+00  covered 0.000e+00  root 2.698e-02
-      diffusivity number t=0.03   shell 1.541e-06  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
-      diffusivity number t=0.1   shell 4.493e-01  fine 0.000e+00  covered 0.000e+00  root 3.169e-01
-      diffusivity number t=0.2   shell 1.310e-02  fine 0.000e+00  covered 0.000e+00  root 4.286e-01
+  gflux two patches      patches 2  steps   304  noise(x>0.85, t=0.1) 1.688e-10  rho_min 0.10834  p_min 0.07499  inadmissible steps 0
+      rho error t=0.1   shell 1.888e-02  fine 0.000e+00  covered 0.000e+00  root 8.478e-02
+      rho error t=0.2   shell 1.050e-02  fine 0.000e+00  covered 0.000e+00  root 9.552e-02
+      diffusivity number t=0.03   shell 1.110e-01  fine 0.000e+00  covered 0.000e+00  root 5.357e-01
+      diffusivity number t=0.1   shell 4.129e-02  fine 0.000e+00  covered 0.000e+00  root 4.254e-01
+      diffusivity number t=0.2   shell 2.692e-02  fine 0.000e+00  covered 0.000e+00  root 4.822e-01
+  gflux two patches grad-rem patches 2  steps   306  noise(x>0.85, t=0.1) 3.520e-10  rho_min 0.11094  p_min 0.08808  inadmissible steps 0
+      rho error t=0.1   shell 1.678e-02  fine 0.000e+00  covered 0.000e+00  root 7.072e-02
+      rho error t=0.2   shell 1.006e-02  fine 0.000e+00  covered 0.000e+00  root 8.194e-02
+      diffusivity number t=0.03   shell 8.496e-02  fine 0.000e+00  covered 0.000e+00  root 5.180e-01
+      diffusivity number t=0.1   shell 2.828e-02  fine 0.000e+00  covered 0.000e+00  root 4.878e-01
+      diffusivity number t=0.2   shell 1.350e-02  fine 0.000e+00  covered 0.000e+00  root 4.386e-01
+  gflux two patches art off patches 2  steps   236  noise(x>0.85, t=0.1) 2.649e-09  rho_min 0.09537  p_min 0.05283  inadmissible steps 0
+      rho error t=0.1   shell 1.017e-01  fine 0.000e+00  covered 0.000e+00  root 1.418e-01
+      rho error t=0.2   shell 2.945e-02  fine 0.000e+00  covered 0.000e+00  root 8.891e-02
+      diffusivity number t=0.03   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
+      diffusivity number t=0.1   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
+      diffusivity number t=0.2   shell 0.000e+00  fine 0.000e+00  covered 0.000e+00  root 0.000e+00
+  gflux three patches    patches 3  steps   307  noise(x>0.85, t=0.1) 3.160e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
+      rho error t=0.1   shell 3.756e-02  fine 0.000e+00  covered 0.000e+00  root 6.669e-02
+      rho error t=0.2   shell 7.949e-02  fine 0.000e+00  covered 0.000e+00  root 2.868e-02
+      diffusivity number t=0.03   shell 1.993e-06  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
+      diffusivity number t=0.1   shell 4.856e-01  fine 0.000e+00  covered 0.000e+00  root 3.180e-01
+      diffusivity number t=0.2   shell 8.174e-03  fine 0.000e+00  covered 0.000e+00  root 4.369e-01
+  gflux three patches grad-rem patches 3  steps   308  noise(x>0.85, t=0.1) 3.934e-10  rho_min 0.06179  p_min 0.04123  inadmissible steps 0
+      rho error t=0.1   shell 3.642e-02  fine 0.000e+00  covered 0.000e+00  root 6.670e-02
+      rho error t=0.2   shell 7.863e-02  fine 0.000e+00  covered 0.000e+00  root 2.706e-02
+      diffusivity number t=0.03   shell 1.993e-06  fine 0.000e+00  covered 0.000e+00  root 4.754e-01
+      diffusivity number t=0.1   shell 4.511e-01  fine 0.000e+00  covered 0.000e+00  root 3.167e-01
+      diffusivity number t=0.2   shell 1.375e-02  fine 0.000e+00  covered 0.000e+00  root 4.290e-01
   reversed               patches 2  steps   326  noise(x>0.85, t=0.1) 5.086e-12  rho_min 0.06099  p_min 0.04046  inadmissible steps 0
       rho error t=0.1   shell 1.384e-02  fine 7.931e-02  covered 4.778e-02  root 6.039e-02
       rho error t=0.2   shell 9.823e-03  fine 7.574e-02  covered 7.574e-02  root 2.762e-02
@@ -298,18 +303,18 @@ sample times t = 0.03, 0.1, 0.2 (the shock enters the box near t = 0.057 and lea
       diffusivity number t=0.03   shell 5.472e-03  fine 3.496e-03  covered 2.559e-02  root 5.074e-01
       diffusivity number t=0.1   shell 1.573e-02  fine 4.779e-01  covered 2.077e-01  root 2.403e-01
       diffusivity number t=0.2   shell 3.172e-02  fine 4.647e-02  covered 1.137e-01  root 4.442e-01
-  d8 tile 8              patches 6  steps   299  noise(x>0.85, t=0.1) 4.519e-12  rho_min 0.06988  p_min 0.03892  inadmissible steps 0
-      rho error t=0.1   shell 4.825e-02  fine 8.567e-02  covered 4.825e-02  root 6.127e-02
-      rho error t=0.2   shell 7.625e-02  fine 1.538e-02  covered 7.447e-02  root 2.009e-02
-      diffusivity number t=0.03   shell 1.440e-04  fine 9.294e-05  covered 2.226e-03  root 5.293e-01
-      diffusivity number t=0.1   shell 4.708e-01  fine 4.147e-01  covered 1.156e-01  root 1.240e-01
-      diffusivity number t=0.2   shell 3.150e-02  fine 4.241e-02  covered 5.773e-02  root 4.961e-01
-  pyranda tile 8         patches 6  steps   330  noise(x>0.85, t=0.1) 5.032e-08  rho_min 0.07202  p_min 0.03229  inadmissible steps 0
-      rho error t=0.1   shell 4.766e-02  fine 9.125e-02  covered 4.766e-02  root 6.888e-02
-      rho error t=0.2   shell 9.151e-02  fine 2.546e-02  covered 8.674e-02  root 2.745e-02
-      diffusivity number t=0.03   shell 3.447e-03  fine 5.635e-03  covered 2.912e-02  root 5.221e-01
-      diffusivity number t=0.1   shell 4.130e-01  fine 5.007e-01  covered 2.170e-01  root 2.446e-01
-      diffusivity number t=0.2   shell 4.653e-02  fine 4.187e-02  covered 1.734e-01  root 4.456e-01
+  d8 tile 8              patches 6  steps   299  noise(x>0.85, t=0.1) 4.481e-12  rho_min 0.06988  p_min 0.03881  inadmissible steps 0
+      rho error t=0.1   shell 4.831e-02  fine 8.598e-02  covered 4.831e-02  root 6.127e-02
+      rho error t=0.2   shell 7.624e-02  fine 1.461e-02  covered 7.445e-02  root 2.009e-02
+      diffusivity number t=0.03   shell 1.440e-04  fine 9.295e-05  covered 2.226e-03  root 5.293e-01
+      diffusivity number t=0.1   shell 4.683e-01  fine 4.097e-01  covered 1.155e-01  root 1.240e-01
+      diffusivity number t=0.2   shell 2.441e-02  fine 5.392e-02  covered 5.446e-02  root 4.963e-01
+  pyranda tile 8         patches 6  steps   330  noise(x>0.85, t=0.1) 5.098e-08  rho_min 0.07202  p_min 0.03185  inadmissible steps 0
+      rho error t=0.1   shell 4.766e-02  fine 9.129e-02  covered 4.766e-02  root 6.886e-02
+      rho error t=0.2   shell 9.118e-02  fine 2.552e-02  covered 8.698e-02  root 2.745e-02
+      diffusivity number t=0.03   shell 3.340e-03  fine 5.835e-03  covered 2.945e-02  root 5.221e-01
+      diffusivity number t=0.1   shell 4.134e-01  fine 5.011e-01  covered 2.170e-01  root 2.446e-01
+      diffusivity number t=0.2   shell 3.965e-02  fine 3.913e-02  covered 1.752e-01  root 4.456e-01
   d8 three levels        patches 3  steps   304  noise(x>0.85, t=0.1) 3.886e-12  rho_min 0.06988  p_min 0.03960  inadmissible steps 0
       rho error t=0.1   shell 1.417e-02  fine 1.245e-01  covered 1.245e-01  root 6.128e-02
       rho error t=0.2   shell 1.138e-02  fine 7.638e-02  covered 7.638e-02  root 2.009e-02
@@ -398,31 +403,31 @@ sensor interface taps: toggle present, both settings run
 === part startup: a Sod diaphragm on an interface, the failsafe's 0.999 count ===
 root N = 81, cfl 0.2, inviscid, level-1 tiles of 8 over root nodes 24..56 (the box 30..50 on the lattice), uniform reference at the fine spacing to the same t; flagged: cells below 0.999 of the initial minimum density or total energy over density, summed over steps, near: fine cells within four nodes of a tile end; L1: level-1 density against the uniform run
 --- diaphragm on the tile plane, 20 steps ---
-  ghost                      steps   20  flagged   164 on   20 steps (near   47)  min rho/rho0 0.697 (level 1, 1 from a tile end, step 16)  min e/e0 0.797  L1(rho) 2.85e-03
+  ghost                      steps   20  flagged   150 on   20 steps (near   42)  min rho/rho0 0.745 (level 1, 1 from a tile end, step 16)  min e/e0 0.830  L1(rho) 3.31e-03
   uniform, fine spacing      steps   24  flagged   173 on   24 steps (near    0)  min rho/rho0 0.671 (root, step 8)  min e/e0 0.910  L1(rho) -
-  closure                    steps   20  flagged   122 on   20 steps (near   42)  min rho/rho0 0.934 (level 1, 1 from a tile end, step 7)  min e/e0 0.825  L1(rho) 9.20e-04
+  closure                    steps   20  flagged   114 on   20 steps (near   38)  min rho/rho0 0.970 (level 1, 1 from a tile end, step 4)  min e/e0 0.839  L1(rho) 1.35e-03
   ghost, BL remainder rows   FAILED negative_density at step 3, t = 0.0009
-  ghost, gradient-row remainder steps   20  flagged   152 on   20 steps (near   42)  min rho/rho0 0.942 (level 1, 1 from a tile end, step 11)  min e/e0 0.990  L1(rho) 2.61e-03
-  ghost, remainder, cf extrapolated steps   20  flagged   152 on   20 steps (near   42)  min rho/rho0 0.942 (level 1, 1 from a tile end, step 11)  min e/e0 0.990  L1(rho) 2.61e-03
+  ghost, gradient-row remainder steps   20  flagged   165 on   20 steps (near   54)  min rho/rho0 0.988 (root, step 7)  min e/e0 0.990  L1(rho) 2.91e-03
+  ghost, remainder, cf extrapolated steps   20  flagged   165 on   20 steps (near   54)  min rho/rho0 0.988 (root, step 7)  min e/e0 0.990  L1(rho) 2.91e-03
 --- diaphragm on the tile plane, t = 0.12 ---
-  ghost                      steps  452  flagged  2006 on  445 steps (near  466)  min rho/rho0 0.697 (level 1, 1 from a tile end, step 16)  min e/e0 0.502  L1(rho) 2.33e-03
+  ghost                      steps  452  flagged  1965 on  447 steps (near  455)  min rho/rho0 0.745 (level 1, 1 from a tile end, step 16)  min e/e0 0.501  L1(rho) 2.35e-03
   uniform, fine spacing      steps  449  flagged   890 on  448 steps (near    0)  min rho/rho0 0.671 (root, step 8)  min e/e0 0.881  L1(rho) -
-  closure                    steps  452  flagged  1727 on  441 steps (near  430)  min rho/rho0 0.762 (root, step 415)  min e/e0 0.505  L1(rho) 2.52e-03
+  closure                    steps  451  flagged  1708 on  441 steps (near  419)  min rho/rho0 0.762 (root, step 414)  min e/e0 0.504  L1(rho) 2.81e-03
   ghost, BL remainder rows   FAILED negative_density at step 3, t = 0.0009
-  ghost, gradient-row remainder steps  454  flagged  1906 on  438 steps (near  415)  min rho/rho0 0.760 (root, step 416)  min e/e0 0.491  L1(rho) 2.72e-03
-  ghost, remainder, cf extrapolated steps  454  flagged  1899 on  437 steps (near  417)  min rho/rho0 0.760 (root, step 416)  min e/e0 0.490  L1(rho) 2.70e-03
+  ghost, gradient-row remainder steps  453  flagged  1926 on  437 steps (near  422)  min rho/rho0 0.760 (root, step 414)  min e/e0 0.489  L1(rho) 3.00e-03
+  ghost, remainder, cf extrapolated steps  453  flagged  1922 on  436 steps (near  425)  min rho/rho0 0.760 (root, step 415)  min e/e0 0.488  L1(rho) 3.02e-03
 --- diaphragm mid-tile, 20 steps ---
-  ghost                      steps   20  flagged   144 on   20 steps (near   33)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 4.96e-05
+  ghost                      steps   20  flagged   145 on   20 steps (near   34)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 6.36e-05
   uniform, fine spacing      steps   20  flagged   142 on   20 steps (near    0)  min rho/rho0 0.671 (root, step 8)  min e/e0 0.910  L1(rho) -
-  closure                    steps   20  flagged   151 on   20 steps (near   41)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 8.04e-05
-  ghost, gradient-row remainder steps   20  flagged   144 on   20 steps (near   33)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 4.96e-05
-  ghost, remainder, cf extrapolated steps   20  flagged   144 on   20 steps (near   33)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 4.96e-05
+  closure                    steps   20  flagged   156 on   20 steps (near   45)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 9.58e-05
+  ghost, gradient-row remainder steps   20  flagged   145 on   20 steps (near   34)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 6.36e-05
+  ghost, remainder, cf extrapolated steps   20  flagged   145 on   20 steps (near   34)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.910  L1(rho) 6.36e-05
 --- diaphragm mid-tile, t = 0.12 ---
-  ghost                      steps  433  flagged  2270 on  425 steps (near  591)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.495  L1(rho) 6.02e-04
+  ghost                      steps  433  flagged  2246 on  425 steps (near  582)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.495  L1(rho) 6.03e-04
   uniform, fine spacing      steps  449  flagged   890 on  448 steps (near    0)  min rho/rho0 0.671 (root, step 8)  min e/e0 0.881  L1(rho) -
-  closure                    steps  433  flagged  2350 on  431 steps (near  661)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.497  L1(rho) 1.42e-03
-  ghost, gradient-row remainder steps  432  flagged  2232 on  422 steps (near  573)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.495  L1(rho) 6.25e-04
-  ghost, remainder, cf extrapolated steps  433  flagged  2236 on  419 steps (near  575)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.493  L1(rho) 5.73e-04
+  closure                    steps  433  flagged  2300 on  430 steps (near  653)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.498  L1(rho) 1.44e-03
+  ghost, gradient-row remainder steps  432  flagged  2210 on  426 steps (near  566)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.494  L1(rho) 6.13e-04
+  ghost, remainder, cf extrapolated steps  433  flagged  2226 on  425 steps (near  573)  min rho/rho0 0.671 (level 1, 11 from a tile end, step 8)  min e/e0 0.494  L1(rho) 5.73e-04
 --- diaphragm on a coarse-fine face, 20 steps ---
   ghost                      steps   20  flagged   176 on   20 steps (near   28)  min rho/rho0 0.556 (root, step 17)  min e/e0 0.854  L1(rho) 9.93e-03
   uniform, fine spacing      steps   34  flagged   228 on   34 steps (near    0)  min rho/rho0 0.671 (root, step 8)  min e/e0 0.910  L1(rho) -

@@ -363,9 +363,10 @@ end
     # the folded box mirror uploaded to the device chain and the Hermite
     # boxes, the tile's fold plans as device plans, and on a tiled level the
     # fold's batched plans over the stack, whose mirror fill runs per tile.
-    # The r-z case tiles a strip along the plane at z = 0 from the axis
-    # outward: the corner tile folds on both dimensions and stacks alone,
-    # and the two tiles beside it share a stack along the active z, the
+    # The r-z case tiles a strip of four along the plane at z = 0 from the
+    # axis outward: the corner tile folds on both dimensions and stacks alone,
+    # the outermost stacks alone by its coarse-fine face, and the two between,
+    # which share a tile on either side, share a stack along the active z, the
     # plane's own dimension, so its mirror fill reads the stacked launch's
     # third index modulo the tile's extent. It is viscous under the default
     # ghost fluxes with the artificial properties off, so the coarse-fine
@@ -396,7 +397,7 @@ end
                    metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
                    transport=ConstantTransport(mu0=1e-3),
                    art=ArtificialProperties(enabled=false),
-                   refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
+                   refine=BlockRegion((0, 0, 0), (17, 1, 5)), tile=4, backend=backend)
         q = allocate_state(s)
         initialize!(s, q, (r, θ, z) -> begin
             rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
@@ -420,14 +421,15 @@ end
         lt = getfield(s2, :levels)[2].transfers[1]
         @test lt.folded[1][1]
     end
-    # The corner tile stacks alone and folds on r and z; its two neighbours
-    # share a stack along z that folds on z only.
+    # The corner tile stacks alone and folds on r and z; the two tiles with a
+    # tile on either side share a stack along z that folds on z only.
     s, _ = corner(DeviceBackend(cpu_ka))
     stacks = getfield(s, :levels)[2].stacks
-    @test [length(st.members) for st in stacks] == [1, 2]
-    @test stacks[2].patch.rho.stride > 1
+    @test sort([length(st.members) for st in stacks]) == [1, 1, 2]
+    pair = only(filter(st -> length(st.members) == 2, stacks))
+    @test pair.patch.rho.stride > 1
     @test stacks[1].patch.folds[1].lo && stacks[1].patch.folds[3].lo
-    @test !CL._fold_active(stacks[2].patch.folds[1]) && stacks[2].patch.folds[3].lo
+    @test !CL._fold_active(pair.patch.folds[1]) && pair.patch.folds[3].lo
 end
 
 @testset "device-resident tiled level: regridding Sod reproduces the CPU solver" begin
@@ -483,14 +485,21 @@ end
         isempty(kw) && @test any(>(0), values(getfield(s1, :regrid).created))
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
-        # The device level's tiles take stacked storage: one stack (every
-        # tile of this case has the lattice extent), the spanning patch's
-        # arrays StackedArrays over the tiles' views, the states views of one
-        # stacked array in slot order, and the spanning plans batched.
+        # The device level's tiles take stacked storage: every tile of this
+        # case has the lattice extent, so its stacks split by the kind of the
+        # tiles' faces (shared with a tile, coarse-fine or on the wall), each
+        # holding one kind, and together they cover the level;
+        # each spanning patch's arrays StackedArrays over its tiles' views,
+        # the states views of one stacked array in slot order, and the
+        # spanning plans batched.
         lev = getfield(s2, :levels)[2]
-        @test length(lev.stacks) == 1
-        st = lev.stacks[1]
-        @test st.members == lev.patches
+        kinds = unique(CL._shared_faces(getfield(s2, :patches)[i].faces)
+                       for i in lev.patches)
+        @test length(lev.stacks) >= length(kinds)
+        @test sort(reduce(vcat, [st.members for st in lev.stacks])) == sort(lev.patches)
+        @test all(length(unique(CL._shared_faces(getfield(s2, :patches)[i].faces)
+                                for i in st.members)) == 1 for st in lev.stacks)
+        st = lev.stacks[argmax([length(st.members) for st in lev.stacks])]
         @test st.patch.rho isa CL.StackedArray
         @test st.patch.rho.ntiles == length(st.members)
         @test st.patch.deriv_plans[1].ntiles == length(st.members)
@@ -513,7 +522,7 @@ end
         @test parent(CL._stack_state(st, q2)) isa CL.StackedArray
         # A state vector assembled from separate arrays is refused.
         loose = [i == 1 ? q2[1] : ConservedState(copy(parent(q2[i]))) for i in eachindex(q2)]
-        @test_throws ErrorException CL._stack_state(st, loose)
+        length(st.members) > 1 && @test_throws ErrorException CL._stack_state(st, loose)
         # The host backend stacks nothing.
         @test all(isempty(lev.stacks) for lev in getfield(s1, :levels))
     end
@@ -524,20 +533,21 @@ end
     # dimension (stride 1, no halo). A 3-D level stacks along an active one:
     # the stacked launches shift `k` by whole padded tile extents, the
     # sensor's edge clamp reduces it modulo the stride, and the halo exchange
-    # along the stacking dimension runs per tile. Two tiles abutting along
-    # z in one stack (the refined box sits inside one lattice cell in x and
-    # y), subcycled so the filter and the Hermite shell batch too, one step,
+    # along the stacking dimension runs per tile. Four tiles along z (the
+    # refined box sits inside one lattice cell in x and y), the two with a
+    # tile on either side abutting in one stack and the two end tiles alone,
+    # subcycled so the filter and the Hermite shell batch too, one step,
     # bitwise against the CPU hierarchy. The cost of this testset is the
     # compilation of the 3-D refined drivers on both backends, so it is kept
-    # to two tiles and a step; `bench/device_solver.jl` runs the twelve-tile
+    # to four tiles and a step; `bench/device_solver.jl` runs the twelve-tile
     # case.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
     function box3d(backend)
-        N = 30
+        N = 36
         s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
                    transport=ConstantTransport(mu0=1e-2), subcycle=true,
-                   refine=BlockRegion((12, 12, 12), (7, 7, 13)), tile=6,
+                   refine=BlockRegion((12, 12, 6), (7, 7, 25)), tile=6,
                    backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
@@ -557,18 +567,19 @@ end
         CL.FORCE_DEVICE_EXCHANGE[] = false
     end
     lev = getfield(s2, :levels)[2]
-    @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 2
-    @test lev.stacks[1].patch.rho.stride > 1
+    @test sort([length(st.members) for st in lev.stacks]) == [1, 1, 2]
+    @test only(filter(st -> length(st.members) == 2, lev.stacks)).patch.rho.stride > 1
     @test s1.step == s2.step
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
 end
 
 @testset "device-resident tiled level: the bulk species channel" begin
-    # A two-species planar slab under `species_flux = :bulk` on a tiled level:
-    # the component copy, the conserved gradients through the batched plans,
-    # the mole-fraction and maximum passes and the bulk flux all run once per
-    # stack over the spanning patch's arrays, bitwise against the CPU
-    # hierarchy after two steps.
+    # A two-species planar slab under `species_flux = :bulk` on a tiled level
+    # of four tiles in a row: the component copy, the conserved gradients
+    # through the batched plans, the mole-fraction and maximum passes and the
+    # bulk flux all run once per stack over the spanning patch's arrays (the
+    # two tiles with a tile on either side in one stack, each end tile in its
+    # own), bitwise against the CPU hierarchy after two steps.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
@@ -580,7 +591,7 @@ end
                    bcs=(per, per, per), eos=eos,
                    art=ArtificialProperties(enabled=true, species_flux=:bulk),
                    transport=ConstantTransport(mu0=0.0), filter_interval=1,
-                   refine=BlockRegion((18, 8, 0), (12, 8, 1)), tile=6,
+                   refine=BlockRegion((18, 12, 0), (25, 7, 1)), tile=6,
                    backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> begin
@@ -604,8 +615,8 @@ end
         CL.REFLUX[] = true
     end
     lev = getfield(s2, :levels)[2]
-    @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
-    @test !isempty(lev.stacks[1].patch.rhs_workspace.grad_Q)
+    @test sort([length(st.members) for st in lev.stacks]) == [1, 1, 2]
+    @test all(!isempty(st.patch.rhs_workspace.grad_Q) for st in lev.stacks)
     @test s1.step == s2.step
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
     @test all(maximum(Array(p.D_art[1])) > 0 for p in getfield(s2, :patches))

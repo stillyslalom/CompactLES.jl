@@ -82,13 +82,14 @@
 #   whose property forwarding gives the patch's own plans, faces and spacing.
 #   `probe` therefore needs one rank; `crossing`, `filter` and `undershoot`
 #   run under any rank count.
-# * The state filter at an interface end takes one identity closure row at
+# * The state filter at a coarse-fine end takes one identity closure row at
 #   the edge node plus the interior C8 rows, which read one to three layers
-#   of exchanged or imposed ghosts. Under `interface_rhs = :onesided` it
-#   falls back to the closed-edge rows of `compact_filter`. In one dimension
-#   the identity row leaves the plane node untouched; in two a transverse
-#   pass filters it with the full stencil, and the shell is re-imposed
-#   afterwards.
+#   of imposed ghosts; at a same-level end it takes the two conservative rows
+#   of `_conservative_interface_rows`, which read the exchanged ghosts. Under
+#   `interface_rhs = :onesided` it falls back to the closed-edge rows of
+#   `compact_filter`. In one dimension the identity row leaves the shell's
+#   plane node untouched; in two a transverse pass filters it with the full
+#   stencil, and the shell is re-imposed afterwards.
 # * The flux divergence keeps one-sided rows at an interface whatever
 #   `interface_rhs` says, and `:neutral3` maps to `:cascade3` there, so the
 #   default derivative row at an interface is the cascade3 row.
@@ -148,7 +149,8 @@ const PER = (PeriodicBC(), PeriodicBC())
 const WALL2 = (SlipWallBC(), SlipWallBC())
 
 # The three interface filter row sets compared throughout: the extended-data
-# identity row, and the two closed-edge sets `compact_filter` offers.
+# rows (the identity row at a coarse-fine end, the conservative rows at a
+# same-level one), and the two closed-edge sets `compact_filter` offers.
 const FILTER_ROWS = (("extended", (interface_rhs=:extended,
                                    filt=compact_filter(0.45))),
                      ("onesided", (interface_rhs=:onesided,

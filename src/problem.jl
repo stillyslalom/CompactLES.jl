@@ -752,7 +752,11 @@ shorthand for `StateFilter(scheme)`, and `Numerics(filter = nothing)` for
   where values nearer `0.5` filter more weakly. It doubles as the
   artificial-property sensor smoother only under
   `ArtificialProperties(smoother = :compact)`; the default `:gaussian`
-  smoother is an explicit stencil that ignores it.
+  smoother is an explicit stencil that ignores it. At a node two same-level
+  patches or tiles share, each patch's line closes with two rows under which
+  the composite pass conserves the integral of the state and gives the node
+  one value; at a coarse-fine face the end node keeps its value, since the
+  parent's shell overwrites it.
 - `interval`: cadence in completed steps. A positive value `k` applies the
   filter every `k` steps, counted from the completed step number. The default
   `1` filters every step; `0` disables state filtering, which leaves `scheme`

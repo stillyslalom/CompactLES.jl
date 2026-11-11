@@ -2105,14 +2105,29 @@ end
 # are this rank's old block of the tile and `Q_new`/`d_new` its new one,
 # `nothing` where it holds none. The sends complete before this returns, so
 # the caller may free the old decomposition afterwards.
+#
+# `ghosts` also carries the ghost layers beyond each kept face of the tile.
+# The hierarchy regrid sweeps a level's tiles for the next level's tags
+# before any exchange, and the sweep reads those layers at shared and
+# parent-fed faces (`_tag_sweep!`). A tile left in place holds its
+# neighbor's nodes or the shell there; a moved tile that carries them sweeps
+# to the same tags, whichever ranks hold it.
 function _migrate_tile!(::Type{T}, Q_new, d_new, Q_old, d_old, Nf::NTuple{3,Int},
                         active::NTuple{3,Bool}, old_blocks::Vector{OwnedBlock},
                         new_blocks::Vector{OwnedBlock}, comm::MPI.Comm,
-                        keep::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+                        keep::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY;
+                        ghosts::Bool=false) where {T}
     me = MPI.Comm_rank(comm)
+    dref = d_new === nothing ? d_old : d_new
+    g = ntuple(d -> ghosts && dref !== nothing && active[d] ? dref.n_halo_d[d] : 0, 3)
     interior = ntuple(d -> active[d] ?
-                      ((keep[d][1] ? 1 : 2):(Nf[d] - (keep[d][2] ? 0 : 1))) : (1:1), 3)
-    nodes(b::BlockRegion) = ntuple(d -> (b.offset[d] + 1):(b.offset[d] + b.extent[d]), 3)
+                      ((keep[d][1] ? 1 - g[d] : 2):(Nf[d] + (keep[d][2] ? g[d] : -1))) :
+                      (1:1), 3)
+    # A block on a face of the tile reaches into the ghost layers beyond it.
+    nodes(b::BlockRegion) =
+        ntuple(d -> (b.offset[d] + 1 - (b.offset[d] == 0 ? g[d] : 0)):
+                    (b.offset[d] + b.extent[d] +
+                     (b.offset[d] + b.extent[d] == Nf[d] ? g[d] : 0)), 3)
     piece(a::BlockRegion, b::BlockRegion) =
         ntuple(d -> _isect(_isect(nodes(a)[d], nodes(b)[d]), interior[d]), 3)
     wanted(r) = !any(isempty, r)
@@ -3062,7 +3077,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
             d_new = li == 0 ? nothing : patches[li].decomp
             _migrate_tile!(T, li == 0 ? nothing : states[li], d_new, Q_old, d_old,
                            fine_extent(wanted[ti], active, folds[ti]), active,
-                           old_table, _block_table(d_new, comm), comm, _EVERY_FACE)
+                           old_table, _block_table(d_new, comm), comm, _EVERY_FACE;
+                           ghosts=true)
         end
     end
     # Under a change of lattice a new tile takes the evolved solution of the

@@ -43,14 +43,15 @@
 # face relation. θ per face scales it toward zero, the admissible state before
 # the pass. The closure rows of the filter do not conserve, and their defect
 # stays on the boundary faces, which neither limiter touches. The filter's row
-# at a closed end is the identity, and the limiter leaves that node alone as
-# well: a limited face beside it corrects its interior neighbour only, so the
-# line's total moves by that correction, as it does under the closure rows.
-# Under the conservative interface rows of the filter
-# (`CONSERVATIVE_INTERFACE_FILTER`) the node two patches share takes a
-# correction, and the limiter holds it: the node takes its end face and the
-# face beside it in one part, by one θ that the exchange of a same-level
-# interface makes the same on both patches (`_filter_ends`).
+# at a wall or a coarse-fine end is the identity, and the limiter leaves that
+# node alone as well: a limited face beside it corrects its interior neighbour
+# only, so the line's total moves by that correction, as it does under the
+# closure rows. At a node two same-level patches share the filter's rows
+# conserve and the node takes a correction, which the limiter holds: the node
+# takes its end face and the face beside it in one part, by one θ that the
+# exchange of a same-level interface makes the same on both patches
+# (`_filter_ends`; `CONSERVATIVE_INTERFACE_FILTER` off restores the identity
+# row there).
 #
 # Both are corrections at the faces they limit: a run in which no face is
 # limited is the unlimited run bit for bit. On a Cartesian line the node terms
@@ -2434,11 +2435,12 @@ _limited_filter_state!(solver, Q::ConservedState) =
     _limited_filter_pass!(getfield(solver, :positivity), solver, Q)
 
 # The multi-patch `filter_state!`, each patch's passes limited. The filter's
-# row at an interface node is the identity, as at a wall, and the averaging
-# that follows leaves the node as it was, unless the conservative rows close
-# the interface (`_limited_level_filter!`); the shell imposition overwrites a
-# refined patch's node at a coarse-fine face. A subcycled refined level
-# filters inside `_advance_level!` (`_limited_level_filter!`).
+# rows at a node two same-level patches share conserve, and the averaging that
+# follows takes the mean of the node's two limited updates
+# (`_limited_level_filter!`); the shell imposition overwrites a refined
+# patch's node at a coarse-fine face, where the filter's row is the identity.
+# A subcycled refined level filters inside `_advance_level!`
+# (`_limited_level_filter!`).
 function _limited_filter_state!(solver, states::Vector{<:ConservedState})
     lims = _follow_patches!(solver, getfield(solver, :positivity))
     subcycle = getfield(solver, :subcycle)

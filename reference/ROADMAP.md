@@ -306,19 +306,18 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   under the toggle. Every limited run takes this fallback, under either
   interface flux (commit `adf5732`), since fills under the closure rows leave
   such nodes too at the same interpolation order; whether unlimited runs
-  take it is open. The toggle stays off because of two defects. The filter's row at a
-  node two tiles share is the identity, a row that does not conserve, and
-  the filter passes carry three quarters of that drift. Conservative rows at
-  a node two same-level patches or tiles share, a coarse-fine end keeping the
-  identity row, are carried behind the test toggle
-  `CONSERVATIVE_INTERFACE_FILTER` (commits `be418e3`, `HASH`): they bring the
-  filter's share to the box's and the limited tiles' drift down sevenfold
-  under `:closure` and threefold under `:ghost`, at the interface order and
-  with no inadmissible point, and leave a level with no same-level face bit
-  for bit as it is. The mass budget of A21's limited, tiled band waits on
-  making them the default, which moves every filtered patched and tiled
-  baseline. On
-  a tiled level a perturbation of one unit in the last place grows in the
+  take it is open. The filter's row at a node two same-level patches or
+  tiles share conserves by default (commits `be418e3`, `5853b90`, `HASH`),
+  a coarse-fine end keeping the identity row: against the identity row it
+  brings the filter's share of the tiled drift to the box's and the limited
+  tiles' drift down sevenfold under `:closure` and threefold under `:ghost`,
+  at the interface order and with no inadmissible point, and leaves a level
+  with no same-level face bit for bit as it is. The stacks of a device level
+  split by the kind of their tiles' faces, into up to nine on the 2-D bands
+  and blobs measured and one per tile on a 3-D cube of tiles, which
+  multiplies a level's launches; one stack per extent, the filter's end rows
+  chosen per tile inside the batched plan, is open. The toggle stays off
+  because on a tiled level a perturbation of one unit in the last place grows in the
   limited `:ghost` run to a visible difference within a few hundred steps,
   where under the closure rows it stays at round-off, so the solution
   depends on the rank count. Without the artificial properties a part of
