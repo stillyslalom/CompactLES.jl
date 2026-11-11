@@ -1005,6 +1005,58 @@ end
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
 end
 
+@testset "mole fractions on device storage match the host" begin
+    # `:X` is computed point by point on host copies of the mass fractions and
+    # into a host array, so a device-storage solver gives the host's values
+    # bitwise, through the snapshot, the padded array and a VTK piece, on one
+    # patch and on a tiled level whose tiles hold views of stacked storage.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    mix(x) = (θ = 0.5 * (1 + tanh((x - 0.5) / 0.05)); (1 - θ, θ))
+    function tube(backend)
+        s = Solver(n_global=(32, 24, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
+                   bcs=((SlipWallBC(), SlipWallBC()), per, per), backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(Y=mix(x), rho=1.0, p=1.0))
+        return s, Q
+    end
+    function tiled(backend)
+        s = Solver(n_global=(48, 24, 1), L_domain=(1.0, 0.5, 1.0), eos=eos,
+                   bcs=(per, per, per), refine=BlockRegion((18, 8, 0), (12, 8, 1)),
+                   tile=6, backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> Prim(Y=mix(x), rho=1.0, p=1.0))
+        return s, states
+    end
+    dir = mktempdir()
+    s1, q1 = tube(CPUBackend())
+    s2, q2 = tube(DeviceBackend(cpu_ka))
+    t1, r1 = tiled(CPUBackend())
+    t2, r2 = tiled(DeviceBackend(cpu_ka))
+    host = field_snapshot(s1, q1; fields=(:X,))
+    host_tiles = field_snapshot(t1, r1; fields=(:X,))
+    save_vtk(s1, q1, joinpath(dir, "host"); fields=(:X,))
+    CL.FORCE_KA[] = true
+    dev, dev_tiles, padded = try
+        save_vtk(s2, q2, joinpath(dir, "dev"); fields=(:X,))
+        (field_snapshot(s2, q2; fields=(:X,)), field_snapshot(t2, r2; fields=(:X,)),
+         field_array(s2, q2, :X; species=2))
+    finally
+        CL.FORCE_KA[] = false
+    end
+    @test dev[:X] isa Array && dev[:X] == host[:X]
+    @test maximum(abs, sum(host[:X]; dims=4) .- 1) < 1e-14
+    @test padded isa Array && padded == field_array(s1, q1, :X; species=2)
+    @test read(joinpath(dir, "dev.r0000.vtr")) == read(joinpath(dir, "host.r0000.vtr"))
+    lev = getfield(t2, :levels)[2]
+    @test sum(st -> length(st.members), lev.stacks) == length(lev.patches) == 4
+    @test length(dev_tiles) == length(host_tiles) == 5
+    @test all(d[:X] == h[:X] for (d, h) in zip(dev_tiles, host_tiles))
+    rm(dir; recursive=true)
+end
+
 @testset "field collections adapt to their device forms" begin
     # DeviceFieldVector, DeviceFieldMatrix and the ConservedState rule are
     # what a real device launch builds out of the host wrappers. Nothing

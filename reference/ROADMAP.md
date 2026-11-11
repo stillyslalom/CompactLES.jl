@@ -101,9 +101,6 @@ subject to one heavy run at a time.
    become urgent when a case at density ratio 100 or more is in production.
 5. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
-6. **A25** records in the output what a downstream reader is told by
-   keyword today. It depends on neither target problem and changes no
-   numerics, so it may be taken at any point.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
 laser- or burn-dominated case; H4a and H5a for cold DT, and the rest of H5b
@@ -1180,33 +1177,6 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `@threaded` backend comparison repeated on the fused path, with the
   backend retained or changed and the decision recorded.
 
-- [ ] **A25 — Describe output files and snapshots to a downstream reader.**
-  Filed as [issue 5](https://github.com/stillyslalom/CompactLES.jl/issues/5)
-  from the CompactLES import of CausticMirage.jl, which converts a solver
-  state, a `FieldSnapshot` or an output file to mole fractions, temperature,
-  pressure and velocity on an optical grid, and which is told by keyword
-  what the solver already holds. In the issue's order:
-  1. `save_vtk` files and `save_hdf5` frames record the species names in
-     field order, the per-species gas constants, the metric, the boundary
-     type of each face, the domain bounds, the time, and the global node
-     count with the stride. A strided file records neither of the last two
-     today, so it fixes neither the periodic period nor the position of a
-     mirror plane. The VTK keys are those of the issue's table, written as
-     `FieldData`; a checkpoint already records the species names.
-  2. `FieldSnapshot` carries the same record.
-  3. `field_snapshot` takes an index or coordinate box, so that a
-     decomposed run exports a window without gathering the grid to one rank.
-  4. The mole fraction `:X` is computed from host copies under device
-     storage (`_mole_fraction_array`), which the issue reported as scalar
-     indexing of device arrays; a device test of `:X` remains.
-  5. Exported accessors return the boundary conditions, the domain bounds
-     and the global node coordinates, in place of the `Solver` fields the
-     import reads.
-  **Gate:** per format, the written record read back and compared with the
-  solver, serial and decomposed, strided and sliced; the snapshot window
-  against the same window of the full snapshot; the accessors exported and
-  documented; `:X` on device storage in `test/device_tests.jl`.
-
 ## Geometry
 
 - [ ] **S9 — Finish azimuthal mode truncation.**
@@ -1502,6 +1472,10 @@ and the production configuration they lead to are in
 - [x] **A24** — `CompositeBC` divides a face among member conditions by a
   coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
   on it (commit `9574aea`).
+- [x] **A25** — VTK files, HDF5 frames and snapshots record the species, the
+  gas constants, the metric, each face's type, the domain bounds, the time
+  and the node count with the stride; `field_snapshot` takes a window, and
+  `boundary_conditions` and `domain_bounds` are exported (commits `HASH`).
 
 ### Scale, devices and I/O
 
