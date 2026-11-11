@@ -230,9 +230,6 @@ end
 const NUMERAL_LIMIT = 2
 const NUMERAL = r"(?<![A-Za-z_0-9])[−+-]?\d+(?:\.\d+)?(?:e[+−-]?\d+)?%?"
 
-# Reference files whose prose predates the rule; the list empties as each is
-# converted.
-const NUMERAL_PENDING = ["CALIBRATION_APPENDIX.md"]
 # A local file the repository ignores (`.gitignore`), present in a maintainer's
 # checkout only: questions to a paper's authors, which quote its figures.
 const NUMERAL_LOCAL = ["AUTHOR_QUESTIONS.md"]
@@ -320,8 +317,7 @@ function numeral_sentences()
     out = String[]
     for f in readdir(REFERENCE; join=true)
         name = basename(f)
-        endswith(name, ".md") && !(name in NUMERAL_PENDING) &&
-            !(name in NUMERAL_LOCAL) || continue
+        endswith(name, ".md") && !(name in NUMERAL_LOCAL) || continue
         append!(out, numeral_sentences(f))
     end
     return out

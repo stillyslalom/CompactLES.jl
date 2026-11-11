@@ -25,10 +25,12 @@ has one place: a measured digit goes in the appendix, once, in the section of
 the instrument that produced it, and a newer measurement replaces the older
 one rather than annotating it; the git log is the history, so a closed roadmap
 item is one line and its commit message is the account; every other file gets
-at most three sentences and a link, or nothing. Results of a session are
-reported in the reply, not recorded in the repository. `test/reference_tests.jl`
-enforces the layout, and a pointer appears here only if an instance would go
-wrong without it.
+at most three sentences and a link, or nothing. Reference prose states what
+was found and leaves the figures to a table: a sentence outside a table or a
+fenced block carries at most two numerals, citations aside. Results of a
+session are reported in the reply, not recorded in the repository.
+`test/reference_tests.jl` enforces the layout, and a pointer appears here
+only if an instance would go wrong without it.
 
 ## Environment
 
