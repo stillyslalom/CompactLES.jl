@@ -861,8 +861,8 @@ end
         run!(solver, states; tfinal=0.2, nmax=40000)
         drift = abs(_two_level_mass(solver, states) - m0) / m0
         @info "subcycled two-level Sod mass drift, $label" drift
-        # Measured 2.3e-8 (C6) and 3.8e-9 (C10) against the global step's
-        # 6.2e-8.
+        # Measured 1.13e-6 (C6) and 7.8e-7 (C10) against the global step's
+        # 7.0e-6.
         @test drift < 1e-5
     end
 end

@@ -69,8 +69,8 @@
 #   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.895  745 steps
 #   Noh nu=2 on a level at the axis, N=256, against the uniform run on 767 nodes
 #   (plateau 15.6523, deficit 50.9%, shock 0.2033, mass -4.45e-7, 6640 steps):
-#     level over 85 nodes   plateau 15.6523  deficit 50.8%  shock 0.2033
-#                           mass -9.7e-7  max |rho - uniform| 5.7e-3  6639 steps
+#     level over 85 nodes   plateau 15.6523  deficit 50.9%  shock 0.2033
+#                           mass -9.7e-7  max |rho - uniform| 5.34e-3  6641 steps
 #     level over 43 nodes   plateau 14.9507  deficit 50.7%  shock 0.2109
 #                           mass +8.4e-6  6006 steps
 #
@@ -139,10 +139,18 @@
 # nodes from the third in and the junction's correction Ω beside its face,
 # moved the masses to -9.7e-7 and -1.18e-3. The conservative coupling leaves
 # the level over 85 nodes bitwise, since no unresolved feature reaches its
-# face, and moves the level over 43 nodes to the row above, whose mass is
-# within 1e-6 of the exact one, as the uniform run's is; without Ω it would
-# read +3.96e-4, Ω's share at the density crater the crossing leaves beside
-# the face. No guard moved; both masses are guarded at 1e-5.
+# face, and moves the level over 43 nodes to plateau 14.906, deficit 51.8%,
+# shock 0.2094 and 6029 steps, with its mass at -3.6e-7, within 1e-6 of the
+# exact one as the uniform run's is; without Ω it would read +3.96e-4, Ω's
+# share at the density crater the crossing leaves beside the face. No guard
+# moved; both masses are guarded at 1e-5.
+#
+# Both level rows moved again when the parent's derivative mask became the
+# default and the coupling's gate came to test the parent's uncovered nodes
+# alone. The level over 85 nodes went from 6639 to 6641 steps, its deficit
+# from 50.8% to 50.9% and its closing e_min from -0.0086 to -0.0087; the
+# level over 43 nodes went to the row above, its mass from -3.6e-7 to +8.4e-6,
+# inside its guard. No guard moved.
 #
 # The four nu = 2 rows moved when the radial momentum of the r-z metric took
 # its pressure term as dp/dr instead of (1/r)D(r p) - p/r, the form that
