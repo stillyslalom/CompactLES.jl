@@ -4743,22 +4743,34 @@ the products and their accumulation, of order eps · c · Σ|w_j| / h before the
 amplifies it. At issue is whether that residual affects an evolution or a useful precision
 range, and whether the anchored form Σ w_j (f_j − f_1), exact on a constant, buys anything.
 Every derivative and filter preset is measured in both precisions with the plan's prescaled
-coefficients, at N = 33, 129 and 513; the normalized residuals do not depend on N.
+coefficients; the normalized residuals do not depend on N between 33 and 513 nodes.
 
 **The weight sums.** The cascade rows' weights are dyadic rationals and sum to zero exactly
-in both precisions, stored and prescaled by 1/h when L = 1 makes 1/h an integer; at L = 2π
-the prescaled row 1 sums to −1.8e-15 (Float64) and −9.5e-7 (Float32). The Brady–Livescu rows
-sum to 1e-16 to 4e-15 stored in Float64 and 1e-7 to 2e-6 in Float32, and the prescaled sums
-scale with 1/h. The filter rows' right-hand sides sum to their left-hand sides exactly in
-Float64 (4e-16 at worst) and to 1e-7 to 4e-7 in Float32; the Gaussian and the Pyranda filter
-likewise.
-
-**A constant on the closed line.** The closure rows' fill residual before the solve and the
-solved residual at the wall window and in the interior, normalized to eps-scale (× h / c for
-a derivative, / c for a filter), N = 129, the generic constant 12345.678, L = 2π. The
-anchored fill reads exactly zero on every derivative row and 2.5e-8 at most on a filter row:
+in both precisions, stored and prescaled, when L = 1 makes the inverse spacing an integer;
+at L = 2π the prescaling leaves a rounding residual. The Brady–Livescu rows' sums are
+rounding residuals as stored and scale with the inverse spacing when prescaled. The filter
+rows pass a constant to round-off, as do the Gaussian and the Pyranda filter.
 
 ```
+sum of the weights                      Float64             Float32
+cascade row 1, prescaled at L = 2π      −1.8e-15            −9.5e-7
+Brady–Livescu rows, stored              1e-16 to 4e-15      1e-7 to 2e-6
+filter rows, Σ rhs − Σ lhs              4e-16 at worst      1e-7 to 4e-7
+```
+
+**A constant on the closed line.** The residual a closure row leaves on a constant is
+round-off, and its three sources separate. The weights' own sums are at most a tenth of the
+fill residual (half on the second row of C8 Brady–Livescu), and the products and their
+accumulation make up the rest of the fill, 2–40 eps. The line solve amplifies the fill by
+the closed-line condition number of the rows, a factor of two for the cascade and 5–40 for
+Brady–Livescu. The interior carries a tenth to a hundredth of the wall residual. The
+table gives the fill residual before the solve and the solved residual at the wall window
+and in the interior, normalized to eps-scale (× h / c for a derivative, / c for a filter).
+The anchored fill reads exactly zero on every derivative row and 2.5e-8 at most on a filter
+row.
+
+```
+N = 129, c = 12345.678, L = 2π
                      Float64: fill      solved wall   interior  |  Float32: fill    solved wall   interior
 C6 cascade3          1.7e-16   3.9e-16       6.0e-18  |  3.1e-8   7.0e-8        1.1e-9
 C6 cascade4          4.3e-16   2.5e-15       3.9e-17  |  1.1e-7   6.4e-7        9.8e-9
@@ -4772,19 +4784,25 @@ gaussian             1.5e-16   1.5e-16       0        |  1.0e-7   7.9e-8        
 pyranda filter       0         9.0e-15       1.5e-14  |  9.4e-8   6.9e-6        2.9e-5
 ```
 
-The three sources separate: the weights' own sums are at most a tenth of the fill residual
-(row 2 of C8 Brady–Livescu excepted, at half); the products and their accumulation are the
-rest of the fill, 2–40 eps; and the solve amplifies the cascade's fill by 2 and the
-Brady–Livescu fill by 5–40, their closed-line condition numbers showing. The interior carries
-a tenth to a hundredth of the wall residual. In absolute terms the derivative of a constant c
-reads eps · c / h × (2–40) at the wall: with c = 1e5 and h = 0.01 that is 1e-9 in Float64 and
-1–20 in Float32.
-
-**A perturbation over a constant.** f = c + sin(3x) against 3 cos(3x), N = 129, errors
-relative to 3, the wall window under the plain and the anchored rows against the interior,
-which is the floor the stored field itself sets:
+In absolute terms the derivative of a constant c reads 2–40 times eps · c / h at the wall:
 
 ```
+derivative of a constant at the wall, c = 1e5, h = 0.01
+Float64     1e-9
+Float32     1–20
+```
+
+**A perturbation over a constant.** Over a large offset the derivative error at the wall
+has a floor set by the stored field's quantization, eps · c, differentiated, which no row
+can remove. The anchored rows recover a factor of two to four for the cascade and ten to
+thirty for Brady–Livescu at the wall, within a factor of two of the interior's floor. The
+difference appears only at offsets where the interior error is already large, c = 1e3 in
+single precision and c = 1e9 in double. In Float64 an offset below 1e6 moves nothing. The
+table gives the error at the wall window under the plain and the anchored rows, with the
+interior as the floor.
+
+```
+f = c + sin(3x), error of f' against 3 cos(3x) relative to 3, N = 129
                   Float64: c=0      1e3       1e6       1e9     |  Float32: c=0      1         1e3       1e6
 C6 cascade3 plain      3.9e-7    3.9e-7    4.2e-7    2.4e-5   |  2.3e-6    1.2e-5    8.8e-3    1.9e+1
             anchored   3.9e-7    3.9e-7    4.0e-7    1.2e-5   |  5.8e-7    1.2e-5    2.4e-3    4.6e+0
@@ -4794,17 +4812,13 @@ C6 BL       plain      3.4e-10   2.1e-9    5.9e-7    4.6e-4   |  4.7e-5    4.4e-
             interior   3.9e-12   4.8e-11   1.5e-8    1.4e-5   |  2.4e-6    1.3e-5    1.2e-2    1.1e+1
 ```
 
-The anchored rows recover a factor of two to four for the cascade and ten to thirty for
-Brady–Livescu at the wall, within a factor of two of the interior's floor. That floor is the
-stored field's quantization, eps · c, differentiated, which no row can remove; the difference
-shows only where the interior is already at 1e-3 relative in Float32 (c = 1e3 over a unit
-perturbation) or 1e-6 in Float64 (c = 1e9). In Float64 an offset below 1e6 moves nothing.
-
 ### The consequence in a run
 
-A uniform state on 101 nodes between slip walls, with a tangential velocity so the x-momentum
-flux is the constant pressure through the wall rows and every other x flux is zero, the
-artificial properties on, a periodic line as the control. The right-hand side of the initial
+The residual on a uniform state grows with the pressure, so it reaches order one at the
+wall only for an SI-unit pressure in Float32. The case is a uniform state on 101 nodes
+between slip walls, with a tangential velocity so the x-momentum flux is the constant
+pressure through the wall rows and every other x flux is zero, the artificial properties on,
+and a periodic line as the control. The table gives the right-hand side of the initial
 state, x-momentum, wall window / interior:
 
 ```
@@ -4815,11 +4829,18 @@ p = 1e5, rho = 1.2     0 / 0               3.0e-7 / 8.2e-9    1.1 / 1.7e-2      
 periodic               0 / 0               0 / 0              0 / 0              0 / 0
 ```
 
-The wall-normal velocity |u| and the pressure's relative drift after 500 / 1000 / 2000 steps
-at cfl 0.5, wall window:
+Under the cascade rows the wall-normal velocity that grows from a nonzero round-off seed is
+a mode of the closed line. It grows neither linearly, as a constant residual would, nor as
+√steps, as a random walk would, but by a factor of 70 per thousand steps in either
+precision, while the Brady–Livescu rows hold their seed and the periodic control holds its
+own. The seed only sets when the mode becomes visible. With the filter on, the periodic
+control also drifts in single precision, interior rows included, from the filter's own
+constant-passing round-off; that drift is of the order of the closure rows' residual, and
+anchoring the derivative rows would not touch it. The table gives the wall-normal velocity
+|u| and the pressure's relative drift at the wall window:
 
 ```
-                                   Float64                              Float32
+steps 500 / 1000 / 2000, cfl 0.5   Float64                              Float32
 p = 1.1, cascade3, filter off      1.3e-14 / 9.2e-13 / 9.5e-9          1.0e-5 / 7.2e-4 / 6.2e-3
 p = 1.1, cascade3, filter on       4.8e-14 / 2.9e-13 / 1.2e-11         2.5e-5 / 1.4e-4 / 1.2e-3
 p = 1.1, BL, filter off            1.4e-14 / 3.8e-14 / 3.5e-14         1.0e-5 / 2.9e-5 / 1.1e-5
@@ -4831,23 +4852,31 @@ p = 1e5, BL, filter off            1.8e-12 / 7.4e-12 / 4.5e-12         1.1e-3 / 
 p = 1e5, periodic, filter on       8.2e-13 / 1.4e-12 / 1.3e-12         3.5e-3 / 6.4e-3 / 1.1e-2
 ```
 
-The periodic control with the filter on drifts at 1e-5 relative in Float32 over 2000 passes,
-interior rows included: the filter's own constant-passing round-off, the same order as the
-closure rows' residual, which anchoring the derivative rows would not touch. Under the cascade
-rows with a nonzero seed the velocity accumulates neither linearly, as a constant residual
-would give, nor as √steps, as a random walk would: it multiplies by 70 per thousand steps in
-Float64 and Float32 alike, while the Brady–Livescu rows hold their seed and the periodic
-control holds its own. That growth is a mode of the closed line, and the round-off seed only
-sets when it becomes visible.
-
 ### The slip-wall mode
 
-The wall-normal velocity from the round-off seed at 1000 / 2000 / 4000 steps in Float64, the
-generic uniform state, and the growth rate per unit time fitted between the last two
-readings (c = 1.31 on a unit domain, so a unit of time is 0.76 acoustic transits):
+The growth is a linear instability of the discrete step at an inviscid slip wall under the
+cascade closures. Its rate is the same at three resolutions and at half the step, so it is
+an O(c/L) mode and not a grid mode, and about half of its eigenvector lies within four
+nodes of the walls. The cascade filter's F2 row damps it exactly; the one-sided filter rows
+halve it, and strengthening them makes it worse, because rows 2 and 3 of that set exceed
+unit gain at high wavenumber. Physical viscosity removes it at a no-slip wall and leaves a
+small rate at a slip wall. Dirichlet ends are neutral, so the shock tubes and the Noh
+inflows are outside it.
+
+Under the defaults a seed reaches |u| = 1e-2 in about 30 time units in double precision and
+in half that in single precision, and the artificial properties then hold it there. The
+battery's wall cases end at t = 0.6 or earlier, before the mode is visible; a long inviscid
+run between slip walls or symmetry planes reaches it. The neutral closure rows remove the
+mode ([closure certificates](#closure-certificates)), and it is absent from a face-centred
+symmetry plane.
+
+The first table gives the wall-normal velocity grown from the round-off seed of the generic
+uniform state in double precision, with the growth rate per unit time fitted between the
+last two readings. The sound speed is 1.31 on a unit domain, so a unit of time is 0.76
+acoustic transits. The cascade4 rows lose positivity before the last reading.
 
 ```
-                                              1000        2000        4000       rate
+steps                                         1000        2000        4000       rate
 N=101 C6 cascade3, filter off                 1.1e-12     9.5e-9      6.4e-3     +1.79
 N=101 C6 cascade3, filter on (relaxed)        3.1e-13     1.2e-11     1.8e-8     +0.96
 N=101 C6 cascade4, filter off                 2.2e-2      negative density at step 1680
@@ -4862,16 +4891,16 @@ N=201 C6 cascade3, filter off                 4.0e-14     1.7e-12     3.3e-9    
 N=101 C6 cascade3, filter off, cfl 0.25       2.2e-14     1.3e-12     1.3e-8     +2.41
 ```
 
-One step linearized about the uniform state by centered differences at N = 51, cfl 0.5,
-artificial properties off (their sensors are not differentiable there, and the rows above
-show they do not set the rate, only the saturation near
-|u| = 1e-2): the largest eigenvalue modulus of the amplification matrix as a rate
-per unit time, the count of eigenvalues outside the unit circle, and the share of the leading
-eigenvector's norm within four nodes of a wall. A filtered row applies the unrelaxed pass
-after the step.
+The second table linearizes one step about the uniform state by centered differences, with
+the artificial properties off: their sensors are not differentiable there, and the rows
+above show that they set the saturation near |u| = 1e-2 and not the rate. It gives the
+largest eigenvalue modulus of the amplification matrix as a rate per unit time, the count
+of eigenvalues outside the unit circle, and the share of the leading eigenvector's norm
+within four nodes of a wall. A filtered row applies the unrelaxed pass after the step. The
+linearized rates reproduce the time-domain ones.
 
 ```
-                                              |λ|max        rate      growing   wall share
+N = 51 unless noted, cfl 0.5                  |λ|max        rate      growing   wall share
 C6 cascade3, unfiltered                       1.01757437    +2.28     54 / 255  0.48
 C6 cascade3, onesided filter                  1.00946695    +1.23     56 / 255  0.43
 C6 cascade3, cascade filter                   1.00000004    +0.00      6 / 255  0.03
@@ -4890,21 +4919,10 @@ C6 cascade3, Dirichlet ends, onesided filter  1.00000004    +0.00      8 / 255  
 C6 cascade3, unfiltered, N = 101              1.00906264    +2.36    110 / 505  0.27
 ```
 
-The centered difference at `delta = 1e-5 · max(|Q|, 1)` resolves |λ| to about 1e-9, so a row
-reading 1.0000000x is neutral and its growing count is round-off; the `ladder` keyword repeats
-a row at 3e-6 and 3e-5 and the readings move by ±1e-9. The linearized rates reproduce the
-time-domain ones, so the growth is a linear instability of the discrete step at an inviscid
-slip wall under the cascade closures: the same rate at N = 51, 101 and 201 and at half the
-step, so an O(c/L) mode and not a grid mode, with half of its eigenvector within four nodes of
-the walls. The cascade filter's F2 row damps it exactly, which is why it went unseen; the
-one-sided rows halve it, and strengthening them makes it worse, rows 2 and 3 of that set
-exceeding unit gain at high wavenumber. Physical viscosity at a no-slip wall removes it and at
-a slip wall leaves 0.04; Dirichlet ends are neutral, so the shock tubes and the Noh inflows
-are outside it. Under the defaults a Float64 seed reaches |u| = 1e-2 in about 30 time units
-and a Float32 seed in about 15, and the artificial properties then hold it there; the
-battery's wall cases end at t = 0.6 or earlier and do not see it, while a long inviscid run
-between slip walls or symmetry planes does. The neutral closure rows remove the mode ([closure
-certificates](#closure-certificates)), and it is absent from a face-centred symmetry plane.
+The centered difference at `delta = 1e-5 · max(|Q|, 1)` resolves |λ| to about 1e-9, so a
+row whose |λ|max departs from one by less than that is neutral and its growing count is
+round-off. The `ladder` keyword repeats a row at deltas of 3e-6 and 3e-5, and the readings
+move by that resolution.
 
 ### The decision on anchored rows
 
@@ -4914,12 +4932,12 @@ hundredth of that in the interior, from the products and their accumulation, the
 sums below that and the solve's amplification above it for the Brady–Livescu sets. Anchoring
 would make a uniform state's residual exactly zero and buy a factor of two to thirty on a
 perturbation over an offset, but only where the stored field's quantization already floors the
-interior at the same level, c/f' above 1e6 in Float64 and above 1e3 in Float32; in a filtered
-Float32 run the filter's own constant-passing round-off drifts the interior at the same 1e-5
-per 2000 passes. The slip-wall mode sets the practical consequence of the seed, and no
-anchoring changes its growth. The Float32 SI-unit case, a 1 Pa/m spurious gradient at a wall
-under p = 1e5 Pa and 1.9 m/s by t = 0.03 s through the mode, is a precision-policy matter and
-not a closure one.
+interior at the same level, c/f' above 1e6 in double precision and above 1e3 in single. In a
+filtered single-precision run the filter's own constant-passing round-off drifts the
+interior by as much. The practical consequence of the seed is the slip-wall mode, and no
+anchoring changes its growth. In single precision with SI units, p = 1e5 Pa leaves a
+spurious gradient of 1 Pa/m at a wall. Through the mode it becomes a wall-normal velocity of
+1.9 m/s by t = 0.03 s, which is a precision-policy matter and not a closure one.
 
 ## Closure certificates
 
@@ -4939,35 +4957,42 @@ production](#wall-closures-in-production).
 
 `closurecertify.jl` builds the closure rows from the exact rationals of the (a, b, c) family,
 checks them against `lele_d1_6()` and `lele_d1_6(closures = :cascade3)`, and measures the
-injected acoustic operator L on the 2N − 2 unknowns (p on every node, u on the interior
-nodes) at c = L = 1, so rates are per unit time and ‖L‖₂ grows in proportion to N. Byers'
-test gives the pseudospectral abscissa in fourteen bisections per α_ε; a dense minimum of
-σ_min((x + iy)I − L) over y reproduces ε to 1e-6 relative. `rtol` floors α_ε at `rtol · ‖L‖₂`,
-7e-8 at N = 201 under the default 1e-10, so readings at ε ≤ 1e-7 use `rtol = 1e-13`.
-‖exp(tL)‖₂ comes from one warm-started subspace eigendecomposition, verified against a dense
-operator norm at nine times to 2.3e-12 relative over 646 times, so the last window is a lower
-bound and the eigenvector condition number the rigorous one.
+injected acoustic operator L on the 2N − 2 unknowns, p on every node and u on the interior
+nodes. It takes c = L = 1, so rates are per unit time and ‖L‖₂ grows in proportion to N.
+Byers' test gives the pseudospectral abscissa in fourteen bisections per α_ε, and a dense
+minimum of σ_min((x + iy)I − L) over y reproduces ε to 1e-6 relative. The floor on α_ε,
+`rtol · ‖L‖₂`, is 7e-8 at N = 201 under the script's default. Readings at ε ≤ 1e-7
+therefore use `rtol = 1e-13`. The norm ‖exp(tL)‖₂ comes from one warm-started subspace
+eigendecomposition, verified against a dense operator norm at nine times to 2.3e-12 relative
+over 646 times, so the last window is a lower bound and the eigenvector condition number the
+rigorous one.
 
-Beside it, a linear model of the production step: the closed-line derivative matrix D (read
-off the production operator, or assembled from the closure rows; the two agree to 6e-14), the
-Euler flux Jacobian at the uniform state, the five-stage low-storage Runge–Kutta tableau, and
-the wall's normal momentum zeroed at each stage as `enforce!` does, its energy correction
-quadratic and dropping out of the linearization. The amplification matrix agrees with the
-production Jacobian to 8e-11 in every entry at N = 51, and the instability is already in the
-semi-discrete operator: the injected operator's largest real part is 2.31 per unit time
-against the measured 2.28. The acoustic pair drives the entropy and tangential components and
-not the reverse, so the reduced system (p, u) on 2N unknowns carries the whole spectrum and
-evaluates in a few milliseconds at N = 51. Its unstable eigenvalue has imaginary part 89 at
-N = 51, 4.6 points per wavelength: a near-grid-scale mode with an O(1) growth rate, removed
-exactly by the second-order F2 row and not by the one-sided filter rows, whose gain exceeds
-one at high wavenumber.
+The instability is already in the semi-discrete operator: the injected operator's largest
+real part is 2.31 per unit time against the 2.28 measured on the step. The step is checked
+against a linear model built of the closed-line derivative matrix D (read off the production
+operator, or assembled from the closure rows; the two agree to 6e-14), the Euler flux
+Jacobian at the uniform state, the five-stage low-storage Runge–Kutta tableau, and the
+wall's normal momentum zeroed at each stage as `enforce!` does, its energy correction
+quadratic and dropping out of the linearization. Its amplification matrix agrees with the
+production Jacobian to 8e-11 in every entry at N = 51. The acoustic pair drives the entropy
+and tangential components and not the reverse, so the reduced system (p, u) on 2N unknowns
+carries the whole spectrum and evaluates in a few milliseconds. Its unstable eigenvalue has
+imaginary part 89 at N = 51. That is 4.6 points per wavelength, so the mode is near the grid
+scale and grows at a rate of order one. It is removed exactly by the second-order F2 row
+and not by the one-sided filter rows, whose gain exceeds one at high wavenumber.
 
 `neutralsearch8.jl` and `neutralsearch10.jl` define the three-row families below, verify them
-against the production plans by differentiating unit vectors (agreement 4e-16 to 9e-16,
-banded assembly included), scan at N = 51 and 101, sweep the finalists over every N from 12
-to 600 and every tenth to 1200, and run the production Jacobian and the forty-time-unit
-uniform state. One growth evaluation at N = 51 is 2 to 5 ms; a 649-length sweep is 220 to
-300 s per member.
+against the production plans by differentiating unit vectors, banded assembly included, scan
+them, sweep the finalists over line lengths, and run the production Jacobian and the
+forty-time-unit uniform state:
+
+```
+agreement with the production plans    4e-16 to 9e-16
+scan                                   N = 51 and 101
+sweep (649 lengths)                    every N from 12 to 600 and every tenth to 1200
+one growth evaluation at N = 51        2 to 5 ms
+one sweep                              220 to 300 s per member
+```
 
 ### The C6 family
 
@@ -4977,55 +5002,111 @@ three-point Padé row 2; widening each by one point frees three coefficients at 
 ```
 g_1 + a g_2 = Σ_{k=1}^{4} w_k f_k          third order, a free
 b g_1 + g_2 + c g_3 = Σ_{k=1}^{5} w_k f_k   fourth order, b and c free
+
+(a, b, c) = (2, 1/4, 1/4)                   the cascade
+a = 3                                       the :cascade4 row 1
 ```
 
-with (a, b, c) = (2, 1/4, 1/4) the cascade and a = 3 the `:cascade4` row 1. A scan of 16,900
-grid points over a ∈ [0, 6], b, c ∈ [−1, 1.5] at N = 51 found 98 at which every eigenvalue of
-the injected acoustic operator lies on the imaginary axis to 1e-14, none with a growth rate
-between 1e-6 and 1e-2, and the rest unstable; the fourth-order five-point row-1 family with
-the same row 2 has no neutral member. Only 4 of the 98 stayed neutral over twelve line
-lengths between 51 and 296. Mapped in the (b, c) plane at fixed a over eight line lengths,
-the neutral set is a curved band about 0.1 wide in c, running from (b, c) ≈ (0.56, 0.45) to
-(0.8, −0.1) at a = 0, with a hole near b = 0.68. A sweep over every N from 301 to 600 and
-every tenth to 1200 separated two rational members: (1/4, 3/5, 1/5) grows at up to 0.042 per
-unit time at N = 371 and every 44th node count after it, while (0, 3/5, 3/10) reads below
-3e-12 at every N from 12 to 1200. Within the a = 0 band the error constants fall with b, so
-the adopted member is the one at the band's low-b edge that passes the sweep:
+Neutral members are rare, and most of those neutral at one line length grow at another.
+At the scan's length every eigenvalue of a neutral member's injected acoustic operator lies
+on the imaginary axis to 1e-14, and every other member grows at a clearly separated rate.
+The fourth-order five-point row-1 family with the same row 2 has no neutral member.
+
+```
+scan over a ∈ [0, 6], b, c ∈ [−1, 1.5] at N = 51
+grid points                                       16,900
+neutral                                           98
+growth rate between 1e-6 and 1e-2                 none
+neutral over twelve line lengths from 51 to 296   4 of the 98
+```
+
+At a = 0, mapped in the (b, c) plane over eight line lengths, the neutral set is a curved
+band with a hole:
+
+```
+band width in c       about 0.1
+ends (b, c)           ≈ (0.56, 0.45) and (0.8, −0.1)
+hole                  near b = 0.68
+```
+
+A sweep over longer lines separates two rational members of the band. One grows at a
+periodic set of node counts and the other stays neutral at every length measured:
+
+```
+sweep: every N from 301 to 600 and every tenth to 1200
+(a, b, c)            growth rate                      at
+(1/4, 3/5, 1/5)      up to 0.042 per unit time        N = 371 and every 44th node count after it
+(0, 3/5, 3/10)       below 3e-12                      every N from 12 to 1200
+```
+
+Within the a = 0 band the error constants fall with b, so the adopted member is the one at
+the band's low-b edge that passes the sweep:
 
 ```
 row 1  (0, 1, 0)        [-11/6, 3, -3/2, 1/3]                 explicit, third order
 row 2  (3/5, 1, 3/10)   [-59/40, 41/30, -3/10, 1/2, -11/120]  compact, fourth order
 ```
 
-The closed line's condition number is 5.0 against the cascade's 16. The other a = 0 band
-members, (16/25, 9/50), (33/50, 7/50), (7/10, 1/25) and (19/25, −3/50), pass the same
-production Jacobians and complete cold Noh at deficits 52.9–53.1%, with wall errors rising
-with b; (1/4, 3/5, 1/5), (0, 4/5, 0) and (1/2, 1/2, 1/2) are neutral at N = 51 and 101 but
-fail the N sweep, the Dirichlet ends or the filtered step, so two resolutions do not select a
-member.
+The closed line's condition number is 5.0 against the cascade's 16. The other members of
+the a = 0 band also pass the production Jacobians and complete cold Noh, with wall errors
+rising with b. Members neutral at two resolutions can still fail the N sweep, the Dirichlet
+ends or the filtered step, so two resolutions do not select a member.
+
+```
+other band members at a = 0, (b, c) =
+    (16/25, 9/50), (33/50, 7/50), (7/10, 1/25), (19/25, −3/50)
+    pass the production Jacobians; cold Noh deficits 52.9–53.1%
+neutral at N = 51 and 101 only, (a, b, c) =
+    (1/4, 3/5, 1/5), (0, 4/5, 0), (1/2, 1/2, 1/2)
+    fail the N sweep, the Dirichlet ends or the filtered step
+```
 
 **Two alternatives to new rows are closed negative.** A filter mirroring only the normal
 acoustic pair, replacing p and u_n on rows 2–4 of each wall by their node-centered
-parity-mirror filtered values, is neutral (1.0000000021 at N = 51) and holds a uniform state
-at 2e-14 to t = 40, but the standing wave's wall order falls from 3.84 to 3.40, its interior
-order from 4.22 to 3.03, and the reflected pulse's wall order from 5.9 to 3.1; one pass of
-either filter on the smooth solution agrees with the exact mirror pass to 1e-14, so the loss
-comes from the two row sets' different response to the wall truncation content the cascade
-rows inject every step. Brady–Livescu rows on the flux divergence only, with the gradient,
-sensor and filter plans left on the cascade, have a Jacobian equal to full Brady–Livescu's
-row for row and fail the singular cold planar Noh start at step 61 against full
-Brady–Livescu's step 201, with cfl 0.05 moving the failure without removing it; the converse
-swap completes the case, so the divergence rows are necessary and sufficient for the failure,
-and the hybrid forfeits the rows' accuracy at every gradient-bearing wall.
+parity-mirror filtered values, is neutral and holds a uniform state, but lowers every
+measured order of accuracy, by more than one in the interior. One pass of either filter on
+the smooth solution agrees with the exact mirror pass to 1e-14, so the loss comes from the
+two row sets' different response to the wall truncation content the cascade rows inject
+every step.
+
+```
+                                          standard    normal-pair mirror
+|λ|max at N = 51                                      1.0000000021
+uniform state to t = 40                               2e-14
+standing wave, wall order                 3.84        3.40
+standing wave, interior order             4.22        3.03
+reflected pulse, wall order               5.9         3.1
+```
+
+Brady–Livescu rows on the flux divergence only, with the gradient, sensor and filter plans
+left on the cascade, have a Jacobian equal to full Brady–Livescu's row for row but fail the
+singular cold planar Noh start earlier, and cfl 0.05 moves the failure without removing it.
+The converse swap completes the case, so the divergence rows are necessary and sufficient
+for the failure, and the hybrid forfeits the rows' accuracy at every gradient-bearing wall.
+
+```
+singular cold planar Noh start              fails at step
+Brady–Livescu on the divergence only        61
+full Brady–Livescu                          201
+```
 
 ### The pseudospectral measurement
 
-The adopted rows (0, 3/5, 3/10), the neighbour (1/4, 3/5, 1/5), and the cascade as the
-unstable control. ε is absolute, in the units of L's entries; `max κ` is the largest
-Bauer–Fike eigenvalue condition number ‖v‖‖w‖; K(L) is the Kreiss constant sup α_ε/ε over ε
-= 1e-2 to 1e-8:
+A neutral member shows no non-normal amplification. For it α_ε equals max κ · ε to four or
+five digits at every ε over six decades, so the ε-pseudospectrum is the first-order
+eigenvalue perturbation. The Kreiss constant and the eigenvector condition number of the
+adopted rows show no trend in N, the first measured to N = 415 and the second to 801. For
+the cascade, and for the neighbour at its resonant node counts, α_ε tends to the positive
+spectral abscissa as ε → 0 and the Kreiss constant is unbounded; the cascade's α_ε above its
+abscissa is again κ · ε, so its instability is spectral and not pseudospectral. The bound
+‖|V||V⁻¹|‖₂ grows linearly with N and is of no use.
+
+The table compares the adopted rows, the neighbour and the cascade as the unstable control.
+ε is absolute, in the units of L's entries; `max κ` is the largest Bauer–Fike eigenvalue
+condition number ‖v‖‖w‖, and K(L) is the Kreiss constant sup α_ε/ε over the range of ε.
 
 ```
+adopted (0, 3/5, 3/10), neighbour (1/4, 3/5, 1/5); ε from 1e-2 to 1e-8
                  N    ‖L‖₂     max Re λ    cond(V)   max κ    α_ε/ε             K(L)
 adopted         25   8.55e1   +3.6e-15     3.08     1.2478   1.2477–1.2478     1.25
 adopted         51   1.78e2   +2.1e-14     5.24     1.9728   1.9661–1.9662     1.97
@@ -5041,19 +5122,15 @@ cascade        201   8.89e2   +1.775      150.5    37.133    181 … 1.8e8      
 cascade        801   3.56e3   +2.073      124.6    29.277
 ```
 
-For a neutral member α_ε equals max κ · ε to four or five digits at every ε over six decades,
-so the ε-pseudospectrum is the first-order eigenvalue perturbation and there is no non-normal
-amplification. The Kreiss constant of the adopted rows is 1.25 to 2.41 over N = 25 to 415 and
-the eigenvector condition number 3.1 to 8.8 to N = 801, without a trend in N. For the
-cascade, and for the neighbour at its resonant node counts, α_ε tends to the positive
-spectral abscissa as ε → 0 and the Kreiss constant is unbounded; the cascade's α_ε above its
-abscissa is again κ · ε, so its instability is spectral and not pseudospectral. The bound
-‖|V||V⁻¹|‖₂ grows linearly with N and is of no use.
-
-The maximum of ‖exp(tL)‖₂ over t ∈ [0, 20], the maximum over the fast window [0, 50/‖L‖₂],
-and the same maximum in the trapezoid quadrature norm of (p, u):
+The adopted rows amplify by at most 3.8 over twenty time units at every N measured, the
+Euclidean and quadrature-norm figures agree to three digits, and the initial fast transient
+is independent of N. The spectral abscissa is below 1e-12 at every node count measured, so
+cond(V), at most 8.75, bounds ‖exp(tL)‖ for all time. The table gives the maximum of
+‖exp(tL)‖₂, the maximum over the fast window, and the same maximum in the trapezoid
+quadrature norm of (p, u).
 
 ```
+t ∈ [0, 20], fast window [0, 50/‖L‖₂]
                  N    max ‖e^{tL}‖₂   at t     fast window   energy norm
 adopted         25       2.677        1.03       2.6108        2.020
 adopted         51       3.783       18.13       2.6102        3.756
@@ -5065,18 +5142,22 @@ cascade         51     8.1e15        20.00       8.2996       7.3e15
 cascade        401     5.3e17        20.00       8.2666       5.2e17
 ```
 
-The adopted rows amplify by at most 3.8 over twenty time units at every N from 25 to 401, the
-Euclidean and quadrature-norm figures agree to three digits, and the initial fast transient
-is independent of N. The spectral abscissa is below 1e-12 at every node count measured, so
-cond(V) bounds ‖exp(tL)‖ for all time, at 8.75 out to N = 801.
-
 ### The resonance
 
-Over N = 340 to 470 the adopted rows read at most 8.5e-13 and the neighbour leaves the axis
-at N = 371, 415 and 459 only. The C6 modified wavenumber k′(θ) = (2 · (7/9) sin θ + 2 ·
-(1/36) sin 2θ)/(1 + (2/3) cos θ) peaks at 1.9894 at θ = 2.2671, so below that frequency the
-interior carries two wavenumbers for one frequency and each closed line holds two ladders of
-modes, one per branch. The colliding pair at N = 371 is one mode from each branch:
+The neighbour's instability is a collision of the two wavenumber branches of the C6
+interior at isolated line lengths. Below the peak frequency of the modified wavenumber the
+interior carries two wavenumbers for one frequency, so each closed line holds two ladders of
+modes, one per branch, and at a resonant length a mode of each branch merges into a growing
+pair.
+
+```
+k′(θ) = (2 · (7/9) sin θ + 2 · (1/36) sin 2θ)/(1 + (2/3) cos θ)
+peak 1.9894 at θ = 2.2671
+```
+
+Over N = 340 to 470 the neighbour leaves the axis only at the first three node counts of the
+second table below. The adopted rows read at most 8.5e-13 over the same range. The colliding
+pair at N = 371 is one mode from each branch:
 
 ```
    N     ω          Re λ        peaks θ (weight)              branch     detuning
@@ -5087,13 +5168,16 @@ modes, one per branch. The colliding pair at N = 371 is one mode from each branc
   372   503.4540   +3.9e-14    2.7827 (1.00)                  2         +0.3037
 ```
 
-The two eigenvalues merge into a quartet ±0.0201 ± 503.08i at N = 371 and separate again at
-N = 372, so the bubble is narrower than one node count and the unstable N are isolated
-points. The modes are propagating, not evanescent wall modes, with 0.27 to 0.38 of their norm
-within eight nodes of a wall against 0.21 for a uniform profile. Every resonance sits at the
-same frequency and the same wall phases (M = N − 1):
+The two eigenvalues merge into a quartet at N = 371 and separate again at N = 372, so the
+bubble is narrower than one node count and the unstable N are isolated points. The modes
+are propagating, not evanescent wall modes: the share of their norm within eight nodes of a
+wall is only modestly above that of a uniform profile. Every resonance sits at the same
+frequency and the same wall phases, and the integer parts of the phases advance by fixed
+steps between consecutive resonances (M = N − 1):
 
 ```
+norm within eight nodes of a wall: the modes 0.27 to 0.38, a uniform profile 0.21
+
    N     rate        ωh        θ₁        θ₂        θ₁M/π      θ₂M/π
   371   +2.011e-2   1.35968   1.36495   2.78161   160.7569   327.6032
   415   +2.869e-2   1.35882   1.36407   2.78192   179.7581   366.6015
@@ -5101,20 +5185,33 @@ same frequency and the same wall phases (M = N − 1):
   503   +3.236e-2   1.35755                       217.7589   444.5988
   547   +3.112e-2   1.35707                       236.7588   483.5976
   591   +2.829e-2   1.35666                       255.7584   522.5964
+
+ωh                                       1.3585 ± 0.0015 (4.62 points per wavelength)
+fractional parts of θ₁M/π and θ₂M/π      0.758 and 0.600
+integer parts advance by                 19 and 39 per 44 nodes
 ```
 
-ωh is fixed at 1.3585 ± 0.0015 (4.62 points per wavelength), the fractional parts of θ₁M/π
-and θ₂M/π are fixed at 0.758 and 0.600, and the integer parts advance by 19 and 39 per 44
-nodes. The period follows from the interior dispersion alone: along k′(θ₁) = k′(θ₂) with r =
-dθ₂/dθ₁ = k″(θ₁)/k″(θ₂), a resonance recurs at a node-count step ΔM with Δm = round(θ₁ΔM/π)
-when Δq = r Δm + ((θ₂ − r θ₁)/π) ΔM is an integer; at the measured frequency r = −0.346815
-and (θ₂ − r θ₁)/π = 1.036097, and ΔM = 44 gives |Δq − round Δq| of 0.0012 against 0.025 or
-more for every other step under seventy. It predicts 371, 415, 459, 503, 547 and 591, which
-the scans found, and nothing else between N = 300 and 620. The period is a property of the C6
-interior row and not of the closure, which sets the two wall phases and with them whether the
-coincidence family lands on integer node counts. Frequency coincidence alone is not
-sufficient: the branch-2 mode comes within 0.019 of a branch-1 partner at N = 379 for the
-adopted rows and within 0.008 at N = 394 for the neighbour, and both stay neutral there.
+The period follows from the interior dispersion alone. Along k′(θ₁) = k′(θ₂), a resonance
+recurs at a node-count step ΔM when Δq below is an integer, and at the measured frequency
+ΔM = 44 is the only step under seventy that comes close:
+
+```
+r = dθ₂/dθ₁ = k″(θ₁)/k″(θ₂),  Δm = round(θ₁ΔM/π),  Δq = r Δm + ((θ₂ − r θ₁)/π) ΔM
+at the measured frequency     r = −0.346815,  (θ₂ − r θ₁)/π = 1.036097
+|Δq − round Δq|               0.0012 at that step; 0.025 or more for every other step under seventy
+```
+
+It predicts the six node counts of the table, which the scans found, and nothing else
+between N = 300 and 620. The period is a property of the C6 interior row and not of the
+closure, which sets the two wall phases and with them whether the coincidence family lands
+on integer node counts. Frequency coincidence alone is not sufficient: a mode of the second
+branch can come close to a partner on the first and both stay neutral.
+
+```
+near coincidence that stays neutral    N      comes within
+adopted rows                           379    0.019
+neighbour                              394    0.008
+```
 
 ### The structural attempt
 
@@ -5122,44 +5219,73 @@ Two conditions were solved exactly, at a four-node wall depth. First, a symmetri
 + Dᵀ H supported on the two wall corners, the admissible set the null space of the support
 constraint taken by SVD, and the minimum eigenvalue maximized over it at tr H = N. A
 well-conditioned positive-definite H within 15% of the identity exists for all three
-closures, the cascade included (λ_min/λ_max +0.848 for the adopted rows at N = 51, +0.834 for
-the neighbour, +0.517 for the cascade, at constraint residuals of 4e-16), so the support
-condition does not separate a neutral closure from an unstable one; a reading that it did
-came from a least-squares projection stalled at a relative residual of 1e-4.
+closures, the cascade included, so the support condition does not separate a neutral
+closure from an unstable one. A least-squares projection of the same problem stalls at a
+relative residual of 1e-4 and reads as a separation that the exact solution does not show.
+
+```
+N = 51, constraint residual 4e-16    λ_min/λ_max of H
+adopted rows                         +0.848
+neighbour                            +0.834
+cascade                              +0.517
+```
 
 Second, the exact Lyapunov certificate: for a real L with imaginary spectrum, P = Re(V⁻ᴴ
 V⁻¹) is symmetric positive definite with P L + Lᵀ P = 0 to round-off, and ‖exp(tL)‖ ≤
-√cond(P) for all time. It exists, at cond(P) of 10.5 (N = 21) and 27.5 (N = 51) for the
-adopted rows and 1170 for the cascade, whose residual is 7.1e-4 rather than 1e-15 since its
-spectrum is not imaginary. It has no structure: P is block diagonal in (p, u) with dense
-blocks, its interior diagonal varies by a factor of seven without settling, and a corner of
-the N = 51 solution at depth 6, 8 or 10 padded with the identity interior leaves an
-off-corner residual of 2.5e-4 to 2.7e-4 at N = 51 to 401, falling like 1/N and never
-vanishing, with under 4% change from depth 6 to 10. No fixed-depth corner block of the
-Sharan, Brady and Livescu form emerges.
+√cond(P) for all time. It exists for the adopted rows, and for the cascade only with a
+residual, since the cascade's spectrum is not imaginary. It has no structure. P is block
+diagonal in (p, u) with dense blocks, and its interior diagonal varies by a factor of seven
+without settling. A corner of the N = 51 solution padded with the identity interior leaves
+an off-corner residual falling like 1/N and never vanishing, nearly independent of the
+corner's depth, so the solution gives no fixed-depth corner block of the Sharan, Brady and
+Livescu form.
+
+```
+Lyapunov certificate      cond(P)                         residual of P L + Lᵀ P
+adopted rows              10.5 (N = 21), 27.5 (N = 51)    1e-15
+cascade                   1170                            7.1e-4
+
+corner of the N = 51 solution at depth 6, 8 or 10, identity interior
+off-corner residual at N = 51 to 401      2.5e-4 to 2.7e-4
+change from depth 6 to 10                 under 4%
+```
 
 **Prior art.** The recipe is published; the result is not. Carpenter, Gottlieb and Abarbanel
-(ICASE 91-71, J. Comput. Phys. 108, 1993, §7) widened compact closure rows into three- and
-four-parameter families and searched for a left-half-plane spectrum on scalar advection with
-a Dirichlet inflow; Zingg and Lederle widened the two boundary rows of explicit schemes by
-one point each and fixed the two-parameter family by the spectrum; Brady and Livescu
-(Computers & Fluids 183, 2019) fixed free boundary coefficients by the stability of the
-injected nonlinear Euler problem, with conservation constraints, at one order below the
-interior. Row 1 of the neutral set is Lele's (1992, eq. 4.1.3) third-order one-sided family
-at α = 0, the explicit difference. Sharan, Brady and Livescu (SIAM J. Numer. Anal. 60, 2022)
-treat strongly imposed boundary conditions by the energy method: their test system U_t + U_x
-= 0, V_t − V_x = 0 with U(0) = τ₁ V(0), V(1) = τ₂ U(1) is the slip-wall acoustic pair in
-characteristic variables, and at τ = 1 their Figure 2 shows the CGA closures, Strand's SBP
-stencils and the Cook–Riley C6 compact scheme with eigenvalues in the right half-plane, the
-mode measured here; their remedy is a nonsquare operator with full-norm corner blocks and a
-skew Q = HD outside them, for explicit interiors up to 3-6-3, and their Theorem 1 is the
-Lyapunov certificate above. Not found in any of these: a compact interior with exactly
-neutral closures, the reflecting two-wall injected operator as the selection problem, a
-two-parameter neutral set, or an instability at particular line lengths only (the literature
-expects the boundary-dependent spectrum to be independent of N, Beam and Warming 1993; the
-nearest frameworks are CGA's N-parity-dependent neutral example, eq. 78–80, and
-Bonnet-Eymard, Coulombel and Faye, arXiv:2504.00667, on wave packets coupling two
-boundaries). A neutral spectrum of a non-normal operator is necessary and not sufficient.
+(CGA) widened compact closure rows into three- and four-parameter families and searched for
+a left-half-plane spectrum on scalar advection with a Dirichlet inflow. Zingg and Lederle
+widened the two boundary rows of explicit schemes by one point each and fixed the
+two-parameter family by the spectrum. Brady and Livescu fixed free boundary coefficients by
+the stability of the injected nonlinear Euler problem, with conservation constraints, at one
+order below the interior. Row 1 of the neutral set is Lele's third-order one-sided family at
+α = 0, the explicit difference.
+
+Sharan, Brady and Livescu treat strongly imposed boundary conditions by the energy method.
+Their test system, below, is the slip-wall acoustic pair in characteristic variables, and at
+τ = 1 a figure of theirs shows the CGA closures, Strand's SBP stencils and the Cook–Riley C6
+compact scheme with eigenvalues in the right half-plane, the mode measured here. Their
+remedy, for explicit interiors, is a nonsquare operator with full-norm corner blocks and a
+skew Q = HD outside them, and a theorem of the paper is the Lyapunov certificate above.
+
+Not found in any of these: a compact interior with exactly neutral closures, the reflecting
+two-wall injected operator as the selection problem, a two-parameter neutral set, or an
+instability at particular line lengths only. The literature expects the boundary-dependent
+spectrum to be independent of N (Beam and Warming); the nearest frameworks are CGA's
+N-parity-dependent neutral example and Bonnet-Eymard, Coulombel and Faye on wave packets
+coupling two boundaries. A neutral spectrum of a non-normal operator is necessary and not
+sufficient.
+
+```
+Carpenter, Gottlieb and Abarbanel   ICASE 91-71; J. Comput. Phys. 108, 1993, §7;
+                                    the N-parity-dependent example, eq. 78–80
+Brady and Livescu                   Computers & Fluids 183, 2019
+Lele                                1992, eq. 4.1.3
+Sharan, Brady and Livescu           SIAM J. Numer. Anal. 60, 2022; Figure 2 at τ = 1;
+                                    Theorem 1; explicit interiors up to 3-6-3
+Beam and Warming                    1993
+Bonnet-Eymard, Coulombel and Faye   arXiv:2504.00667
+
+test system   U_t + U_x = 0, V_t − V_x = 0, U(0) = τ₁ V(0), V(1) = τ₂ U(1)
+```
 
 ### The C8 family
 
@@ -5170,17 +5296,23 @@ one point at fixed order:
 g_1 + a g_2 = Σ_{k=1}^{4} w_k f_k                third order,  a free
 b g_1 + g_2 + c g_3 = Σ_{k=1}^{5} w_k f_k         fourth order, b and c free
 d g_2 + g_3 + e g_4 = Σ_{k=1}^{6} w_k f_k         sixth order on 2d + e = 1
+
+degree-6 residual of row 3: 12 − 24d − 12e, zero on a line through the cascade's (1/3, 1/3)
 ```
 
 Six weights and two left-hand-side coordinates against seven conditions leave the sixth-order
-members of row 3 on a line, not a plane: the degree-6 residual is 12 − 24d − 12e, and the
-line passes through the cascade's (1/3, 1/3). Off the line the row is fifth order. The family
+members of row 3 on a line, not a plane. Off the line the row is fifth order. The family
 reproduces the C8 cascade rows and the C6 `:neutral3` rows exactly, and the assembled line
-agrees with the production plan to 4.4e-16. The neutral count on a 41 × 41 grid in (b, c) ∈
-[−1, 1.5]² at N = 51 and 101, against a and against the position of row 3 on the sixth-order
-line:
+agrees with the production plan to 4.4e-16.
+
+As for C6, the neutral set sits at a = 0, with an explicit third-order row 1, and is empty
+at large a. Here it is a two-dimensional region in (b, c) rather than a thin band. At a = 0
+the wall-window error is set by row 1 alone, so every member there has the same wall error
+and the discriminators are the interior error and the sweep. The table counts the neutral
+members against a and against the position of row 3 on the sixth-order line.
 
 ```
+neutral count, 41 × 41 grid in (b, c) ∈ [−1, 1.5]², N = 51 and 101
   a \ d      0     1/5    1/4    1/3    9/20
   0        132     73     76     60     71
   1/2       50     22     22     28     40
@@ -5190,12 +5322,10 @@ line:
   5/2        0      0      0      0      0
 ```
 
-The neutral set again sits at a = 0, an explicit third-order row 1, and is empty from a = 5/2,
-as for C6, but at a = 0 it is a two-dimensional region in (b, c) rather than a band 0.1 wide.
-The wall-window error at a = 0 is set by row 1 alone, so every a = 0 member has the same wall
-error and the discriminators are the interior error and the sweep. The unique seventh-order
-row 3 on the line, (d, e) = (1/4, 1/2), is neutral at N = 51 and 101, cuts the interior error
-by 20%, and fails the sweep from N = 18. The sweep over 649 line lengths, reject above 1e-10:
+Only two members pass the sweep over 649 line lengths, and both keep the C6 interior row as
+row 3 over C6-neutral first and second rows. The unique seventh-order row 3 on the line is
+neutral at the scan's two lengths and cuts the interior error by 20%, but fails the sweep at
+short lines (the last row of the table). A member is rejected above 1e-10.
 
 ```
   (a, b, c) + (d, e)                max Re λ     at N    verdict
@@ -5211,12 +5341,11 @@ by 20%, and fails the sweep from N = 18. The sweep over 649 line lengths, reject
   (0, 3/5, 3/10) + (1/4, 1/2)       +6.3e-1       384    fails from N = 18 (to 400)
 ```
 
-The two survivors keep the C6 interior row on row 3 and carry C6-neutral rows 1 and 2. A
-prefilter of 750 rational members over twenty line lengths keeps 79, all with the same wall
-error; the two of lowest interior error among them grow at 0.22 per unit time from N = 97 on
-the full sweep, so twenty line lengths are a prefilter and not a verdict. The adopted set is
-(0, 3/5, 3/10; 1/3, 1/3), preferred over the runner-up for its denominators, its interior
-error (5.65e-6 against 5.90e-6 at N = 97) and its viscous Jacobian reading.
+Twenty line lengths are a prefilter and not a verdict. Of 750 rational members such a
+prefilter keeps 79, all with the same wall error. The two of lowest interior error among
+them fail the full sweep, growing at 0.22 per unit time from N = 97. The adopted set is the
+first row of the table, preferred over the runner-up for its denominators, its interior
+error (in the table of error constants below) and its viscous Jacobian reading.
 
 ### The C10 family
 
@@ -5227,16 +5356,21 @@ the full band:
 g_1 + a g_2 + a₂ g_3 = Σ_{k=1}^{4} w_k f_k                    third order
 b g_1 + g_2 + c g_3 + c₂ g_4 = Σ_{k=1}^{5} w_k f_k             fourth order
 d₋₂ g_1 + d g_2 + g_3 + e g_4 + e₂ g_5 = Σ_{k=1}^{7} w_k f_k   sixth order
+
+(d, e) = (1/3, 1/3): centred; the seven-point row collapses to the cascade's, w₆ = w₇ = 0
 ```
 
 Row 3 takes seven points because a row with M right-hand-side points and a fixed left-hand
-side is exact through degree M − 1: the cascade's five-point row is sixth order only because
-(1/3, 1/3) makes it centred, and at (1/3, 1/3) the seven-point row collapses to the cascade's
-with w₆ = w₇ = 0 exactly. The banded assembly agrees with the production `BandPlan` to 5.6e-16
-to 8.9e-16. With row 3 held at the C6 interior row, the scan over (b, c) ∈ [−1, 1.5]² at
-N = 51, pruned over N = 31, 79, 101 and 151:
+side is exact through degree M − 1. The cascade's five-point row is sixth order only because
+its left-hand side makes it centred, and at that left-hand side the seven-point row
+collapses to the cascade's exactly. The banded assembly agrees with the production
+`BandPlan` to 5.6e-16 to 8.9e-16.
+
+With row 3 held at the C6 interior row, a = 0 is forced as before. No growth rate between
+1e-12 and 1e-8 occurs, so the threshold is not a knob.
 
 ```
+row 3 the C6 interior row; (b, c) ∈ [−1, 1.5]²; pruned over N = 31, 79, 101 and 151
   a       neutral at N = 51   surviving five lengths   b range          c range
   0            137 of 1681            24               [0.56, 0.88]     [−0.13, 0.63]
   1/2           56 of 1681            18               [0.50, 0.63]     [0.13, 0.75]
@@ -5246,8 +5380,10 @@ N = 51, pruned over N = 31, 79, 101 and 151:
   5/2 to 6     0 to 1 of 1681          0
 ```
 
-a = 0 is forced as before, and no growth rate between 1e-12 and 1e-8 occurs, so the
-threshold is not a knob. The sweep over 649 line lengths:
+Only the first member below, with the cascade's row 3, stays below 1e-10 over the sweep of
+every line length. Two rational members of the C6 band that are neutral for C6 at every N
+fail on the pentadiagonal interior, at N = 315 and N = 127, so the resonance is specific to
+the interior.
 
 ```
   (a, b, c [, d, e])                 max Re λ     at N    N above 1e-10
@@ -5261,23 +5397,31 @@ threshold is not a knob. The sweep over 649 line lengths:
   (0, 19/20, 2/5, 1/8, 1/4)          +6.9e-2       990        3
 ```
 
-(0, 3/5, 3/10) with the cascade's row 3 is the only member that never exceeds 1e-10. Two
-rational members of the C6 band that are neutral for C6 at every N fail for C10 at N = 315
-and N = 127, so the resonance is specific to the interior. Widening row 3 buys accuracy and
-no neutrality: the lowest interior error constants sit at (d, e) = (1/8, 1/4), where the
-interior error at N = 97 falls to 3.5e-8 against 7.8e-6 for the selected rows and 2.3e-6 for
-the cascade, and every one of the ten lowest fails a staged sweep, the best at N = 226 and
-seven further node counts. A seeded random search over all nine coordinates (40,000 draws,
-1956 neutral at N = 51, 121 passing every stage) found nothing below 1.2e-7. The adopted set
-is the C6 `:neutral3` rows padded with zeros at ±2 over the unchanged row 3, so the minimum
-extent and the halo reach do not move.
+Widening row 3 buys accuracy and no neutrality. The lowest interior error constants sit at
+the (d, e) of the last three rows of the table, where the interior error at N = 97 falls to
+3.5e-8, two orders below the selected rows'. Every one of the ten lowest fails a staged
+sweep, the best at N = 226 and seven further node counts. A seeded random search over all
+nine coordinates found nothing below 1.2e-7:
+
+```
+seeded random search      draws 40,000; neutral at N = 51: 1956; passing every stage: 121
+```
+
+The adopted set is the C6 `:neutral3` rows padded with zeros at ±2 over the unchanged row
+3, so the minimum extent and the halo reach do not move.
 
 ### Error constants and the decision
 
-One derivative of exp(sin 3x) on the closed line, wall window of four nodes then the
-interior, N = 49 / 97 / 193, with the closed line's condition number:
+The neutral rows cost accuracy at unchanged order. Their wall-window error is the same on
+every interior, 1.35 times the cascade's at third order, and their interior-window error is
+3.4 times the cascade's on every interior. On C8 the closed line's condition number falls by
+more than half; on the pentadiagonal interior it is set by the interior and reads 20.7 for
+every band member against 24.6 for the cascade. The table gives one derivative of
+exp(sin 3x) on the closed line, the wall window of four nodes then the interior, with the
+closed line's condition number.
 
 ```
+N = 49 / 97 / 193
                           wall                              interior                      cond
 C8 :neutral3     8.573e-4  1.011e-4  1.224e-5     4.878e-5  5.648e-6  6.751e-7     6.95
 C8 :cascade3     6.309e-4  7.492e-5  9.107e-6     1.422e-5  1.676e-6  2.029e-7    16.25
@@ -5289,40 +5433,52 @@ C6 :neutral3     8.573e-4  1.011e-4  1.224e-5     3.387e-5  3.922e-6  4.689e-7  
 C6 :cascade3     6.287e-4  7.465e-5  9.075e-6     9.841e-6  1.161e-6  1.405e-7    15.97
 ```
 
-The wall-window error is set by row 1 and is the same for the neutral rows on every interior,
-1.35 times the cascade's at unchanged third order; the interior-window error is 3.4 times the
-cascade's on every interior, at unchanged order. The C8 condition number falls from 16 to 7;
-the C10 one is set by the pentadiagonal interior and reads 20.7 for every band member against
-24.6 for the cascade.
-
 On C8 and C10 the two neutral rows are followed by the C6 interior row the cascade already
 used there, so `neutral_closures` builds the three-row set from the C6 table and that row;
 `:cascade3` is kept for comparison. The closed C8 and C10 studies of `test/convergence.jl`
 read the C6 study's errors to the printed digits. A patch or level interface keeps the
-cascade rows for every neutral set. The certificate is the measured one: a Kreiss constant
-below 2.5, an eigenvector condition number below 9 to N = 801, and a transient amplification
-below 4 over twenty time units, with no trend in N. No N-independent structural certificate
-has been found, and the line-length resonance of the neighbouring members is a collision of
-the two interior wavenumber branches of a compact scheme, whose period the interior sets and
-whose occurrence the closure's wall phases decide, so the selection sweeps over every line
-length and not over a sample.
+cascade rows for every neutral set. The certificate is the measured one, with no trend in N:
+
+```
+Kreiss constant                     below 2.5
+eigenvector condition number        below 9 to N = 801
+transient amplification             below 4 over twenty time units
+```
+
+No N-independent structural certificate has been found. The line-length resonance of the
+neighbouring members is a collision of the two interior wavenumber branches of a compact
+scheme, whose period is set by the interior and whose occurrence is decided by the
+closure's wall phases, so the selection sweeps over every line length and not over a sample.
 
 ### The same model on a face-centred symmetry plane
 
 `bench/closuresearch.jl` holds `folded_derivative_matrix` (the interior stencil on every row,
 the taps outside the line folded back with the field's sign, the ghost coupling of the result
-folded onto the diagonal with the opposite sign) and `folded_acoustic_operator`, L = [0
-−D_odd; −D_even 0] on the 2N unknowns (p even, u odd) with no endpoint elimination;
-`bench/closurecertify.jl` takes `wall=folded`. The folded matrix reproduces the package's
-fold plan on unit vectors to 0.0 (C6, C8) and 7.8e-16 (C10), equals the periodic operator on
-2N nodes restricted by parity to 1.3e-15, and differentiates cos(πx) and sin(πx) at 6.00
-(C6), 7.97 (C8) and the round-off floor from N = 20 (C10).
+folded onto the diagonal with the opposite sign) and `folded_acoustic_operator`,
+`L = [0 −D_odd; −D_even 0]` on the 2N unknowns (p even, u odd) with no endpoint
+elimination; `bench/closurecertify.jl` takes `wall=folded`. The folded matrix reproduces the
+package's fold plan, equals the periodic operator on 2N nodes restricted by parity, and
+differentiates at the interior order:
 
-The folded L is antisymmetric to round-off: ‖L + Lᵀ‖/‖L‖ is 3e-16 to 8e-16 and the commutator
-‖LᵀL − LLᵀ‖/‖L‖² 6e-16 to 1e-15 at N = 25 to 801 for all three schemes, where the node-centred
-operator reads 0.84 and 0.97. Every unknown has the same cell measure and the mirror holds no
-node, so the restriction argument gives skew-adjointness in the Euclidean inner product
-itself, not similarity to it. The consequences follow without a search:
+```
+fold plan on unit vectors              0.0 (C6, C8), 7.8e-16 (C10)
+periodic operator restricted by parity 1.3e-15
+order on cos(πx) and sin(πx)           6.00 (C6), 7.97 (C8), round-off floor from N = 20 (C10)
+```
+
+The folded L is antisymmetric and normal to round-off for all three schemes, and the
+node-centred operator is neither. Every unknown has the same cell measure and the mirror
+holds no node, so the restriction argument gives skew-adjointness in the Euclidean inner
+product itself, not similarity to it.
+
+```
+N = 25 to 801, all three schemes    ‖L + Lᵀ‖/‖L‖        ‖LᵀL − LLᵀ‖/‖L‖²
+folded                              3e-16 to 8e-16      6e-16 to 1e-15
+node-centred                        0.84                0.97
+```
+
+The consequences follow without a search. The folded operator has no transient growth and
+no unstable line length, and its Kreiss ratio is one to three digits:
 
 ```
                     spectral abscissa    Kreiss ratio α_ε/ε      max_t ‖exp(tL)‖, t ≤ 20
@@ -5334,15 +5490,20 @@ folded, N = 801     +7.1e-13
 node :neutral3      +3.6e-15 … +6.3e-13  1.25 / 1.97 / 1.26 / 1.93   2.68 / 3.78 / 2.61 / 3.68
 ```
 
-The Kreiss ratios hold over ε = 1e-2 to 1e-6 for C6, C8 and C10 alike; at ε = 1e-8 both
-operators rise, the classification tolerance sitting on top of ε. The folded semigroup is an
-isometry: the subspace iteration and the dense 2-norm agree to 3.8e-13 at every sampled time
-to t = 20, in the Euclidean and in the cell-measure norm, and the eigenvector condition
-numbers of 1.1 to 7.1 are the general eigensolver's response to the doubly degenerate ± pairs
-of a normal operator. The node-count scan over every N from 12 to 600 and every tenth to 1200
-finds no unstable length: the largest real part is +1.137e-12 (C6), +1.592e-12 (C8) and
-+1.577e-12 (C10). Wall times at `-t 16`: spectrum 19 s, pseudo 118 s, transient 106 s, the
-scan 999 s for the three schemes.
+The Kreiss ratios hold over ε = 1e-2 to 1e-6 for all three schemes. At ε = 1e-8 both
+operators rise, because the classification tolerance sits on top of ε. The folded semigroup
+is an isometry: the subspace iteration and the dense 2-norm agree to 3.8e-13 at every
+sampled time, in the Euclidean and in the cell-measure norm. The eigenvector condition
+numbers of 1.1 to 7.1 come from the general eigensolver's treatment of the doubly
+degenerate ± pairs of a normal operator. The node-count scan finds no unstable length.
+
+```
+scan over every N from 12 to 600 and every tenth to 1200
+largest real part        +1.137e-12 (C6), +1.592e-12 (C8), +1.577e-12 (C10)
+
+wall times at -t 16, the three schemes
+spectrum 19 s, pseudo 118 s, transient 106 s, scan 999 s
+```
 
 ## The fifth-order closure search
 
@@ -5360,82 +5521,113 @@ or an impossibility result. The archived vectors, seeds, populations, generation
 training grids are in `bench/closuresearch_results.md`.
 
 **The family.** Each row reads the first six field values. With a unit diagonal on the
-implicit side, row 1 has one free superdiagonal and rows 2–4 have two free off-diagonals
-each; the seven parameters determine the explicit weights by exactness on monomials of
-degrees zero through five, in rational arithmetic. Brady–Livescu T6 belongs to this family,
-with additional conservation constraints the search does not impose. A seven-point extension
-adds a multiple of `[1,-6,15,-20,15,-6,1]`, which annihilates degrees zero through five, for
-eleven free parameters. The acoustic screening operator evolves pressure on all N points and
-normal velocity on the N−2 interior points; finite-grid spectral neutrality is not an energy
-estimate uniform in N, and eigenvector conditioning and sampled resolvents are diagnostics,
-not proofs.
+implicit side, the first row has one free superdiagonal and rows 2–4 have two free
+off-diagonals each; the seven parameters determine the explicit weights by exactness on
+monomials of degrees zero through five, in rational arithmetic. Brady–Livescu T6 belongs to
+this family, with additional conservation constraints the search does not impose. A
+seven-point extension adds a multiple of `[1,-6,15,-20,15,-6,1]`, which annihilates degrees
+zero through five, for eleven free parameters. The acoustic screening operator evolves
+pressure on all N points and normal velocity on the N−2 interior points; finite-grid
+spectral neutrality is not an energy estimate uniform in N, and eigenvector conditioning and
+sampled resolvents are diagnostics, not proofs.
 
 **Four candidate sets and what killed each.**
 
 - `ClosureSearch.unfiltered_scheme()`, six points, selected on unfiltered acoustic growth and
-  conditioning (implicit condition number 141 against Brady–Livescu's 1192, moment residual
-  7.0e-17, production differentiation of x^6 at order 5.00000). Its filtered production
-  Jacobian reads 1.006528 at N = 51 and 1.002726 at N = 101, growth rates 0.85 and 0.71 per
-  unit time, persisting across the perturbation ladder, and although neutral at its training
-  sizes it grows at 0.662 c/L at N = 171 in the sweep over every N from 12 through 200.
+  conditioning. It is fifth order in production at about a tenth of Brady–Livescu's implicit
+  condition number, but its filtered production Jacobian grows, persisting across the
+  perturbation ladder, and although neutral without the filter at its training sizes it
+  grows at a longer line of the sweep.
 - `ClosureSearch.candidate_scheme()`, six points, selected against both the unfiltered
-  growth and the filtered step. Its filtered radii improve to 1.0000148 and 1.0000059 but
-  exceed the model gate of 1 + 1e-10, and the held-out unfiltered sweep finds growth 1.041
-  c/L at N = 415.
+  growth and the filtered step. Its filtered radii improve but still exceed the model gate,
+  and the held-out unfiltered sweep finds growth at a longer line.
 - `ClosureSearch.de_scheme()`, seven points, differential evolution optimizing stability
-  before conditioning. It retains fifth-order accuracy (moment defect 9.995e-17, x^6 orders
-  4.99964 to 5.00000) and its slip and no-slip radii sit at the Jacobian's differencing
-  floor, but its Dirichlet radius is 1.121 unfiltered and 1.0746 filtered at N = 79, 101 and
-  171 alike, growth rates +14.67, +18.81 and +31.98 per unit time, which the one-sided filter
-  does not remove. The `:neutral3` control at the same settings reads 1.000000001380
-  filtered, so the growth belongs to these rows. The filter does remove its one unfiltered
-  slip resonance, at N = 171.
+  before conditioning. It retains fifth-order accuracy and its slip and no-slip radii sit at
+  the Jacobian's differencing floor, but its Dirichlet radius exceeds one by the same amount
+  at every line length, unfiltered and filtered, and the one-sided filter does not remove
+  that growth. The `:neutral3` control at the same settings is neutral, so the growth
+  belongs to these rows. The filter does remove its one unfiltered slip resonance, at
+  N = 171.
 - The joint derivative/filter treatment of `bench/closuredamping.jl`: the filtered-objective
   candidate with an extra rank-one wall pass `Fwall = I − σ v vᵀ/(vᵀv)`, `v =
   [1,-6,15,-20,15,-6,1]`, σ = 0.1, which preserves degree-five polynomials and is an O(h^5)
   boundary perturbation at fixed hyperbolic CFL. Applied to every conserved component it is
-  rejected: the acoustic block alone appears neutral but the full production Jacobian reads
-  1.00087 at N = 51 and 101, the missing modes the scalar entropy and tangential branches
-  governed by the composite scalar filter. Applied only to pressure and normal velocity, with
-  total energy adjusted for both the pressure and kinetic-energy changes, it passes the full
-  Jacobian at 1 + 3.4e-9, holds a uniform state to t = 40 below 2.5e-13, and reads
-  smooth-wall orders 5.94 / 6.06 with the artificial properties off. Over every N from 14
-  through 200 plus five larger probes, at three CFL numbers, the only failures are N = 14 and
-  N = 15. The prototype is a serial one-dimensional calorically perfect gas.
+  rejected: the acoustic block alone appears neutral but the full production Jacobian grows,
+  the missing modes the scalar entropy and tangential branches governed by the composite
+  scalar filter. Applied only to pressure and normal velocity, with total energy adjusted
+  for both the pressure and kinetic-energy changes, it passes the full Jacobian, holds a
+  uniform state, reads smooth-wall orders near six with the artificial properties off, and
+  fails only at the two shortest lines of its sweep. The prototype is a serial
+  one-dimensional calorically perfect gas.
 
-**An exact energy-norm feasibility probe.** `bench/closureenergy.jl` tests a restricted
-construction: symmetric implicit A, `B + B' = (5/3) diag(-1,0,...,1)`, fifth-order boundary
+```
+accuracy                     points   implicit cond.   moment residual   order on x^6
+unfiltered_scheme()          six      141              7.0e-17           5.00000
+de_scheme()                  seven                     9.995e-17         4.99964 to 5.00000
+Brady–Livescu                         1192
+
+failures                     test                                           N             reading
+unfiltered_scheme()          filtered production Jacobian                   51 / 101      1.006528 / 1.002726
+                               growth per unit time                                         0.85 / 0.71
+                             unfiltered sweep, every N from 12 through 200  171           growth 0.662 c/L
+candidate_scheme()           filtered radii against the gate 1 + 1e-10                    1.0000148 and 1.0000059
+                             held-out unfiltered sweep                      415           growth 1.041 c/L
+de_scheme()                  Dirichlet radius, unfiltered / filtered        79, 101, 171  1.121 / 1.0746
+                               growth per unit time                         the same      +14.67, +18.81, +31.98
+:neutral3 control            same settings, filtered                                      1.000000001380
+joint, every component       full production Jacobian                       51 and 101    1.00087
+joint, acoustic components   full production Jacobian                                     1 + 3.4e-9
+                             uniform state to t = 40                                      below 2.5e-13
+                             smooth-wall orders, artificial properties off                5.94 / 6.06
+                             every N from 14 through 200, five larger
+                             probes, three CFL numbers                      fails at 14 and 15
+```
+
+**An exact energy-norm feasibility probe.** A simple norm ansatz is ruled out, though not
+other compact SBP norms. `bench/closureenergy.jl` tests a restricted construction:
+symmetric implicit A, `B + B' = (5/3) diag(-1,0,...,1)`, fifth-order boundary
 moments, and the unchanged C6 interior. Positive A would give an SBP norm `H = (3/5)A`, and
 decoupling its endpoint would make strong injection orthogonal in that norm. Exact rational
 elimination finds inconsistent moment systems for tridiagonal boundary blocks with 4–12
 closure rows, and full boundary blocks also fail in the tested widths; each rejection carries
 a checked exact left-null certificate `y'M = 0, y'b = 1`. The standard explicit sixth-order
 control admits the expected fifth-order restricted-full-norm moment families at 7 and 8 rows,
-verifying the machinery. This rules out the tested simple norm ansatz, not other compact SBP
-norms.
+verifying the machinery.
 
 **Brady–Livescu also has a line-length resonance.** The published T6 control is not
-unconditionally neutral without filtering: at N = 171 the production Jacobian reads 1.000751
-unfiltered, growth 0.334 per unit time, and 1.000239 under the unrelaxed default filter,
-growth 0.106, both persisting across the perturbation ladder. Its neutral readings at N = 51
-and 101 do not generalize.
+unconditionally neutral, with or without the filter: it grows at N = 171 in both, persisting
+across the perturbation ladder. Its neutral readings at N = 51 and 101 do not generalize.
+
+```
+Brady–Livescu T6 at that N       production Jacobian    growth per unit time
+unfiltered                       1.000751               0.334
+unrelaxed default filter         1.000239               0.106
+```
 
 **The verdict.** A fifth-order closure is useful only where the artificial properties are
 off or the dilatation sensor is on. Under the strain sensor the sensor's own cusp caps an
 inviscid wall at fourth order under any closure ([wall closures in
 production](#wall-closures-in-production)), and the production workloads of this solver are
 shocked and cold-started. With the sensor mirrors and the slip-wall flux contract in place,
-Brady–Livescu and the unfiltered-search rows complete cold planar Noh at N = 200 and CFL 0.3
-with seven inadmissible cells, while the filtered-objective candidate fails at step 30, the
-seven-point DE rows at step 28 and the joint treatment at step 31, under both sensors. All
-five derivative choices complete Woodward–Colella and the t0 = 0.1 warm start. Completion
-under a permissive policy is not an admissibility result, and one extent, CFL and end time do
-not establish a cold-start envelope.
+only Brady–Livescu and the unfiltered-search rows complete cold planar Noh; the other three
+fail within a few tens of steps under both sensors. All five derivative choices complete
+Woodward–Colella and the t0 = 0.1 warm start. Completion under a permissive policy is not an
+admissibility result, and one extent, CFL and end time do not establish a cold-start
+envelope.
+
+```
+cold planar Noh, N = 200, CFL 0.3, both sensors
+Brady–Livescu                     completes, seven inadmissible cells
+unfiltered-search rows            completes, seven inadmissible cells
+filtered-objective candidate      fails at step 30
+seven-point DE rows               fails at step 28
+joint treatment                   fails at step 31
+```
 
 No fifth-order route is a production candidate, so the thread is closed. The independent
 limitations remain: Brady–Livescu has a filtered slip-wall resonance, the unfiltered-search
 set has the N = 171 resonance, the filtered-objective candidate has a held-out line-length
-failure, and DE has a filtered Dirichlet radius of 1.0746. A resumption would measure
+failure, and DE has a filtered Dirichlet radius above one. A resumption would measure
 closures under `beta_sensor = :dilatation`, where the wall is no longer capped, rather than
 begin at the derivative rows. The instruments are kept: `bench/closuresearch.jl` holds the
 family, the reduced models and the searches, `bench/closurequalify.jl` the production
@@ -5476,7 +5668,7 @@ derivative's zero row sum from the interior weights. The `:gaussian` smoother ta
 absolute value and so even; the `:d8` detector takes both signs, a pair per dimension
 indexed by the wall sign that aliases to one plan where neither face is a wall, leaving the
 default configuration's plans and memory unchanged. A fold's closed far end takes the same
-rows, and `FoldSpec.ring_plans` became 2×2, ghost parity by wall sign. Patched runs apply
+rows, and `FoldSpec.ring_plans` is 2×2, ghost parity by wall sign. Patched runs apply
 the smoother rows at physical wall faces only. The `:compact` smoother shares the state
 filter's plans, carries no half-cell shift and is unchanged.
 
@@ -5493,36 +5685,41 @@ change reaches one cell per folded end.
 
 At a fold, for an even field the clamp misplaces one δ⁴ tap by a term that the vanishing
 edge derivative makes O(h²); for an odd field the edge derivative is the largest quantity
-there and the same tap is wrong at O(h). On u_r = r at the cylindrical axis, N = 32, which
-should produce no sensor at all, the clamp gives μ\* = 1.2e-6 on the axis cell against 0 for
-the mirror, or C_mu·ρ·h² of spurious viscosity on the cell where every converging case
-fails.
+there and the same tap is wrong at O(h). On u_r = r at the cylindrical axis, which should
+produce no sensor at all, the clamp gives μ\* = 1.2e-6 on the axis cell at N = 32, a
+spurious viscosity of C_mu·ρ·h² on the cell where every converging case fails; the mirror
+gives none.
 
-A scratch probe applies `detect_sum!` under `:delta4` at weight power 2 to ρ = 1 + r² and to
-exp(−4r²), comparing the first interior cell against the analytic δ⁴ of the smooth even
-extension through r < 0. The self-paired axisymmetric cylinder and the paired resolved-θ
-cylinder and spherical origin give identical numbers:
+On the first cell off the axis the clamp's error relative to the exact δ⁴ grows as h⁻², as
+an O(h²) relative error predicts, and the mirror reproduces the exact value to every printed
+digit. A scratch probe applies `detect_sum!` under `:delta4` at weight power 2 to the two
+even fields of the table, comparing the first interior cell against the analytic δ⁴ of the
+smooth even extension through r < 0. The self-paired axisymmetric cylinder and the paired
+resolved-θ cylinder and spherical origin give identical numbers:
 
 ```
-N    field        cell 1 clamp   cell 1 mirror   exact
+N    field        cell 1 clamp   cell 1 mirror   exact          clamp / exact
 32   1 + r²       2.031364e-06   2.237789e-19    2.237789e-19
-32   exp(−4r²)    8.278876e-06   1.942393e-07    1.942393e-07
+32   exp(−4r²)    8.278876e-06   1.942393e-07    1.942393e-07   42.62
 64   1 + r²       1.230085e-07   5.506717e-20    5.506717e-20
-64   exp(−4r²)    4.943444e-07   2.920133e-09    2.920133e-09
-```
+64   exp(−4r²)    4.943444e-07   2.920133e-09    2.920133e-09   169.29
 
-On exp(−4r²) the clamp reads 42.62 times the exact value at cell 1 for N = 32 and 169.29
-times it for N = 64, growing as h⁻² as an O(h²) relative error predicts; the mirror reads
-1.0000 to every printed digit, and cells 2, 3, 4 and 8 read 1.0000 under both extensions.
+cells 2, 3, 4 and 8 read 1.0000 of the exact value under both extensions
+```
 
 ### The operator probe
 
-`bench/sensorwall.jl` prints |wall − periodic| at a node over the input amplitude, on an
-even field cos(πx) + 0.5cos(5πx) + 0.1cos(13πx) and an odd one sin(πx) + 0.1sin(13πx), both
-of period 2 and reflecting about the nodes at x = 0 and x = 1. Nodes 1, 2 and 6 of the low
-wall, N = 49 / 97 / 193, under the half-offset rows these replaced:
+At a node-centred wall the half-offset rows make the `:d8` detector second order on an even
+field and first order on an odd one, and the `:gaussian` smoother second order; the
+node-centred rows reproduce the periodic result to round-off. `bench/sensorwall.jl` prints
+|wall − periodic| at a node over the input amplitude, on an even and an odd field that
+reflect about the wall nodes. The first table is the low wall under the half-offset rows.
 
 ```
+even field   cos(πx) + 0.5cos(5πx) + 0.1cos(13πx)
+odd field    sin(πx) + 0.1sin(13πx)
+both of period 2, reflecting about the nodes at x = 0 and x = 1
+
 operator / field        node   N=49        97          193         orders
 :d8, even                  1   4.637e-03   1.075e-03   2.629e-04   2.11 / 2.03
                            2   1.014e-02   2.334e-03   5.725e-04
@@ -5537,75 +5734,109 @@ operator / field        node   N=49        97          193         orders
 :compact, even             1   3.310e-06   1.358e-08   5.375e-11   7.93 / 7.98
 ```
 
-The high wall reads the low one in every row. `:gaussian` is exactly 0 at nodes 5 and 6, its
-rows reaching four nodes, and `:compact` reads between 1.3e-05 and 1.4e-10 at nodes 2 to 6;
-`:delta4` sits at the 1e-15 floor at nodes 1 and 2 and is exactly 0 at nodes 3 to 6, on both
-parities and at both walls.
+The high wall reads the low one in every row. The other operators and nodes, on both
+parities and at both walls, read:
 
-Under the node-centred rows, `:d8` reads at most 1.994e-15 on the even field and 2.545e-15
-on the odd one at any of the six nodes of either wall at any resolution, `:gaussian` at most
-2.776e-16 at nodes 1 to 4 and exactly 0 at nodes 5 and 6, and `:delta4` and `:compact` are
-unchanged in every digit. A one-dimensional cross-check at N = 49 reads the same way, the
-smoother reproducing the periodic run to between 1.5e-16 and 2.9e-16 relative and
-`ring_along!` to between 1e-12 and 3e-11, the high-pass's own cancellation floor. At a
-symmetry plane the same probe reads round-off for every operator on both parities with no
-wall rows at all ([the face-centred symmetry plane](#the-face-centred-symmetry-plane)).
+```
+:gaussian    exactly 0 at nodes 5 and 6, its rows reaching four nodes
+:compact     between 1.3e-05 and 1.4e-10 at nodes 2 to 6
+:delta4      the 1e-15 floor at nodes 1 and 2, exactly 0 at nodes 3 to 6
+```
+
+Under the node-centred rows every operator reads round-off at every node of either wall at
+every resolution, and `:delta4` and `:compact` are unchanged in every digit. A
+one-dimensional cross-check reads the same way, `ring_along!` at the high-pass's own
+cancellation floor. At a symmetry plane the same probe reads round-off for every operator on
+both parities with no wall rows at all ([the face-centred symmetry
+plane](#the-face-centred-symmetry-plane)).
+
+```
+node-centred rows, the six nodes of either wall      at most
+:d8, even field                                      1.994e-15
+:d8, odd field                                       2.545e-15
+:gaussian, nodes 1 to 4                              2.776e-16 (exactly 0 at nodes 5 and 6)
+one-dimensional check at N = 49
+    smoother                                         1.5e-16 to 2.9e-16 relative
+    ring_along!                                      1e-12 to 3e-11
+```
 
 ### What moved
 
 Every smooth-wall row with the artificial properties off is bit-identical, as is
 `test/convergence.jl` study by study (every study there runs with the properties off). With
 them on, the wall errors of the Brady–Livescu closures fall by one to two orders at the
-viscous and shear walls, to within about 1% of their properties-off values, and the
+viscous and shear walls, to within about 1% of their properties-off values. The
 `detector = :d8` channel row falls by factors 2.7 to 5.3. The inviscid slip wall under the
 strain sensor is then limited by that sensor's cusp rather than by any operator's edge, and
 the two default closures move in the third digit.
 
 On the battery the mirror moved the planar Noh wall deficit and the aligned Noh case and
-nothing else past the printed digits. The aligned case's transverse round-off read 1.4e-8
-under the clamp, 2.8e-6 under the `:delta4` wall mirror alone, and 7.8e-9 under the full set
-([the aligned Noh transverse mode](#the-aligned-noh-transverse-mode)). The fold rows moved
-in the fourth or fifth digit and no guard failed. Spherical Noh completed 544 steps at CFL
-0.30 before the fold change and 543 after, and failed on negative density at 0.40 at step
-105 before and 106 after.
+nothing else past the printed digits. In the aligned case the `:delta4` wall mirror alone
+raised the transverse round-off by two orders over the clamp's, and the full set brought it
+below the clamp's ([the aligned Noh transverse mode](#the-aligned-noh-transverse-mode)). The
+fold rows moved in the fourth or fifth digit and no guard failed, and spherical Noh moved by
+one step at either CFL.
 
-A scratch MPI check on the cylindrical axis with θ split over two ranks gives np = 1 and np
-= 2 agreeing to 1.2e-15 relative on Σμ\*, 6e-16 on Σβ\* and 5e-16 on Σκ\*, with no deadlock;
-between clamp and mirror Σμ\* and Σβ\* move in the eleventh digit while Σκ\* falls by a
-factor 5.9, so the internal-energy sensor at the axis carried most of the clamp's spurious
-contribution. No MPI phase runs the detector across a paired fold, and the butterfly
-exchange every scalar sensor now carries there is untimed.
+```
+aligned Noh, transverse round-off      clamp 1.4e-8, :delta4 wall mirror alone 2.8e-6, full set 7.8e-9
 
-`_device_plan` copies the closure rows generically. On an AMD RX 6800 XT (gfx1030) through
-AMDGPU.jl, on a (48, 16, 16) slab with slip walls on dimension 1, `ring_plans[1]` holds two
-distinct plans and `ring_plans[2]` one aliased plan as on the host, and `mu_art`,
-`beta_art`, `kappa_art` and `dQ` after one `compute_rhs!` agree bitwise with the
-`CPUBackend` solver from the same standing-wave data, over the interior and over the six
-nodes nearest each wall, as does the state after five steps; the comparison repeats under
-`mu_sensor = :velocity`, which exercises the odd wall sign, and under the `detector =
-:delta4` control.
+spherical Noh                          clamp at the fold    mirror at the fold
+CFL 0.30, steps completed              544                  543
+CFL 0.40, negative density at step     105                  106
+```
+
+At the cylindrical axis the internal-energy sensor carried most of the clamp's spurious
+contribution: between clamp and mirror Σμ\* and Σβ\* move in the eleventh digit while Σκ\*
+falls by a factor 5.9. A scratch MPI check with θ split over two ranks agrees with one rank
+to round-off on every sum, with no deadlock. No MPI phase runs the detector across a paired
+fold, and the butterfly exchange every scalar sensor carries there is untimed.
+
+```
+np = 1 against np = 2, relative      Σμ* 1.2e-15     Σβ* 6e-16     Σκ* 5e-16
+```
+
+The device path reproduces the host bitwise. `_device_plan` copies the closure rows
+generically. On the device below, `ring_plans[1]` holds two distinct plans and
+`ring_plans[2]` one aliased plan as on the host, and `mu_art`, `beta_art`, `kappa_art` and
+`dQ` after one `compute_rhs!` agree bitwise with the `CPUBackend` solver from the same
+standing-wave data, over the interior and over the six nodes nearest each wall, as does the
+state after five steps. The comparison repeats under `mu_sensor = :velocity`, which
+exercises the odd wall sign, and under the `detector = :delta4` control.
+
+```
+AMD RX 6800 XT (gfx1030) through AMDGPU.jl, (48, 16, 16) slab, slip walls on dimension 1
+```
 
 In the default configuration the extra rows cost nothing, the pair aliasing one plan. Under
-`:d8` with a wall they add one plan per walled dimension: at (96, 64, 64) the solver holds
-four distinct ring plans against three and 12.00 MiB of packed-line buffer against 9.00 MiB,
-and `Base.summarysize` reads 289.01 MiB against 285.50 MiB. Construction does not move, and
-per call the walled configuration is 4 to 8% cheaper in both runs, inside the run-to-run
-spread.
+`:d8` with a wall they add one plan per walled dimension and about a percent of the solver's
+memory. Construction does not move, and per call the walled configuration is 4 to 8%
+cheaper in both runs, inside the run-to-run spread.
+
+```
+:d8 at (96, 64, 64)          with a wall    without
+distinct ring plans          four           three
+packed-line buffer           12.00 MiB      9.00 MiB
+Base.summarysize             289.01 MiB     285.50 MiB
+```
 
 `bench/jetcheck.jl` reports one dispatch site for the hook, `sensor_mirror` through
-`_face_mirror`, so `compute_rhs!` reads 3 and `step!` 4 with every other entry point 0. Two
-rejected spellings measured five sites (a bare call whose `Any` return destroyed the
-pointwise body's specialization) and one extra `convert` site (a `::Bool` annotation); the
-adopted `@noinline` `@nospecialize` form compared with `=== true` holds it to one.
-`bench/audit.jl` reads +1536 B per call at 48³ in `compute_artificial!`, `compute_rhs!` and
-`step!`, constant rather than per point (three extra scalars captured per threaded region;
-0 B at `-t 1`), with every inference row unchanged.
+`_face_mirror`. Two rejected spellings measured five sites (a bare call whose `Any` return
+destroyed the pointwise body's specialization) and one extra `convert` site (a `::Bool`
+annotation); the adopted `@noinline` `@nospecialize` form compared with `=== true` holds it
+to one. `bench/audit.jl` reads a constant allocation per call in `compute_artificial!`,
+`compute_rhs!` and `step!`, three extra scalars captured per threaded region rather than a
+cost per point, with every inference row unchanged.
+
+```
+jetcheck dispatch sites      compute_rhs! 3, step! 4, every other entry point 0
+audit allocation at 48³      +1536 B per call; 0 B at -t 1
+```
 
 Two test guards moved with the `:d8` wall rows. The `:d8 through a coordinate-singularity
-fold` window narrowed to the inner half, because exp(−4r²) has slope −0.147 at the outer
-slip wall and is not the reflection the wall rows continue it as, which reads 3.6e-3 at the
-wall node. The `u_r = r` axis check under `:d8` moved from 1e-14 to 1e-12 because that field
-is not odd about the outer wall, the slip condition leaves a kink there, and the
+fold` window narrowed to the inner half, because the test field has slope −0.147 at the
+outer slip wall and is not the reflection the wall rows continue it as, which reads 3.6e-3
+at the wall node. The `u_r = r` axis check under `:d8` moved from 1e-14 to 1e-12 because
+that field is not odd about the outer wall, the slip condition leaves a kink there, and the
 pentadiagonal inverse carries a decaying tail of that mismatch to the axis.
 
 ## The face-centred symmetry plane
@@ -5628,13 +5859,14 @@ mechanism and the setup rules.
 ### Mirror equivalence
 
 The folded operator is the periodic operator on the doubled line restricted by parity, so a
-run between symmetry planes on [0, 1] at N nodes and the periodic run on [0, 2) at 2N nodes
-with origin h/2 differ by round-off for every operator in the step. The `symmetry plane: the
-mirror of the periodic run on the doubled line` testset measures that at N = 32 over thirty
-to forty steps, compact filter every step at full strength and artificial properties on,
-relative maximum norm over every conserved component on the coincident nodes:
+run between symmetry planes and the periodic run on the doubled line, offset by half a cell,
+differ by round-off for every operator in the step. The `symmetry plane: the mirror of the
+periodic run on the doubled line` testset measures that at N = 32 over thirty to forty
+steps, compact filter every step at full strength and artificial properties on, relative
+maximum norm over every conserved component on the coincident nodes:
 
 ```text
+[0, 1] at N nodes against [0, 2) at 2N nodes with origin h/2
                   :delta4/:gaussian  :delta4/:compact  :d8/:gaussian  :d8/:compact
 lele_d1_6              2.52e-15          3.36e-15        3.36e-15       3.53e-15
 lele_d1_8              2.35e-15          3.02e-15        3.19e-15       3.53e-15
@@ -5649,8 +5881,10 @@ and five steps leave a spread and a drift of 1.9e-14.
 
 ### One derivative, one filter pass, and the sensors
 
-`test/convergence.jl`, global maximum norm of one derivative between two planes on [0, 1],
-the field even (exp(cos πx)) or odd (sin(πx) exp(cos πx)) about both planes:
+Between two planes one derivative converges at the interior order on even and odd fields
+alike, and so does a filter pass. The table is `test/convergence.jl`, global maximum norm of
+one derivative between two planes on [0, 1], the field even (exp(cos πx)) or odd
+(sin(πx) exp(cos πx)) about both planes:
 
 ```text
                                  Ns            errors                              order
@@ -5664,23 +5898,36 @@ C8 filter pass, planes         16/24/32/48 4.051e-7  1.711e-8  1.762e-9  7.016e-
 ```
 
 The resolutions fall with the order because a field this smooth reaches round-off quickly.
-`bench/foldorder.jl` with a plane at the low end and a node-centred `SlipWallBC` at the high
-end splits the norm: the fold window converges at 7.01 (even) and 6.05 (odd) with the
-maximum at the last node, where the wall window reads 2.99 and 3.76, and both rows are
-bitwise identical to the cylindrical-axis rows of the same file.
+With a plane at the low end and a node-centred `SlipWallBC` at the high end,
+`bench/foldorder.jl` splits the norm: the fold window converges at or above the interior
+order, and the maximum sits at the last node of the wall window, which converges at third to
+fourth order. Both rows are bitwise identical to the cylindrical-axis rows of the same file.
 
-`bench/sensorwall.jl wall=folded` runs the `:delta4` and `:d8` detectors on an even and an
-odd field and the `:gaussian` and `:compact` smoothers on the even field, at a plane against
-the periodic mirror, N = 49 / 97 / 193, both faces. The maximum relative departure over
-every combination and node is 9.1e-15, the typical entry 1e-16 to 3e-15, many entries
-exactly zero, against the 2.8e-16 (smoother) and 2.5e-15 (detector) of the node-centred wall
-rows of [the sensor operators at walls](#the-sensor-operators-at-walls).
+```text
+bench/foldorder.jl     even    odd
+fold window            7.01    6.05
+wall window            2.99    3.76
+```
+
+At a plane every sensor operator reproduces the periodic mirror to round-off, at the level
+of the node-centred wall rows of [the sensor operators at
+walls](#the-sensor-operators-at-walls). `bench/sensorwall.jl wall=folded` runs the `:delta4`
+and `:d8` detectors on an even and an odd field and the `:gaussian` and `:compact` smoothers
+on the even field, at a plane against the periodic mirror, on both faces.
+
+```text
+N = 49 / 97 / 193, relative departure from the periodic mirror
+plane, maximum over every combination and node     9.1e-15
+plane, typical entry                               1e-16 to 3e-15, many entries exactly zero
+node-centred wall rows                             2.8e-16 (smoother), 2.5e-15 (detector)
+```
 
 ### The smooth wall matrix
 
-`bench/wallclosure.jl parts=smooth wall=folded`, the wall-window maximum norm at t = 0.4
-against the mirror at the same spacing, the default filter every step, cfl 0.25. The
-node-centred rows carry a closure defect; the folded rows are round-off:
+The node-centred rows carry a closure defect that converges near fourth order, and the
+folded rows are round-off. The table is `bench/wallclosure.jl parts=smooth wall=folded`, the
+wall-window maximum norm at t = 0.4 against the mirror at the same spacing, the default
+filter every step, cfl 0.25:
 
 ```text
                                         node-centred                          folded
@@ -5709,28 +5956,43 @@ inviscid planes, C6, cfl/4             25/49/97   8.587e-10  1.526e-11  2.782e-1
 viscous slip planes, C6, unfiltered    25/49/97   8.751e-10  1.528e-11  2.445e-13  6.04
 ```
 
-The 4.00 of the C8 and C10 rows is the time integrator. Halving the step at N = 49 takes
-the C6 error 7.40e-11 to 1.87e-11 and quartering it to 1.53e-11: a fourth-order time error
-over a fixed spatial floor of 1.5e-11, and the cfl/4 row is that floor's sixth-order
-sequence. The C6 rows read above 4 because that floor is still visible at N = 25, where
-they sit twice as high as C8 and C10; the gap is 25% at N = 49 and 6% at N = 97. The
-viscous row's step is diffusion-limited and shows the spatial order directly.
+The 4.00 of the C8 and C10 rows is the time integrator. Halving and quartering the step on
+the middle grid show the C6 error to be a fourth-order time error over a fixed spatial floor
+of 1.5e-11, and the cfl/4 row is that floor's sixth-order sequence. The C6 rows read above
+fourth order because that floor is still visible on the coarsest grid, where they sit
+twice as high as C8 and C10, and the gap closes with refinement. The viscous row's step is
+diffusion-limited and shows the spatial order directly.
 
-The rows first ran on 49/97/193. The finest grid's difference was then 2.5e-13, and at that
-level the step's accumulated round-off differs between hosts: the same code gave the C10
-row 3.844e-12 / 2.580e-13 and an order of 3.96 on the workstation and 3.838e-12 / 2.456e-13
-and 4.00 on the GitHub runner, with the N = 49 column identical to four digits. Julia
-1.11.4 and 1.13.0 on the workstation agree to every printed digit, so the spread is the
-hardware's arithmetic and not the compiler's. At the coarser ladder's finest grid the two
-hosts differ by 0.16% and the fitted order by 0.001.
+```text
+C6, middle grid, half the step         1.87e-11
+C6, middle grid, a quarter of the step 1.53e-11
+C6 above C8 and C10                    N = 25: twice    N = 49: 25%    N = 97: 6%
+```
+
+The ladder stops at its present finest grid because one level finer the step's accumulated
+round-off differs between hosts. Two Julia versions on the workstation agree to every
+printed digit, so the spread is the hardware's arithmetic and not the compiler's. At the
+finest grid of the ladder in use the two hosts differ by 0.16% and the fitted order by
+0.001.
+
+```text
+C10 row on the ladder 49/97/193     middle      finest      order
+workstation                         3.844e-12   2.580e-13   3.96
+GitHub runner                       3.838e-12   2.456e-13   4.00
+finest-grid difference 2.5e-13; the N = 49 column identical to four digits
+Julia 1.11.4 and 1.13.0 on the workstation agree to every printed digit
+```
 
 ### The production Jacobian
 
-`bench/closurequalify.jl parts=jacobian jwalls=symmetry,slip`, the finite-differenced
-`step!` about a uniform state, radius and rate per unit time at the three differencing steps
-δ = 3e-6 / 1e-5 / 3e-5:
+The plane's radius is one to the finite-difference noise, and its filtered rate is six to
+thirty times below the node-centred slip wall's, the one configuration in which the neutral
+rows show a measurable positive rate. The table is `bench/closurequalify.jl parts=jacobian
+jwalls=symmetry,slip`, the finite-differenced `step!` about a uniform state, radius and rate
+per unit time at three differencing steps:
 
 ```text
+δ = 3e-6 / 1e-5 / 3e-5
  N   wall      filter   radius − 1                    rate
  51  symmetry  off      2.5e-10  7.6e-11  1.9e-11     +3.2e-8  +1.0e-8  +2.5e-9
  51  symmetry  on       1.3e-10  9.0e-11  5.0e-12     +1.6e-8  +1.2e-8  +6.5e-10
@@ -5739,14 +6001,19 @@ hosts differ by 0.16% and the fitted order by 0.001.
 101  slip      on       3.8e-9   9.7e-10  2.1e-10     +9.9e-7  +2.5e-7  +5.6e-8
 ```
 
-The plane's radius is one to the finite-difference noise, and its filtered rate is six to
-thirty times below the node-centred slip wall's, the one configuration in which the neutral
-rows show a measurable positive rate. C8 and C10 measured through `production_jacobian`
-directly at δ = 1e-5 read radius − 1 of 7.6e-11 / 1.0e-11 (C8, N = 51, unfiltered /
-filtered), 1.2e-10 / 1.7e-10 (N = 101), 8.1e-11 / 3.9e-11 and 1.1e-10 / 1.6e-11 (C10), where
-their filtered slip-wall counterparts read 2.7e-9 at both N. The exact linear model of the
+C8 and C10 measured through `production_jacobian` directly read the same way, against
+filtered slip-wall counterparts one to two orders higher. The exact linear model of the
 folded operator, antisymmetric with an isometric semigroup, is in [closure
 certificates](#closure-certificates).
+
+```text
+production_jacobian at δ = 1e-5, radius − 1     unfiltered    filtered
+C8, N = 51                                      7.6e-11       1.0e-11
+C8, N = 101                                     1.2e-10       1.7e-10
+C10                                             8.1e-11       3.9e-11
+C10                                             1.1e-10       1.6e-11
+filtered slip-wall counterparts                               2.7e-9 at both N
+```
 
 ### MPI and device parity
 
@@ -5756,29 +6023,37 @@ The `symmetry plane` phase builds every case twice, on the process grid and whol
 dimension on each axis in Float64 and Float32 with two species, physical viscosity,
 `detector = :d8` on one axis and `species_flux = :bulk` on another; a corner with planes at
 both ends of two split dimensions; and the Noh layout, `DirichletBC` low and the plane high.
-All 22 checks pass at np = 2 and np = 4, Float64 residuals 7.1e-15 to 2.3e-14 against a
-tolerance of 1e-8 and Float32 ones 2.4e-7 to 6.7e-6 against 5e-4, with two ranks at np = 4
-owning neither plane and still reaching the folded solve. Device plans inherit the fold from
-the wrapped host plan's factorization, and the two device runs of `test/device_tests.jl` are
-bitwise against the CPU solver.
+Every check passes far inside its tolerance, with two ranks at np = 4 owning neither plane
+and still reaching the folded solve.
+
+```text
+22 checks at np = 2 and np = 4     residual              tolerance
+Float64                            7.1e-15 to 2.3e-14    1e-8
+Float32                            2.4e-7 to 6.7e-6      5e-4
+```
+
+Device plans inherit the fold from the wrapped host plan's factorization, and the two device
+runs of `test/device_tests.jl` are bitwise against the CPU solver.
 
 ### The battery at a plane
+
+Against the node-centred wall the plane improves Woodward–Colella by 6% in L1 with the
+contact where it was, reads the planar Noh wall deficit one point higher at six times less
+negative a wall-layer internal energy, cuts the aligned Noh deficit by five points, and
+holds the aligned case's transverse round-off four hundred times smaller ([the shock
+battery](#the-shock-battery)). That row's uniformity guard is therefore 5e-9 where the
+node-centred row's is 5e-7. Every pre-existing row reads its recorded value to four digits.
+The planar deficit repeats the earlier finding: the wall heating of Noh is a property of the
+captured shock's start at the wall, not of the closure rows.
 
 `test/cases.jl` gives `woodward`, `noh_case` (ν = 1) and `noh_aligned` a `folded` keyword
 that places `SymmetryPlaneBC()` where the `SlipWallBC` was, the spacing following the grid
 (h = L/N between two planes, L/(N − ½) from a plane to the Dirichlet inflow) and feeding the
 collapsed extents and the blend width, so the two runs differ in the wall placement alone.
 `test/validation.jl` runs each folded case beside its original under the same bounds. The
-wall deficit is sampled at node 1 on both grids, the wall itself node-centred and half a
-cell inside the plane folded; `noh_plane_density`, the even continuation (9ρ₁ − ρ₂)/8 onto
-the plane, prints beside it. The readings are in [the shock battery](#the-shock-battery):
-the plane improves Woodward–Colella by 6% in L1 with the contact where it was, reads the
-planar Noh wall deficit one point higher at six times less negative a wall-layer internal
-energy, cuts the aligned Noh deficit by five points, and holds the aligned case's transverse
-round-off four hundred times smaller, so that row's uniformity guard is 5e-9 where the
-node-centred row's is 5e-7. Every pre-existing row reads its recorded value to four digits.
-The planar deficit repeats the earlier finding: the wall heating of Noh is a property of the
-captured shock's start at the wall, not of the closure rows.
+wall deficit is sampled at the first node on both grids, the wall itself node-centred and
+half a cell inside the plane folded; `noh_plane_density`, the even continuation
+(9ρ₁ − ρ₂)/8 onto the plane, prints beside it.
 
 ## The aligned Noh transverse mode
 
@@ -5793,15 +6068,22 @@ julia --project=. -t 1 bench/noh_transverse.jl extended tfinal=2.0 sample=200 nm
 ```
 
 The aligned Noh case grows a transverse disturbance from round-off. The baseline is the
-validation case: 12 periodic transverse nodes, 100 wall-normal nodes, spacing ratio 4, final
-time 0.6, under the slip-wall flux contract, node-centred sensor rows and C6 `:neutral3`. A
-post-step observer reads only the conserved state during one continuous `run!` and subtracts
-transverse station 1 before projecting a line, so a transversely constant state has exactly
-zero modal content. `uniformity` is the largest absolute density difference from the first
-station; the largest transverse spread and the Fourier amplitude at each wall-normal node
-are different norms of the same state. The baseline completes in 4,966 steps with
-`uniformity = 2.052e-7`, spread 3.07e-7, and dominant density amplitude 1.328e-7 in mode
-m = 2, a six-cell transverse wavelength, near the moving shock.
+validation case, under the slip-wall flux contract, node-centred sensor rows and C6
+`:neutral3`. A post-step observer reads only the conserved state during one continuous
+`run!` and subtracts transverse station 1 before projecting a line, so a transversely
+constant state has exactly zero modal content. `uniformity` is the largest absolute density
+difference from the first station; the largest transverse spread and the Fourier amplitude
+at each wall-normal node are different norms of the same state. The baseline's dominant
+density mode is m = 2, a six-cell transverse wavelength, near the moving shock.
+
+| baseline | |
+|---|---:|
+| periodic transverse nodes | 12 |
+| wall-normal nodes | 100 |
+| spacing ratio | 4 |
+| final time | 0.6 |
+| `uniformity` | 2.052e-7 |
+| largest transverse spread | 3.07e-7 |
 
 **The burst is not a measured eigenvalue.** The natural m = 2 component first becomes
 wall-local, then undergoes a short increase with its maximum ahead of the shock; later
@@ -5817,53 +6099,72 @@ samples put its maximum within the four-cell shock window:
 | 4,966 | 0.60000 | 1.328e-7 | shock window |
 
 Across the burst interval the apparent rate is `log(1.345e-7 / 3.648e-11) / (0.35513 -
-0.29273) = 131.6`, but at step 3,000 the maximum sits 7.3 wall-normal cells from the
-analytic shock and outside the four-cell shock window, so the rate is not the growth of an
-amplitude continuously localized at the shock. It is a finite-window rate of a
+0.29273) = 131.6`, but at the end of that interval the maximum sits outside the four-cell
+shock window, 7.3 wall-normal cells from the analytic shock, so the rate is not the growth of
+an amplitude continuously localized at the shock. It is a finite-window rate of a
 path-dependent transient: the amplitude falls again after the burst, and controlled
-perturbations follow different paths. The final spectrum, m1 3.45e-8, m2 1.33e-7, m3 2.21e-9
-and m4 6.25e-11, is dominated by a low transverse mode rather than a single alternating grid
-mode.
+perturbations follow different paths. The final spectrum is dominated by a low transverse
+mode rather than a single alternating grid mode:
 
-**The same wall without a shock does not amplify it.** The control uses the identical strip,
-filter, artificial properties and slip wall, filled with the exact planar-Noh post-shock
-state (rho = 4, u = 0, p = 4/3) and holding it at the far Dirichlet end. Unseeded it
-finishes at station 1.91e-13 and m = 2 amplitude 7.96e-14; with an m = 2 relative density
-seed of 1e-10, which begins at 4e-10 since it multiplies rho = 4, it finishes at 3.446e-10,
-a gain of 0.861 and a finite-horizon rate of −0.25, with a transverse-velocity amplitude of
-4.36e-15. The two-dimensional `:neutral3` wall therefore holds round-off and slightly damps
-the controlled perturbation over the validation horizon, agreeing with the uniform-state
-Jacobians of [constant annihilation](#constant-annihilation), and certifies nothing about
-every perturbation of either state.
+| final density A | m1 | m2 | m3 | m4 |
+|---|---:|---:|---:|---:|
+| baseline | 3.45e-8 | 1.33e-7 | 2.21e-9 | 6.25e-11 |
 
-**Controlled amplitude.** The seed multiplies the initial density by `1 + a cos(2 pi m
-x/Lx)` at fixed pressure and velocity. For m = 2:
+**The same wall without a shock does not amplify it.** The two-dimensional `:neutral3` wall
+holds round-off and slightly damps a controlled perturbation over the validation horizon,
+agreeing with the uniform-state Jacobians of [constant
+annihilation](#constant-annihilation); it certifies nothing about every perturbation of
+either state. The control uses the identical strip, filter, artificial properties and slip
+wall, filled with the exact planar-Noh post-shock state and holding it at the far Dirichlet
+end. A relative density seed multiplies the post-shock density, so its initial amplitude is
+four times the seed.
 
-| initial A | final m = 2 A | gain | `log(gain)/0.6` | fitted rate over the second half |
-|---:|---:|---:|---:|---:|
-| 1e-12 | 6.868e-11 | 68.7 | 7.05 | -1.22 |
-| 1e-10 | 6.594e-9 | 65.9 | 6.98 | -0.10 |
-| 1e-8 | 1.443e-5 | 1,443 | 12.12 | -- |
+| post-shock state rho = 4, u = 0, p = 4/3 | station variation | initial m = 2 A | final A | gain | finite-horizon rate | transverse-velocity A |
+|---|---:|---:|---:|---:|---:|---:|
+| unseeded | 1.91e-13 | | 7.96e-14 | | | |
+| relative seed 1e-10 | | 4e-10 | 3.446e-10 | 0.861 | −0.25 | 4.36e-15 |
 
-The two small seeds take finite gains differing by about 4% with no positive late-time
-fitted rate; the 1e-8 seed takes a much larger gain and generates an m = 4 harmonic of
-7.96e-7. Neither is the constant exponential growth of an unstable wall eigenmode, and
-extrapolating the small-seed gains does not predict the unseeded baseline: inserting even
-the 1e-12 seed changes the round-off history and suppresses the baseline's large burst, so
-endpoint changes under an unseeded ablation are not channel causality. From the smoothed
-exact profile at t = 0.1, evolved for 0.5, the unseeded station variation is 1.389e-10
-against 2.052e-7 from the cold singular start, while the seeded m = 2 run finishes at
-3.129e-8, a gain of about 313, with its maximum at the shock: the singular startup sets the
-natural burst history, and a resolved shock can still amplify an imposed disturbance.
+**Controlled amplitude.** A controlled seed grows by a finite gain and not as the constant
+exponential growth of an unstable wall eigenmode. The two small seeds take finite gains
+differing by about 4% with no positive late-time fitted rate, and the largest seed takes a
+much larger gain and generates the m = 4 harmonic. The seed multiplies the initial density
+by `1 + a cos(2 pi m x/Lx)` at fixed pressure and velocity. For m = 2:
+
+| initial A | final m = 2 A | final m = 4 A | gain | `log(gain)/0.6` | fitted rate over the second half |
+|---:|---:|---:|---:|---:|---:|
+| 1e-12 | 6.868e-11 | | 68.7 | 7.05 | -1.22 |
+| 1e-10 | 6.594e-9 | | 65.9 | 6.98 | -0.10 |
+| 1e-8 | 1.443e-5 | 7.96e-7 | 1,443 | 12.12 | -- |
+
+Extrapolating the small-seed gains does not predict the unseeded baseline: inserting even
+the smallest seed changes the round-off history and suppresses the baseline's large burst,
+so endpoint changes under an unseeded ablation are not channel causality. The singular
+startup sets the natural burst history, and a resolved shock can still amplify an imposed
+disturbance. From the smoothed exact profile the unseeded station variation stays three
+orders below the cold start's, while the seeded m = 2 run ends with its maximum at the
+shock.
+
+| start | unseeded station variation | seeded m = 2 final A | gain |
+|---|---:|---:|---:|
+| cold singular start (the baseline) | 2.052e-7 | as above | as above |
+| smoothed exact profile at t = 0.1, evolved for 0.5 | 1.389e-10 | 3.129e-8 | about 313 |
 
 Changing the transverse point count at fixed spacing changes both the available modes and
-the round-off trajectory, with neither a monotone width law nor one selected wavelength: nx
-= 10 ends at 3.132e-9 (m = 2 at the shock), nx = 12 at 2.052e-7 (m = 2), nx = 16 at 6.932e-7
-(m = 2) and nx = 24 at 3.457e-10 (m = 5, in the bulk). The nx = 16 row exceeds the nx = 12
-validation guard.
+the round-off trajectory, with neither a monotone width law nor one selected wavelength.
+The nx = 16 row exceeds the nx = 12 validation guard.
 
-Artificial-property comparisons use the same m = 2, 1e-10 seed so that a different initial
-round-off realization is not the comparison:
+| nx | final `uniformity` | dominant mode | location |
+|---:|---:|---|---|
+| 10 | 3.132e-9 | m = 2 | shock |
+| 12 | 2.052e-7 | m = 2 | |
+| 16 | 6.932e-7 | m = 2 | |
+| 24 | 3.457e-10 | m = 5 | bulk |
+
+Conductivity damps and relocates the controlled small mode: adding it to beta reduces the
+matched seeded gain and moves the maximum from the wall to the shock, without identifying
+one nonlinear feedback behind the natural burst. Artificial-property comparisons use the
+same m = 2, 1e-10 seed so that a different initial round-off realization is not the
+comparison:
 
 | active artificial channels | final m = 2 A | gain | `log(gain)/0.6` | location |
 |---|---:|---:|---:|---|
@@ -5873,22 +6174,32 @@ round-off realization is not the comparison:
 | beta + kappa | 2.555e-9 | 25.6 | 5.40 | shock |
 | defaults with `C_D = 0` | 6.594e-9 | 65.9 | 6.98 | bulk |
 
-`C_D = 0` is bit-identical to the default in this single-species case. Adding conductivity
-to beta reduces the matched seeded gain and moves the maximum from the wall to the shock,
-establishing damping and relocation for the controlled small mode without identifying one
-nonlinear feedback behind the natural burst. The unseeded endpoint variations under the same
-ablations (9.78e-11, 1.57e-10, 4.47e-10) are associations with different numerical
-trajectories. With the filter off the cold run fails with negative density at step 1,335 and
-with all artificial properties off or beta off near t = 0.074, so those runs cannot decide
-whether the removed channel generates or damps the completed run's mode.
+`C_D = 0` is bit-identical to the default in this single-species case. The unseeded endpoint
+variations under the same ablations are associations with different numerical trajectories.
+With the filter off, or with all artificial properties or beta off, the cold run fails with
+negative density, so those runs cannot decide whether the removed channel generates or
+damps the completed run's mode.
 
-**Later evolution.** The baseline initial data evolved in one continuous run to t = 2.0,
-with no landing imposed at t = 0.6, completes in 16,219 steps with the shock inside the
-domain and undergoes a second burst before settling into a bounded oscillatory range: the
-station variation reads 2.13e-7 at t = 0.604, 1.71e-6 at 1.102, 3.20e-4 at 1.351, 4.24e-4 at
-1.475 and 2.87e-4 at 2.0, the dominant mode again m = 2 with its maximum in the shock
-window. The order 3e-4 level over t = 1.35 to 2.0 is about three orders above the validation
-endpoint, so the first t = 0.6 plateau is not saturation.
+| unseeded | |
+|---|---|
+| endpoint variations under the same ablations | 9.78e-11, 1.57e-10, 4.47e-10 |
+| filter off | negative density at step 1,335 |
+| all artificial properties off, or beta off | negative density near t = 0.074 |
+
+**Later evolution.** The validation endpoint is not saturation. Run on to t = 2.0, the
+baseline undergoes a second burst and settles into a bounded oscillatory range, the dominant
+mode again m = 2 with its maximum in the shock window. From t = 1.35 the station variation
+stays of order 3e-4, about three orders above the validation endpoint. The run is one
+continuous `run!` with no landing imposed at the validation time, and the shock stays
+inside the domain. It completes in 16,219 steps.
+
+| t | station variation |
+|---:|---:|
+| 0.604 | 2.13e-7 |
+| 1.102 | 1.71e-6 |
+| 1.351 | 3.20e-4 |
+| 1.475 | 4.24e-4 |
+| 2.0 | 2.87e-4 |
 
 The evidence supports a path-sensitive transverse interaction with the captured Noh shock
 and the history produced where that shock leaves the wall: the natural disturbance moves
@@ -5898,10 +6209,10 @@ extent, has approximately linear finite gain for small imposed modes, and develo
 and a higher bounded amplitude when driven farther. No unique nonlinear feedback among the
 filter, shock capture and artificial properties is isolated by these measurements.
 
-The validation guard is `uniformity < 5e-7` for exactly N = 100, AR = 4, nx = 12 and t =
-0.6, a factor 2.44 above the current measurement: a deterministic regression envelope for
-that preset and horizon, not a stability bound for another width, an injected disturbance or
-later evolution. At a face-centred symmetry plane the same case reads 5.135e-10 and its
+The validation guard, `uniformity < 5e-7`, sits a factor 2.44 above the current
+measurement. It is a deterministic regression envelope for the baseline's preset and
+horizon, not a stability bound for another width, an injected disturbance or later
+evolution. At a face-centred symmetry plane the same case reads 5.135e-10 and its
 guard is 5e-9 ([the face-centred symmetry plane](#the-face-centred-symmetry-plane)).
 
 ## The inflow transverse terms
@@ -5918,31 +6229,42 @@ The transcript of the four commands is `bench/results/nscbcinflow.txt`.
 Every imposed amplitude of `NSCBCInflowBC` carries `−beta_t·𝒯`, the
 weighted transverse contribution of its characteristic, except the transverse
 pressure gradient ∇_t p/ρ in the transverse-velocity amplitudes, which takes
-min(`beta_t`, M) (the derivation is in `src/nscbc.jl`); `NSCBCOutflowBC` has
-carried the same weight on its one incoming wave since its introduction. The
-instrument measures both faces on a two-dimensional stream at Mach 0.3
-(γ = 1.4, p = ρ = 1, 64 points per unit length, periodic width 1, artificial
-properties off, the default filter every step) against the same run on a
-domain extended two units past the face under test, where the disturbance
-meets no boundary in the run: the difference is the face's reflection or the
-error of its imposition. A pressure pulse of amplitude 1e-3 and radius 0.1
-released half a unit inside the face meets it at every incidence angle; the
-pressure deviation is scaled by the largest excursion the extended run
-carries across the plane of the face (2.1e-4 at the inflow, 2.6e-4 at the
-outflow), and the vorticity entering through the face, taken by second-order
-differences, by the pulse's acoustic velocity over its radius. An isentropic
-vortex of peak velocity 0.3 of the stream and radius 0.1 enters through the
-inflow from a time-dependent target, the analytic vortex at the plane, or
-leaves through the outflow; the deviation is scaled by its peak velocity and
-by its pressure depression (1.5e-2). The vortex rows run to the time the
-centre reaches one unit inside the face; the pulse rows to the time the
-reflection is half a unit back inside.
+min(`beta_t`, M) (the derivation is in `src/nscbc.jl`); `NSCBCOutflowBC` carries
+the same weight on its one incoming wave. The instrument measures both faces on a
+two-dimensional stream, artificial properties off and the default filter every
+step, against the same run on a domain extended two units past the face under
+test, where the disturbance meets no boundary in the run: the difference is the
+face's reflection or the error of its imposition. A pressure pulse released half a
+unit inside the face meets it at every incidence angle. Its pressure deviation is
+scaled by the largest excursion the extended run carries across the plane of the
+face, and the vorticity entering through the face, taken by second-order
+differences, by the pulse's acoustic velocity over its radius. An isentropic vortex
+enters through the inflow from a time-dependent target, the analytic vortex at the
+plane, or leaves through the outflow; its deviation is scaled by its peak velocity
+and by its pressure depression. The vortex rows run to the time the centre reaches
+one unit inside the face; the pulse rows to the time the reflection is half a unit
+back inside.
+
+```
+stream             Mach 0.3, γ = 1.4, p = ρ = 1, 64 points per unit length, periodic width 1
+pressure pulse     amplitude 1e-3, radius 0.1
+  scale of p       the extended run's largest excursion across the face's plane:
+                   2.1e-4 at the inflow, 2.6e-4 at the outflow
+isentropic vortex  peak velocity 0.3 of the stream, radius 0.1
+  scale of p       its pressure depression, 1.5e-2
+```
 
 ### The pulse at the inflow
 
-Maximum and root-mean-square deviation of p over the region the reflection
-has crossed, over the incident amplitude, and of the vorticity, over the
-pulse's acoustic velocity over its radius, at the default relaxation rates:
+The pressure reflection is least at an intermediate weight and the entering vorticity
+least at the full share. The reflection is least at a weight of 0.5, a factor 9 under the
+LODI form. It rises from there to the full share, still 2.4 times under the LODI form. The
+vorticity falls monotonically above the Mach number, to a tenth of the LODI form's and a
+fifth of the Mach number's at the full share; below the Mach number it is not monotone in
+the weight. Above the Mach number the pressure part keeps the weight M and only the rest of
+𝒯 follows `beta_t`. The table gives the maximum and root-mean-square deviation of p over
+the region the reflection has crossed, over the incident amplitude, and of the vorticity,
+over the pulse's acoustic velocity over its radius, at the default relaxation rates:
 
 | `beta_t` | max p | rms p | max ω | rms ω |
 |---|---|---|---|---|
@@ -5954,18 +6276,24 @@ pulse's acoustic velocity over its radius, at the default relaxation rates:
 | 0.85 | 0.069 | 0.013 | 0.038 | 0.0051 |
 | 1 | 0.093 | 0.016 | 0.035 | 0.0030 |
 
-Above the Mach number the pressure part keeps the weight M and only the rest
-of 𝒯 follows `beta_t`. The reflection is least at 0.5, a factor 9 under the
-LODI form, and rises from there to 0.093 at the full share, 2.4 times under
-the LODI form. The vorticity falls monotonically above the Mach number, to
-0.035 at the full share, a tenth of the LODI form's and a fifth of the Mach
-number's; below the Mach number it is not monotone in the weight.
-
 ### The vortex at the inflow
 
-Maximum and root-mean-square deviation of u over the peak velocity, the
-maximum of v likewise, and the maximum of p over the pressure depression,
-once the centre is one unit inside:
+The vortex enters only under a fast enough relaxation, and at every rate the full share
+admits it best. At the default rates (0.28) the vortex does not enter at all under any
+weight: the error is the vortex itself. A relaxation admits a structure only when its time
+L_ref/(η c) is short against the passage time r_v/u_0, and the error then falls as 1/η up
+to the largest rate run, with no stiffness at η = 1024. At every rate the full share is the
+best weight, by a factor 3 to 4 over the LODI form at the three highest rates, with the
+error in u falling monotonically in the weight and the pressure error falling fastest.
+
+```
+passage time r_v/u_0        0.28
+relaxation time L_ref/(η c) 6 at the default rate, 0.03 at η = 64
+```
+
+The table gives the maximum and root-mean-square deviation of u over the peak velocity,
+the maximum of v likewise, and the maximum of p over the pressure depression, once the
+centre is one unit inside:
 
 | `eta` | `beta_t` | max u | rms u | max v | max p |
 |---|---|---|---|---|---|
@@ -5987,22 +6315,17 @@ once the centre is one unit inside:
 | 1024 | 0.5 | 0.011 | 0.0015 | 0.018 | 0.017 |
 | 1024 | 1 | 0.0052 | 0.0008 | 0.010 | 0.0069 |
 
-At the default rates (0.28) the vortex does not enter at all under any
-weight: the error is the vortex itself. A relaxation admits a structure only
-when its time L_ref/(η c) is short against the passage time r_v/u_0, 0.28
-here against 6 at the default rate and 0.03 at η = 64, and the error then
-falls as 1/η up to the largest rate run, with no stiffness at η = 1024. At
-every rate the full share is the best weight, by a factor 3 to 4 over the
-LODI form from η = 64 up and with the error in u falling monotonically in the
-weight; the pressure error falls fastest, 0.40 to 0.091 at η = 64.
-
 ### Across the Mach number
 
-The same two disturbances at Mach 0.1, 0.3 and 0.5 (the domain and the
-disturbances unchanged, η = 16 for the vortex), the pulse's maximum
-deviation over its incident amplitude and maximum vorticity over its
-acoustic velocity over its radius, and the vortex's maximum u over its peak
-velocity and maximum p over its pressure depression:
+The ordering is the same at every Mach number: the Mach-number weight reflects the pulse
+least, and the full share admits the vortex best, by a factor 6 over the LODI form at
+Mach 0.1, where the Mach-number weight is nearly the LODI form. Under the full share the
+pulse carries in between a half and a tenth of the LODI form's vorticity, and the
+reflection is less than the LODI form's at every Mach number. The table repeats the two
+disturbances at three Mach numbers, the domain and the disturbances unchanged and η = 16
+for the vortex: the pulse's maximum deviation over its incident amplitude and maximum
+vorticity over its acoustic velocity over its radius, and the vortex's maximum u over its
+peak velocity and maximum p over its pressure depression.
 
 | M | `beta_t` | pulse max p | pulse max ω | vortex max u | vortex max p |
 |---|---|---|---|---|---|
@@ -6016,14 +6339,11 @@ velocity and maximum p over its pressure depression:
 | 0.5 | M | 0.025 | 0.097 | 0.58 | 0.79 |
 | 0.5 | 1 | 0.081 | 0.039 | 0.45 | 0.61 |
 
-The ordering is the same at every Mach number: the Mach-number weight
-reflects the pulse least, and the full share admits the vortex best, by a
-factor 6 over the LODI form at Mach 0.1, where the Mach-number weight is
-nearly the LODI form. Under the full share the pulse carries in between a
-half (Mach 0.1) and a tenth (Mach 0.3) of the LODI form's vorticity, and the
-reflection is less than the LODI form's at every Mach number.
-
 ### The same disturbances at the outflow
+
+The outflow's reflection of the pulse is least at the Mach number in the root-mean-square
+and at half of it in the maximum, and the vortex leaves most cleanly at 1 − M, where the
+pressure error is a fourteenth of the LODI form's and a fifth of the default's:
 
 | `beta_t` | pulse max | pulse rms | vortex max u | vortex rms u | vortex max v | vortex max p |
 |---|---|---|---|---|---|---|
@@ -6035,19 +6355,19 @@ reflection is less than the LODI form's at every Mach number.
 | 0.85 | 0.242 | 0.028 | 0.057 | 0.0071 | 0.067 | 0.098 |
 | 1 | 0.284 | 0.033 | 0.022 | 0.0034 | 0.019 | 0.10 |
 
-The outflow's reflection of the pulse is least at the Mach number in the
-root-mean-square and at half of it in the maximum, and the vortex leaves
-most cleanly at 1 − M, where the pressure error is a fourteenth of the LODI
-form's and a fifth of the default's. At Mach 0.1 the pulse reflection is
-0.187, 0.117, 0.247 and 0.273 under the LODI form, the Mach number, 1 − M and
-the full share, and the vortex leaves with a pressure error of 0.032, 0.0060,
-0.020 and 0.11: the Mach number is the best weight for both. At Mach 0.5,
-where the constant 1 − M equals the stream's Mach number but not the local
-Mach number under the vortex, the pulse reflection is 0.052, 0.131, 0.131 and
-0.279 and the vortex's pressure error 0.48, 0.19, 0.064 and 0.37. The default
-is unchanged by this measurement: the outflow's task is the pulse's, and
-1 − M, the weight that carries a vortex out best at Mach 0.3 and 0.5,
-reflects the pulse twice as strongly as the Mach number at Mach 0.3.
+At Mach 0.1 the Mach number is the best weight for both disturbances. At Mach 0.5 the
+constant 1 − M equals the stream's Mach number but not the local Mach number under the
+vortex. There the LODI form reflects the pulse least and 1 − M carries the vortex out best.
+The outflow default stays at the Mach number, since the outflow's task is the pulse's: the
+weight 1 − M, which carries a vortex out best at the two higher Mach numbers, reflects the
+pulse twice as strongly as the Mach number at Mach 0.3.
+
+| weight | Mach 0.1: pulse reflection | vortex pressure error | Mach 0.5: pulse reflection | vortex pressure error |
+|---|---|---|---|---|
+| LODI form | 0.187 | 0.032 | 0.052 | 0.48 |
+| the Mach number | 0.117 | 0.0060 | 0.131 | 0.19 |
+| 1 − M | 0.247 | 0.020 | 0.131 | 0.064 |
+| the full share | 0.273 | 0.11 | 0.279 | 0.37 |
 
 ### The decision
 
@@ -6060,18 +6380,27 @@ under it. Under it the incoming characteristic variables also follow their
 targets through a transverse flow at the face, the transverse velocity up to
 the rate −(1 − M)∇_t p/ρ that an acoustic wave leaving obliquely gives it
 there; `test/serial_suite.jl` asserts this at both faces. The weight M on the
-pressure part leaves exactly that rate. Under the full weight on it, u_t was
-held against an obliquely leaving acoustic wave at the face and a vorticity
-wave entered the domain: where a pressure pulse converging on the axis
-crossed the top face of `examples/vortex_ring_shock.jl`, 2500 1/s of
-azimuthal vorticity was carried down into the tube, against at most 100 1/s
-under the weight M. On this instrument the weight M lowered the default's
-pulse reflection from 0.128 to 0.093 and raised the entering vortex's error
-at η = 16 by 7% in u (0.262 to 0.280) and 2% in p (0.355 to 0.362). The
-default's pulse reflection is still twice the 0.047 of `beta_t = -1` and
-almost four times the 0.025 of 0.5; a run whose inflow admits no structure
-and faces outgoing waves selects `beta_t = -1`. `NSCBCOutflowBC` keeps the
-Mach number.
+pressure part leaves exactly that rate. Under the full weight on it, u_t is held
+against an obliquely leaving acoustic wave at the face and a vorticity wave enters
+the domain, as where a pressure pulse converging on the axis crosses the top face
+of `examples/vortex_ring_shock.jl`. On this instrument the weight M lowers the
+default's pulse reflection by about a quarter and raises the entering vortex's
+error by a few percent.
+
+```
+vortex_ring_shock.jl, azimuthal vorticity carried into the tube
+full weight on the pressure part     2500 1/s
+weight M                             at most 100 1/s
+
+inflow default, pressure part at     full weight   weight M
+pulse reflection                     0.128         0.093
+vortex error at η = 16, u            0.262         0.280   (7%)
+vortex error at η = 16, p            0.355         0.362   (2%)
+```
+
+The default's pulse reflection is still twice that of `beta_t = -1` and almost four times
+that of a weight of 0.5. For an inflow that admits no structure and faces outgoing waves,
+`beta_t = -1` is the better weight. `NSCBCOutflowBC` keeps the Mach number.
 
 ## Fold order and geometry limits
 
@@ -6093,9 +6422,14 @@ spherical origin, odd  (u_r-like)     6.07     3.86     3.81       i = n
 ```
 
 **The global maximum sits at the outer wall in every fold study.** The fold's own error
-converges at 6.05 to 7.01 and is three to five orders of magnitude below the interior: at N
-= 96 the spherical origin carries 7.0e-12 against 1.9e-7 in the middle of the line. Every
-global error `test/convergence.jl` prints equals the outer-window norm to every digit
+converges at the interior order or above and is three to five orders of magnitude below the
+interior error:
+
+```
+spherical origin, N = 96     fold window 7.0e-12, middle of the line 1.9e-7
+```
+
+Every global error `test/convergence.jl` prints equals the outer-window norm to every digit
 printed, so the guarded numbers in that file are measurements of the outer wall taken
 through a norm insensitive to the fold. With walls at both ends the same window reports
 3.23, so the split does detect a third-order closure where one is present. The middle of the
@@ -6106,13 +6440,21 @@ calculation differentiates at the origin. A face-centred symmetry plane reads th
 fold-window orders bitwise ([the face-centred symmetry
 plane](#the-face-centred-symmetry-plane)).
 
-**A blast at the spherical origin carries a lower CFL ceiling than at the axis.** A top hat
-of the Sedov deposit's energy, p = 1e-5 + p_in inside r₀ with a tanh edge of w cells, on
-N = 256 over (0, 1.2] to t = 0.2 without retries; "area form" restores the former radial
-pressure term through `bench/axisvariant.jl`, and the axis and the plane take the same p_in
-over the same line:
+**A blast at the spherical origin carries a lower CFL ceiling than at the axis.** Under
+∂p/∂r the ceiling is 0.2 to 0.3 on the larger blast, which fails at the same time in either
+form of the pressure term, well after the start. On the smaller blast it is 0.3 to 0.5.
+The area form of the radial pressure term requires initial data resolved over three cells
+or more ([grid-scale growth](#grid-scale-growth-at-the-r-z-axis)): in that form the small
+top hat fails within tens of steps at every edge width to three cells, and under ∂p/∂r a
+sharp edge completes. `test/cases.jl` initializes Sedov with a Gaussian deposit.
+
+The case is a top hat of the Sedov deposit's energy with a tanh edge of w cells, run without
+retries; "area form" restores the area form of the radial pressure term through
+`bench/axisvariant.jl`, and the axis and the plane take the same p_in over the same line.
+With retries both blasts complete, at half the starting CFL.
 
 ```
+p = 1e-5 + p_in inside r₀; N = 256 over (0, 1.2]; t = 0.2
 r0     w        cfl    origin                    area form               axis, plane
 0.03   0        0.3    completes                 fails at step 3
 0.03   0        0.15                             fails at step 144
@@ -6123,22 +6465,18 @@ r0     w        cfl    origin                    area form               axis, p
 0.1    1, 4     0.3    fails at t = 0.046, 0.050 fails at t = 0.046      complete
 0.1    8        0.3    completes
 0.1    1        0.5    fails at t = 0.045        fails at t = 0.045      complete
+
+with retries = 4     from cfl    completes at
+larger blast         0.3         0.15
+smaller blast        0.5         0.25
 ```
 
-The former requirement of initial data resolved over three cells or more was the area form
-of the radial pressure term ([grid-scale growth](#grid-scale-growth-at-the-r-z-axis)): in
-that form the small top hat fails within tens of steps at every edge width to three cells,
-and under ∂p/∂r a sharp edge completes. What remains is a ceiling of 0.2 to 0.3 on the
-larger blast, which fails at the same time in either form, well after the start, and of 0.3
-to 0.5 on the smaller one; `retries = 4` completes both, from 0.3 at 0.15 and from 0.5 at
-0.25. `test/cases.jl` initializes Sedov with a Gaussian deposit.
-
-**The singular t = 0 start of Noh completes at the origin at cfl 0.15** and returns a plateau
-18% low ([the singular start](#the-singular-start-and-the-warm-start)), since the exact
-solution requires 64× compression to appear at r = 0 instantaneously; in the area form it
-completed only at 0.05. A warm start from the exact solution at t = 0.3 integrates to 0.6,
-testing maintenance of the solution through the origin without the initialization
-singularity. The cylindrical axis accepts the cold start at 16× compression.
+**The singular t = 0 start of Noh completes at the origin at cfl 0.15**. It returns a
+plateau 18% low ([the singular start](#the-singular-start-and-the-warm-start)), since the
+exact solution requires 64× compression to appear at the origin instantaneously. In the area
+form it completes only at cfl 0.05. A warm start from the exact solution at t = 0.3
+integrates to 0.6, testing maintenance of the solution through the origin without the
+initialization singularity. The cylindrical axis accepts the cold start at 16× compression.
 
 ### Mass through the cylindrical axis face
 
@@ -6153,39 +6491,57 @@ the closed line's tail at the far end) the folded divergence telescopes to
 Σ W (D g) = g_N − Ĝ_0, Ĝ_0 the face value at the fold, so the right-hand side changes
 Σ W J ρ by Ĝ_0 alone on a line closed by a slip wall. Ĝ_0 is round-off (under 5e-16) for
 the odd area-weighted fluxes at the spherical origin and at a face-centred symmetry plane.
-For the even mass and energy fluxes at the cylindrical axis, measured from one right-hand
-side on a converging profile with ρ(0) = 1.5 and u_r'(0) = −1, per radian, against the
-prediction −h² ρ u_r'(0)/12 (and (E + p) in place of ρ), with "corrected" the mass face less
-(h²/24) dρ_1/dt:
+At the cylindrical axis the even mass and energy fluxes leave a face that matches its
+prediction to the third or fourth digit. The table measures them from one right-hand side
+on a converging profile, per radian, with "corrected" the mass face less (h²/24) dρ_1/dt:
 
 ```
+profile ρ(0) = 1.5, u_r'(0) = −1; prediction −h² ρ u_r'(0)/12, (E + p) in place of ρ for energy
 N      mass face    /prediction   /node-1 rate   corrected    energy face /prediction
 64     +3.103e-05   1.0008        0.0835         +6.456e-08   1.0007
 128    +7.691e-06   1.0002        0.0834         +3.995e-09   1.0002
 256    +1.915e-06   1.0001        0.0833         +2.481e-10   1.0000
 ```
 
-The face carries one twelfth of node 1's mass rate W_1 J_1 dρ_1/dt at every resolution, the
-ratio of −h² ρ u_r'(0)/12 to (h²/2)(−2ρ u_r'(0)) for any smooth flow; on this profile it is
-one sixth of node 1's mass per unit time. The even folded divergence annihilates a
-constant (max |D 1| ≤ 2.8e-14) where Σ W (D 1) would have to equal 1, so no node weights,
-positive or not, conserve the r-z mass exactly. With θ resolved the faces of all lines sum
-to −(π h²/12) ∇·(ρu)(0), the collapsed value times 2π: on the axis-crossing vortex with its
-centre at x = −0.15 the ratio to that prediction is 1.0072, 1.0020 and 1.0005 at N = 32, 64
-and 128, and the sum is round-off with the centre on the axis, where ∇·(ρu)(0) = 0.
-
-**The face is the rate of change of the quadrature's own error at the axis.** The fold side
-of W J is the midpoint rule on f = r q, whose Euler–Maclaurin error is (h²/24) f'(0) =
-(h²/24) q(0); at q = ρ its rate is −(h²/24) ∇·(ρu)(0) = −h² ρ u_r'(0)/12, the face.
-Subtracting (h²/24) q_1 from the W J total, a node-1 weight of 11h²/24 per radian in place
-of h²/2, leaves the fourth-order remainder of the corrected column above. Closed runs to t = 1
-(slip wall at r = 1, cfl 0.5, the default filter and artificial properties), relative change
-of the total mass: the first column is `volume_integral`'s total under the edge-corrected
-weights described below, the others the right-hand side's part under W J (the filter's share
-removed), the time integral of Ĝ_0 over the steps, and the corrected total's right-hand-side
-part:
+The face carries one twelfth of node 1's mass rate W_1 J_1 dρ_1/dt at every resolution,
+which is the ratio below for any smooth flow; on this profile it is one sixth of node 1's
+mass per unit time. The even folded divergence annihilates a constant to round-off, where
+conservation would need Σ W (D 1) = 1, so no node weights, positive or not, conserve the r-z
+mass exactly. With θ resolved the faces of all lines sum to the collapsed value times 2π,
+within a percent on the axis-crossing vortex. The sum is round-off with the centre on the
+axis, where ∇·(ρu)(0) = 0.
 
 ```
+ratio of the face to node 1's rate     −h² ρ u_r'(0)/12 to (h²/2)(−2ρ u_r'(0))
+constant through the folded divergence max |D 1| ≤ 2.8e-14
+θ resolved, sum of the faces           −(π h²/12) ∇·(ρu)(0)
+vortex centred at x = −0.15            ratio 1.0072, 1.0020 and 1.0005 at N = 32, 64 and 128
+```
+
+**The face is the rate of change of the quadrature's own error at the axis.** The fold side
+of W J is the midpoint rule on f = r q, and at q = ρ the rate of change of its
+Euler–Maclaurin error is the face. Subtracting (h²/24) q_1 from the W J total leaves the
+fourth-order remainder of the corrected column above.
+
+```
+Euler–Maclaurin error      (h²/24) f'(0) = (h²/24) q(0)
+its rate at q = ρ          −(h²/24) ∇·(ρu)(0) = −h² ρ u_r'(0)/12, the face
+corrected node-1 weight    11h²/24 per radian in place of h²/2
+```
+
+The mass drift of the closed r-z runs is the axis face. In every run, filter and artificial
+properties each on or off, the right-hand side's part under W J equals the time integral of
+the face to the accuracy of the trapezoid rule in time, and the corrected part falls by a
+factor of 14 to 44 over the last doubling; the energy totals follow the same pattern. On
+the spherical origin, the symmetry plane and the line between two slip walls the same mass
+column is round-off (under 2e-14), and the drift under W J is the filter's alone. The table
+gives closed runs to t = 1, the relative change of the total mass: the first column is
+`volume_integral`'s total under the edge-corrected weights described below, the others the
+right-hand side's part under W J (the filter's share removed), the time integral of Ĝ_0
+over the steps, and the corrected total's right-hand-side part.
+
+```
+slip wall at r = 1, cfl 0.5, the default filter and artificial properties
 case     N     vol. int.   W J rhs     ∫ Ĝ_0 dt    corrected rhs
 pulse    64    +4.81e-07   -6.27e-06   -6.26e-06   -2.36e-08
 pulse    128   +1.47e-08   -1.55e-06   -1.55e-06   -1.46e-09
@@ -6193,14 +6549,10 @@ pulse    256   +5.89e-10   -3.87e-07   -3.87e-07   -9.10e-11
 implode  64    -2.21e-07   -8.40e-06   -8.40e-06   -5.72e-10
 implode  128   -1.31e-08   -2.09e-06   -2.09e-06   -4.28e-11
 implode  256   -7.24e-10   -5.19e-07   -5.19e-07   -3.03e-12
-```
 
-In all 24 r-z runs, filter and artificial properties each on or off, the right-hand side's
-part under W J equals the time integral of the axis face to the accuracy of the trapezoid
-rule in time (1.6e-3 relative at N = 64, 4.8e-5 at 256), and the corrected part falls by a
-factor of 14 to 44 between N = 128 and 256; the energy totals follow the same pattern. On
-the spherical origin, the symmetry plane and the line between two slip walls the same mass
-column is round-off (under 2e-14), and the drift under W J is the filter's alone.
+all 24 r-z runs: W J rhs against ∫ Ĝ_0 dt, 1.6e-3 relative at N = 64 and 4.8e-5 at 256;
+the last doubling is N = 128 to 256
+```
 
 **The diagnostics' edge correction.** `volume_integral`, `domain_volume`, the conserved
 budget and its ledger, and the positivity floor's tally take the same correction in a form
@@ -6208,11 +6560,16 @@ that reads only the metric (the quadrature note in `src/diagnostics.jl`). Their 
 trapezoid rule on f = J q in ξ, the midpoint rule along a folded dimension, whose
 Euler–Maclaurin edge terms are −(h²/12) ∂ₙf and +(h²/24) ∂ₙf with ∂ₙf = q ∂ₙJ + J ∂ₙq;
 the edge node's weight removes q ∂ₙJ, with ∂ₙJ from the node and its two inward neighbours.
-At the axis that is the node-1 weight above, 11/12 of the midpoint's; at the spherical
-origin ∂ₙJ = 0 and nothing changes; at a curved or stretched node-centred face the half
-weight becomes ½(1 + h ∂ₙJ/(6J)). The term left is the Cartesian trapezoid's −(h²/12) J ∂ₙq,
-zero for a field even about the face. Errors of smooth fields against their exact integrals
-(`parts=quadrature`), at N = 64, 128 and 256 along r (and along θ between the poles):
+At the axis that is the corrected node weight above, 11/12 of the midpoint's. At the
+spherical origin ∂ₙJ = 0 and nothing changes. At a curved or stretched node-centred face
+the half weight becomes ½(1 + h ∂ₙJ/(6J)). The term left is the Cartesian trapezoid's
+−(h²/12) J ∂ₙq, zero for a field even about the face.
+
+The corrected rule is fourth order on every geometry for a field even about its faces, and a
+field with a normal derivative at a node-centred face keeps the second order of the
+Cartesian rule. On exp(−r²) the uncorrected rule errs less, its axis and wall terms having
+opposite signs. The table gives errors of smooth fields against their exact integrals
+(`parts=quadrature`) along r, and along θ between the poles:
 
 ```
 case                                 N = 64      N = 128     N = 256     order
@@ -6223,21 +6580,26 @@ origin, q = 2 + cos πr               -5.059e-09  -3.112e-10  -1.930e-11  4.01
 poles, q = 2 + cos π(r − ½) cos 2θ   -9.505e-07  -5.947e-08  -3.718e-09  4.00
 stretched, q = 2 + cos πx            -2.996e-07  -1.770e-08  -1.075e-09  4.04
 stretched, q = exp(x)                +4.581e-05  +1.122e-05  +2.781e-06  2.01
+
+exp(−r²) at the axis: uncorrected error h²/24 − h²/(12e) against h²/(6e)
 ```
 
-A field with a normal derivative at a node-centred face keeps the second order of the
-Cartesian rule. On exp(−r²) the uncorrected rule erred less, by h²/24 − h²/(12e) against
-h²/(6e), its axis and wall terms having opposite signs. In the closed runs the corrected
-total of the spherical implosion changes by +3.00e-8, −3.01e-9 and −2.54e-10, and of the
-spherical pulse by +7.96e-7, +3.70e-8 and +1.48e-9, at or below the trapezoid total of the
-pulse between two Cartesian slip walls (+4.31e-6, +3.98e-7 and +2.49e-8), whose drift is
-the trapezoid weights' departure from W at the walls.
+In the closed runs the corrected totals at the spherical origin change by no more than the
+trapezoid total of a pulse between two Cartesian slip walls, whose drift is the trapezoid
+weights' departure from W at the walls:
+
+```
+closed runs, change of the total                    three resolutions, coarse to fine
+spherical implosion, corrected                      +3.00e-8    −3.01e-9    −2.54e-10
+spherical pulse, corrected                          +7.96e-7    +3.70e-8    +1.48e-9
+pulse between two Cartesian slip walls, trapezoid   +4.31e-6    +3.98e-7    +2.49e-8
+```
 
 **Decision.** The options and their size:
 
 - Carry the axis face explicitly: subtracting Ĝ_0 at node 1 conserves Σ W J ρ exactly but
   changes node 1's rate by one twelfth at every resolution, an order-one error at the node
-  whose fold windows above converge at 6 to 7; spreading it over a fixed region instead
+  whose fold windows above converge at high order; spreading it over a fixed region instead
   adds an O(h²) error at every node of the region. The face value itself is local to the
   rank holding the fold, through the mirrored face relation there.
 - Change the quadrature: the end correction (h²/24) q_1 conserves the r-z totals to fourth
@@ -6270,16 +6632,28 @@ process and every absolute figure is a median of three.
 
 ### The derivative operators
 
-Wall-clock cost per grid point per step of `lele_d1_6`, `lele_d1_8` and `lele_d1_10` on a
-single-species ideal-gas box, the Taylor–Green field as the initial state, the default
-filter every step, `ArtificialProperties()` defaults, cfl 0.5, Float64, on a 12th-gen Core i9-12900K (8
-performance and 8 efficiency cores, 24 threads) under Microsoft MPI 10.1 from the JLL. Each
+In the production configuration C8 costs a few percent of a step over C6, and C10 16%. At
+32³ per rank every operator's cost per point rises 13% from the communication share. The C8
+figure stays where it is there and the C10 figure rises to about 20%. The single-rank
+single-thread ratios, 10% and 29%, are the undiluted arithmetic. The derivative solves are a
+fifth to a quarter of the right-hand side, the artificial-property pass and the filter are
+flat across the operators to within 3%, and a decomposed line solve adds a
+reduced-interface stage and a halo exchange per direction that no operator changes. That
+stage dilutes C8's extra multiply-adds more than C10's extra band, since the pentadiagonal
+interface stage is itself wider.
+
+The table gives the wall-clock cost per grid point per step of `lele_d1_6`, `lele_d1_8` and
+`lele_d1_10` on a single-species ideal-gas box, the Taylor–Green field as the initial state,
+the default filter every step, `ArtificialProperties()` defaults, in double precision. Each
 cell is warmed over three steps and timed over thirty through `solver.wall_total`, spanning
 `max_rate`, `apply_bcs!`, the stages and the filter pass, reduced as the maximum over ranks
 after a barrier; a fourth process with the operators in reverse order reproduces the forward
 ratios inside the spread. The production configuration is eight ranks at one thread each.
 
 ```
+cfl 0.5, Float64; 12th-gen Core i9-12900K (8 performance and 8 efficiency cores, 24 threads),
+Microsoft MPI 10.1 from the JLL
+
                                             C6        C8        C10      C8/C6          C10/C6
 128^3 on 8 ranks (2,2,2), periodic, -t 1   444.1     461.5     517.3    1.035–1.054    1.157–1.170
 128^3 on 8 ranks, slip walls in x          447.3     459.2     518.1    1.010–1.041    1.090–1.167
@@ -6306,73 +6680,87 @@ compute_rhs! (whole)      73.64   82.75   90.26        71.32   73.27   92.20
 filter_state!             24.35   21.98   21.63        19.19   18.25   19.31
 ```
 
-In the production configuration C8 costs 4% of a step over C6 and C10 16%; at 32³ per rank
-the C8 figure stays where it is and the C10 figure rises to about 20%, while every
-operator's cost per point rises 13% from the communication share. The single-rank
-single-thread ratios, 10% and 29%, are the undiluted arithmetic: the derivative solves are a
-fifth to a quarter of the right-hand side, the artificial-property pass and the filter are
-flat across the operators to within 3%, and a decomposed line solve adds a reduced-interface
-stage and a halo exchange per direction that no operator changes, diluting C8's extra
-multiply-adds more than C10's extra band since the pentadiagonal interface stage is itself
-wider. The closed configuration costs the same as the periodic one on eight ranks and less
-on one, where the closed line solve carries no cyclic correction. The pentadiagonal plans
-add 1.1 MiB to a 234 MiB per-rank footprint at 64³ per rank, and the allocation per step
-(7.7 KiB per rank) is the same across the operators.
+The closed configuration costs the same as the periodic one on eight ranks and less on one,
+where the closed line solve carries no cyclic correction. The pentadiagonal plans add under
+half a percent to the per-rank footprint, and the allocation per step is the same across
+the operators.
+
+```
+at 64³ per rank: plans +1.1 MiB on a 234 MiB footprint; allocation 7.7 KiB per rank per step
+```
 
 Rank placement is not controllable with this launcher. Microsoft MPI's `-affinity` and
 `-affinity_layout seq:P` options have no effect through the JLL `mpiexec`, which runs
 without the `smpd` service and sets no affinity mask: sampled over two seconds of work,
 every rank migrated over the whole machine including the efficiency cores, and two ranks
-were seen on one logical CPU at the same instant. The process-to-process spread at 64³ per
-rank is 2.7–4.2% on five of six cells (one 15% outlier), the size of the whole C8 effect,
-and 19–30% at 32³ per rank in the periodic cells, so the C8 figure is quoted as a few
-percent. Pinning would take a `SetProcessAffinityMask` call inside the run, not a launcher
-flag.
+were seen on one logical CPU at the same instant. The process-to-process spread is the size
+of the whole C8 effect, so the C8 figure is quoted as a few percent. Pinning would take a
+`SetProcessAffinityMask` call inside the run, not a launcher flag.
+
+```
+process-to-process spread
+64³ per rank     2.7–4.2% on five of six cells (one 15% outlier)
+32³ per rank     19–30% in the periodic cells
+```
 
 ### The x-direction pentadiagonal solve
 
 `bench/reducedsolve.jl` (`48 derivs=c6,c10` serially, `96` at np = 2, `-t 1`, fully
 periodic) splits a line solve into the local sweep, the reduced interface stage, and the spike
 correction (total − sweep − reduced). On the x layout, where a line is a column of the n ×
-lines block, the C10 correction cost as much as the sweep. Its point loop, an inner sum over
-the q coupling columns with a runtime trip count, reloaded the interface values for every
-point, because the compiler cannot rule out aliasing between them and the stores into the
-block, and its `code_llvm` carried no vector instruction. The back substitution of the band
-sweep reloaded its U coefficients once per column for the same reason. Both loops now take
-q = 2 as a compile-time constant and read those values once per line and once per row, with
-bitwise-identical results. Times in µs, before and after:
+lines block, the C10 spike correction costs as much as the sweep when its point loop, an
+inner sum over the q coupling columns with a runtime trip count, reloads the interface
+values for every point. The compiler cannot rule out aliasing between them and the stores
+into the block, and `code_llvm` shows no vector instruction. The back substitution of the
+band sweep reloads its U coefficients once per column for the same reason. Taking q = 2 as
+a compile-time constant and reading those values once per line and once per row gives
+bitwise-identical results, cuts the correction by an order of magnitude and halves the
+whole x solve. Times in µs:
 
 ```
                                 sweep   correction    total
-48^3, 1 rank, x      before     260.4      251.2      544.0
-                     after      150.0       37.6      222.8
+48^3, 1 rank, x  runtime q      260.4      251.2      544.0
+                 constant q     150.0       37.6      222.8
 48^3, 1 rank, y                  43.0       37.5      114.7
-96^3, 2 ranks, x     before    1237.4     1084.2     2637.4
-(P = 2)              after      905.6       68.5     1286.5
+96^3, 2 ranks, x runtime q     1237.4     1084.2     2637.4
+(P = 2)          constant q     905.6       68.5     1286.5
 96^3, 2 ranks, y (P = 1)        383.2      126.1      639.0
 ```
 
-Timed in one process against a copy of the previous loops, the whole x solve of the C10
-derivative and the `pyranda_filter` plans is 2.3–2.9x faster on a periodic line and
-1.6–1.8x on a closed one, which carries no correction, at 48³ and 96³ serially. `bench/derivcost.jl 64 20
-cases=periodic` on one rank at `-t 1` gave a C10/C6 step ratio of 1.29 before and 1.19 after,
-one process each. The remaining gap is the x sweep, 3.5x the y sweep at 48³ where C6's is
-2.8x, from reading a column block with a stride of n. A scratch prototype that copies 64
-lines into a lines × n buffer, sweeps it as the transposed path does, and copies back was
-bitwise equal and 1.4x faster than the hoisted sweep; it needs a scratch buffer per task and
-was not adopted.
+Timed in one process against a copy of the runtime-q loops, the whole x solve of the C10
+derivative and the `pyranda_filter` plans is about two to three times faster on a periodic
+line and less on a closed one, which carries no correction, and the C10/C6 step ratio falls
+by about a tenth. The remaining gap is the x sweep, which reads a column block with a stride
+of n. It is 3.5x the y sweep, where C6's is 2.8x.
+
+```
+one process, serial at 48³ and 96³, constant q against runtime q
+whole x solve, periodic line       2.3–2.9x faster
+whole x solve, closed line         1.6–1.8x faster
+bench/derivcost.jl 64 20 cases=periodic, one rank, -t 1, one process each
+C10/C6 step ratio                  1.29 runtime q, 1.19 constant q
+```
+
+A scratch prototype that copies 64 lines into a lines × n buffer, sweeps it as the
+transposed path does, and copies back was bitwise equal and 1.4x faster than the hoisted
+sweep; it needs a scratch buffer per task and was not adopted.
 
 ### The decomposed line solve against serial
 
-`bench/reducedsolve.jl mode=accuracy` at np = 8, 96 points, 64 smooth right-hand sides per
-operator: one application of the x line solver with the line split over P ranks, against
-the P = 1 solve and against a 256-bit dense solve, max-norm relative to the largest exact
-value. The departure from serial is the same fraction of cond(A)·eps for every operator,
-0.13–0.44 for the four well-conditioned ones and 0.13–0.21 for `pyranda_filter`, whose
-left-hand side symbol 1 + 2α cos k + 2β cos 2k falls to 1.3e-3 near k = 0.98π and sets
-cond(A) = 2087 against 5–21 for the others:
+A decomposed solve of a system of condition number κ reproduces serial to between a
+twentieth and a half of κ·eps, and 3e-15 is that bar only for the operators with cond(A)
+near 20. The departure from serial is the same fraction of cond(A)·eps for every operator,
+including `pyranda_filter`, whose left-hand-side symbol nearly vanishes near k = π and
+sets a condition number two orders above the others'. `bench/reducedsolve.jl
+mode=accuracy` applies the x line solver once with the line split over P ranks, against the
+P = 1 solve and against a 256-bit dense solve, max-norm relative to the largest exact value.
 
 ```
+np = 8, 96 points, 64 smooth right-hand sides per operator
+departure / (cond(A)·eps)   0.13–0.44 for the four well-conditioned operators,
+                            0.13–0.21 for pyranda_filter
+pyranda_filter symbol       1 + 2α cos k + 2β cos 2k, falling to 1.3e-3 near k = 0.98π
+
                      cond(A)  cond(red)    serial error   departure, P = 2..8   pivoted dense LU
 c6                     5.0      2.24        2.4e-16        3.7e-16 – 4.9e-16       2.4e-16
 c10                   21.0      5.51        8.4e-16        9.2e-16 – 1.4e-15       1.1e-15
@@ -6382,35 +6770,47 @@ pyranda_filter()    2087       394–440      4.8e-14        5.9e-14 – 9.5e-14
 ```
 
 The departure does not grow with P, the reduced matrix is better conditioned than A at
-every P, and the local block's condition number falls with n (2083 at P = 1, 766 at
-P = 8), so neither the interface stage nor the unpivoted local factorization amplifies
-round-off. The serial solve itself sits 4.8e-14 from the exact solution, and a pivoted
-dense LU of the same system in Float64 sits 1.0e-13 from it: the decomposed solve departs
-from serial by the error any Float64 solve of this system carries. With uniform-noise
-right-hand sides the departure is 2.4e-14 – 5.2e-14 at 96 and 192 points, 0.05–0.11
-cond(A)·eps, and the default filter's 1.1e-15 – 1.8e-15. The per-solve ratio between the
-two filters, 60–170 on smooth data, is of the order of the ratio between the decomposed
-runs' departures from serial in the MPI suite's two-level wave rows under the two filters
-(1e-13 to 1.4e-12 against 7e-15), so those departures are this floor accumulated over the
-steps, not a defect of the distributed solve. A decomposed solve of a system of condition
-number κ reproduces serial to between a twentieth and a half of κ·eps, and 3e-15 is that bar
-only for the operators with cond(A) near 20.
+every P, and the local block's condition number falls with n, so neither the interface
+stage nor the unpivoted local factorization amplifies round-off. For `pyranda_filter` the
+serial solve and a pivoted dense LU of the same system sit as far from the exact solution as
+the decomposed solve sits from serial, so the decomposed solve departs from serial by the
+error any double-precision solve of this system carries. The per-solve ratio between the two
+filters is of the order of the ratio between the decomposed runs' departures from serial in
+the MPI suite's two-level wave rows under the two filters, so those departures are this
+floor accumulated over the steps, not a defect of the distributed solve.
 
-The table above is the band solve of the reduced matrix. Against the dense LU it replaced,
-measured the same way, every departure is within the same range; the largest change is
-`pyranda_filter()` at P = 6, 7.1e-14 to 9.5e-14 (0.153 to 0.206 cond(A)·eps), and the
-maximum over P is 9.5e-14 either way. On the real reduced matrices of the four
-well-conditioned operators the pivoted band LU interchanges no rows; on `pyranda_filter()`'s
-it interchanges 8–46 of 2qP rows at P = 4–16.
+```
+local block, pyranda_filter              cond 2083 at P = 1, 766 at P = 8
+uniform-noise right-hand sides, 96 and 192 points
+  pyranda_filter                         2.4e-14 – 5.2e-14 (0.05–0.11 cond(A)·eps)
+  default filter                         1.1e-15 – 1.8e-15
+pyranda_filter against the default filter
+  per solve, smooth data                 60–170 times
+  MPI two-level wave rows                1e-13 to 1.4e-12 against 7e-15
+```
+
+The table above is the band solve of the reduced matrix. A dense LU of the reduced matrix,
+measured the same way, gives departures within the same range and the same maximum over P.
+On the real reduced matrices of the four well-conditioned operators the pivoted band LU
+interchanges no rows; on `pyranda_filter()`'s it interchanges some.
+
+```
+dense LU against band, largest change   pyranda_filter() at P = 6, 7.1e-14 to 9.5e-14
+                                        (0.153 to 0.206 cond(A)·eps); maximum over P 9.5e-14
+rows interchanged, pyranda_filter()     8–46 of 2qP at P = 4–16
+```
 
 The same instrument in `mode=timing`, x direction of a fully periodic solver split P ways
 (`dims=P,1,1`), `-t 1`, µs, the maximum over ranks of each rank's median; "reduced" is
 `_reduced_solve!` whole (Allgather and solve), "solve" everything after the Allgather, the
-dense column the `ldiv!` alone. Dense and band are two processes, before and after:
+dense column the `ldiv!` alone. Dense and band are two processes. The band solve is
+2.3–5.6x faster than the dense triangular solves at every P measured. At P = 2 the band
+covers nearly the whole matrix, and the gain is the loop structure, each band entry one
+contiguous pass over a block of 128 lines, rather than the operation count.
 
 ```
                  lines    dense     band             reduced          local sweep
-                          ldiv      solve       dense    band      before / after
+                          ldiv      solve       dense    band      dense / band process
 C6,  P = 2,  96³  9216    102.8      18.2       141.4     36.0          646 / 936
 C10, P = 2,  96³  9216    220.8      63.1       316.0    100.1         1116 / 922
 C6,  P = 4,  96³  9216    231.8      50.3       511.2    116.1          296 / 357
@@ -6421,25 +6821,33 @@ C6,  P = 16, 192³ 36864  19868    6149        45356    10131           4915 / 4
 C10, P = 16, 192³ 36864  41601   12093        73127    21146           6708 / 5650
 ```
 
-The band solve is 2.3–5.6x faster than the dense triangular solves at every P measured,
-including P = 2, where the band covers nearly the whole matrix and the gain is the loop
-structure (each band entry one contiguous pass over a block of 128 lines) rather than the
-operation count. Operations per line of the band solve, counted as the table's `red`
-column (twice the multiply-adds of the forward sweep and the back substitution down to the
-first unknown the rank reads, maximum over ranks), are 104 / 248 / 536 for C6 at P = 4 / 8 /
-16 against the dense 128 / 512 / 2048, and 428 / 1036 / 2252 for C10 against 512 / 2048 /
-8192: linear in P, the ratio to P rising toward 34 (q = 1) and 141 (q = 2) on a periodic
-line as the fixed end terms dilute. At
-P = 16 sixteen ranks fill the workstation's sixteen cores, eight of them efficiency cores,
-and the Allgather rises to 4.5–9.1 ms, so that row measures the machine as much as the solve.
-The serial rows (P = 1) keep the dense 2q × 2q solve and are unchanged. The crossover
-against the local work is a cluster measurement and remains open.
+Operations per line of the band solve, counted as the table's `red` column (twice the
+multiply-adds of the forward sweep and the back substitution down to the first unknown the
+rank reads, maximum over ranks), are linear in P where the dense count grows as P², and
+their ratio to P approaches a constant as the fixed end terms dilute. At P = 16 the ranks
+fill the workstation's sixteen cores, eight of them efficiency cores, and the Allgather
+rises to milliseconds, so that row measures the machine as much as the solve. A serial line
+keeps the dense 2q × 2q solve. The crossover against the local work is a cluster
+measurement and remains open.
+
+```
+operations per line     P = 4    8      16
+C6, band                104      248    536
+C6, dense               128      512    2048
+C10, band               428      1036   2252
+C10, dense              512      2048   8192
+band / P on a periodic line: toward 34 (q = 1) and 141 (q = 2)
+Allgather in the last two rows of the timing table: 4.5–9.1 ms
+```
 
 ### The sensor phase
 
-`bench/phases.jl` on the two-species tube, back to back on one machine. The `artificial`
-phase is `compute_artificial!`, and `line solves` counts the directional solves per
-right-hand-side evaluation as (filter and gradient) + (`:d8` detector):
+The velocity sensor and the `:d8` detector each make the sensor phase dearer, and together
+they make it costlier than the rest of the evaluation combined. The default `:gaussian`
+smoother makes it cheaper than `:compact`. `bench/phases.jl` runs the two-species tube,
+back to back on one machine. The `artificial` phase is `compute_artificial!`, and
+`line solves` counts the directional solves per right-hand-side evaluation as (filter and
+gradient) + (`:d8` detector):
 
 ```
 setting                          artificial   % of RHS   compute_rhs!   line solves
@@ -6455,13 +6863,23 @@ on the sensor phase under δ⁴. Paired with `:d8` it adds six more pentadiagona
 right-hand side, and the sensor phase then costs more than everything else in the evaluation
 combined. `:d8` alone is eight pentadiagonal solves per right-hand side, one per active
 dimension per sensor, for +80% on the sensor phase and +19% on the whole evaluation in a
-separate back-to-back pair (0.946 ms and 23.5% against 1.707 ms and 34.6%); against a 10–20%
-run-to-run spread the phase figure is resolved and the total is marginal.
+separate back-to-back pair. Against a 10–20% run-to-run spread the phase figure is resolved
+and the total is marginal.
 
-The smoother moves the same phase the other way: the `artificial` phase falls from 1.360 ms
-to 0.971 ms, 31.8% to 24.8% of the right-hand side, from `:compact` to the default
-`:gaussian`, against a run-to-run spread of about 1.3% over three `:compact` readings. The
-Gaussian is an explicit nine-point stencil with no line solve and no interface reduction,
+```
+separate pair, artificial phase    without :d8: 0.946 ms, 23.5% of the RHS
+                                   with :d8:    1.707 ms, 34.6%
+```
+
+The smoother moves the same phase the other way: from `:compact` to the default `:gaussian`
+the `artificial` phase falls by more than a quarter, against a run-to-run spread of about
+1.3% over three `:compact` readings.
+
+```
+artificial phase      :compact 1.360 ms (31.8% of the RHS), :gaussian 0.971 ms (24.8%)
+```
+
+The Gaussian is an explicit nine-point stencil with no line solve and no interface reduction,
 where the compact pass costs a distributed line solve per active dimension per sensor,
 `n_species` of them per evaluation for the species sensors.
 
@@ -6473,11 +6891,23 @@ per-species sensor, and not a code tweak.
 
 ### bench/nasa9_inversion.jl: the NASA-9 temperature inversion
 
-`julia --project=. -t 1 bench/nasa9_inversion.jl` for the cost (N2/O2/CO2/H2O, 300–3000 K,
-three processes per checkout, alternating) and `... 200000 part=sweep` for the failures:
-200,000 states per case over 200–20,000 K, for N2, CO2, He and N2/O2/CO2/H2O, in Float64 and
-Float32, under `:polynomial` and `:linear`. "Wrong" is a recovery more than 1e-3 from the
-temperature the energy was formed at; "silent" is a wrong one whose status carries no flag.
+Under `:linear` the sweep finds no failure in either precision. Every remaining failure is
+the four-species mixture above 6000 K under `:polynomial`, where the H2O fit ends and its
+extrapolated energy is not monotone: states with no bracket, and silent ones whose energy
+has a second root inside the fitted range, which the inversion returns. `:linear` is
+therefore the default of `Nasa9Mixture`, and `:polynomial` an opt-in.
+
+The first command below measures the cost and the second the failures, in both precisions
+under `:polynomial` and `:linear`. "Wrong" is a recovery more than 1e-3 from the temperature
+the energy was formed at; "silent" is a wrong one whose status carries no flag.
+
+```
+julia --project=. -t 1 bench/nasa9_inversion.jl
+    N2/O2/CO2/H2O, 300–3000 K, three processes per checkout, alternating
+... 200000 part=sweep
+    200,000 states per case over 200–20,000 K, for N2, CO2, He and N2/O2/CO2/H2O,
+    in Float64 and Float32
+```
 
 | inversion | not converged | no bracket | wrong | silent |
 |---|---|---|---|---|
@@ -6491,20 +6921,18 @@ temperature the energy was formed at; "silent" is a wrong one whose status carri
 | `mixture_temperature`, ns per point | 187.4–189.8 | 157.4–160.1 |
 | `recover_primitives!`, ns per point, 32³ | 235.4–237.6 | 197.4–198.4 |
 
-Pure CO2 at 13–20 kK under `:polynomial` was unbracketed and wrong on 68,231 of 70,708
-states in either precision: the seed, linearized about 300 K, lands past 20,000 K, where the
-fit's cv is negative. Holding the iterate on the edge of the fitted range recovers all of
-them, to 5.2e-14 in Float64. The 32 eps criterion was unmet on 5,967 (Float64) and 12,172
-(Float32) of the 70,706 pure N2 states at 6–13 kK, although their largest error was 1.6e-13
-and 7.7e-5, set by the residual's round-off and by the fits' continuity at the 6000 K join;
-eps^(2/3) is met on all of them. At 100,000 states, Float32 criteria of 32 eps, eps^(2/3)
-and 1e-4 left 6,021, 0 and 0 of those misses.
+Holding the iterate on the edge of the fitted range removes the failures of pure CO2 at
+high temperature, where the seed lands past the fitted range and the fit's cv is negative.
+The 32 eps criterion fails on pure N2 at intermediate temperatures although the recovered
+temperature is accurate, its error set by the residual's round-off and by the fits'
+continuity at the 6000 K join. The criterion eps^(2/3) is met on all of those states.
 
-Settled: under `:linear` the sweep finds no failure in either precision. Every remaining
-failure is the four-species mixture above 6000 K under `:polynomial`, where the H2O fit ends
-and its extrapolated energy is not monotone: states with no bracket, and silent ones whose
-energy has a second root inside the fitted range, which the inversion returns. `:linear` is
-therefore the default of `Nasa9Mixture`, and `:polynomial` an opt-in.
+| case | states | result |
+|---|---|---|
+| pure CO2 at 13–20 kK, `:polynomial`, iterates free | 70,708 | 68,231 unbracketed and wrong in either precision; the seed, linearized about 300 K, lands past 20,000 K |
+| the same, iterates held on the edge | the same | all recovered, to 5.2e-14 in Float64 |
+| pure N2 at 6–13 kK, 32 eps | 70,706 | unmet on 5,967 (Float64) and 12,172 (Float32); largest error 1.6e-13 and 7.7e-5 |
+| the same in Float32 at 100,000 states, 32 eps, eps^(2/3) and 1e-4 | | 6,021, 0 and 0 of those misses |
 
 ## AMR
 
