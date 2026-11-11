@@ -305,8 +305,14 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   such nodes too at the same interpolation order; whether unlimited runs
   take it is open. The toggle stays off because of two defects. The filter's row at a
   node two tiles share is the identity, a row that does not conserve, and
-  the filter passes carry three quarters of that drift, so the mass budget
-  of A21's limited, tiled band waits on a conservative filter row there. On
+  the filter passes carry three quarters of that drift. Conservative rows at
+  every interface end are carried behind the test toggle
+  `CONSERVATIVE_INTERFACE_FILTER` (commit `HASH`): they bring the filter's
+  share to the box's and the limited tiles' drift down sevenfold under
+  `:closure` and threefold under `:ghost`, at the interface order and with no
+  inadmissible point, so the mass budget of A21's limited, tiled band waits
+  on making them the default, which moves every patched, tiled and refined
+  baseline that filters. On
   a tiled level a perturbation of one unit in the last place grows in the
   limited `:ghost` run to a visible difference within a few hundred steps,
   where under the closure rows it stays at round-off, so the solution

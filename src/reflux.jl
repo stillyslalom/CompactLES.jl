@@ -240,7 +240,7 @@ function _replaced_rows(settings::SchemeSettings)
     src = settings.interface_divergence
     nv = ext || src !== nothing ?
          length(interface_divergence_rows(settings.deriv, src)) : nd
-    nf = length(ext ? interface_closures(settings.filt) : settings.filt.closures)
+    nf = length(ext ? _filter_interface_rows(settings.filt) : settings.filt.closures)
     return max(nd, nv), nf
 end
 

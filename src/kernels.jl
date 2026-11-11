@@ -499,6 +499,100 @@ function interface_closures(scheme::CompactScheme{T}) where {T}
     return [ClosureRow{T}(lhs, T[1], 1)]
 end
 
+# --- Conservative filter rows at an interface ----------------------------------
+#
+# With the identity row at a node two patches share, the composite pass does
+# not conserve. A pass of a symmetric filter A f̄ = B f is f + δ with
+# A δ = R f, R = B − A a symmetric zero-sum stencil, and R f is the difference
+# of an explicit face stencil, (R f)_i = g_{i+½} − g_{i−½} (`t` in
+# `_conservative_filter_rows`). On an unbounded line δ is then a difference of
+# face fluxes, δ_i = F_{i+½} − F_{i−½}, F the solution of the face relation
+# Σ_{|s|≤q} l_s F_{j+½+s} = g_{j+½}, l the left-hand side's band (l_0 = 1),
+# and the pass conserves Σ h q.
+#
+# At an interface the two faces beside the end node are pinned to the
+# explicit value F = g/σ, σ = 1 + 2Σ l the left-hand side's row sum. The
+# stencil of g there reads the same nodes on both patches, the other patch's
+# through the exchanged ghosts, so the two patches take the same values. The
+# relation holds at every other face. From the edge node 1 of the low end:
+#
+#   row 1: f̄_1 = f_1 + (R f)_1/σ, explicit, reading M ghost layers;
+#   row 2: the relation at face 2½ alone, the pinned faces moved to the
+#          right-hand side, Σ_{k=0}^{q} L_k δ_{2+k} = g_{2½} −
+#          ((1 + Σ l) g_{1½} + Σ_{m=1}^{q} l_m g_{2½−m})/σ, L_k = Σ_{s≥k} l_s,
+#          its left-hand side coupling no unknown of row 1;
+#   rows 3 on: the interior rows, each the difference of two relations that
+#          hold.
+#
+# For the tridiagonal filter row 2 is α δ_3 + (1 + α) δ_2 = (R f)_2. A patch's
+# corrections then telescope to g_{1½}/σ at the face beside the node, the
+# node's correction is the difference of the two pinned faces, and with the
+# node counted at h/2 in each patch the composite pass conserves Σ h q and
+# gives the node one value on both sides. On smooth data F differs from g/σ
+# by O(h²) relative to the correction, so the rows keep the filter's order. At
+# a coarse-fine end the shell overwrites node 1, and the relation holds at
+# face 2½, where the coarse-fine coupling reads the child's filter flux
+# (`_replaced_rows`). The rows are formed in BigFloat and rounded once to the
+# scheme's type. An explicit filter (`gaussian_filter`) reads the ghosts
+# through its interior stencil, the single line's operator, and takes no rows.
+
+# The two rows from the band `l` (l_1 .. l_q), the centre weight `a0` and the
+# right-hand-side half-stencil `c` (c_m on f_{i±m}): per row the left-hand
+# side over offsets −q..q, the right-hand side and the index of its first
+# point (1 = the edge node).
+function _conservative_filter_rows(l::Vector{BigFloat}, a0::BigFloat,
+                                   c::Vector{BigFloat})
+    q = length(l)
+    M = max(length(c), q)
+    at(v, m) = m <= length(v) ? v[m] : zero(BigFloat)
+    s(m) = m == 0 ? a0 - 1 : at(c, abs(m)) - at(l, abs(m))
+    t(k) = sum(s(m) for m in k:M)
+    σ = 1 + 2 * sum(l)
+    add!(w, i, v) = (w[i] = get(w, i, zero(BigFloat)) + v; w)
+    face!(w, j, v) = foreach(k -> add!(w, j + k, v * t(k)), 1-M:M)
+    L(k) = k == 0 ? 1 + sum(l) : sum(l[k:q])
+    row1 = Dict(1 => one(BigFloat))
+    foreach(m -> add!(row1, 1 + m, s(m) / σ), -M:M)
+    row2 = Dict{Int,BigFloat}()
+    foreach(k -> add!(row2, 2 + k, L(k)), 0:q)
+    face!(row2, 2, one(BigFloat))
+    face!(row2, 1, -L(0) / σ)
+    foreach(m -> face!(row2, 2 - m, -l[m] / σ), 1:q)
+    dense(w) = (lo = minimum(keys(w)); hi = maximum(keys(w));
+                ([get(w, i, zero(BigFloat)) for i in lo:hi], lo))
+    lhs1 = zeros(BigFloat, 2q + 1)
+    lhs1[q+1] = 1
+    lhs2 = zeros(BigFloat, 2q + 1)
+    foreach(k -> lhs2[q+1+k] = L(k), 0:q)
+    return [(lhs1, dense(row1)...), (lhs2, dense(row2)...)]
+end
+
+# The conservative rows of a symmetric scheme at an interface end, none for an
+# explicit one. The banded method is in kernels_banded.jl.
+function _conservative_interface_rows(scheme::CompactScheme{T}) where {T}
+    scheme.symmetric || throw(ArgumentError("conservative interface rows need a " *
+                                            "symmetric scheme; '$(scheme.name)' is not"))
+    iszero(scheme.alpha) && return ClosureRow{T}[]
+    rows = _conservative_filter_rows([big(scheme.alpha)], big(scheme.a0),
+                                     big.(scheme.coeffs))
+    return [ClosureRow{T}((T(lhs[1]), T(lhs[2]), T(lhs[3])), T.(rhs), first)
+            for (lhs, rhs, first) in rows]
+end
+
+# Test and benchmark toggle: `true` closes the state filter at every patch and
+# level interface end, coarse-fine ones included, with the conservative rows
+# above, and a limited filter pass then holds a node two patches share
+# (`_filter_ends` in positivity.jl); `false`, the default, keeps the identity
+# row of `interface_closures`. Read where the filter plans and the limiter are
+# built (the constructor, a regrid, a restart, the start of `run!`), so a run
+# sets it before construction and leaves it set.
+const CONSERVATIVE_INTERFACE_FILTER = Ref(false)
+
+# The rows of the state filter at a patch or level interface end.
+_filter_interface_rows(filt) = CONSERVATIVE_INTERFACE_FILTER[] ?
+                               _conservative_interface_rows(filt) :
+                               interface_closures(filt)
+
 """
     interface_divergence_closures(scheme) -> closure rows
 

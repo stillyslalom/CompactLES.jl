@@ -284,6 +284,16 @@ function interface_closures(scheme::BandedCompactScheme{T}) where {T}
     return rows
 end
 
+# The conservative interface rows of a symmetric banded scheme
+# (`_conservative_filter_rows` in kernels.jl).
+function _conservative_interface_rows(scheme::BandedCompactScheme{T}) where {T}
+    scheme.symmetric || throw(ArgumentError("conservative interface rows need a " *
+                                            "symmetric scheme; '$(scheme.name)' is not"))
+    all(iszero, scheme.lhs) && return BandedClosureRow{T}[]
+    rows = _conservative_filter_rows(big.(scheme.lhs), big(scheme.a0), big.(scheme.coeffs))
+    return [BandedClosureRow{T}(T.(lhs), T.(rhs), first) for (lhs, rhs, first) in rows]
+end
+
 # One compact first-derivative row by Taylor matching, in exact rationals:
 # g'_0 + Σ_{s∈pairs} c_s (g'_{-s} + g'_{s}) + Σ_{s∈singles} c_s g'_{s}
 #     = (1/h) Σ_{k=-m}^{m} w_k f_k,

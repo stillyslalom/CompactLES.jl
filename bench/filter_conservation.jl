@@ -6,12 +6,18 @@
 #   julia --project=. bench/filter_conservation.jl                  # everything
 #   julia --project=. bench/filter_conservation.jl parts=operator   # the assembled lines only
 #   julia --project=. bench/filter_conservation.jl parts=noh,sedov alphaf=0.49
+#   julia --project=. bench/filter_conservation.jl parts=shared N=48
 #
 # Parts: operator (each 1-D line operator assembled column by column: constant
 # preservation, the per-row conservation defect, the wall and fold profiles),
 # noh (the three Noh geometries under both weightings, with the filter's own
 # mass and energy tally over the run), sedov (the same through the spherical
-# origin) and interface (the shock/interface case on a clustered grid).
+# origin), interface (the shock/interface case on a clustered grid) and shared
+# (a periodic line as two patches sharing two nodes, each patch's line closed
+# by the filter's interface rows, the identity row and the conservative rows of
+# `CONSERVATIVE_INTERFACE_FILTER`: the composite operator's defect about a
+# shared node, the spread of the node's two copies, and its departure from the
+# single line's pass on a smooth wave).
 #
 # What is measured. A pass is a linear operator M on each conserved component
 # along a line, and the quadrature `volume_integral` applies weights each node
@@ -230,16 +236,125 @@ function interface_part(opt)
     end
 end
 
+# --- the composite line of two patches ------------------------------------------
+
+# One pass of `scheme` over the periodic composite values `v`, the line held as
+# two patches, nodes 1..nA and nA..N then 1, sharing nodes nA and 1. Each
+# patch's line closes at both ends with `rows`, its ghost layers holding the
+# other patch's nodes as the exchange fills them, and each node takes its
+# patch's value, the mean of the two copies at a shared node as the averaging
+# leaves it. Returns the composite values and the largest difference between
+# the two copies of a shared node.
+function composite_pass(scheme, rows, v)
+    N = length(v)
+    nA = N ÷ 2 + 1
+    out = zeros(N)
+    copies = zeros(N)
+    first_copy = fill(NaN, N)
+    spread = 0.0
+    for (c0, n) in ((0, nA), (nA - 1, N - nA + 2))
+        d = CL.Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1))
+        plan = CL.plan_direction(d, scheme, 1, 1.0; lo_closures=rows, hi_closures=rows)
+        f = CL.field(d)
+        g = CL.field(d)
+        pad = d.n_halo_d
+        for k in axes(f, 3), j in axes(f, 2), i in axes(f, 1)
+            f[i, j, k] = v[mod(c0 + i - pad[1] - 1, N) + 1]
+        end
+        CL.apply_along!(g, plan, f, d)
+        for i in 1:n
+            c = mod(c0 + i - 1, N) + 1
+            x = g[i+pad[1], pad[2]+1, pad[3]+1]
+            if isnan(first_copy[c])
+                first_copy[c] = x
+            else
+                spread = max(spread, abs(x - first_copy[c]))
+            end
+            out[c] += x
+            copies[c] += 1
+        end
+    end
+    return out ./ copies, spread
+end
+
+# The single periodic line's pass of `scheme` on `v`.
+function single_pass(scheme, v)
+    N = length(v)
+    d = CL.Decomp((N, 4, 4), (true, true, true); dims=(1, 1, 1))
+    plan = CL.plan_direction(d, scheme, 1, 1.0)
+    f = CL.field(d)
+    g = CL.field(d)
+    pad = d.n_halo_d
+    for k in axes(f, 3), j in axes(f, 2), i in axes(f, 1)
+        f[i, j, k] = v[mod(i - pad[1] - 1, N) + 1]
+    end
+    CL.apply_along!(g, plan, f, d)
+    return [g[i+pad[1], pad[2]+1, pad[3]+1] for i in 1:N]
+end
+
+function shared_part(opt)
+    N = opt.N
+    nA = N ÷ 2 + 1
+    schemes = (("compact_filter()", compact_filter()),
+               ("compact_filter($(opt.alphaf))", compact_filter(opt.alphaf)),
+               ("pyranda_filter()", pyranda_filter()),
+               ("gaussian_filter()", gaussian_filter()))
+    println("\n=== a periodic line of $N nodes as two patches sharing nodes 1 and $nA ===")
+    println("d = Mᵀ V − V relative to V (V = h), at the shared node nA and beside it; " *
+            "spread: the two copies of a shared node before the mean")
+    for (label, scheme) in schemes
+        println("\n--- $label ---")
+        for (rlabel, rows) in (("identity row", CL.interface_closures(scheme)),
+                               ("conservative rows", CL._conservative_interface_rows(scheme)))
+            M = zeros(N, N)
+            spread = 0.0
+            for j in 1:N
+                e = zeros(N)
+                e[j] = 1
+                col, s = composite_pass(scheme, rows, e)
+                M[:, j] = col
+                spread = max(spread, s)
+            end
+            rel = vec(sum(M; dims=1)) .- 1
+            printf("  %-17s %d rows  constant %.1e  max |d|/V %.2e  Σ|d|/ΣV %.2e  " *
+                   "spread %.1e\n", rlabel, length(rows), maximum(abs, M * ones(N) .- 1),
+                   maximum(abs, rel), sum(abs, rel) / N, spread)
+            println("                    nA-3..nA+3 ", fmt(rel[nA-3:nA+3]))
+        end
+        # A smooth wave through both shared nodes, off its zeros there: the
+        # composite pass against the single line's, and the single line's own
+        # correction.
+        println("  wave sin(2π k i / n + 0.37), k = 3: max |composite − single| and the " *
+                "correction max |single − v|")
+        for (rlabel, rowsof) in (("identity row", CL.interface_closures),
+                                 ("conservative rows", CL._conservative_interface_rows))
+            errs = Float64[]
+            ns = (N, 2N, 4N)
+            for n in ns
+                v = [sin(2π * 3 * (i - 1) / n + 0.37) for i in 1:n]
+                single = single_pass(scheme, v)
+                comp, _ = composite_pass(scheme, rowsof(scheme), v)
+                push!(errs, maximum(abs, comp .- single))
+                rlabel == "identity row" && n == N &&
+                    printf("    correction at n = %d: %.2e\n", n, maximum(abs, single .- v))
+            end
+            p = log(errs[1] / errs[3]) / log(4)
+            printf("    %-17s n = %s: %s  order %.2f\n", rlabel, join(ns, ", "), fmt(errs), p)
+        end
+    end
+end
+
 function main(args)
     opt = CL.script_args(args, (parts="all", N=64, alphaf=0.45))
-    parts = opt.parts == "all" ? ["operator", "noh", "sedov", "interface"] :
+    parts = opt.parts == "all" ? ["operator", "noh", "sedov", "interface", "shared"] :
             split(opt.parts, ',')
     for part in parts
         part == "operator" ? operator_part(opt) :
         part == "noh" ? noh_part(opt) :
         part == "sedov" ? sedov_part(opt) :
         part == "interface" ? interface_part(opt) :
-        error("unknown part '$part'; want operator, noh, sedov or interface")
+        part == "shared" ? shared_part(opt) :
+        error("unknown part '$part'; want operator, noh, sedov, interface or shared")
     end
 end
 

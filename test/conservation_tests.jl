@@ -184,3 +184,121 @@ end
         end
     end
 end
+
+@testset "conservative filter rows at a shared node" begin
+    # A periodic line of N nodes as two patches sharing nodes 1 and nA, each
+    # closed at both ends by the filter's interface rows, its ghost layers
+    # holding the other patch's nodes. The composite pass takes each node from
+    # the patch holding it, the mean of the two copies at a shared node, so its
+    # column sums are one exactly when the pass conserves Σ h q.
+    function composite_pass(scheme, rows, v)
+        N = length(v)
+        nA = N ÷ 2 + 1
+        out = zeros(N)
+        copies = zeros(N)
+        spread = 0.0
+        first_copy = fill(NaN, N)
+        for (c0, n) in ((0, nA), (nA - 1, N - nA + 2))
+            d = CL.Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1))
+            plan = CL.plan_direction(d, scheme, 1, 1.0; lo_closures=rows,
+                                     hi_closures=rows)
+            f = CL.field(d)
+            g = CL.field(d)
+            pad = d.n_halo_d
+            for k in axes(f, 3), j in axes(f, 2), i in axes(f, 1)
+                f[i, j, k] = v[mod(c0 + i - pad[1] - 1, N) + 1]
+            end
+            CL.apply_along!(g, plan, f, d)
+            for i in 1:n
+                c = mod(c0 + i - 1, N) + 1
+                x = g[i+pad[1], pad[2]+1, pad[3]+1]
+                isnan(first_copy[c]) ? (first_copy[c] = x) :
+                                       (spread = max(spread, abs(x - first_copy[c])))
+                out[c] += x
+                copies[c] += 1
+            end
+        end
+        return out ./ copies, spread
+    end
+    function defect(scheme, rows; N=48)
+        cols = zeros(N)
+        spread = 0.0
+        for j in 1:N
+            e = zeros(N)
+            e[j] = 1
+            col, s = composite_pass(scheme, rows, e)
+            cols[j] = sum(col) - 1
+            spread = max(spread, s)
+        end
+        return maximum(abs, cols), spread
+    end
+    for scheme in (compact_filter(), compact_filter(0.45), pyranda_filter())
+        rows = CL._conservative_interface_rows(scheme)
+        @test length(rows) == 2
+        # Row 1 reads the halo's four layers, and both rows pass a constant.
+        @test rows[1].first == -3
+        @test all(r -> abs(sum(r.rhs) - sum(r.lhs)) < 1e-14, rows)
+        d_on, s_on = defect(scheme, rows)
+        @test d_on < 1e-14 && s_on < 1e-14
+        d_off, _ = defect(scheme, CL.interface_closures(scheme))
+        @test d_off > 1e-3
+        # The rows keep the filter's order: a polynomial of degree seven,
+        # which the interior pass leaves unchanged, passes unchanged.
+        p7(x) = 1 + x - 0.3x^2 + 0.2x^3 - 0.05x^4 + 0.01x^5 - 0.002x^6 + 3e-4x^7
+        n = 32
+        dl = CL.Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1))
+        plan = CL.plan_direction(dl, scheme, 1, 1.0; lo_closures=rows, hi_closures=rows)
+        f = CL.field(dl)
+        g = CL.field(dl)
+        pad = dl.n_halo_d
+        for k in axes(f, 3), j in axes(f, 2), i in axes(f, 1)
+            f[i, j, k] = p7((i - pad[1] - 1) / n)
+        end
+        CL.apply_along!(g, plan, f, dl)
+        @test maximum(abs(g[i+pad[1], pad[2]+1, pad[3]+1] - p7((i - 1) / n))
+                      for i in 1:n) < 1e-12        # measured 1.6e-13
+    end
+    # The explicit Gaussian reads the ghosts through its interior stencil and
+    # takes no rows: the composite pass is the single line's.
+    @test isempty(CL._conservative_interface_rows(gaussian_filter()))
+    @test defect(gaussian_filter(), CL._conservative_interface_rows(gaussian_filter()))[1] <
+          1e-14
+
+    # A tiled level of four tiles, a density step at two of the faces they
+    # share, the state uniform within five fine nodes of the coarse-fine faces.
+    # The rows close the coarse-fine ends too, so a pass changes the tiles'
+    # mass (each tile's own quadrature, a shared node at h/2 on either side) by
+    # the filter's face values at those ends, which vanish on uniform data. One
+    # pass leaves it to round-off under the rows and moves it by the identity
+    # row's defect without them.
+    function filtered_change(conservative)
+        saved = CL.CONSERVATIVE_INTERFACE_FILTER[]
+        CL.CONSERVATIVE_INTERFACE_FILTER[] = conservative
+        try
+            per = (PeriodicBC(), PeriodicBC())
+            s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(per, per, per), filter_cfl=0.0, tile=8,
+                       refine=BlockRegion((8, 0, 0), (32, 1, 1)))
+            Q = allocate_state(s)
+            initialize!(s, Q, (x, y, z) ->
+                Prim(rho=1.0 + 0.5 * (abs(x - 0.5) < 0.168), p=1.0, u=(0.3, 0.0, 0.0)))
+            # The ghost layers from the neighbouring tiles and the parent's
+            # shell, as `run!` holds them when it filters.
+            CL.sync_patches!(s, Q)
+            CL.prolong_level_ghosts!(s, Q)
+            lev = s.levels[2]
+            tiles_mass() = sum(CL._local_volume_integral(CL.PatchSolver(s, s.patches[i]),
+                                                         Q[i][:, :, :, 1], false)
+                               for i in lev.patches)
+            before = tiles_mass()
+            CL.filter_state!(s, Q)
+            return length(lev.transfers), tiles_mass() / before - 1
+        finally
+            CL.CONSERVATIVE_INTERFACE_FILTER[] = saved
+        end
+    end
+    tiles, change_on = filtered_change(true)
+    @test tiles == 4
+    @test abs(change_on) < 1e-14
+    @test abs(filtered_change(false)[2]) > 1e-6
+end

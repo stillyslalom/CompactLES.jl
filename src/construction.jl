@@ -1402,7 +1402,7 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                                              lines_factor=ntiles); ntiles, stride)
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
-    icf = ext_f ? interface_closures(filt) : nothing
+    icf = ext_f ? _filter_interface_rows(filt) : nothing
     ivd = ext_f || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
     # Every face of a refined patch but one on the domain boundary closes
@@ -1821,7 +1821,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     end
     ext = interface_rhs === :extended
     icd = ext ? interface_closures(deriv) : nothing
-    icf = ext ? interface_closures(filt) : nothing
+    icf = ext ? _filter_interface_rows(filt) : nothing
     ivd = ext || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
     nofold = (nothing, nothing, nothing)

@@ -17,6 +17,7 @@
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33
 #   julia --project=. -t 1 bench/positivity.jl part=tiledrift
+#   julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=true
 #   julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,noh81tiles flux=ghost
 #
 # The collocated compact divergence on a closed line is a difference of face
@@ -145,6 +146,10 @@
 #             Noh (ν = 1) on the same layouts under each variant of `planar`,
 #             and a smooth pulse at rest on the cylindrical line under each
 #             variant of `pulse`. Not in `part=all`
+#
+# `conservative=true` sets `CONSERVATIVE_INTERFACE_FILTER` for every part: the
+# filter closes each patch and level interface with its conservative rows, and
+# a limited pass holds the node two patches share.
 #
 # The tallies of `variants`, summed over the steps of a run:
 #
@@ -1677,7 +1682,7 @@ function main(args)
                                 variants=join(VARIANTS, ","), nmax=100_000,
                                 identity_steps=300, N=96, steps=500, reps=3,
                                 patches="1", levels="wc,wcsub,noh43", a19n=64,
-                                flux="closure", ledger=false,
+                                flux="closure", ledger=false, conservative=false,
                                 drift="uniform,box,tiles8,tiles16,tiles80,box-sub," *
                                       "tiles8-sub,regrid8,tiles8-ghost,box-ghost," *
                                       "tiles8-noreflux,tiles8-clamp,tiles8-nofilter," *
@@ -1716,14 +1721,17 @@ function main(args)
             throw(ArgumentError("the radial case '$c' runs in part=src or part=cost alone"))
     end
     variants = variant_flags.(split(opt.variants, ','))
-    # A limited run keeps :ghost at its interfaces only under the toggle.
-    saved = CL.LIMITED_GHOST_INTERFACES[]
+    # A limited run keeps :ghost at its interfaces only under the toggle;
+    # `conservative=true` closes the filter at every interface with the
+    # conservative rows (`CONSERVATIVE_INTERFACE_FILTER`).
+    saved = (CL.LIMITED_GHOST_INTERFACES[], CL.CONSERVATIVE_INTERFACE_FILTER[])
     CL.LIMITED_GHOST_INTERFACES[] = FLUX[] === :ghost
+    CL.CONSERVATIVE_INTERFACE_FILTER[] = opt.conservative
     try
         run_parts(parts, cases, counts, variants, level_names, drift_names, pulse_names,
                   planar_names, opt)
     finally
-        CL.LIMITED_GHOST_INTERFACES[] = saved
+        CL.LIMITED_GHOST_INTERFACES[], CL.CONSERVATIVE_INTERFACE_FILTER[] = saved
     end
     return nothing
 end
