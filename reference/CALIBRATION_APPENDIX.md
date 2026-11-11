@@ -6202,34 +6202,47 @@ Patch AMR, the level hierarchy and the device backend. The mechanism is in
 tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16 check=true`,
 8.5 minutes on the i9-12900K.
 
-The case is periodic passive-species shear on [0, 8π) × [0, 2π): two
-thermodynamically identical ideal species at uniform density and pressure,
-u = 1, v = 0.08 sin(x/4), and the composition a periodic pair of perturbed
-tanh sheets, width parameter 0.22 for the fixed layouts and 0.18 for moving
-refinement. 96 × 24, Float64, C6, the default C8 filter every step, CFL 0.45,
-no physical transport, the artificial properties off except the
-mass-fraction bound, permissive validity (below). The layouts are the uniform
-grid, two same-level patches, a two-level and a three-level nest each with
-global steps and subcycled, and the two-level nest regridded 16 times under
-species-gradient tagging. Every run lasts two domain transits, t = 16π.
+The case is periodic passive-species shear: two thermodynamically identical
+ideal species at uniform density and pressure, a uniform stream with a weak
+sinusoidal transverse velocity, and the composition a periodic pair of
+perturbed tanh sheets. There is no physical transport, the artificial
+properties are off except the mass-fraction bound, and validity is
+permissive (below). The layouts are the uniform grid, two same-level patches,
+a two-level and a three-level nest each with global steps and subcycled, and
+the two-level nest regridded sixteen times under species-gradient tagging.
 
-The budgets were declared before the measurement: 1e-3 of each initial
-species mass, of total mass and of total energy; 1e-3 of M₀c₀ per momentum
-component, which gives the initially zero transverse components a scale; the
-same for each layout's initial sampling offset from the uniform run; 0.01 in
-molecular mixing and 1% of the domain length in mix width for the mixing
-comparisons. The conserved snapshot is the quadrature the coarse-fine
+```text
+domain           [0, 8π) × [0, 2π), periodic
+grid             96 × 24, Float64
+flow             u = 1, v = 0.08 sin(x/4)
+sheet width      0.22 (fixed layouts), 0.18 (moving refinement)
+scheme           C6, the default C8 filter every step, CFL 0.45
+duration         two domain transits, t = 16π
+```
+
+The budgets were declared before the measurement. The momentum budget is
+scaled by M₀c₀, which gives the initially zero transverse components a scale.
+
+| quantity | budget |
+|---|---|
+| each species mass, total mass, total energy | 1e-3 of the initial value |
+| each momentum component | 1e-3 of M₀c₀ |
+| each layout's initial sampling offset from the uniform run | the same |
+| molecular mixing | 0.01 |
+| mix width | 1% of the domain length |
+
+The conserved snapshot is the quadrature the coarse-fine
 coupling conserves (`volume_integral`'s composite form) with shared planes
 counted once, and each layout's drift is taken from its own
 initial integral, sampled sixteen times so that a cancelling excursion is not
 hidden by the endpoint. The regrid ledger records the jump across each
 transfer separately from the evolution between transfers.
 
-**Fixed layouts.** The sampled maximum of the normalized drift over two
-transits, and the largest mass-fraction excursion outside [0, 1] seen at any
-sample. The drift is an exchange between the two species: total mass,
-momentum and energy hold to 4e-11 in every layout, and the two species masses
-move by equal and opposite amounts.
+**Fixed layouts.** The drift is an exchange between the two species: total
+mass, momentum and energy hold to 4e-11 in every layout, and the two species
+masses move by equal and opposite amounts. The table gives the sampled
+maximum of the normalized drift over two transits and the largest
+mass-fraction excursion outside [0, 1] seen at any sample.
 
 | layout | root steps | max drift | species excursion |
 |---|---|---|---|
@@ -6240,12 +6253,18 @@ move by equal and opposite amounts.
 | three levels, global step | 10568 | 8.5e-7 | 3.6e-4 |
 | three levels, subcycled | 1184 | 4.8e-7 | 0 |
 
-The initial sampling offsets from the uniform run are 3.0e-10 at two and
-three levels; the mixing comparisons stay within 1.6e-3 in width and 8.2e-4
-in molecular mixing over the history, against budgets of 0.25 and 0.01.
+The refined layouts also agree with the uniform run, each comparison an order
+of magnitude or more inside its budget:
 
-**Moving refinement.** Sixteen regrids over two transits, global step and
-subcycled.
+| comparison with the uniform run | largest | budget |
+|---|---|---|
+| initial sampling offset, two and three levels | 3.0e-10 | |
+| mix width, over the history | 1.6e-3 | 0.25 |
+| molecular mixing, over the history | 8.2e-4 | 0.01 |
+
+**Moving refinement.** The evolution between transfers is the larger term of
+the drift and grows steadily over the run; the regrid jumps are the smaller
+one. Sixteen regrids over two transits, global step and subcycled:
 
 | quantity | global step | subcycled |
 |---|---|---|
@@ -6256,27 +6275,32 @@ subcycled.
 | final drift | 1.6e-5 | 1.1e-5 |
 | species excursion | 7.1e-4 | 5.8e-4 |
 
-The signed sums of the jumps are 1.0e-6 and 1.7e-6. The evolution between
-transfers is the larger term, growing steadily over the run; the budget
-compares the absolute sum of the jumps, which at this spacing would reach it
-after some three thousand regrids. Regridding a three-level hierarchy is
-unsupported and is not measured.
+The budget compares the absolute sum of the jumps, which at this spacing
+would reach it after some three thousand regrids. Regridding a three-level
+hierarchy is unsupported and is not measured.
 
-**Why the runs are permissive, and the bound is on.** With the artificial
-properties off entirely, strict validity ended the three-level global-step
-run at t = 37.7, the long moving-refinement run at t = 25.1 and an unfiltered
-uniform run at t = 28.3, in every case on mass fractions past the 1e-4 dead
-band. A per-step probe of the three-level run shows no growth anywhere else:
+**Why the runs are permissive, and the bound is on.** The mass-fraction
+undershoot that ends some of these runs under strict validity is independent
+of conservation: the drift up to the point of failure was inside the budget
+in every failed run, so the instrument reports the excursion beside the drift
+instead of stopping on it. With the artificial properties off entirely,
+strict validity ended the runs below on mass fractions past the 1e-4 dead
+band.
+
+| run, artificial properties off, strict validity | ended at |
+|---|---|
+| three levels, global step | t = 37.7 |
+| moving refinement, long run | t = 25.1 |
+| uniform, unfiltered | t = 28.3 |
+
+A per-step probe of the three-level run shows no growth anywhere else:
 velocity, pressure and density stay at their initial values to four digits,
-and the step size is steady. The undershoot sits on the root and level-1
-nodes along the edges of the nested box, is advected with the flow, and grows
-from 1e-4 at t = 34 to 3e-4 at t = 38; the mass-fraction bound at its default
-slows it but does not hold it below the dead band, since it acts in
-proportion to the excursion. The same layout subcycled shows no excursion at
-all. The drift up to the point of failure was inside the budget in every one
-of those runs, so the validity failure and the conservation budget are
-independent measurements, and the instrument reports the excursion beside
-the drift instead of stopping on it.
+and the step size is steady. The undershoot sits on the root and first-level
+nodes along the edges of the nested box and is advected with the flow. It
+grows from the size of the dead band at t = 34 to three times it at t = 38. The
+mass-fraction bound at its default slows it but does not hold it below the
+dead band, since it acts in proportion to the excursion. The same layout
+subcycled shows no excursion at all.
 
 **Decision.** Every layout is inside its conservation budget, the fixed
 layouts by an order of magnitude, so smooth flow takes no surface-flux
@@ -6288,15 +6312,20 @@ mass-fraction undershoot under global stepping is an imposed-shell accuracy
 question for N11, not a conservation one. No turbulent, variable-density,
 shock or hardware-GPU claim follows from these passive-species cases.
 
-**Attribution.** `ledger=true` books each run's drift to the mechanism that
-made it (DESIGN.md, [attributing the conserved
-budgets](DESIGN.md#attributing-the-conserved-budgets)). Species 1 on its
-initial mass, two levels subcycled, 96 × 24 over two transits at 8 ranks,
-18.7 minutes; the row "at t = 15π" is the sample of largest drift. Total
-mass, momentum and energy stay at 4e-11 or below in every row, so the
-species exchange is the whole drift. Rows absent from a run (`shell`,
-`restrict`, `same_level` on a refined layout, `unattributed`) were zero: the
-shell and the restriction write only nodes the quadrature does not count.
+**Attribution.** On a refined layout the right-hand side's share of the
+drift is the coarse-fine flux mismatch at the junction, and the rest is the
+filter's; each level's right-hand side less the fluxes through its faces
+conserves to round-off.
+`ledger=true` books each run's drift to the mechanism that made it
+(DESIGN.md, [attributing the conserved
+budgets](DESIGN.md#attributing-the-conserved-budgets)). The table is species 1
+on its initial mass, two levels subcycled at the resolution above, over two
+transits at eight ranks in 18.7 minutes. The column "at t = 15π" is the
+sample of largest drift. Total mass, momentum and energy stay at 4e-11 or
+below in every row, so the species exchange is the whole drift. Rows absent
+from a run (`shell`, `restrict`, `same_level` on a refined layout,
+`unattributed`) were zero: the shell and the restriction write only nodes the
+quadrature does not count.
 
 | piece | at t = 15π | at t = 16π |
 |---|---|---|
@@ -6314,25 +6343,39 @@ child's with the rate of Ω, integrated through the stage recurrence: the
 quantity the coarse-fine correction removes on a line it flags, and here
 it flags none. Each level's right-hand side less the fluxes through its
 faces is round-off, so the right-hand side's whole drift is the junction's.
-The same split holds under the global step (mismatch −5.15e-7 at t = 15π,
-−9.56e-8 at the end; filter −1.91e-7 and −2.37e-7) and at three levels
-(mismatch −5.94e-7 and −1.79e-7 under the global step, −3.63e-7 and
-−4.05e-8 subcycled). The uniform run books 3e-15 to the right-hand side and
-5e-14 to the filter, and two same-level patches 1.5e-9, of which the filter
-carries 9.0e-10, the right-hand side 5.6e-10 and the same-level averaging
-1e-16. Under moving refinement the sixteen regrid jumps sum to +1.0e-6, the
-right-hand side, all of it mismatch, to +1.38e-5 and the filter to +8.9e-7
-under the global step; subcycled, +1.65e-6, +5.9e-6 and +3.0e-6.
+The same split holds under the global step and at three levels; the
+columns are the sample of largest drift and the end of the run.
 
-Over t ≤ 5π the largest sampled two-level subcycled drift is 2.05e-7 at
-96 × 24 and 2.19e-9 at 192 × 48, a ratio of 93, and at t = 5π the mismatch
-falls from 2.08e-7 to 8.7e-11. The drift is a truncation error of the
-coupling at the junction, converging at high order once Ω is counted.
+| species 1 | mismatch, largest | mismatch, end | filter, largest | filter, end |
+|---|---|---|---|---|
+| two levels, global step (largest at t = 15π) | −5.15e-7 | −9.56e-8 | −1.91e-7 | −2.37e-7 |
+| three levels, global step | −5.94e-7 | −1.79e-7 | | |
+| three levels, subcycled | −3.63e-7 | −4.05e-8 | | |
+
+Without a coarse-fine junction the filter carries the larger share. Under
+moving refinement the right-hand side's part, all of it mismatch under the
+global step, outweighs the sum of the regrid jumps.
+
+| species 1 | right-hand side | filter | same-level averaging | regrid jumps, summed |
+|---|---|---|---|---|
+| uniform | 3e-15 | 5e-14 | | |
+| two same-level patches | 5.6e-10 | 9.0e-10 | 1e-16 | |
+| moving refinement, global step | +1.38e-5 | +8.9e-7 | | +1.0e-6 |
+| moving refinement, subcycled | +5.9e-6 | +3.0e-6 | | +1.65e-6 |
+
+The drift is a truncation error of the coupling at the junction, converging
+at high order once Ω is counted: doubling the resolution of the two-level
+subcycled run reduces its largest drift over t ≤ 5π by a factor of 93.
+
+| two levels, subcycled, t ≤ 5π | 96 × 24 | 192 × 48 |
+|---|---|---|
+| largest sampled drift | 2.05e-7 | 2.19e-9 |
+| mismatch at t = 5π | 2.08e-7 | 8.7e-11 |
 
 **Decision.** Smooth flow takes no conservative correction. The attributed
-non-conservation is the junction's flux mismatch, 5e-7 at its largest
-against the 1e-3 budget at this resolution and converging at high order, and
-a correction applied on every line of a 2-D face costs the interface its
+non-conservation is the junction's flux mismatch, more than three orders of
+magnitude inside the budget at this resolution and converging at high order,
+and a correction applied on every line of a 2-D face costs the interface its
 order ([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)).
 
 ### bench/reflux.jl: the conservative coarse-fine coupling
@@ -6341,9 +6384,11 @@ order ([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)).
 filter; the cases are described in the script's header. The uncorrected rows
 set `REFLUX[] = false`.
 
-**Sod.** Relative change of the composite mass and energy at t = 0.2, in the
-conserved quadrature (`_conserved_budget`), the shock having crossed both faces
-of the box over [0.6, 0.8]:
+**Sod.** Across a shock that crosses both faces of the box, the correction
+reduces the composite mass and energy change by about three to four orders
+of magnitude, under either stepping and with the parent mask off or on. The
+box is over [0.6, 0.8]. The table gives the relative change at t = 0.2 in
+the conserved quadrature (`_conserved_budget`):
 
 | stepping | parent mask | uncorrected mass | corrected mass | uncorrected energy | corrected energy |
 |---|---|---|---|---|---|
@@ -6352,7 +6397,9 @@ of the box over [0.6, 0.8]:
 | subcycled | off | +9.12e-5 | +3.10e-8 | +4.72e-5 | +5.90e-8 |
 | subcycled | on | −7.48e-4 | +3.72e-8 | −1.05e-3 | +6.58e-8 |
 
-**Entropy wave.** Largest density error over the level's nodes at t = 0.3:
+**Entropy wave.** A correction applied on every line costs a smooth
+two-dimensional interface its order, and the gate keeps it off smooth data.
+Largest density error over the level's nodes at t = 0.3:
 
 | coupling | N = 24 | N = 48 | N = 96 | orders |
 |---|---|---|---|---|
@@ -6368,10 +6415,12 @@ is no tangential quadrature, the ungated correction keeps the interface's
 order; without Ω, the correction of the box rule beside the face, it lowers
 it to 2.
 
-**Noh crossing.** The tile over 43 root nodes passes its shock out near
-t = 0.5; mass pieces of the budget ledger over the run to t = 0.6, and the
-composite mass less the inflow through the outer boundary, of the final
-mass:
+**Noh crossing.** When a shock leaves the tile, the correction holds the
+composite mass to the uniform run's own drift, where the uncorrected coupling
+loses about a thousandth of it. The tile over 43 root nodes passes its shock
+out near t = 0.5. The table gives the mass pieces of the budget ledger over
+the run to t = 0.6, and the composite mass less the inflow through the outer
+boundary, as fractions of the final mass:
 
 | coupling | right-hand sides | filter | correction | inflow | composite less inflow |
 |---|---|---|---|---|---|
@@ -6381,23 +6430,30 @@ mass:
 The uniform run at the level's spacing drifts by −4.45e-7 against the exact
 mass. The crossing leaves a static density crater beside the face, ρ ≈ 8.9
 against a plateau near 15 on the child, three child nodes wide, which is
-present uncorrected as well. On data that rough Ω is not small: at t = 0.6
-it carries −3.96e-4 of the mass, so the cells alone read +3.96e-4 on the
-corrected run where the conserved quadrature, which `volume_integral` takes,
-reads −3.65e-7. Ω is −4e-7 at t = 0.2 and grows from t ≈ 0.45 as the shock
-reaches the face.
+present uncorrected as well. On data that rough Ω is not small, and the
+cells alone misread the corrected run's mass by its share; the conserved
+quadrature, which `volume_integral` takes, reads the composite of the table
+above. Ω grows from t ≈ 0.45 as the shock reaches the face.
 
-**A moving converging shock.** The shock problem of `bench/movinglevel.jl`
-(256 root nodes, a subcycled box placed by the density sensor four root
-nodes ahead of the shock) keeps the shock inside the box's inner face and
-within `GATE_REACH` of it, so a gate testing the covered nodes corrects the
-junction in nearly every step, and its correction lands in the gas at rest
-ahead of the shock. The
-level's largest |ρ − 1| beyond 0.02 inside the front (fine grid 2.91e-4),
-with variants of the gate, and the Sod and Noh rows above:
+| corrected run, of the final mass | t = 0.2 | t = 0.6 |
+|---|---|---|
+| Ω | −4e-7 | −3.96e-4 |
+| the cells alone | | +3.96e-4 |
+
+**A moving converging shock.** A gate that tests the covered nodes corrects a
+moving shock's junction in nearly every step, and the correction lands in the
+gas at rest ahead of the shock; testing the uncovered nodes alone, the
+default, keeps the masked level's error ahead of the shock at the fine
+grid's. The
+shock problem of `bench/movinglevel.jl` (256 root nodes, a subcycled box
+placed by the density sensor four root nodes ahead of the shock) keeps the
+shock inside the box's inner face and within `GATE_REACH` of it. The moving
+shock column is the level's largest |ρ − 1| beyond 0.02 inside the front,
+with variants of the gate; the Sod and Noh columns summarize the tables above.
 
 | gate | mask | moving shock | Sod mass, largest | Noh composite less inflow |
 |---|---|---|---|---|
+| uniform fine grid | | 2.91e-4 | | |
 | none (`REFLUX[] = false`) | off | 1.08e-2 | 9.1e-5 | −1.18e-3 |
 | none | on | 3.38e-4 | 7.5e-4 | |
 | parent nodes either side of the face | off | 1.92e-2 | 6.7e-8 | −3.65e-7 |
@@ -6431,10 +6487,19 @@ gained 4.9e-3 of its mass.
 `filter` and `undershoot`; the toggle `SENSOR_INTERFACE_GHOSTS` selects
 the detector's interface taps).
 
-**The operator probe.** One application of each operator on
-ρ = 1 + 0.3 sin(2π(x + 1/7)) + 0.05 sin(10π(x + 1/7)), p = 1, u = 0 on
-[0, 1), against the uniform periodic grid of the same spacing: the level-1
-patch of a two-level nest at h/3, its shell imposed from the root's own
+**The operator probe.** The detector's ghost taps carry a coarse-fine face's
+interpolation error at the shell's order and reproduce a same-level face
+exactly, where clamped taps put a first-order error in the sensor. Of the
+filter's interface rows, the one-sided rows are closest to the uniform
+filter at a coarse-fine face and the extended rows at a same-level face. The
+probe is one application of each operator on a smooth field at rest,
+
+```text
+ρ = 1 + 0.3 sin(2π(x + 1/7)) + 0.05 sin(10π(x + 1/7)),  p = 1,  u = 0  on [0, 1)
+```
+
+against the uniform periodic grid of the same spacing: the level-1 patch of
+a two-level nest at h/3, its shell imposed from the root's own
 initialization, and the two patches of a same-level pair. The entry is
 |interface − uniform| over the input amplitude at the first node in from
 the face; the orders are log₂ of successive ratios. The detector runs at
@@ -6455,10 +6520,9 @@ weight power zero on the internal energy.
 | filter, onesided rows, same level, node 2 | 7.0e-7 | 3.6e-9 | 2.4e-11 | 7.59 / 7.23 |
 | filter, cascade rows, same level, node 2 | 3.5e-4 | 1.1e-4 | 2.8e-5 | 1.73 / 1.95 |
 
-The clamp is a first-order error in the sensor at the two nodes it
-touches and exactly zero beyond them; the ghost taps carry the shell's
-order-6 interpolation error at a coarse-fine face and reproduce the
-uniform grid bitwise at a same-level face. The `:gaussian` smoother's
+The clamp's error is confined to the two nodes it touches and is exactly
+zero beyond them; the shell's interpolation error, which the ghost taps
+carry, is of order 6. The `:gaussian` smoother's
 closed-edge rows add a first-order error over four nodes where the
 `:compact` smoother stays at its own order. The filter's identity row
 leaves node 1 at round-off under every row set. At a coarse-fine face the
@@ -6470,22 +6534,31 @@ reverses: the extended rows track the uniform filter at order 8 and the
 closed rows depart from it. The cascade rows are the worst set at both
 faces.
 
-**The Sod crossing.** Root N = 201 on [0, 1] between slip walls, CFL 0.4,
-the default artificial properties and filter, the level-1 box over
-[0.6, 0.8], run to t = 0.2 so that the shock enters through the low face
-near t = 0.057 and leaves through the high face near t = 0.17. The base
-row is C6, subcycled, one tile, `filter_cfl = 0.35`, the default rows,
-ghost taps, `interface_flux = :closure`; each other row changes one
-setting. Package at `743fdb4b`, Julia 1.13.3, from
+**The Sod crossing.** A Sod shock crosses a refined box under every
+configuration of the main table below with no inadmissible point counted on
+any step, and the
+detector's tap policy moves nothing past the third digit on a
+single-species shock. The case:
+
+```text
+root grid      N = 201 on [0, 1] between slip walls, CFL 0.4
+level 1        a box over [0.6, 0.8]; the shock enters through the low face
+               near t = 0.057 and leaves through the high face near t = 0.17
+run            to t = 0.2, the default artificial properties and filter
+base row       C6, subcycled, one tile, filter_cfl = 0.35, the default rows,
+               ghost taps, interface_flux = :closure
+```
+
+Each other row changes one setting. Package at `743fdb4b`, Julia 1.13.3, from
 `julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
-transcript is `bench/results/interfacesensor.txt`. The columns are the
-momentum ahead of the shock at t = 0.1 (x > 0.85, the level suite's gate
-quantity), the minimum density and pressure over every patch on any
-step, the artificial diffusivity number ((μ\* + β\*)/ρ + κ\*/(ρc_p) +
-max D\*)/(ch) over the four fine nodes nearest each face at t = 0.03,
-before the shock arrives, and at t = 0.1, and the density error against
-the uniform run at the fine spacing over those nodes at t = 0.2. No row
-counted an inadmissible point on any step.
+transcript is `bench/results/interfacesensor.txt`.
+
+| column | quantity |
+|---|---|
+| noise | the momentum ahead of the shock at t = 0.1 (x > 0.85, the level suite's gate quantity) |
+| ρ_min, p_min | the minimum density and pressure over every patch on any step |
+| shell number | the artificial diffusivity number ((μ\* + β\*)/ρ + κ\*/(ρc_p) + max D\*)/(ch) over the four fine nodes nearest each face, at t = 0.03 before the shock arrives and at t = 0.1 |
+| shell error | the density error against the uniform run at the fine spacing over those nodes at t = 0.2 |
 
 | row | noise | ρ_min | p_min | shell number, t = 0.03 | t = 0.1 | shell error, t = 0.2 |
 |---|---|---|---|---|---|---|
@@ -6507,40 +6580,60 @@ The minimum density is the step data's start-up transient at step 3, and
 the uniform run reads the same 0.062 at both spacings. Under the tiled
 level and the three-patch layout the shell window includes the tile and
 patch faces the shock is crossing at t = 0.1, so those two rows read the
-shock itself. The tap policy moves nothing past the third digit on a
-single-species shock, whose own δ⁴ signal is orders above the clamp's
-error. On the two-species contact the clamped taps raise the shell
-number at t = 0.1 3.5-fold and move the shell error in the third digit;
-the contact carries the composition through both faces with a
-mass-fraction excursion of 2.7e-10 over the shell against 1.4e-4
-elsewhere (2.1e-10 and 1.5e-4 clamped). The `:brady_livescu` rows put
-2.4 times the base row's sensor on the shell during the crossing and
-complete it; no closure candidate fails this gate and none is promoted
-by it.
+shock itself. The tap policy has no visible effect on a single-species
+shock, whose own δ⁴ signal is orders above the clamp's error. On the
+two-species contact the clamped taps raise the shell number during the
+crossing 3.5-fold and move the shell error in the third digit. The contact
+carries the composition through both faces with a mass-fraction excursion
+over the shell about six orders below the excursion elsewhere:
+
+| two-species contact, mass-fraction excursion | over the shell | elsewhere |
+|---|---|---|
+| ghost taps | 2.7e-10 | 1.4e-4 |
+| clamped taps | 2.1e-10 | 1.5e-4 |
+
+The `:brady_livescu` rows put 2.4 times the base row's sensor on the shell
+during the crossing and complete it; no closure candidate fails this gate
+and none is promoted by it.
 
 Under `interface_flux = :closure` a discontinuity initialized on a
-same-level plane is the one failure; the default ghost fluxes complete
-that run
+same-level plane is the one failure. The extended gradient rows read the
+jump through the ghosts while the divergence keeps its one-sided rows, and
+the mismatch on a step one node wide fails the run. A captured shock
+arriving from the interior is several nodes wide and crosses either kind of
+face without incident, as every other row shows, and the default ghost
+fluxes complete the run that fails
 ([ghost fluxes](#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
-With two patches the shared plane is node 101, the Sod diaphragm, and
-the run fails on negative density at step 2 with ρ = −50 at the plane;
-the artificial properties off (step 10) and the filter off (step 2) fail
-the same way, the one-sided interface rows complete the run, a diaphragm
-one node to the right of the plane completes it, one node to the left or
-adjacent on a 200-node grid fails, and a coarse-fine box face on the
-diaphragm completes. The extended gradient rows read the jump through
-the ghosts while the divergence keeps its one-sided rows, and the
-mismatch on a step that is one node wide is what fails; a captured shock
-arriving from the interior is several nodes wide and crosses either kind
-of face without incident, as every other row shows.
+With two patches the shared plane is node 101, the Sod diaphragm:
 
-**The filter's change at the shell.** The density change of each filter
-pass, its maximum over the run at each distance from a coarse-fine face
-relative to its maximum over the fine interior, global stepping. The
-entropy wave is ρ = 1 + 0.1 sin(2πx), u = 1, p = 1 at root N = 96 to
-t = 0.5; the Sod crossing is the base case above to t = 0.2; the
-two-dimensional row is the wave on (96, 24, 1) with a two-dimensional
-box, where the plane column is the transverse pass.
+| Sod diaphragm on a same-level plane, closure rows | outcome |
+|---|---|
+| base | negative density at step 2, ρ = −50 at the plane |
+| artificial properties off | the same failure at step 10 |
+| filter off | the same failure at step 2 |
+| one-sided interface rows | completes |
+| diaphragm one node to the right of the plane | completes |
+| diaphragm one node to the left of the plane | fails |
+| diaphragm adjacent to the plane on a 200-node grid | fails |
+| a coarse-fine box face on the diaphragm | completes |
+
+**The filter's change at the shell.** Under the default extended rows the
+filter acts three to five times harder on the two nodes beside a coarse-fine
+face than in the fine interior, and fifteen times harder in two dimensions,
+where the transverse pass also moves the plane node itself by its interior
+level before the shell is re-imposed. The one-sided rows filter the whole
+fine interior five to ten times harder, since their closed rows make content
+the extended rows do not, and the cascade rows are four decades worse on the
+smooth wave. The table gives the density change of each filter pass, its
+maximum over the run at each distance from a coarse-fine face relative to
+its maximum over the fine interior, global stepping.
+
+```text
+entropy wave   ρ = 1 + 0.1 sin(2πx), u = 1, p = 1, root N = 96, to t = 0.5
+Sod crossing   the base case above, to t = 0.2
+2-D wave       the wave on (96, 24, 1) with a two-dimensional box; the plane
+               column is the transverse pass
+```
 
 | case, rows | interior | plane | node 2 | node 3 | node 4 | node 6 |
 |---|---|---|---|---|---|---|
@@ -6554,22 +6647,15 @@ box, where the plane column is the transverse pass.
 | 2-D wave, onesided | 6.4e-9 | 0.26 | 14 | 14 | 11 | 4.5 |
 | 2-D wave, cascade | 6.3e-7 | 8.0 | 24 | 20 | 13 | 1.7 |
 
-Under the default extended rows the filter acts three to five times
-harder on the two nodes beside a coarse-fine face than in the fine
-interior, and fifteen times harder in two dimensions, where the
-transverse pass also moves the plane node itself by its interior level
-before the shell is re-imposed. The one-sided rows filter the whole fine
-interior five to ten times harder, since their closed rows make content
-the extended rows do not, and the cascade rows are four decades worse on
-the smooth wave.
-
-**The root-edge undershoot.** The two-species layer of
-`bench/interfaceconservation.jl` on (96, 24, 1) with only the
-mass-fraction bound on, permissive, over two transits, sampled eight
-times: the minimum mass fraction by distance from the level-1 box edge,
-in root nodes on the root and in fine nodes from the imposed plane on
-each fine level. The toggle changes no digit in any row, since the bound
-is the only species sensor and it is zero inside [0, 1].
+**The root-edge undershoot.** With the filter on, the three-level nest under
+global stepping is the one refined layout that undershoots, and the
+undershoot starts at the first level's boundary plane. The case is the
+two-species layer of `bench/interfaceconservation.jl` on that section's grid
+with only the mass-fraction bound on, permissive, over two transits, sampled
+eight times. The table gives the minimum mass fraction by distance from the
+level-1 box edge, in root nodes on the root and in fine nodes from the
+imposed plane on each fine level. The toggle changes no digit in any row,
+since the bound is the only species sensor and it is zero inside [0, 1].
 
 | nest, stepping | t = 37.7, root face node | root outside, 2–3 nodes | level-1 plane | t = 50.3, root face node | root outside, 4+ nodes | level-1 interior | level-2 interior |
 |---|---|---|---|---|---|---|---|
@@ -6584,24 +6670,27 @@ A positive entry is a minimum above zero, so the two-level nests and both
 subcycled nests carry no undershoot at any sample. Without the filter the
 sheet undershoots on its own, at the box face and four or more root nodes
 outside it alike, which is the unfiltered ringing the conservation
-instrument's header describes and not an interface effect. The
-three-level nest under global stepping is the one refined case that
-undershoots, and it does so at the level-1 boundary plane first, at
-t = 37.7 on the coarse node coincident with that plane and the two or
-three root nodes outside it while the root interior and level 2 are still
-positive; by t = 50.3 the flow has carried it over the whole root outside
-the box and through level 1. The unrelaxed filter reproduces every entry
-to two digits. Direct weight measurements below show that global stepping
-uses the finest directional rate on every patch; the root pass is not
-relaxed in proportion to its own coarse spacing.
+instrument's header describes and not an interface effect. In the
+three-level nest under global stepping the undershoot appears first on the
+coarse node coincident with the first level's boundary plane and the two or
+three root nodes outside it, at t = 37.7, while the root interior and the
+second level are still positive; by t = 50.3 the flow has carried it over
+the whole root outside the box and through the first level. The unrelaxed
+filter reproduces every entry to two digits. Direct weight measurements
+below show that global stepping uses the finest directional rate on every
+patch; the root pass is not relaxed in proportion to its own coarse spacing.
 
-**Global-step follow-up (N12).** Reducing the two-level CFL from 0.45 to
-0.15 matches the three-level root-step scale without adding another
-interface. The two-level run then develops an undershoot too, so the
-second transfer is not necessary for its onset. A diagnostic driver that
-restricts fine data onto the parent every third step retains the same
-RK stages, shell impositions and filter passes. It produces almost the
-same undershoot, ruling out the frequency of fine-to-coarse restriction.
+**Global-step follow-up (N12).** The global-step undershoot follows the
+filter's application schedule. A second transfer is not necessary for its
+onset, the frequency of fine-to-coarse restriction does not set it, and the
+smaller timestep alone does not cause it. Reducing the two-level CFL from
+0.45 to 0.15 matches the three-level root-step scale without adding another
+interface, and the two-level run then develops an undershoot too. A
+diagnostic driver that restricts fine data onto the parent every third step
+retains the same RK stages, shell impositions and filter passes, and
+produces almost the same undershoot. Keeping the small timestep but
+filtering every third step restores the ordinary two-level physical filter
+cadence and remains positive at every sample.
 
 | two-level run, CFL 0.15 | t | completed steps | root face / level-1 plane | root outside, 4+ nodes | level-1 interior, 5+ nodes |
 |---|---|---|---|---|---|
@@ -6609,14 +6698,7 @@ same undershoot, ruling out the frequency of fine-to-coarse restriction.
 | production | 43.9823 | 9251 | +3.027e-5 | +6.388e-5 | +7.047e-5 |
 | production | 50.2655 | 10572 | -7.997e-5 | -2.395e-4 | +2.588e-4 |
 | restriction every third step | 50.2655 | 10572 | -8.091e-5 | -2.397e-4 | +2.567e-4 |
-
-Keeping the small timestep but filtering every third step restores the
-ordinary two-level physical filter cadence and remains positive at every
-sample: at t = 50.2655 the root face minimum is +1.347e-4, the root outside
-four nodes is +3.852e-5, and the level-1 plane and interior minima are
-+1.002e-4 and +2.511e-4. Thus the smaller RK timestep alone does not cause
-the undershoot; the changed filter application schedule is required in
-this reproducer.
+| filter every third step | 50.2655 | | +1.347e-4 / +1.002e-4 | +3.852e-5 | +2.511e-4 |
 
 The startup weights are identical on every patch of a hierarchy:
 
@@ -6672,10 +6754,19 @@ julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 movi
 `interface_divergence` replaces the flux divergence's closure rows at patch and level
 interface ends and nowhere else; the derivative operator stays `lele_d1_6()`, so a wall keeps
 the `:neutral3` rows. Without it an interface takes the `:cascade3` rows, and those rows below
-reproduce [the matrix](#patch-interfaces-and-refinement-levels) to every digit. Serial
-Float64, `cfl = 0.25`, the interface window of the matrix, root N = 48, 96, 192 (49, 97, 193
-for the wall rows); the `dt` column is below 0.1 on every row cited as an order unless
-marked.
+reproduce [the matrix](#patch-interfaces-and-refinement-levels) to every digit.
+
+On most smooth rows the Brady–Livescu rows raise the order at an interface from about three
+or four under the default rows to five or six. The exceptions are the rows with walls, where the
+`:neutral3` wall's fourth-order error dominates the window, and the one-sided viscous
+gradients, which hold every source to about third order or less. `:cascade4` falls to second
+order on the standing wave between two patches and below it between walls and an interface.
+The `dt` column is below 0.1 on every row cited as an order unless marked.
+
+```text
+serial, Float64, cfl = 0.25, the interface window of the matrix
+root N = 48, 96, 192 (49, 97, 193 for the wall rows)
+```
 
 ```
                                             default                cascade4               Brady–Livescu
@@ -6702,17 +6793,28 @@ viscous, 2 levels, extended gradients       8.597e-10 3.61 / 3.65  7.309e-12 4.8
 viscous, 2 levels, one-sided gradients      3.455e-9  3.44 / 3.66  3.652e-10 2.92 / 3.07  4.927e-10 3.25 / 3.30
 ```
 
-The standing wave through two levels at `cfl = 0.125` and root N = 96, 192, 384 reads
-2.022e-11, 3.459e-13, 6.084e-14 under the Brady–Livescu rows (5.08, then the round-off
-floor, `dt` 0.004 at N = 192) and 1.109e-8, 7.778e-10, 7.504e-11 under the default. The
-walls-and-interface rows' wall window is 3.1e-9 (default) and 2.8e-9 (Brady–Livescu) at
-N = 193, the `:neutral3` wall's fourth order, and the interface window reads that error.
+At half the step the Brady–Livescu standing wave through two levels stays at fifth order: it
+converges at 5.08 and then reaches the round-off floor.
 
-In Float32 the entropy wave k = 1 reads 3e-6 to 6e-5 in the interface window at every N and
-under every source, rising with N; no row converges and no source lowers the floor.
+| two levels, standing wave, `cfl = 0.125` | N = 96 | N = 192 | N = 384 |
+|---|---|---|---|
+| Brady–Livescu | 2.022e-11 | 3.459e-13 | 6.084e-14 |
+| Brady–Livescu, `dt` column | | 0.004 | |
+| default | 1.109e-8 | 7.778e-10 | 7.504e-11 |
 
-The acoustic pulse of the reflection tests, the left-running characteristic upstream of
-the first face over the pulse amplitude, against the run without the face:
+On the walls-and-interface rows the wall window carries the `:neutral3` wall's fourth-order
+error, 3.1e-9 under the default rows and 2.8e-9 under Brady–Livescu on the finest grid, and
+the interface window reads that error.
+
+In single precision no row converges and no source lowers the floor. The error of the
+single-wavelength entropy wave in the interface window is 3e-6 to 6e-5 at every N and under
+every source, rising with N.
+
+The Brady–Livescu rows reflect least from a same-level face on the two finer grids. On the
+nests the three sources reflect alike on the coarsest grid, and on the finest the default
+reflects about ten times more than the other two. The entry is the acoustic pulse of the
+reflection tests, the left-running characteristic upstream of the first face over the pulse
+amplitude, against the run without the face:
 
 ```
                       N = 96                           N = 192                          N = 384
@@ -6722,7 +6824,9 @@ two patches           9.740e-6  6.060e-5  1.543e-5     2.049e-6  8.356e-6  1.139
 2 levels subcycled    8.314e-7  8.928e-7  8.933e-7     1.051e-8  2.897e-9  1.099e-9     7.058e-10 8.713e-11 5.242e-11
 ```
 
-**Shocks.** The Sod crossing of
+**Shocks.** Neither candidate survives a discontinuity on a shared plane, and the
+Brady–Livescu rows halve the minimum pressure where the shock crosses a same-level face. The
+case is the Sod crossing of
 [the interface sensor instrument](#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface),
 root N = 201, `cfl = 0.4`, the artificial properties and the filter live; shell and root
 columns are the density error against the uniform run at t = 0.2:
@@ -6738,25 +6842,33 @@ columns are the density error against the uniform run at t = 0.2:
 | the same, one-sided gradients | completes, p_min 0.097 | negative density, step 113 | step 2 |
 
 The mirrored tube, the shock running right to left through the same faces, reproduces every
-printed digit of the forward rows. The Brady–Livescu rows halve the minimum pressure where
-the shock crosses a same-level face, and neither candidate survives a discontinuity on a
-shared plane; both remove the one-sided gradient rows as a workaround for it.
+printed digit of the forward rows. Under either candidate the one-sided gradient rows no
+longer serve as a workaround for a discontinuity on a shared plane.
 
-**Conservation.** The layer of
+**Conservation.** The nests and the regrid histories agree across the three sources to the
+second digit, all within the budget. At a same-level face the Brady–Livescu rows drift least
+and raise the largest mass-fraction excursion thirteenfold. The case is the layer of
 [the conservation instrument](#benchinterfaceconservationjl-composite-conservation-budgets)
-on (96, 24, 1) to t = 8: the nests and the regrid histories agree across the three sources
-to the second digit (6.9e-5 to 7.1e-5 fixed-nest drift, 2.2e-4 cumulative regrid jump, all
-within the 1e-3 budget). The same-level layout's drift is 5.2e-10, 5.9e-10 and 9.8e-11
-under the default, `:cascade4` and Brady–Livescu rows, and its largest mass-fraction
-excursion 3.1e-5, 2.2e-4 and 4.0e-4.
+on that section's grid to t = 8.
+
+| layer to t = 8, every source | |
+|---|---|
+| fixed-nest drift | 6.9e-5 to 7.1e-5 |
+| cumulative regrid jump | 2.2e-4 |
+| budget | 1e-3 |
+
+| same-level layout, layer to t = 8 | default | `:cascade4` | Brady–Livescu |
+|---|---|---|---|
+| drift | 5.2e-10 | 5.9e-10 | 9.8e-11 |
+| largest mass-fraction excursion | 3.1e-5 | 2.2e-4 | 4.0e-4 |
 
 **Decision.** The default stays. `:cascade4` is rejected: the undamped mode it carries at an
 inviscid wall appears at an interface on the standing wave and grows between walls and an
-interface. The Brady–Livescu rows reach 5.8–7.0 at a same-level interface and 6.0 at every
-coarse-fine nest on the entropy waves, but 5.1 on the acoustic standing wave at a
-coarse-fine face, their formal fifth order, below the 5.5 target; they halve the minimum
-pressure of a shock crossing a same-level face and raise the same-level mass-fraction
-excursion thirteenfold. The option stays experimental, a Float64 smooth-flow setting.
+interface. The Brady–Livescu rows reach about sixth order on the entropy waves at every
+interface, but 5.1 on the acoustic standing wave at a coarse-fine face, their formal fifth
+order, below the 5.5 target. They halve the minimum pressure of a shock crossing a
+same-level face and raise the same-level mass-fraction excursion thirteenfold. The option
+stays experimental, a Float64 smooth-flow setting.
 
 ### bench/boundaryorder.jl gflux: the divergence through interface ends from ghost fluxes
 
@@ -6779,13 +6891,20 @@ rows or an `interface_divergence` source's. With the artificial properties on, t
 F − f (the molecular and artificial fluxes and the wall corrections) is carried in
 `ghost_flux` as well, exchanged at a same-level face and extrapolated at a coarse-fine face,
 and the whole flux takes the gradient rows (the remainder paragraph below). The ghost column
-runs at the ghost path's default level interpolation order, 8. Serial Float64, `cfl = 0.25`,
-the matrix's interface window, root N = 48, 96, 192 (49, 97, 193 for the wall rows), beside
-the closure-row and Brady–Livescu (BL) columns of the section above, which this study
-reproduces to every digit. Package at `743fdb4b`, Julia 1.13.3; the transcript of the
-first command is `bench/results/boundaryorder.txt`. The polynomial row is
-`polynomial_case(96)`, every inviscid flux component of degree at most five, at the interface
-window:
+runs at the ghost path's default level interpolation order, 8.
+
+The ghost fluxes take the interface out of the error budget. At a same-level face the
+interface window's error equals the interior's, and at a coarse-fine face every row matches
+or leads the Brady–Livescu (BL) rows. The polynomial row, `polynomial_case(96)` with every
+inviscid flux component of degree at most five, is differenced to round-off in the interface
+window by the ghost path alone. The closure-row and BL columns are those of the section
+above, which this study reproduces to every digit. Package at `743fdb4b`, Julia 1.13.3; the
+transcript of the first command is `bench/results/boundaryorder.txt`.
+
+```text
+serial, Float64, cfl = 0.25, the matrix's interface window
+root N = 48, 96, 192 (49, 97, 193 for the wall rows)
+```
 
 ```
                                             closure                BL                     ghost
@@ -6814,27 +6933,45 @@ viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.5
 viscous, 2 levels subcycled                 8.529e-10 3.61 / 3.64  3.400e-13 5.53 / 5.39  1.057e-13 6.28 / 6.06
 ```
 
-At a same-level face the interface window's error equals the interior's on every ghost row,
-viscous ones included (the entropy wave k = 3 reads 1.42e-10 at the face and 1.55e-10 inside);
-the inviscid standing-wave slopes there are set by the time integrator (`dt` column 0.83–0.86
-at N = 192). The BL rows on the remainder change nothing without the artificial properties:
-the ghost path leaves no remainder, and the `ghost+BL` column repeats the ghost column to
-every digit. At a coarse-fine face the ghost state is the interpolation of the parent, whose
-O(h^p) value error enters the differenced inviscid flux at h^(p−1) and the molecular flux at
-h^(p−2). At order 6 the RHS on exact data converged at 5.01 against the BL rows' 5.02 with a
-constant eight times larger and the evolution errors sat five to twelve times above the BL
-rows; at order 8 every coarse-fine row matches or leads them. The viscous right-hand side
-on exact data within four nodes of an interface end, against the periodic operator at the
-patch's spacing (the check of `test/patch_tests.jl`, on one species), converges at 5.92 / 5.98
-through two patches and 6.73 / 5.44 / 7.02 through a level (N = 48 to 384; 6.23 then the 1e-12
-floor at order 10). Under the third-order closure rows of the operator's own set at the box ends, the level row
-had instead stalled at 5e-11, a second-order floor: the box ends lie eight to eleven fine
-nodes from the ghost layers, and a closure row's error decays by 2 − √3 per node.
+The equality of the interface window and the interior at a same-level face holds on every
+ghost row, viscous ones included. The inviscid standing-wave slopes there are set by the time
+integrator, the `dt` column reading 0.83–0.86 on the finest grid. The BL rows on the
+remainder change nothing without the artificial properties: the ghost path leaves no
+remainder, and the `ghost+BL` column repeats the ghost column to every digit.
 
-In Float32 the entropy wave k = 1 keeps the floor of the other sources (4.4e-6 two patches,
-8.4e-6 two levels at N = 192).
+| two patches, ghost | at the face | inside |
+|---|---|---|
+| entropy wave k = 3 | 1.42e-10 | 1.55e-10 |
 
-The acoustic pulse of the reflection tests, left-running characteristic over the amplitude:
+At a coarse-fine face the interpolation order sets the ghost path's accuracy. The ghost
+state is the interpolation of the parent, whose O(h^p) value error enters the differenced
+inviscid flux at h^(p−1) and the molecular flux at h^(p−2). At order 6, below the default,
+the right-hand side on exact data converged at 5.01, the BL rows' order, with a constant
+eight times larger, and the evolution errors sat five to twelve times above the BL rows.
+
+Near an interface end the viscous right-hand side converges at about sixth order against the
+periodic operator at the patch's spacing, through two patches and through a level. The
+measure is the error within four nodes of an interface end on exact data, the check of
+`test/patch_tests.jl` on one species.
+
+| viscous right-hand side on exact data, N = 48 to 384 | orders |
+|---|---|
+| two patches | 5.92 / 5.98 |
+| a level | 6.73 / 5.44 / 7.02 |
+| a level, order 10 | 6.23, then the 1e-12 floor |
+
+Under the third-order closure rows of the operator's own set at the box ends, the level row
+stalls at a second-order floor of 5e-11. The box ends lie eight to eleven fine nodes from the
+ghost layers, and a closure row's error decays by 2 − √3 per node.
+
+In single precision the ghost path keeps the floor of the other sources on the
+single-wavelength entropy wave: 4.4e-6 through two patches and 8.4e-6 through two levels on
+the finest grid.
+
+The ghost fluxes reflect least from the interface on the two finer grids in every layout but
+the subcycled level at N = 192, and through two patches at N = 384 forty times less than the
+BL rows. The entry is the acoustic pulse of the reflection tests, the left-running
+characteristic over the amplitude:
 
 ```
                       N = 96                           N = 192                          N = 384
@@ -6844,9 +6981,11 @@ two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049
 2 levels subcycled    8.314e-7  8.933e-7  4.824e-7     1.051e-8  1.099e-9  1.417e-9     7.070e-10 5.213e-11 5.072e-11
 ```
 
-**Shocks.** The Sod crossing, root N = 201, `cfl = 0.4`, the artificial properties and the
-filter live, inviscid, at the ghost path's default order 8. Package at `743fdb4b`, Julia
-1.13.3; the transcript of the `crossing` and `startup` commands is
+**Shocks.** The ghost fluxes keep the closure rows' minimum pressure on every layout measured
+under both, and they complete the run with the diaphragm on a shared plane, which fails under
+the closure rows. The case is the Sod crossing, root N = 201, `cfl = 0.4`, the artificial
+properties and the filter live, inviscid, at the ghost path's default order 8. Package at
+`743fdb4b`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
 `bench/results/interfacesensor.txt`. Shell and root are the density errors against the
 uniform run at the fine spacing at t = 0.2, p_min the smallest pressure on any step. In the
 default ghost column the remainder goes through the gradient rows (the transcript's
@@ -6862,26 +7001,38 @@ one-sided rows, both toggles off (the transcript's `gflux` rows):
 | tile 8: p_min, shell | — | 0.0405, 7.6e-2 | 0.0391, 7.6e-2 |
 | three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.8e-2 | 0.0412, 7.9e-2, 2.7e-2 |
 | diaphragm on the shared plane | negative density, step 2 | completes: 303 steps, p_min 0.072, shell 1.0e-2, root 1.0e-1 | completes: 305 steps, p_min 0.080, shell 8.3e-3, root 8.6e-2 |
+| the same, one-sided gradient workaround | completes: p_min 0.097, shell 4.6e-2, root 2.35e-1 | | |
 | the same, art off (the toggles inert) | — | negative density, step 20 | negative density, step 20 |
 | two species: shell Y excursion, elsewhere | — | 1.1e-9, 1.6e-4 | 1.3e-9, 1.6e-4 |
 
 The reversed tube reproduces every printed digit of the forward ghost rows under either
-remainder. On the shared plane the one-sided gradient workaround reads p_min 0.097, shell
-4.6e-2 and root 2.35e-1 in the same run.
+remainder.
 
-The positivity failsafe's case in `test/level_tests.jl` (root N = 81, level-1 tiles of 8 over
-root nodes 24–56, `cfl = 0.2`, 20 steps, `floor_ratio = 0.999`) places the Sod diaphragm on the
-plane between two tiles. At `743fdb4b` the failsafe saw 116 cells below the internal-energy
-floor on 20 steps and repaired 113 under the default ghost fluxes (133 and 141 with the
-remainder on the one-sided rows, 116 and 113 with the coarse-fine ends not extrapolated),
-against 63 on 18 steps and 70 repaired under the closure rows. At `aa5757b`, with the
-remainder on the one-sided rows, the repaired cells lay 1–11 fine nodes into the low-density
-tile, density triggered four in five of them, and interpolation order 6 or 8 left the tallies
-unchanged on both paths. The `startup` part counts the same criterion without repairing
-(cells below 0.999 of the initial minimum density or total energy over density, summed over
-steps) and gives the level-1 density error against the uniform run at the fine spacing. In
-the table, `ghost` is the ghost path with both remainder toggles off and the last two paths
-run with them on, the second of the two being the default:
+A Sod diaphragm on the plane between two tiles exercises the positivity failsafe. The count
+of flagged cells measures the start-up undershoot of an ideal jump, which the scheme
+produces without an interface, and the interface paths differ in how far that transient is
+damped. The failsafe's case in `test/level_tests.jl` places the diaphragm on that plane:
+
+```text
+root N = 81, level-1 tiles of 8 over root nodes 24–56, cfl = 0.2, 20 steps,
+floor_ratio = 0.999
+```
+
+| failsafe at `743fdb4b` | cells below the internal-energy floor | on steps | repaired |
+|---|---|---|---|
+| ghost fluxes (default) | 116 | 20 | 113 |
+| ghost, remainder on the one-sided rows | 133 | | 141 |
+| ghost, coarse-fine ends not extrapolated | 116 | | 113 |
+| closure rows | 63 | 18 | 70 |
+
+At `aa5757b`, with the remainder on the one-sided rows, the repaired cells lay 1–11 fine
+nodes into the low-density tile and density triggered four in five of them. The
+interpolation order, 6 or 8, left the tallies unchanged on both paths. The `startup` part
+counts the same criterion without repairing (cells below 0.999 of the initial minimum
+density or total energy over density, summed over steps) and gives the level-1 density error
+against the uniform run at the fine spacing. In the table, `ghost` is the ghost path with
+both remainder toggles off and the last two paths run with them on, the second of the two
+being the default:
 
 | diaphragm | path | 20 steps: flagged, min ρ/ρ0, L1(ρ) | t = 0.12: flagged, min ρ/ρ0, L1(ρ) |
 |---|---|---|---|
@@ -6899,24 +7050,41 @@ run with them on, the second of the two being the default:
 | | closure | 106, 0.556, 8.20e-3 | 2804, 0.556, 1.46e-2 |
 | | ghost, remainder, coarse-fine ends extrapolated | 173, 0.556, 9.67e-3 | 2893, 0.556, 1.40e-2 |
 
-The count measures the start-up undershoot of an ideal jump, which the scheme produces without
-an interface (0.671 on the uniform grid, at step 8). A jump on a tile plane under the closure rows
-starts through the one-sided inviscid and remainder rows, whose dissipation damps that transient
-to 0.934; the ghost fluxes with the remainder on the one-sided rows difference the inviscid
-flux there with interior accuracy and read 0.697, which they keep to t = 0.12. With the
-remainder through the gradient rows as well, the default, the transient reads 0.942, and at
-t = 0.12 the minimum is a later one on the root, 0.760 against the closure rows' 0.762. The
-Brady–Livescu rows on the remainder have failed at step 3 since `1fc1fdb`, which
-computes a tiled level's artificial coefficients over the whole level; at `c78eee8` they read
-0.664 and 7.39e-3, and the ghost path 0.770 and 2.89e-3. A diaphragm inside a tile or on a
-coarse-fine face gives the same minima under every path. Taken at `aa5757b`: at root N = 161
-and t = 0.0045 the flagged counts rise 1.8-fold (ghost) and 1.4-fold (closure) over N = 81 and
-the minima are unchanged. On the three regridded levels of `test/level_tests.jl` (shock and
-contact, subcycled, run to t = 0.25 in the test's four calls) the same count is 3750 under the
-default ghost fluxes against 3744 under the closure rows, min ρ/ρ0 0.663 against 0.675, at
-`743fdb4b`.
+On the uniform grid the start-up minimum is reached at step 8. A jump on a tile plane under
+the closure rows starts through the one-sided inviscid and remainder rows, whose dissipation
+damps that transient. The ghost fluxes with the remainder on the one-sided rows difference
+the inviscid flux there with interior accuracy, and keep their start-up minimum to t = 0.12.
+With the remainder through the gradient rows as well, the default, the transient is damped
+at least as much as under the closure rows, and at t = 0.12 the minimum of both is a later
+one on the root. A diaphragm inside a tile or on a coarse-fine face gives the same minima
+under every path.
 
-**The remainder through the gradient rows.** With the artificial properties on and
+The Brady–Livescu rows on the remainder have failed since `1fc1fdb`, which computes a tiled
+level's artificial coefficients over the whole level. At `c78eee8` they completed with a
+lower minimum and a larger error than the ghost path:
+
+| on the tile plane, at `c78eee8` | min ρ/ρ0, L1(ρ) |
+|---|---|
+| ghost, BL remainder rows | 0.664, 7.39e-3 |
+| ghost | 0.770, 2.89e-3 |
+
+On a root grid of twice the resolution the flagged counts rise less than twofold and the
+minima are unchanged. On the three regridded levels of `test/level_tests.jl` (shock and
+contact, subcycled, run in the test's four calls) the two paths flag nearly the same count.
+
+| at `aa5757b`, t = 0.0045 | flagged at root N = 161 over N = 81 |
+|---|---|
+| ghost | 1.8-fold |
+| closure | 1.4-fold |
+
+| three regridded levels to t = 0.25, at `743fdb4b` | flagged | min ρ/ρ0 |
+|---|---|---|
+| ghost (default) | 3750 | 0.663 |
+| closure | 3744 | 0.675 |
+
+**The remainder through the gradient rows.** Differenced through the gradient rows, the
+remainder raises the interface's order with the artificial properties on from about three
+to six. With the artificial properties on and
 `GHOST_FLUX_REMAINDER` off, the remainder F − f of the ghost-differenced flux (the molecular
 and artificial fluxes and the wall rewrite) takes the divergence plans' one-sided rows at an
 interface end, a second line solve. `GHOST_FLUX_REMAINDER` instead carries it in `ghost_flux`
@@ -6924,9 +7092,9 @@ on dimensions whose interface ends are same-level, the level's records filling t
 layers, and differences the whole flux through the gradient plans in one solve;
 `GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take a
 degree-5 Lagrange extrapolation of the interior remainder. Both are the default, the
-extrapolation applied per tile, so a stacked device level takes it too. On exact data with
-prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with `coefficients_current`), interface
-window, N = 48, 96, 192:
+extrapolation applied per tile, so a stacked device level takes it too. The table is on exact
+data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with `coefficients_current`), in
+the interface window on the section's three grids:
 
 | layout | plain | same-level ends | and coarse-fine ends |
 |---|---|---|---|
@@ -6935,61 +7103,90 @@ window, N = 48, 96, 192:
 | two levels, inviscid | (2.76, 2.97) | the same as plain | (5.99, 5.93), 1.28e-10 at N = 192 |
 | two levels, μ = 2e-2 | (2.79, 2.97) | the same as plain | (5.96, 5.99) |
 
-On the `crossing` rows of the transcript above, np = 1, both toggles against neither: on the
-untiled nests the fine and root errors at t = 0.2 move by under 0.3% and the shell error
-falls by 2 to 12% (base 9.50e-3 to 8.42e-3, fine 7.571e-2 in both, root 2.768e-2 to
-2.761e-2; three levels 8.90e-3 to 7.88e-3; global step 9.07e-3 to 8.66e-3), the level-1
-error of tile 8, its `fine` column, falls from 9.70e-3 to 9.07e-3, the two-patch row from
-1.02e-2 to 8.25e-3 (shell) and 1.00e-1 to 8.60e-2 (root), the three-patch row from 7.95e-2 to
-7.87e-2, and no row has an inadmissible step. At `d346d35`, on `test/validation.jl`'s Noh
-with a level at the axis, the coarse-fine correction on, the run holding the shock is
-unchanged in plateau (15.6523) and mass drift (−9.7e-7), its steps 6641 to 6639 and its tile
-error against the uniform run 5.693e-3 to 5.658e-3; the run passing the shock out reads
-plateau 14.9341 to 14.9059, shock radius 0.2092 to 0.2094, mass drift −4.7e-7 to −3.6e-7 and
-e_min −0.0189 to −0.0162. `bench/couplingspectrum.jl` (art off) and
-`bench/interfaceconservation.jl iflux=ghost`'s mixing layer, whose remainder is zero, are
-unchanged to every printed digit.
+On shocks the two toggles lower the error at the shell slightly and leave the rest of the
+solution as it was. The comparison is both toggles against neither on the `crossing` rows of
+the transcript above, np = 1, at t = 0.2. On the untiled nests the shell error falls by 2 to
+12%. The fine and root errors there move by under 0.3%, and no row has an inadmissible step.
 
-**Conservation.** The layer on (96, 24, 1) to t = 8, inviscid: the same-level layout's drift
-is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the closure rows),
-and every nest and regrid history agrees with the closure rows to the third digit. With
-`mu=1e-3` on every layout, the uniform run included: the same-level drift is 5.3e-13 against
-2.2e-10 under the closure rows, the nests drift 6.75e-5 to 6.92e-5 against 6.76e-5 to 6.93e-5,
-the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
+| `crossing` row | quantity | neither toggle | both toggles |
+|---|---|---|---|
+| base | shell | 9.50e-3 | 8.42e-3 |
+| base | fine | 7.571e-2 | 7.571e-2 |
+| base | root | 2.768e-2 | 2.761e-2 |
+| three levels | shell | 8.90e-3 | 7.88e-3 |
+| global step | shell | 9.07e-3 | 8.66e-3 |
+| tile 8 | level-1 error (`fine` column) | 9.70e-3 | 9.07e-3 |
+| two patches | shell | 1.02e-2 | 8.25e-3 |
+| two patches | root | 1.00e-1 | 8.60e-2 |
+| three patches | shell | 7.95e-2 | 7.87e-2 |
 
-**Cost.** `bench/interfacecost.jl`: serial, one thread, Float64, the median step over nine
-rounds of a few steps per configuration, the ghost and closure solvers of a round stepping in
-alternating order in one process, periodic, with the artificial properties and the filter on,
-at the default level interpolation order of each path. Package at the commit that builds the
-shell's gradient ring only where a coarse-fine face reads it, Julia 1.13.3, Core i9-12900K;
-the transcript is `bench/results/interfacecost.txt`. Ghost over closure: (64, 48, 48) in two
-patches 1.170 inviscid and 1.250 with `mu = 1e-3`; with `mu = 1e-3`, a 2-D static 17² box on
-N = 96 at the global step 1.165, a 2-D subcycled level of sixteen 37-node tiles on N = 96
-1.525, and a 3-D static 13³ box on N = 40 at the global step 1.351. With the artificial
-properties on, the extrapolated remainder carries the molecular flux at a coarse-fine face and
-no gradient ring is built. With them off the ring is built and filled at every shell
-imposition (the compact derivatives of every component along every dimension over the lines of
-the interpolated box that cross the ring): on the sixteen-tile level the ratio is then 2.104,
-and one imposition of the level's sixteen shells takes 1.447 ms against 0.329 ms without the
-ring. The `ghost_flux` arrays add one state-sized array per interface dimension of a patch.
+On `test/validation.jl`'s Noh with a level at the axis and the coarse-fine correction on, the
+toggles leave the run holding the shock unchanged in plateau and mass drift. The run passing
+the shock out moves slightly, its most negative internal energy rising.
+`bench/couplingspectrum.jl` (art off) and `bench/interfaceconservation.jl iflux=ghost`'s
+mixing layer, whose remainder is zero, are unchanged to every printed digit.
+
+| Noh at the axis, at `d346d35` | plateau | mass drift | steps | tile error | shock radius | e_min |
+|---|---|---|---|---|---|---|
+| holding the shock, neither toggle | 15.6523 | −9.7e-7 | 6641 | 5.693e-3 | | |
+| holding the shock, both toggles | 15.6523 | −9.7e-7 | 6639 | 5.658e-3 | | |
+| passing the shock out, neither toggle | 14.9341 | −4.7e-7 | | | 0.2092 | −0.0189 |
+| passing the shock out, both toggles | 14.9059 | −3.6e-7 | | | 0.2094 | −0.0162 |
+
+**Conservation.** At a same-level face the ghost fluxes conserve to round-off with no
+mass-fraction excursion, and every nest and regrid history agrees with the closure rows to
+the third digit. The case is the layer on that section's grid to t = 8, inviscid and with
+`mu=1e-3` on every layout, the uniform run included.
+
+| layer to t = 8 | ghost, inviscid | closure, inviscid | ghost, `mu=1e-3` | closure, `mu=1e-3` |
+|---|---|---|---|---|
+| same-level drift | 6.2e-13 | 5.2e-10 | 5.3e-13 | 2.2e-10 |
+| same-level mass-fraction excursion | 0 | 3.1e-5 | none outside [0, 1] | |
+| nest drift | | | 6.75e-5 to 6.92e-5 | 6.76e-5 to 6.93e-5 |
+| regrid histories, summed | | | 2.24e-4 | 2.24e-4 |
+
+**Cost.** With the artificial properties on, the ghost fluxes cost between a sixth and a half
+more per step than the closure rows, the most on a subcycled tiled level. With them off, the
+gradient ring built at every shell imposition doubles the cost on that level.
+`bench/interfacecost.jl`: serial, one thread, Float64, the median step over nine rounds of a
+few steps per configuration, the ghost and closure solvers of a round stepping in alternating
+order in one process, periodic, with the artificial properties and the filter on, at the
+default level interpolation order of each path. Package at the commit that builds the shell's
+gradient ring only where a coarse-fine face reads it, Julia 1.13.3. The machine is the Core
+i9-12900K, and the transcript is `bench/results/interfacecost.txt`.
+
+| ghost over closure, per step | ratio |
+|---|---|
+| (64, 48, 48) in two patches, inviscid | 1.170 |
+| (64, 48, 48) in two patches, `mu = 1e-3` | 1.250 |
+| 2-D static 17² box on N = 96, global step, `mu = 1e-3` | 1.165 |
+| 2-D subcycled level of sixteen 37-node tiles on N = 96, `mu = 1e-3` | 1.525 |
+| 3-D static 13³ box on N = 40, global step, `mu = 1e-3` | 1.351 |
+| the sixteen-tile level, artificial properties off | 2.104 |
+
+With the artificial properties on, the extrapolated remainder carries the molecular flux at a
+coarse-fine face and no gradient ring is built. With them off the ring is built and filled at
+every shell imposition (the compact derivatives of every component along every dimension over
+the lines of the interpolated box that cross the ring). One imposition of the sixteen-tile
+level's shells then takes 1.447 ms against 0.329 ms without the ring. The `ghost_flux` arrays
+add one state-sized array per interface dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every
 order-measuring row), cut the acoustic reflection forty-fold below the BL rows at N = 384, keep
 the closure rows' shock minimum pressure, conserve to round-off without a mass-fraction excursion,
 and are the first treatment under which the diaphragm on a shared plane runs with the extended
-gradients. Coarse–fine faces: at the ghost path's default order 8 it reads 5.8–7.0 on every
+gradients. Coarse–fine faces: at the ghost path's default order it reads 5.8–7.0 on every
 smooth row the time integrator leaves, viscous included, and matches or leads the BL rows
-everywhere, so one treatment
-serves both interface kinds. It is the default (ROADMAP N15b).
+everywhere, so one treatment serves both interface kinds. It is the default (ROADMAP N15b).
 
 ### bench/levelfilter.jl: level-aware filtering under global stepping
 
 N12a compares the production filter with two benchmark-only policies. The
 driver explicitly loads `bench/level_filter_policy.jl` in a fresh process;
 it does not install a solver option or change the package default. These
-are Float64 CPU measurements on an Intel Core i9-12900K, Julia 1.11.4,
-one Julia thread per process. The helper pays for an extra rate sweep and
+are Float64 CPU measurements on an Intel Core i9-12900K, one Julia thread
+per process. The Julia version is 1.11.4. The helper adds a rate sweep and a
 collective; no performance conclusion is drawn from it.
 
 For patch level `l`, the normalized policy forms the globally reduced
@@ -7010,9 +7207,11 @@ physical-cadence prescription. Both trials delegate subcycling and
 actual-per-level envelope for diagnostic checks; that variant is outside
 the qualification matrix below.
 
-**Two-transit layer and composite budgets.** The conservation instrument
-runs the bound-only two-species layer on `(96,24,1)` to
-`t=50.26548245743669`, with sixteen equally spaced observations, CFL 0.45
+**Two-transit layer and composite budgets.** Both candidates remove the
+sampled late undershoot while remaining well inside the conservation
+allowance. The conservation instrument runs the bound-only two-species
+layer on `(96,24,1)` to `t=50.26548245743669`, with sixteen equally spaced
+observations, CFL 0.45
 and permissive validity. Each drift is relative to that layout's own
 initialized composite quadrature. The evolution budget remains 1e-3 for
 mass, each species mass, energy and momentum scaled by initial mass times
@@ -7027,13 +7226,12 @@ sound speed; it was not adjusted for these candidates.
 | normalized | 3 | 10568 | 4.773e-7 | 0 |
 | cadence | 3 | 10568 | 4.803e-7 | 0 |
 
-Both candidates remove the sampled late undershoot while remaining well
-inside the conservation allowance. Subcycling remains positive at both depths
-and its production maximum drifts are 4.851e-7 and 4.847e-7. The policies
-were run at 8 ranks, 5.3 minutes each. The agreement
-of the two candidate layer outcomes does not make their operators
-equivalent: one applies a weak pass at every fine-sized step, the other
-interleaves fewer stronger passes with shell imposition.
+Subcycling remains positive at both depths, and its production maximum
+drifts are 4.851e-7 and 4.847e-7. The policies were run at 8 ranks, 5.3
+minutes each. The agreement of the two candidate layer outcomes does not
+make their operators equivalent: one applies a weak pass at every
+fine-sized step, the other interleaves fewer stronger passes with shell
+imposition.
 
 Reproduce with `julia --project=. -t 1 bench/levelfilter.jl
 policy=normalized instrument=budgets N=96 ny=24
@@ -7042,31 +7240,32 @@ check=true`. Use `parts=mixing layouts=uniform,depth3 stepping=global`
 to isolate the long three-level rank comparison while retaining its
 uniform attribution baseline.
 
-**Moving refinement.** The sharper moving layer uses the same grid and
-end time, with sixteen explicitly sampled regrids of a two-level nest.
-The table separates evolution from the immediate transfer jumps, using
-the existing 1e-3 allowance for each reported conserved-budget measure.
+**Moving refinement.** Every conservation measure passes, but moving
+refinement still has a species excursion beyond the validity dead band
+under either trial, as under the unchanged subcycled control. These
+policies therefore resolve the fixed-layer reproducer, not general species
+positivity. The sharper moving layer uses the same grid and end time, with
+sixteen explicitly sampled regrids of a two-level nest. The table separates
+evolution from the immediate transfer jumps, using the existing 1e-3
+allowance for each reported conserved-budget measure.
 
 | policy, global stepping | sum of absolute transfer jumps | maximum total drift | maximum drift with transfers subtracted | species excursion |
 |---|---|---|---|---|
 | production | 3.824e-6 | 1.708e-5 | 1.467e-5 | 7.06e-4 |
 | normalized | 5.948e-6 | 1.406e-5 | 1.027e-5 | 5.64e-4 |
 | cadence | 5.710e-6 | 1.254e-5 | 8.908e-6 | 5.71e-4 |
+| production, subcycled (control) | 5.801e-6 | 1.259e-5 | 8.927e-6 | 5.76e-4 |
 
-Every conservation measure passes, but moving refinement still has a
-species excursion beyond the validity dead band under either trial.
-The unchanged subcycled control has cumulative jumps 5.801e-6, maximum
-total drift 1.259e-5, transfer-subtracted drift 8.927e-6 and species
-excursion 5.76e-4. These policies therefore resolve the fixed-layer
-reproducer, not general species positivity. Three-level moving
-refinement is unsupported and is not measured.
+Three-level moving refinement is unsupported and is not measured.
 
-**Smooth evolution and reflection.** The shared entropy-wave case runs to
-`t=0.5` at root `N=48,96,192`, CFL 0.25 and 0.125, with the filter on.
-The interface maximum counts actual patch faces, not MPI block ends;
-the L2 norm uses the solver's composite quadrature, the coupling's
-conserved one. Serial, about 15 seconds per policy. The following orders
-fit all three spacings at CFL 0.25.
+**Smooth evolution and reflection.** Both trials bring the global step
+close to the subcycled order at both depths and lower its finest-grid L2
+error, by about a third at two levels and nearly three quarters at three.
+The shared entropy-wave case runs to `t=0.5` at root `N=48,96,192`, CFL
+0.25 and 0.125, with the filter on. The interface maximum counts actual
+patch faces, not MPI block ends; the L2 norm uses the solver's composite
+quadrature, the coupling's conserved one. Serial, about 15 seconds per
+policy. The following orders fit all three spacings at CFL 0.25.
 
 | policy, global stepping | levels | interface order | L2 order | L2 error, N=192 |
 |---|---|---|---|---|
@@ -7077,29 +7276,44 @@ fit all three spacings at CFL 0.25.
 | normalized | 3 | 7.751 | 6.451 | 4.513e-11 |
 | cadence | 3 | 7.773 | 6.449 | 4.510e-11 |
 
-Both trials bring the two depths close to the subcycled order, about
-7.91 at the interface and 6.44 in L2, and lower the finest-grid
-global-step L2 error by 34% at two levels and 73% at three. Under the
-global step the largest relative change on halving CFL is 0.18%
-(production), 0.49% (normalized) and 1.6% (cadence), below the accuracy
-instrument's 10% temporal-contamination criterion; subcycled it is 0.8%
-up to N = 96 and 21% at N = 192, where the interface error is 6e-12 and
-the step's own error shows. These measured orders do not identify an
-individual operator mode.
+The subcycled orders are about 7.91 at the interface and 6.44 in L2.
+Under the global step, halving the CFL changes no error by more than a
+fraction of the accuracy instrument's 10% temporal-contamination criterion.
+Subcycled, the change passes it only on the finest grid, where the
+interface error is 6e-12 and the step's own error shows. These measured
+orders do not identify an individual operator mode.
 
-The filtered acoustic pulse crosses both faces of the nest at root
-`N=192`, measured at `t=pi/sqrt(1.4)` against a filtered uniform run.
-In serial, the maximum of the upstream pressure-wake and leftgoing-characteristic
-errors, divided by pulse amplitude, is 3.26e-9 for production, 1.53e-9
-for normalized rates and 1.46e-9 for cadence, across two/three levels
-and both stepping modes. All pass the pre-existing 1% reflection bound.
+| largest relative change on halving CFL | |
+|---|---|
+| production, global step | 0.18% |
+| normalized, global step | 0.49% |
+| cadence, global step | 1.6% |
+| subcycled, up to N = 96 | 0.8% |
+| subcycled, N = 192 | 21% |
+
+Every policy reflects the filtered acoustic pulse far inside the
+pre-existing 1% reflection bound, the two candidates about half as much as
+production. The pulse crosses both faces of the nest at root `N=192`,
+measured at `t=pi/sqrt(1.4)` against a filtered uniform run. The entry is
+the serial maximum of the upstream pressure-wake and
+leftgoing-characteristic errors, divided by pulse amplitude, over two and
+three levels and both stepping modes.
+
+| policy | reflection |
+|---|---|
+| production | 3.26e-9 |
+| normalized | 1.53e-9 |
+| cadence | 1.46e-9 |
+
 Subcycled accuracy and reflection rows are unchanged by the trial hooks.
 Reproduce with `bench/levelfilter.jl policy=normalized instrument=accuracy
 parts=all ns=48,96,192` after `julia --project=. -t 1`.
 
-**Shock crossings.** The sensor instrument's Sod shock enters and exits
-the refinement box by `t=0.2`, root `N=201`, with a uniform fine-spacing
-reference. All listed runs completed with zero inadmissible steps. The
+**Shock crossings.** Under global stepping both candidates raise the
+minimum density and pressure of a shock crossing and lower the disturbance
+ahead of it, the most at three levels. The sensor instrument's Sod shock
+enters and exits the refinement box by `t=0.2`, root `N=201`, with a
+uniform fine-spacing reference. All listed runs completed with zero inadmissible steps. The
 minimum density and pressure include startup; the disturbance is the
 momentum ahead of the shock at `t=0.1`, `x>0.85`.
 
@@ -7113,9 +7327,15 @@ momentum ahead of the shock at `t=0.1`, `x>0.85`.
 | cadence | 3 | 0.07740 | 0.05315 | 2.403e-10 |
 
 The two-species global-step crossing also stays admissible under every
-policy. Its final mass-fraction excursion at the contact changes from
-4.951e-4 (production) to 3.990e-4 (normalized) and 3.909e-4 (cadence);
-the corresponding shell excursions are 6.953e-8, 1.328e-8 and 6.283e-9.
+policy, and both candidates lower its final mass-fraction excursion, the
+most at the shell.
+
+| two species, global step | excursion at the contact | excursion at the shell |
+|---|---|---|
+| production | 4.951e-4 | 6.953e-8 |
+| normalized | 3.990e-4 | 1.328e-8 |
+| cadence | 3.909e-4 | 6.283e-9 |
+
 The subcycled two- and three-level rows reproduce production under both
 trials. This tests passage into and out of a refined region; it does not
 remove the separate discontinuity-on-a-same-level-plane limitation.
@@ -7126,16 +7346,17 @@ instrument=sensors parts=crossing N=201
 "crossing_variants=base,global,three levels,two species"`, substituting
 `policy=default` or `policy=cadence` for the controls.
 
-**Rank coverage.** The normalized three-level global-step layer was run
-over both transits at 1, 2, 4 and 8 ranks. Every run took 10568 steps,
+**Rank coverage.** The candidates' results agree across every rank count
+tried. The normalized three-level global-step layer was run over both
+transits at one, two, four and eight ranks. Every run took 10568 steps,
 with maximum sampled conserved drift 7.578e-5, zero species excursion,
 and matching printed width and molecular-mixing histories. The
 conservation, initial-sampling and mixing-comparison checks all pass.
 
 All three policies' smooth and reflection matrices were repeated at four
 and eight ranks, with the normalized matrix also repeated at two ranks.
-Eight ranks use `ns=96,192`; the 48-node root cannot supply the filter's
-nine nodes per rank. Over common resolutions, the largest absolute
+Eight ranks use `ns=96,192`, since a 48-node root leaves a rank fewer
+nodes than the filter's nine. Over common resolutions, the largest absolute
 difference from serial in any reported smooth error norm is below
 3.6e-14. Every reflection row passes. The standalone
 `bench/level_filter_policy_check.jl` checks default delegation, shortened
@@ -7143,8 +7364,8 @@ steps, skipped and due cadence passes, subcycle trajectory equality, and
 propagation of a fastest rate present only on deep-level owners to root
 ranks that own no deep tile.
 
-The policy checks pass at 1, 2, 4 and 8 ranks. Normalized-policy moving
-regrid smoke runs pass at four and eight ranks in both stepping modes;
+The policy checks pass at one, two, four and eight ranks. Normalized-policy
+moving regrid smoke runs pass at four and eight ranks in both stepping modes;
 the eight-rank global shock crossings reproduce the serial diagnostics
 at the printed precision, with zero inadmissible steps. The full moving
 two-transit comparison above was measured in serial.
@@ -7165,11 +7386,13 @@ promote a general filter-interval multiplier.
 `julia --project=. -t 8 bench/restrictcost.jl study=time case=2d` (and `case=3d`),
 `julia --project=. -t 1 bench/restrictcost.jl study=shock`.
 
-The per-stage schedule injects the fine level into the covered parent nodes before the
-shell imposition that follows every stage of the global step, as `restrict=stage` of
-`bench/temporalorder.jl` does. The cost rows alternate the two schedules in one process,
-five repetitions of ten steps each, one rank at eight threads, the default numerics on a
-smooth advected field; the ratio is the median of the paired per-repetition ratios.
+Restricting before every stage instead of once per step adds one to two percent to the step
+and leaves a shock crossing nearly unchanged. The per-stage schedule injects the fine level
+into the covered parent nodes before the shell imposition that follows every stage of the
+global step, as `restrict=stage` of `bench/temporalorder.jl` does. The cost rows alternate
+the two schedules in one process, five repetitions of ten steps each, one rank at eight
+threads, the default numerics on a smooth advected field; the ratio is the median of the
+paired per-repetition ratios.
 
 | case | restrictions per step | restriction, ms per step | share of the step | stage/step |
 |---|---|---|---|---|
@@ -7178,10 +7401,13 @@ smooth advected field; the ratio is the median of the paired per-repetition rati
 | 64³ root, 31³ box in 8 tiles, per step | 1.10 | 1.57 | 0.20% | |
 | same, per stage | 7.00 | 10.1 | 1.26% | 1.007 |
 
-The Sod crossing of `bench/interfacesensor.jl` (root N = 201, box over [0.6, 0.8] and at
-three levels a level-2 box over its middle half, cfl 0.4, the default numerics, global
-step), with the minimum density and pressure over every step and the density error at
-t = 0.2 against the uniform run at the level-1 spacing:
+The Sod crossing of `bench/interfacesensor.jl` gives the minimum density and pressure over
+every step and the density error at t = 0.2 against the uniform run at the level-1 spacing:
+
+```text
+root N = 201, box over [0.6, 0.8]; at three levels a level-2 box over its middle half
+cfl 0.4, the default numerics, global step
+```
 
 | levels, schedule | steps | ρ_min | p_min | density error |
 |---|---|---|---|---|
@@ -7194,7 +7420,7 @@ t = 0.2 against the uniform run at the level-1 spacing:
 over the parent level's communicator, and a measured 0.7–2.1% of the serial step. It changes
 the smooth error against the exact solution by under 2%
 ([temporal order](#temporal-order)), raises the shock's density error by under 1%, and
-deepens the three-level pressure minimum by 10%. The once-per-step injection is retained
+deepens the three-level pressure minimum by a tenth. The once-per-step injection is retained
 under both stepping modes.
 
 ### bench/substeprates.jl: refreshed refined-level rates
@@ -7204,11 +7430,15 @@ sides refresh the artificial coefficients, using the production subcycling
 driver. The root estimate is taken after startup priming or regrid priming,
 and the state filter uses the production cadence and relaxation.
 
+At startup the refreshed substep CFL of a refined level reaches about
+eight times the root target, in the first root step at both depths.
 Reproduction: `julia --project=. -t 1 bench/substeprates.jl steps=3
-levels=3,4 regrid_steps=6`. Serial Float64 on an Intel Core i9-12900K,
-Julia 1.11.4, one Julia thread: 201 root nodes, a Sod jump at x = 0.69
-inside the deepest nested box, root CFL 0.2. Both startup maxima occur
-in the first root step:
+levels=3,4 regrid_steps=6`.
+
+```text
+serial, Float64, one Julia thread, Intel Core i9-12900K, Julia 1.11.4
+201 root nodes, a Sod jump at x = 0.69 inside the deepest nested box, root CFL 0.2
+```
 
 | levels | peak refreshed substep CFL | divided by root CFL target | refined level | substep | RK stage |
 |---|---|---|---|---|---|
@@ -7219,24 +7449,28 @@ The location is the level with the largest observed rate, not necessarily
 the finest level. These are rate-growth measurements, not stability or
 solution-accuracy certificates.
 
-The supported two-level moving-box case changes layout four times in six
-root steps. Its largest changed-layout CFL is 0.188657 (0.943283 times the
-root target), on root step 2, refined level 1, substep 6, RK stage 1,
-after the box changes from offset/extent (50, 31) to (87, 30). The largest
-unchanged-layout value is 0.198363. These readings include the new regrid
-coefficient refresh and therefore measure its resulting trajectory.
+Under moving refinement the refreshed rates stay below the root target,
+whether or not the layout has just changed. The supported two-level
+moving-box case changes layout four times in six root steps. These readings
+include the regrid coefficient refresh and therefore measure its resulting
+trajectory.
 
-The original proposed absolute ceiling of 1 was rejected: the existing
-subcycled Sod precompile case at root CFL 0.2 reached a refreshed refined
-stage CFL of 1.011060 on its first step. The rate used to choose a step and
-the largest rate within its RK trajectory are different quantities; that
-observation alone does not establish a stability ceiling. The refreshed-rate
+| two-level moving box | CFL | over the root target | root step | refined level | substep | RK stage | box offset/extent |
+|---|---|---|---|---|---|---|---|
+| largest, changed layout | 0.188657 | 0.943283 | 2 | 1 | 6 | 1 | (50, 31) to (87, 30) |
+| largest, unchanged layout | 0.198363 | | | | | | |
+
+The proposed absolute ceiling of one was rejected: the subcycled Sod
+precompile case at root CFL 0.2 reached a refreshed refined stage CFL of
+1.011060 on its first step. The rate used to choose a step and the largest
+rate within its RK trajectory are different quantities; that observation
+alone does not establish a stability ceiling. The refreshed-rate
 check therefore remains opt-in (`StepControl.substep_cfl = 0` by default),
 with a positive value interpreted as an absolute ceiling qualified for the
 case. A violation returns through the level communicators to the root's
 savepoint/retry path before any accepted-step clock or callback advances.
 
-Every regrid check now refreshes artificial coefficients before the next
+Every regrid check refreshes artificial coefficients before the next
 root estimate, including checks that keep the layout. This makes the refresh
 cadence independent of timing-based ownership moves; a changed layout saves
 the refreshed coefficients in its retry state. This applies to both direct
@@ -7244,11 +7478,11 @@ the refreshed coefficients in its retry state. This applies to both direct
 regridding below the first refined level remains unsupported; the deeper
 startup cases do not qualify that missing capability.
 
-The `test/mpi_tests.jl` moving-Sod references were remeasured with this
-refresh cadence, keeping the existing round-off tolerances. Serial and
-two-rank runs agree to round-off; the changed times follow from using fresh
-coefficients in the root CFL estimate, rather than the previous stale arrays.
-All cases use 400 root nodes, root CFL 0.2 and the unrelaxed filter.
+The `test/mpi_tests.jl` moving-Sod references are taken with this refresh
+cadence, under round-off tolerances. Serial and two-rank runs agree to
+round-off; the times follow from the fresh coefficients in the root CFL
+estimate. All cases use 400 root nodes, root CFL 0.2 and the unrelaxed
+filter.
 
 | regression fixture | completed steps | serial time | final offset/extent or tile offsets |
 |---|---|---|---|
@@ -7257,21 +7491,27 @@ All cases use 400 root nodes, root CFL 0.2 and the unrelaxed filter.
 | tiled regrid | 41 | 0.003194481761204692 | 168, 176, 184 |
 | stored ownership / rebalance | 41 | 0.003194481019080914 | 168, 176, 184 |
 
-**Cost and dense-output decision.** Two warm whole runs precede five pairs
-of three-step smooth runs, with the guard disabled and enabled on identical
-initial data. The table reports the minimum time in each group; differences
-between the two depth-dependent percentages are not resolved against
-workstation timing noise.
+**Cost and dense-output decision.** The refreshed-rate guard's scan adds
+about a tenth to a root step, and the endpoint evaluations of the dense
+output are about a twentieth of the RHS time. Two warm whole runs precede
+five pairs of three-step smooth runs, with the guard disabled and enabled on
+identical initial data. The table reports the minimum time in each group;
+differences between the two depth-dependent percentages are not resolved
+against workstation timing noise.
 
 | levels | guard off, ms/root step | guard on, ms/root step | scan overhead | estimated endpoint share of RHS time |
 |---|---|---|---|---|
 | 3 | 2.472 | 2.738 | 10.7% | 5.48% |
 | 4 | 9.152 | 9.923 | 8.4% | 4.63% |
 
-The endpoint estimate weights measured per-level RHS costs by the recursive
-evaluation counts. Three levels use 65 stage RHS evaluations and 4 endpoint
-evaluations; four use 200 and 13. Minimum warm RHS costs from five samples
-are (39.8, 18.6, 26.0) μs and (32.3, 19.2, 27.0, 38.5) μs respectively.
+The endpoint estimate weights measured per-level RHS costs, the minimum of
+five warm samples, by the recursive evaluation counts.
+
+| levels | stage RHS evaluations | endpoint evaluations | RHS cost per level, μs |
+|---|---|---|---|
+| 3 | 65 | 4 | 39.8, 18.6, 26.0 |
+| 4 | 200 | 13 | 32.3, 19.2, 27.0, 38.5 |
+
 This is an estimate for the measured serial layouts, excluding endpoint box
 gathers; it is neither an equal-cost count nor a distributed speedup bound.
 Retain cubic Hermite output: removing this small RHS share does not justify
@@ -7283,10 +7523,13 @@ choice if a measured layout makes parent endpoint work dominant.
 `julia --project=. bench/amr_transfer.jl` (`7dbf319`; banded schemes
 `8271bd7`).
 
-The Pyranda pair (invertible compact filter, Gaussian of width 3Δx) bound to
-`plan_direction` as a `CompactScheme` (restriction) and a
-`BandedCompactScheme` (prolongation), the 3:1 sampling convention pinned
-numerically because the public kernels do not specify it.
+The transfer pair is exact to round-off as a round trip and converges at
+the Lagrange order away from a closed end, and at the closure's third order
+near one. The Pyranda pair, an invertible compact filter and a Gaussian
+of width 3Δx, is bound to `plan_direction` as a `CompactScheme`
+(restriction) and a `BandedCompactScheme` (prolongation). The public
+kernels do not specify the 3:1 sampling convention, so it is pinned
+numerically.
 
 | quantity | measured |
 |---|---|
@@ -7299,10 +7542,16 @@ numerically because the public kernels do not specify it.
 | prolongation gain at the fine Nyquist | 20.24 |
 | closure condition number | 33 |
 
-Conditioning in situ, on a 2h captured shock: the smoothed δ⁴ sensor
-round-trips at 1.03–1.13, the state undershoots ≤ 3% of ambient at the shock,
-and pollution decays ≈ 3.4× per point away from it. Settled the default
-coupling's tolerance of captured features and sized `tag_buffer = 4`.
+Conditioning in situ, on a captured shock:
+
+| 2h captured shock | measured |
+|---|---|
+| smoothed δ⁴ sensor, round trip | 1.03–1.13 |
+| state undershoot at the shock | ≤ 3% of ambient |
+| pollution away from the shock | decays ≈ 3.4× per point |
+
+On these figures the default coupling was judged tolerant of captured
+features, and `tag_buffer = 4` was sized.
 
 **Closure localization.** The response of the compact solve to a unit error in
 the first ghost layer decays into the patch at exactly the root of the LHS
@@ -7322,16 +7571,28 @@ where it holds five at C6, which is enough; the buffers did not move.
 `julia --project=. -t 1 bench/leveltransfer.jl orders=2,4,6,8,10` (about a
 minute).
 
-The live coupling by itself, on analytic data with the root exact: the
-`level_interpolation_order` Lagrange interpolation that fills a refined
-patch's shell and a freshly created fine region, the restriction, and
-repeated regrids. 2-D fields are periodic on [0, 2π)² with a square level
-fixed at 5L/12..7L/12; the smooth field is 1 + 0.2 sin(3x + 0.37) cos(2y − 0.1);
-N is the root count.
+An interpolation of order p reaches that order in values, p − 1 in the
+first derivative and p − 2 in the second, and regrids do not accumulate
+transfer error. The study is the live coupling by itself, on analytic data
+with the root exact: the `level_interpolation_order` Lagrange interpolation
+that fills a refined patch's shell and a freshly created fine region, the
+restriction, and repeated regrids.
+
+```text
+2-D fields     periodic on [0, 2π)², a square level fixed at 5L/12..7L/12
+smooth field   1 + 0.2 sin(3x + 0.37) cos(2y − 0.1)
+N              the root count
+```
 
 **Values.** A tensor polynomial of degree p − 1 per dimension is reproduced
-in the shell and in a fresh fill to 1e-14 of its maximum (degree p: 7.5e-3,
-3.4e-4, 4.7e-5, 1.6e-5, 1.3e-5 at p = 2, 4, 6, 8, 10). On the smooth field:
+in the shell and in a fresh fill to 1e-14 of its maximum, and one of degree
+p is not:
+
+| p | 2 | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|---|
+| error on degree p, of its maximum | 7.5e-3 | 3.4e-4 | 4.7e-5 | 1.6e-5 | 1.3e-5 |
+
+On the smooth field:
 
 | order | ghosts, N = 48 / 96 / 192 | boundary planes, N = 192 | fresh fill, N = 192 | order |
 |---|---|---|---|---|
@@ -7352,7 +7613,8 @@ the gradient plans, whose extended interface rows read the ghosts; the
 second applies the divergence plans (one-sided at the interface end, the
 viscous flux path) to that first derivative, along x (xx) and along y (xy).
 Windows are the four fine nodes nearest an end along the differentiated
-dimension; N = 192, orders over 48 / 96 / 192:
+dimension. The table gives the error at N = 192, with the orders over the
+three grids in parentheses:
 
 | order | 1st interp | 1st interp on a plane | xx interp | xy interp | xx total | fill, 1st interp |
 |---|---|---|---|---|---|---|
@@ -7363,54 +7625,89 @@ dimension; N = 192, orders over 48 / 96 / 192:
 | 10 | 1.06e-13 (9.0, 8.4) | 2.27e-13 (9.0) | 8.01e-12 (8.0, 7.0) | 5.94e-12 (7.9) | 1.29e-6 (3.1) | 3.93e-13 (8.9) |
 
 An O(h^p) value error enters the first derivative at h^(p−1) and the second
-at h^(p−2), each at the fine spacing, as the counting predicts, the order-10
-rows reaching round-off by N = 192; a fresh fill
-carries the first-derivative loss over the whole patch, not only at its
-edge. The second-derivative total is the divergence's own closure error at
-order 8, while at order 6 the transfer term is 64% of the total at N = 96
-and 42% at N = 192, so under the default coupling the viscous path is where
-the order-6 transfer is visible.
+at h^(p−2), each at the fine spacing, as the counting predicts. The order-10
+rows reach round-off on the finest grid. A fresh fill carries the
+first-derivative loss over the whole patch, not only at its edge.
+
+Under the default coupling the transfer of order 6 is visible on the
+viscous path, where it is a large share of the second-derivative total. At
+order 8 that total is the divergence's own closure error.
+
+| order 6, xx | N = 96 | N = 192 |
+|---|---|---|
+| transfer term, share of the total | 64% | 42% |
 
 **Restriction.** Injection writes the fine coincident values onto the
-covered root nodes exactly (20, 157 and 814 written nodes at N = 48, 96,
-192; difference at round-off). The filtered restriction on point samples
-errs by 1.68e-3, 4.63e-4, 1.16e-4, order 1.9 / 2.0: it is not a
-point-sample transfer.
+covered root nodes exactly. The filtered restriction is second order
+against point samples, since it is not a point-sample transfer.
 
-**Repeated regrids.** A 1-D level moved ±N/24 root nodes sixteen times with
-no evolution, restricted after each: the fine error after the last regrid is
-1.09 to 1.16 times the error after the first at every order and N, and the
-order of both is the interpolation order (2.0, 4.0, 6.0, 8.0, 9.9; 6.98e-10 and
-7.63e-10 at order 6, N = 192). Regrids do not accumulate transfer error.
+| restriction | N = 48 | N = 96 | N = 192 | order |
+|---|---|---|---|---|
+| injection, nodes written | 20 | 157 | 814 | |
+| injection, difference | round-off | round-off | round-off | |
+| filtered, error on point samples | 1.68e-3 | 4.63e-4 | 1.16e-4 | 1.9 / 2.0 |
 
-**Positivity.** A fresh fill of the step 1 → 0.125 of width w root cells:
-at w = 0.5 the fill undershoots the low state by 1.2%, 2.3%, 2.9% and 3.2%
-of the jump at orders 4, 6, 8 and 10 (overshoot 0.8%, 0.4%, 0.03%, 0.05%);
-order 2 is monotone, and at w = 1 and 2 no order leaves the range. The
-moving-region Sod gate of `test/level_tests.jl` (N = 201, subcycled, regrid
-every five steps) is order-independent: composite density error 8.7e-4,
-8.4e-4, 9.5e-4, 8.9e-4, 9.2e-4 at orders 2, 4, 6, 8, 10, minimum density
-0.1243–0.1248 and minimum pressure 0.0992–0.0995, all 628 steps.
+**Repeated regrids.** Regrids do not accumulate transfer error. A
+one-dimensional level is moved ±N/24 root nodes sixteen times with no
+evolution, restricted after each move. The fine error after the last regrid
+is 1.09 to 1.16 times the error after the first at every order and N, and
+the order of both is the interpolation order.
 
-**Budgets.** `bench/interfaceconservation.jl` at `interpolation_order=8`,
-serial, `layouts=uniform,depth2`, otherwise the command of that section:
-two levels drift 6.95e-5 (global) and 6.94e-5 (subcycled); the sixteen
-regrids sum to 8.41e-4 in absolute jumps, sampled drift with transfers
-1.0e-4, transfers subtracted 2.1e-4 / 2.2e-4, final 1.7e-5 / 2.5e-5,
-species excursion 7.4e-4 / 5.6e-4. Every figure matches order 6 to the
-digits that section prints. At `interpolation_order=10`, measured later on
-the same command: two levels drift 6.88e-5 (global) and 6.89e-5
-(subcycled); the eight regrids of that run sum to 2.20e-4 in absolute jumps,
-transfers subtracted 1.20e-4, final 3.8e-6 / 4.5e-6, and no species leaves
-[0, 1]; every figure is inside its budget.
+| repeated regrids | order 2 | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|---|
+| measured order of the fine error | 2.0 | 4.0 | 6.0 | 8.0 | 9.9 |
 
-Settled: the live order is a choice among 2, 4, 6, 8 and 10, by default the
-derivative operator's interior order, two more under `interface_flux =
-:ghost`. Orders 8 and 10 fit the default halo and buffer, the off-centre
-outer stencils included, cost nothing measurable in conservation, positivity
-on resolved data or regrid drift, and remove the transfer from the
-second-derivative and filtered error budgets; order 2 is the only monotone
-choice.
+| order 6, N = 192 | after the first regrid | after the last |
+|---|---|---|
+| fine error | 6.98e-10 | 7.63e-10 |
+
+**Positivity.** Only order 2 is monotone on a fresh fill of a sharp step,
+and the undershoot at the higher orders grows with the order. The fill is
+of the step 1 → 0.125 of width w root cells. At w = 1 and 2 no order leaves
+the range.
+
+| fresh fill, w = 0.5, of the jump | order 4 | 6 | 8 | 10 |
+|---|---|---|---|---|
+| undershoot of the low state | 1.2% | 2.3% | 2.9% | 3.2% |
+| overshoot | 0.8% | 0.4% | 0.03% | 0.05% |
+
+On resolved data the order makes no difference: the moving-region Sod gate
+of `test/level_tests.jl` (N = 201, subcycled, regrid every five steps) is
+order-independent.
+
+| Sod gate, order | 2 | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|---|
+| composite density error | 8.7e-4 | 8.4e-4 | 9.5e-4 | 8.9e-4 | 9.2e-4 |
+
+| Sod gate, every order | |
+|---|---|
+| minimum density | 0.1243–0.1248 |
+| minimum pressure | 0.0992–0.0995 |
+| steps | 628 |
+
+**Budgets.** Orders 8 and 10 keep every conservation figure inside its
+budget. At order 8 every figure matches order 6 to the digits the
+conservation section prints. The run is `bench/interfaceconservation.jl`,
+serial, `layouts=uniform,depth2`, otherwise the command of that section;
+the pairs are global step / subcycled.
+
+| `interpolation_order` | 8 | 10 |
+|---|---|---|
+| two levels, drift (global / subcycled) | 6.95e-5 / 6.94e-5 | 6.88e-5 / 6.89e-5 |
+| regrids | sixteen | eight |
+| regrids, sum of absolute jumps | 8.41e-4 | 2.20e-4 |
+| sampled drift with transfers | 1.0e-4 | |
+| sampled drift, transfers subtracted | 2.1e-4 / 2.2e-4 | 1.20e-4 |
+| final drift | 1.7e-5 / 2.5e-5 | 3.8e-6 / 4.5e-6 |
+| species excursion | 7.4e-4 / 5.6e-4 | none outside [0, 1] |
+
+Settled: the live order is a choice among the even orders 2 to 10, by
+default the derivative operator's interior order, two more under
+`interface_flux = :ghost`. Orders 8 and 10 fit the default halo and buffer,
+the off-centre outer stencils included, cost nothing measurable in
+conservation, positivity on resolved data or regrid drift, and remove the
+transfer from the second-derivative and filtered error budgets. Order 2 is
+the only monotone choice.
 
 ### test/patch_tests.jl: same-level patch interfaces
 
