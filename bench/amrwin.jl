@@ -43,9 +43,18 @@
 #   overwritten nodes took against the solver's. The rate is recomputed from
 #   the state after each step, the state the next step's `max_rate` sizes from, and is
 #   compared with the rate `run!` records for that step; the two differ only
-#   across a regrid check, which refreshes the coefficients.
+#   across a regrid check, which refreshes the coefficients. The prediction
+#   from the refined levels' rate alone, with and without the artificial
+#   diffusivity, is the root step count the level's own rate would allow;
+# - for a refined run against the fine run, the wall ratio as the product of
+#   the ideal (the point-steps had the finest level taken the fine run's steps
+#   on its time-averaged points), the measured point-steps over the ideal and
+#   the cost per point-step over the fine run's (`attribution`), with the
+#   root's share of the points and the padded-over-interior points of the
+#   levels; the profile also gives each phase's time per point-step of the
+#   whole run and of the level its samples fall on, the uniform runs' alike.
 #
-# The profile and the step-size account share one more run of the
+# The profile and the step-size account share one more run of every
 # configuration, since a profiler perturbs the wall and a per-step callback
 # makes `run!` repeat the restriction before the next step. The profile leaves
 # out the callback's samples and those of that repeated restriction, and the
@@ -75,11 +84,28 @@
 # dropping the configuration, `quick=true` takes small grids and short end
 # times for a smoke run. Each problem's grid, tile edge and end time
 # are options (`sod_n`, `blob3d_t`, ...), and the blobs' edge width `blobs_w`.
-# Serial only: the composite error compares node by node against an
-# undistributed fine run. The full set takes about half an hour at -t 1 on the
-# workstation, the 3-D problem a third of it; run one problem per process. The
-# measurements are in reference/CALIBRATION_APPENDIX.md under this script's
-# name.
+# The full set takes about half an hour at -t 1 on the workstation, the 3-D
+# problem a third of it; run one problem per process. The measurements are in
+# reference/CALIBRATION_APPENDIX.md under this script's name.
+#
+# Under `mpiexec -n N` every configuration runs decomposed and rank 0 prints:
+#
+#   mpiexec -n 8 julia --project=. -t 1 bench/amrwin.jl problems=blobs
+#
+# The Sod channel lays its ranks along the tube, since its 17 root nodes across
+# cannot be split under the filter's nine-node minimum. The fine run's compared
+# fields are gathered to rank 0 by `field_snapshot` and broadcast, so each rank
+# compares its own nodes and the composite error is the same quadrature at any
+# rank count. The wall is the slowest rank's. The waiting (`solver.wait_total`:
+# time inside the run-wide collectives and the level record exchanges) as a
+# share of a rank's wall, and the busy time (the wall less the waiting), are
+# given as their largest and mean over the ranks. Points, point-steps and the
+# census are summed over the ranks, and the wall per point-step is core time,
+# the wall times the rank count, so that a run scaling perfectly keeps it. The
+# step-size account takes each class's largest rate over the ranks. The phase
+# profile is rank 0's sampler alone, and its last column is the share of each
+# phase's samples inside an MPI call, so the time a collective or an exchange
+# waits shows under the phase that holds it. Allocation and GC are rank 0's.
 #
 # The summary numbers, the phase shares and the step-size account also appear
 # on `row,<problem>,<config>,<key>,<value>` lines, so bench/repeat.jl can take
@@ -94,6 +120,8 @@ using CompactLES
 using Printf
 using Profile
 const CL = CompactLES
+const COMM = MPI.COMM_WORLD
+nranks() = MPI.Comm_size(COMM)
 
 const opt = CompactLES.script_args(ARGS, (
     problems = "sod,blobs,shock,blob3d", configs = "coarse,box,tiles,fine",
@@ -121,9 +149,12 @@ function sod_spec(nx, ny, tile, tfinal)
     # takes three substeps on one rate measurement: cfl 0.2 (AMR_GPU.md,
     # startup traps), for every configuration alike.
     box = AMR(initial=:sensor, subcycle=true)
+    # Decomposed, every rank along the tube: the root nodes across it are too
+    # few to split under the filter's nine-node minimum.
     return (; name="sod", title="planar Sod tube in 2-D", problem,
             n_root=(nx, ny, 1), n_fine=(3nx - 2, 3ny - 2, 1), tfinal, cfl=0.2,
-            box, tiles=AMR(box; tile=tile), compare=[(:rho, 1)], mixture=false)
+            box, tiles=AMR(box; tile=tile), compare=[(:rho, 1)], mixture=false,
+            dims=(nranks(), 1, 1))
 end
 
 function blobs_spec(n, tile, tfinal, w)
@@ -148,7 +179,7 @@ function blobs_spec(n, tile, tfinal, w)
     return (; name="blobs", title="three blobs advected through a periodic box",
             problem, n_root=(n, n, 1), n_fine=(3n, 3n, 1), tfinal, cfl=0.5,
             box, tiles=AMR(box; tile=tile), compare=[(:rho, 1), (:Y, 2)],
-            mixture=true)
+            mixture=true, dims=nothing)
 end
 
 function shock_spec(n, tile, tfinal)
@@ -164,7 +195,8 @@ function shock_spec(n, tile, tfinal)
     # h = 1/(N − 1/2) with node 1 at h/2, so the grid at h/3 has 3N − 1 nodes.
     return (; name="shock", title="1-D converging shock at the axis", problem,
             n_root=(n, 1, 1), n_fine=(3n - 1, 1, 1), tfinal, cfl=0.5,
-            box, tiles=AMR(box; tile=tile), compare=[(:rho, 1)], mixture=false)
+            box, tiles=AMR(box; tile=tile), compare=[(:rho, 1)], mixture=false,
+            dims=nothing)
 end
 
 function blob3d_spec(n, tile, tfinal)
@@ -184,7 +216,7 @@ function blob3d_spec(n, tile, tfinal)
     return (; name="blob3d", title="bench/amr_cost.jl's 3-D blob", problem,
             n_root=(n, n, n), n_fine=(3n, 3n, 3n), tfinal, cfl=0.5,
             box, tiles=AMR(box; tile=tile), compare=[(:rho, 1), (:Y, 2)],
-            mixture=true)
+            mixture=true, dims=nothing)
 end
 
 function problem_spec(name)
@@ -207,10 +239,12 @@ end
 function numerics(spec, config)
     art = ArtificialProperties(enabled=opt.art)
     control = StepControl(validity=Symbol(opt.validity))
+    # One rank takes the default execution, as before the decomposed form.
+    extra = nranks() > 1 ? (; execution=Execution(dims=spec.dims)) : (;)
     config == "coarse" && return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art,
-                                          control=control)
+                                          control=control; extra...)
     config == "fine" && return Numerics(n_global=spec.n_fine, cfl=spec.cfl, art=art,
-                                        control=control)
+                                        control=control; extra...)
     amr = config == "box" ? spec.box :
           config == "tiles" ? spec.tiles :
           config == "box_global" ? AMR(spec.box; subcycle=false) :
@@ -218,7 +252,7 @@ function numerics(spec, config)
           error("unknown config '$config', want coarse, box, tiles, fine, " *
                 "box_global or tiles_global")
     return Numerics(n_global=spec.n_root, cfl=spec.cfl, art=art, amr=amr,
-                    control=control)
+                    control=control; extra...)
 end
 
 refined(config) = config in ("box", "tiles", "box_global", "tiles_global")
@@ -251,10 +285,42 @@ function root_fingerprint(solver, states)
     Q = parent(statevec(states)[1])
     o = ps.decomp.n_halo_d
     n = ps.decomp.n_local
-    return sum(view(Q, o[1]+1:o[1]+n[1], o[2]+1:o[2]+n[2], o[3]+1:o[3]+n[3], :))
+    return MPI.Allreduce(sum(view(Q, o[1]+1:o[1]+n[1], o[2]+1:o[2]+n[2],
+                                  o[3]+1:o[3]+n[3], :)), +, COMM)
 end
 
 level_factor(solver, level) = getfield(solver, :subcycle) ? 3^level : 1
+
+# The interior points of every patch, summed over the ranks.
+global_points(solver) =
+    MPI.Allreduce(sum(prod(p.decomp.n_local) for p in patches_of(solver)), +, COMM)
+
+# The padded points (halos included) over the interior points, of the root's
+# pieces and of the refined levels' pieces in the final layout, over the ranks.
+function padded_ratios(solver)
+    acc = zeros(4)
+    for p in patches_of(solver)
+        i = p.level == 0 ? 1 : 3
+        acc[i] += prod(CL.padded_extent(p.decomp))
+        acc[i+1] += prod(p.decomp.n_local)
+    end
+    MPI.Allreduce!(acc, +, COMM)
+    return acc[1] / acc[2], acc[4] > 0 ? acc[3] / acc[4] : NaN
+end
+
+# The slowest rank's wall, and over the ranks the largest and the mean of the
+# waiting share of a rank's wall and of its busy time (wall less waiting).
+function wall_stats(solver)
+    wall, wait = solver.wall_total, solver.wait_total
+    share = wall > 0 ? wait / wall : 0.0
+    busy = wall - wait
+    np = nranks()
+    return (; wall=MPI.Allreduce(wall, max, COMM),
+            wait_share_max=MPI.Allreduce(share, max, COMM),
+            wait_share_mean=MPI.Allreduce(share, +, COMM) / np,
+            busy_max=MPI.Allreduce(busy, max, COMM),
+            busy_mean=MPI.Allreduce(busy, +, COMM) / np)
+end
 
 # ---------------------------------------------------------------------------
 # Composite error against the fine run
@@ -285,7 +351,9 @@ function composite_errors(solver, states, ref, spec)
     patches = patches_of(solver)
     maps = [ntuple(d -> fine_index_map(CL.PatchSolver(solver, p), d, ref.solver), 3)
             for p in patches]
-    pf = ref.solver.decomp.n_halo_d
+    # Decided over the ranks: a rank may hold the root's piece alone while
+    # others hold tiles, and the split below runs collectives.
+    several = MPI.Allreduce(length(patches), max, COMM) > 1
     out = Dict{String,Float64}()
     missing_nodes = 0
     for (name, sp) in spec.compare
@@ -313,7 +381,7 @@ function composite_errors(solver, states, ref, spec)
                     continue
                 end
                 I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-                e = abs(fs[li][I] - F[g1 + pf[1], g2 + pf[2], g3 + pf[3]])
+                e = abs(fs[li][I] - F[g1, g2, g3])
                 errs[li][I] = e
                 ones_[li][I] = 1.0
                 if p.level > 0
@@ -326,8 +394,9 @@ function composite_errors(solver, states, ref, spec)
         label = name === :Y ? "Y$sp" : String(name)
         total, volume = volume_integral(solver, errs), volume_integral(solver, ones_)
         out["L1_$label"] = total / volume
-        out["Linf_$label"] = linf
-        if length(patches) > 1
+        out["Linf_$label"] = MPI.Allreduce(linf, max, COMM)
+        missing_nodes = MPI.Allreduce(missing_nodes, +, COMM)
+        if several
             e_in, v_in = volume_integral(solver, inside), volume_integral(solver, inside_ones)
             out["L1in_$label"] = e_in / v_in
             out["L1out_$label"] = (total - e_in) / (volume - v_in)
@@ -343,10 +412,30 @@ function composite_errors(solver, states, ref, spec)
     return out
 end
 
+# The fine run's field over its whole grid without halos, on every rank: the
+# interior of the one rank's array, or decomposed, gathered to rank 0 by
+# `field_snapshot` and broadcast.
+function global_field(run, name, sp)
+    s = run.solver
+    if nranks() == 1
+        f = fields_of(s, run.states, name, sp)[1]
+        o = s.decomp.n_halo_d
+        n = s.decomp.n_local
+        return f[o[1]+1:o[1]+n[1], o[2]+1:o[2]+n[2], o[3]+1:o[3]+n[3]]
+    end
+    snap = field_snapshot(s, statevec(run.states)[1]; fields=[name])
+    F = zeros(s.decomp.n_global)
+    if snap !== nothing
+        A = snap[name]
+        F .= ndims(A) == 4 ? view(A, :, :, :, sp) : A
+    end
+    return MPI.Bcast!(F, COMM; root=0)
+end
+
 function fine_reference(run, spec)
     fields = Dict{Tuple{Symbol,Int},Array{Float64,3}}()
     for (name, sp) in spec.compare
-        fields[(name, sp)] = fields_of(run.solver, run.states, name, sp)[1]
+        fields[(name, sp)] = global_field(run, name, sp)
     end
     mixedness = NaN
     if spec.mixture
@@ -430,18 +519,22 @@ function patch_rates!(classes, ps, Q, scale, zero_cache)
     return classes
 end
 
+# The callback accumulates each rank's own pieces, with no collective, and
+# `reduce_census!` combines the ranks once after the run.
 mutable struct Census
     level_steps::Vector{Int}         # steps taken by each level, substeps counted
     level_points::Vector{Float64}    # point-steps of each level
     level_size::Vector{Float64}      # points of each level, summed over root steps
+    level_padded::Vector{Float64}    # the same with the halos, summed over root steps
+    level_present::Vector{NTuple{4,Int}} # per root step, each level's steps, 0 absent
     tiles::Vector{Int}               # level-1 patches after each root step
     steps::Vector{Vector{ClassMax}}  # per root step, the class maxima after it
     rate_next::Vector{Float64}       # the rate that sized each step, from run!
     regrid_checks::Vector{Int}
     zero_cache::Dict{Any,Array{Float64,3}}
 end
-Census() = Census(zeros(Int, 4), zeros(4), zeros(4), Int[], Vector{ClassMax}[],
-                  Float64[], Int[], Dict{Any,Array{Float64,3}}())
+Census() = Census(zeros(Int, 4), zeros(4), zeros(4), zeros(4), NTuple{4,Int}[], Int[],
+                  Vector{ClassMax}[], Float64[], Int[], Dict{Any,Array{Float64,3}}())
 
 function census_callback(census::Census, rates::Bool)
     return function (solver, states)
@@ -457,18 +550,49 @@ function census_callback(census::Census, rates::Bool)
             f = level_factor(solver, p.level)
             census.level_points[ℓ+1] += npts * f
             census.level_size[ℓ+1] += npts
+            census.level_padded[ℓ+1] += prod(CL.padded_extent(p.decomp))
             present[ℓ+1] = true
-            p.level == 1 && (ntiles += 1)
+            # A tile decomposed over several ranks is counted by the rank
+            # holding its first node.
+            p.level == 1 && all(==(0), p.decomp.offset) && (ntiles += 1)
             rates && patch_rates!(classes, CL.PatchSolver(solver, p),
                                   statevec(states)[li], f, census.zero_cache)
         end
-        for ℓ in 0:3
-            present[ℓ+1] && (census.level_steps[ℓ+1] += level_factor(solver, ℓ))
-        end
+        push!(census.level_present,
+              ntuple(ℓ -> present[ℓ] ? level_factor(solver, ℓ - 1) : 0, 4))
         push!(census.tiles, ntiles)
         rates && push!(census.steps, classes)
         return nothing
     end
+end
+
+# Every rank calls this once after the census run: sums over the ranks, a
+# level present on any rank, and per step and class the largest rate over the
+# ranks with the artificial share at the rank holding it.
+function reduce_census!(c::Census)
+    for v in (c.level_points, c.level_size, c.level_padded)
+        MPI.Allreduce!(v, +, COMM)
+    end
+    MPI.Allreduce!(c.tiles, +, COMM)
+    n = length(c.level_present)
+    present = [c.level_present[i][ℓ] for ℓ in 1:4, i in 1:n]
+    n > 0 && MPI.Allreduce!(present, max, COMM)
+    c.level_steps .= vec(sum(present; dims=2))
+    nranks() == 1 && return c
+    nsteps = length(c.steps)
+    nsteps == 0 && return c
+    nc = length(CLASSES)
+    packed = [getfield(c.steps[i][q], f) for f in (:rate, :rate_noart, :art_at),
+              q in 1:nc, i in 1:nsteps]
+    gathered = reshape(MPI.Allgather(vec(packed), COMM), 3, nc, nsteps, nranks())
+    for i in 1:nsteps, q in 1:nc
+        r = argmax(view(gathered, 1, q, i, :))
+        cm = c.steps[i][q]
+        cm.rate = gathered[1, q, i, r]
+        cm.art_at = gathered[3, q, i, r]
+        cm.rate_noart = maximum(view(gathered, 2, q, i, :))
+    end
+    return c
 end
 
 # ---------------------------------------------------------------------------
@@ -498,6 +622,9 @@ const PHASES = [
     ("level sensors", (:_sensor_level_rhs!,)),
     ("stage update", (:_rk_update!, :_level_update!)),
     ("boundary conditions", (:apply_bcs!,)),
+    ("reflux apply", (:_reflux_apply!,)),
+    ("state validation", (:validate_state!, :state_report, :_reduce_state_report)),
+    ("positivity floors", (:positivity_floors,)),
     ("other", ()),
 ]
 const ENDPOINT = 5
@@ -524,10 +651,21 @@ end
 # A frame's function name without the decoration of a keyword body or a
 # closure (`#run!#12` is `run!`), with its line.
 function frame_names(ip)
+    src = dirname(pathof(CompactLES))
     return map(Profile.lookup(convert(Ptr{Cvoid}, ip))) do fr
         name = String(fr.func)
         m = match(r"^#+([^#]+)#", name)
-        (m === nothing ? fr.func : Symbol(m.captures[1]), fr.line)
+        (m === nothing ? fr.func : Symbol(m.captures[1]), fr.line,
+         startswith(String(fr.file), src))
+    end
+end
+
+# Whether an instruction pointer stands in an MPI call: a frame of MPI.jl's
+# source, or a library function named MPI_ or PMPI_.
+function in_mpi(ip)
+    return any(Profile.lookup(convert(Ptr{Cvoid}, ip))) do fr
+        occursin(r"[\\/]MPI[\\/]", String(fr.file)) ||
+            occursin(r"^P?MPI[DI]?_", String(fr.func))
     end
 end
 
@@ -549,12 +687,15 @@ function phase_profile()
             push!(current, ip)
         end
     end
-    frames = Dict{UInt64,Vector{Tuple{Symbol,Int}}}()
+    frames = Dict{UInt64,Vector{Tuple{Symbol,Int,Bool}}}()
+    mpi_frames = Dict{UInt64,Bool}()
     endpoint = endpoint_lines()
     counts = zeros(Int, length(PHASES), 5)
+    mpi_counts = zeros(Int, length(PHASES))
     total = 0
     excluded = 0
     rhs_lines = Dict{Int,Int}()
+    other_funcs = Dict{Symbol,Int}()
     rhs_phases = (ENDPOINT, findfirst(p -> p[1] == "RHS", PHASES),
                   findfirst(p -> p[1] == "level sensors", PHASES),
                   findfirst(p -> p[1] == "ghost-flux divergence", PHASES))
@@ -562,9 +703,11 @@ function phase_profile()
         funcs = Symbol[]
         depth = 0
         innermost_line = 0
+        innermost_own = Symbol("")
         for ip in stack
-            for (func, line) in get!(() -> frame_names(ip), frames, ip)
+            for (func, line, own) in get!(() -> frame_names(ip), frames, ip)
                 push!(funcs, func)
+                own && innermost_own === Symbol("") && (innermost_own = func)
                 if func === :_advance_level!
                     depth == 0 && (innermost_line = line)
                     depth += 1
@@ -572,7 +715,8 @@ function phase_profile()
             end
         end
         :run! in funcs || continue
-        if :run_callbacks! in funcs || (:_presync! in funcs && :restrict_level! in funcs)
+        if :_step_callbacks in funcs || :_start_callbacks in funcs ||
+           (:_presync! in funcs && :restrict_level! in funcs)
             excluded += count
             continue
         end
@@ -586,11 +730,15 @@ function phase_profile()
             end
         end
         counts[phase, min(depth, 4)+1] += count
+        phase == OTHER &&
+            (other_funcs[innermost_own] = get(other_funcs, innermost_own, 0) + count)
+        any(ip -> get!(() -> in_mpi(ip), mpi_frames, ip), stack) &&
+            (mpi_counts[phase] += count)
         total += count
         depth > 0 && phase in rhs_phases &&
             (rhs_lines[innermost_line] = get(rhs_lines, innermost_line, 0) + count)
     end
-    return (; counts, total, excluded, rhs_lines, endpoint,
+    return (; counts, mpi_counts, total, excluded, rhs_lines, other_funcs, endpoint,
             endpoint_found=!isempty(endpoint))
 end
 
@@ -600,17 +748,21 @@ end
 row(problem, config, key, value) = println("row,", problem, ",", config, ",", key, ",",
                                            value)
 
-function print_profile(spec, config, prof, wall, steps)
-    @printf("\nphase profile, %s %s: %d samples of run!, timed wall %.2f s, %d root steps\n",
-            spec.name, config, prof.total, wall, steps)
+# `points` holds the point-steps a column's time is divided by: every level's
+# (outside the level advance), the root's, then each refined level's.
+function print_profile(spec, config, prof, wall, steps, points)
+    np = nranks()
+    @printf("\nphase profile, %s %s%s: %d samples of run!, timed wall %.2f s, %d root steps\n",
+            spec.name, config, np > 1 ? " (rank 0's sampler, $np ranks)" : "",
+            prof.total, wall, steps)
     @printf("  (%d samples in the callback and the repeated restriction left out)\n",
             prof.excluded)
     prof.endpoint_found ||
         println("  (endpoint line not found in the loaded timestep.jl; the endpoint " *
                 "RHS is counted under RHS)")
     prof.total == 0 && return
-    @printf("  %-24s %7s %9s   %7s %7s %7s %7s %7s\n", "phase", "share", "ms/step",
-            "outside", "root", "L1", "L2", "L3")
+    @printf("  %-24s %7s %9s   %7s %7s %7s %7s %7s %7s\n", "phase", "share", "ms/step",
+            "outside", "root", "L1", "L2", "L3", "in MPI")
     for (q, (label, _)) in enumerate(PHASES)
         c = sum(prof.counts[q, :])
         c == 0 && continue
@@ -619,8 +771,38 @@ function print_profile(spec, config, prof, wall, steps)
         for col in 1:5
             @printf(" %6.1f%%", 100 * prof.counts[q, col] / prof.total)
         end
-        println()
+        @printf(" %6.1f%%\n", 100 * prof.mpi_counts[q] / prof.total)
         row(spec.name, config, "phase:" * label, round(share; sigdigits=4))
+        np > 1 && row(spec.name, config, "phase_mpi:" * label,
+                      round(prof.mpi_counts[q] / prof.total; sigdigits=4))
+    end
+    # Core time per point-step: a phase's time times the rank count, over the
+    # point-steps of the whole run (all), or of the level its column counts.
+    ns(c, ps) = ps > 0 ? 1e9 * np * c / prof.total * wall / ps : NaN
+    @printf("  core-ns per point-step:  %9s %9s %9s %9s %9s %9s\n", "all", "outside",
+            "per root", "per L1", "per L2", "per L3")
+    for (q, (label, _)) in enumerate(PHASES)
+        c = sum(prof.counts[q, :])
+        c == 0 && continue
+        @printf("  %-24s %9.1f", label, ns(c, points[1]))
+        for col in 1:5
+            @printf(" %9.1f", prof.counts[q, col] == 0 ? 0.0 :
+                              ns(prof.counts[q, col], points[col]))
+        end
+        println()
+        row(spec.name, config, "phase_ns:" * label, round(ns(c, points[1]); sigdigits=4))
+        for (col, key) in ((2, "phase_ns_root:"), (3, "phase_ns_L1:"))
+            prof.counts[q, col] > 0 &&
+                row(spec.name, config, key * label,
+                    round(ns(prof.counts[q, col], points[col]); sigdigits=4))
+        end
+    end
+    if !isempty(prof.other_funcs)
+        println("  other, by the innermost package function on the stack:")
+        for (func, c) in first(sort(collect(prof.other_funcs), by=x -> -x[2]), 6)
+            @printf("    %6.1f%%  %s\n", 100c / prof.total,
+                    func === Symbol("") ? "(none)" : func)
+        end
     end
     isempty(prof.rhs_lines) && return
     @printf("  right-hand-side samples by line of _advance_level! (endpoint at %s):\n",
@@ -645,6 +827,22 @@ function print_census(spec, config, census, steps, coarse_steps)
             mean_l1, mean_l1 / nfine, sum(census.tiles) / n,
             isempty(census.tiles) ? 0 : maximum(census.tiles))
     row(spec.name, config, "cover", round(mean_l1 / nfine; sigdigits=4))
+    for ℓ in 0:3
+        census.level_steps[ℓ+1] > 0 &&
+            row(spec.name, config, "level_steps:L$ℓ", census.level_steps[ℓ+1])
+    end
+    @printf("  root: mean %.0f points (%.3f of the fine grid), %.3f of the point-steps\n",
+            census.level_size[1] / n, census.level_size[1] / n / nfine,
+            census.level_points[1] / sum(census.level_points))
+    @printf("  padded over interior points, time-averaged: root %.3f, level 1 %.3f\n",
+            census.level_padded[1] / census.level_size[1],
+            census.level_padded[2] / census.level_size[2])
+    row(spec.name, config, "root_cover", round(census.level_size[1] / n / nfine;
+                                               sigdigits=4))
+    row(spec.name, config, "root_share", round(census.level_points[1] /
+                                               sum(census.level_points); sigdigits=4))
+    row(spec.name, config, "padded_ratio_L1",
+        round(census.level_padded[2] / census.level_size[2]; sigdigits=4))
     isempty(census.steps) && return
     # The step-size account. Step i's rate after it sizes step i + 1, which
     # `run!` records as rate_prev at the next callback.
@@ -654,7 +852,9 @@ function print_census(spec, config, census, steps, coarse_steps)
     pred = Dict("covered root nodes left out" => 0.0,
                 "partly covered ones too" => 0.0,
                 "covered root nodes without artificial diffusivity" => 0.0,
-                "no artificial diffusivity anywhere" => 0.0)
+                "no artificial diffusivity anywhere" => 0.0,
+                "the refined levels' rate alone" => 0.0,
+                "the refined levels' rate without artificial diffusivity" => 0.0)
     mismatch = Float64[]
     held = Float64[]
     weight = CL._overwritten_weight(spec.cfl)
@@ -674,6 +874,9 @@ function print_census(spec, config, census, steps, coarse_steps)
             max(unc, part, cl[3].rate_noart, levels) / R
         pred["no artificial diffusivity anywhere"] +=
             maximum(c.rate_noart for c in cl[COUNTED]) / R
+        pred["the refined levels' rate alone"] += levels / R
+        pred["the refined levels' rate without artificial diffusivity"] +=
+            max(cl[4].rate_noart, cl[5].rate_noart, cl[6].rate_noart) / R
         if i < nsteps && census.regrid_checks[i+1] == census.regrid_checks[i]
             push!(mismatch, abs(census.rate_next[i+1] / R - 1))
         end
@@ -747,12 +950,23 @@ function run_problem(spec, configs)
         reached = isapprox(s.t, spec.tfinal; rtol=1e-12)
         reached || @printf("  %s stopped at t = %g after %d steps (nmax)\n", config,
                            s.t, s.step)
-        npoints = sum(prod(p.decomp.n_local) for p in patches_of(s))
-        res = Dict{String,Any}("wall" => s.wall_total, "setup" => r.t_setup,
+        npoints = global_points(s)
+        ws = wall_stats(s)
+        res = Dict{String,Any}("wall" => ws.wall,
+                               "setup" => MPI.Allreduce(r.t_setup, max, COMM),
                                "steps" => s.step, "points" => npoints,
                                "alloc" => r.stats.bytes, "gc" => r.stats.gctime,
                                "elapsed" => r.stats.time, "reached" => reached,
                                "fingerprint" => root_fingerprint(s, r.states))
+        if nranks() > 1
+            res["wait_share_max"] = ws.wait_share_max
+            res["wait_share_mean"] = ws.wait_share_mean
+            res["busy_max"] = ws.busy_max
+            res["busy_mean"] = ws.busy_mean
+        end
+        padded_root, padded_level = padded_ratios(s)
+        res["padded_end_root"] = padded_root
+        isfinite(padded_level) && (res["padded_end_L1"] = padded_level)
         if config == "fine"
             ref = fine_reference(r, spec)
             for d in 1:3
@@ -768,48 +982,39 @@ function run_problem(spec, configs)
         results[config] = res
     end
     coarse_steps = haskey(results, "coarse") ? results["coarse"]["steps"] : 0
-    # The census and the step-size account of each refined configuration, and
-    # of the coarse run for its own bound.
+    # The census, the step-size account and the profile of each configuration,
+    # in one more run; the uniform runs' own bound and phases are the
+    # reference the refined ones are read against. Without `diagnose`, the
+    # profiled run carries a census without the rates, for its point-steps.
     censuses = Dict{String,Census}()
     profiles = Dict{String,Any}()
     opt.profile && Profile.init(n=10_000_000, delay=opt.delay)
     for config in filter(c -> haskey(results, c), order)
-        (refined(config) || config == "coarse") || continue
-        opt.diagnose || break
+        (opt.diagnose || opt.profile) || break
         census = Census()
-        profiled = opt.profile && refined(config)
-        profiled && Profile.clear()
-        r = attempt(config, "census run") do
-            timed_run(spec, config; callback=census_callback(census, true),
-                      profiled=profiled)
+        opt.profile && Profile.clear()
+        r = attempt(config, opt.diagnose ? "census run" : "profiled run") do
+            timed_run(spec, config; callback=census_callback(census, opt.diagnose),
+                      profiled=opt.profile)
         end
         r === nothing && continue
-        profiled && (profiles[config] = (phase_profile(), results[config]["wall"],
-                                         results[config]["steps"]))
+        # Rank 0's samples alone.
+        opt.profile && (profiles[config] = MPI.Comm_rank(COMM) == 0 ? phase_profile() :
+                                                                     nothing)
+        reduce_census!(census)
         censuses[config] = census
         res = results[config]
-        same = r.solver.step == res["steps"] &&
-               root_fingerprint(r.solver, r.states) == res["fingerprint"]
         sum_census = root_fingerprint(r.solver, r.states)
+        same = r.solver.step == res["steps"] && sum_census == res["fingerprint"]
         same || @printf("  %s census run: steps %d / %d, root sum differs by %.1e relative\n",
                         config, r.solver.step, res["steps"],
                         abs(sum_census / res["fingerprint"] - 1))
-        res["point_steps"] = sum(census.level_points)
+        refined(config) && (res["point_steps"] = sum(census.level_points))
     end
     for config in ("coarse", "fine")
         haskey(results, config) || continue
         res = results[config]
         res["point_steps"] = Float64(res["points"] * res["steps"])
-    end
-    if opt.profile && !opt.diagnose
-        for config in filter(c -> haskey(results, c) && refined(c), order)
-            Profile.clear()
-            r = attempt(config, "profiled run") do
-                run = timed_run(spec, config; profiled=true)
-                (phase_profile(), results[config]["wall"], results[config]["steps"])
-            end
-            r === nothing || (profiles[config] = r)
-        end
     end
     # Summary table.
     println()
@@ -820,8 +1025,12 @@ function run_problem(spec, configs)
     end
     spec.mixture && push!(keys_err, "mixedness_rel")
     fine_wall = haskey(results, "fine") ? results["fine"]["wall"] : NaN
-    @printf("%-13s %7s %8s %7s %6s %11s %8s %8s %5s", "config", "setup s", "wall s",
-            "/fine", "steps", "point-steps", "ns/pt-st", "alloc GB", "gc%")
+    np = nranks()
+    # Core time per point-step, the wall times the rank count.
+    per_point(res) = 1e9 * np * res["wall"] / get(res, "point_steps", NaN)
+    fine_per_point = haskey(results, "fine") ? per_point(results["fine"]) : NaN
+    @printf("%-13s %7s %8s %7s %6s %11s %8s %7s %8s %5s", "config", "setup s", "wall s",
+            "/fine", "steps", "point-steps", "ns/pt-st", "/fine", "alloc GB", "gc%")
     for k in keys_err
         @printf(" %13s", k)
     end
@@ -830,14 +1039,20 @@ function run_problem(spec, configs)
         haskey(results, config) || continue
         res = results[config]
         ps = get(res, "point_steps", NaN)
-        @printf("%-13s %7.2f %8.2f %7.3f %6d %11.4g %8.1f %8.2f %5.1f", config,
+        @printf("%-13s %7.2f %8.2f %7.3f %6d %11.4g %8.1f %7.3f %8.2f %5.1f", config,
                 res["setup"], res["wall"], res["wall"] / fine_wall, res["steps"], ps,
-                1e9 * res["wall"] / ps, res["alloc"] / 1e9,
+                per_point(res), per_point(res) / fine_per_point, res["alloc"] / 1e9,
                 100 * res["gc"] / res["elapsed"])
         for k in keys_err
             @printf(" %13.4e", get(res, k, NaN))
         end
         println()
+        if np > 1
+            @printf("  %d ranks: waiting %.1f%% of the wall at most, %.1f%% on average;",
+                    np, 100res["wait_share_max"], 100res["wait_share_mean"])
+            @printf(" busy %.2f s at most, %.2f s on average (%.3f)\n", res["busy_max"],
+                    res["busy_mean"], res["busy_max"] / res["busy_mean"])
+        end
         for (name, sp) in spec.compare
             label = name === :Y ? "Y$sp" : String(name)
             haskey(res, "L1in_$label") || continue
@@ -858,16 +1073,21 @@ function run_problem(spec, configs)
         print_census(spec, config, censuses[config], results[config]["steps"],
                      coarse_steps)
     end
-    if haskey(censuses, "coarse") && !isempty(censuses["coarse"].steps)
-        c = censuses["coarse"]
+    for config in ("coarse", "fine")
+        (haskey(censuses, config) && !isempty(censuses[config].steps)) || continue
+        c = censuses[config]
         art = count(cl -> cl[1].art_at > 0.5, c.steps)
-        @printf("\n%s coarse: bounding rate over half artificial on %.1f%% of steps\n",
-                spec.name, 100art / length(c.steps))
+        @printf("\n%s %s: bounding rate over half artificial on %.1f%% of steps\n",
+                spec.name, config, 100art / length(c.steps))
     end
     for config in order
-        haskey(profiles, config) || continue
-        prof, wall, steps = profiles[config]
-        print_profile(spec, config, prof, wall, steps)
+        (haskey(profiles, config) && profiles[config] !== nothing) || continue
+        res = results[config]
+        total = get(res, "point_steps", NaN)
+        lp = haskey(censuses, config) && refined(config) ? censuses[config].level_points :
+                                                           [total, 0.0, 0.0, 0.0]
+        print_profile(spec, config, profiles[config], res["wall"], res["steps"],
+                      (total, lp...))
     end
     println()
     for config in order
@@ -878,10 +1098,42 @@ function run_problem(spec, configs)
         @printf("time to solution, %s %s: %.3f of the fine wall, %.3f with setup (%s)\n",
                 spec.name, config, ratio, with_setup, ratio < 1 ? "below" : "not below")
     end
+    for config in order
+        (refined(config) && haskey(censuses, config) && haskey(results, "fine")) ||
+            continue
+        attribution(spec, config, results[config], results["fine"], censuses[config])
+    end
     for (config, why) in failed
         @printf("%s %s not measured, %s\n", spec.name, config, why)
     end
     return results
+end
+
+# The wall over the fine run's as a product of three factors. The ideal is the
+# refined run's point-steps over the fine run's had its finest level taken
+# exactly the fine run's steps (a coarser level a third of them per level when
+# subcycled, all of them otherwise) on its time-averaged points; the step
+# factor is the measured point-steps over that; the per-point factor is the
+# core time per point-step over the fine run's.
+function attribution(spec, config, res, fine, c::Census)
+    n = max(length(c.tiles), 1)
+    finest = findlast(>(0), c.level_steps) - 1
+    subcycled = config in ("box", "tiles")
+    nf, pf = fine["steps"], prod(spec.n_fine)
+    ideal_ps = sum(c.level_size[ℓ+1] / n * nf * (subcycled ? 3.0^(ℓ - finest) : 1.0)
+                   for ℓ in 0:finest)
+    ideal = ideal_ps / (pf * nf)
+    steps = res["point_steps"] / ideal_ps
+    cost = (res["wall"] / res["point_steps"]) / (fine["wall"] / fine["point_steps"])
+    @printf("attribution, %s %s: wall/fine %.3f = ideal %.3f x steps %.3f", spec.name,
+            config, res["wall"] / fine["wall"], ideal, steps)
+    @printf(" x per point-step %.3f (level %d steps / fine %.3f)\n", cost, finest,
+            c.level_steps[finest+1] / nf)
+    row(spec.name, config, "ideal", round(ideal; sigdigits=4))
+    row(spec.name, config, "step_factor", round(steps; sigdigits=4))
+    row(spec.name, config, "point_cost_factor", round(cost; sigdigits=4))
+    row(spec.name, config, "level_steps_over_fine",
+        round(c.level_steps[finest+1] / nf; sigdigits=4))
 end
 
 # The root spacing along `d`, from the domain and the grid counts by the rule
@@ -900,11 +1152,11 @@ function numerics_h(spec, d)
 end
 
 function main()
-    MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
-        error("bench/amrwin.jl is serial: the composite error compares node by node " *
-              "against an undistributed fine run")
-    @printf("Julia %s, %d threads, %d hardware threads, %s\n", VERSION,
-            Threads.nthreads(), Sys.CPU_THREADS, strip(Sys.cpu_info()[1].model))
+    # Every rank runs every collective; rank 0 alone prints.
+    MPI.Comm_rank(COMM) == 0 || redirect_stdout(devnull)
+    @printf("Julia %s, %d ranks, %d threads, %d hardware threads, %s\n", VERSION,
+            nranks(), Threads.nthreads(), Sys.CPU_THREADS,
+            strip(Sys.cpu_info()[1].model))
     @printf("options: %s\n", join(("$k=$v" for (k, v) in pairs(opt)), " "))
     configs = String.(strip.(split(opt.configs, ',')))
     for name in strip.(split(opt.problems, ','))
