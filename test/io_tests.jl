@@ -657,7 +657,7 @@ end
         "metric" => ["cartesian"],
         "boundary" => ["open", "open", "periodic", "periodic", "periodic", "periodic"],
         "domain" => [-1.0, 1.0, 0.5, 1.5, 0.0, 1.0], "TIME" => [0.375],
-        "n_global" => [24, 12, 1], "stride" => [1, 1, 1])
+        "n_global" => [24, 12, 1], "n_sampled" => [24, 12, 1], "stride" => [1, 1, 1])
     save_vtk(s, Q, joinpath(dir, "plain"); fields=(:rho, :Y))
     for f in ("plain.pvtr", "plain.r0000.vtr")
         @test read_vtk_record(joinpath(dir, f)) == expected
@@ -666,15 +666,19 @@ end
     txt = read(joinpath(dir, "plain.pvtr"), String)
     @test [m.captures[1] for m in eachmatch(r"Name=\"(\w+)\" NumberOfTuples", txt)] ==
           ["species_names", "gas_constants", "metric", "boundary", "domain", "TIME",
-           "n_global", "stride"]
+           "n_global", "n_sampled", "stride"]
 
     # Strided: from the record and the written coordinates a reader recovers
     # the spacing, the period of the periodic dimension and the wall bounds.
+    # `n_global` stays the solver's node count and `n_sampled` is the count of
+    # the grid as written.
     save_vtk(s, Q, joinpath(dir, "coarse"); fields=(:rho,), stride=(3, 2, 1))
     rec = read_vtk_record(joinpath(dir, "coarse.pvtr"))
     @test rec["stride"] == [3, 2, 1] && rec["n_global"] == [24, 12, 1]
+    @test rec["n_sampled"] == [8, 6, 1]
     @test read_vtk_record(joinpath(dir, "coarse.r0000.vtr")) == rec
     cx, cy, _ = vtr_coordinates(joinpath(dir, "coarse.r0000.vtr"))
+    @test [length(cx), length(cy)] == rec["n_sampled"][1:2]
     hx, hy = (cx[2] - cx[1]) / rec["stride"][1], (cy[2] - cy[1]) / rec["stride"][2]
     @test (rec["n_global"][1] - 1) * hx ≈ rec["domain"][2] - rec["domain"][1]
     @test rec["n_global"][2] * hy ≈ rec["domain"][4] - rec["domain"][3]
@@ -685,6 +689,7 @@ end
     for f in ("cut.pvtr", "cut.r0000.vtr")
         rec = read_vtk_record(joinpath(dir, f))
         @test rec["stride"] == [2, 2, 2] && rec["domain"] == expected["domain"]
+        @test rec["n_global"] == [24, 12, 1] && rec["n_sampled"] == [1, 6, 1]
     end
 
     # Mirror planes: the bounds are the planes, half a spacing outside the
@@ -726,8 +731,9 @@ end
         @test rec["domain"] ≈ [0.0, 1.0, 0.0, 2π, 0.0, 1.0]
     end
 
-    # A refined run: the index and every piece, each piece with its level and
-    # the root grid's node count.
+    # A refined run: the index and every piece, each piece with its level, the
+    # root grid's node count and its own patch's count as written, which the
+    # index, holding no one grid, leaves out.
     amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
                  bcs=(io_per, io_per, io_per), tile=12,
                  refine=BlockRegion((12, 12, 0), (24, 24, 1)),
@@ -737,12 +743,18 @@ end
     save_vtk(amr, states, joinpath(dir, "amr"); fields=(:rho,), stride=2)
     rec = read_vtk_record(joinpath(dir, "amr.vtm"))
     @test !haskey(rec, "level") && rec["n_global"] == [48, 48, 1]
+    @test !haskey(rec, "n_sampled")
     @test rec["stride"] == [2, 2, 2] && rec["domain"] ≈ [0, 2π, 0, 2π, 0, 1]
     for (f, ℓ) in (("amr.L0.T0001.r0000.vtr", 0), ("amr.L1.T0001.r0000.vtr", 1))
         piece = read_vtk_record(joinpath(dir, f))
         @test piece["level"] == [ℓ]
-        @test delete!(copy(piece), "level") == rec
+        # One rank holds the whole patch, so the piece is the patch as written.
+        cx, cy, _ = vtr_coordinates(joinpath(dir, f))
+        @test piece["n_sampled"] == [length(cx), length(cy), 1]
+        @test delete!(delete!(copy(piece), "level"), "n_sampled") == rec
     end
+    @test read_vtk_record(joinpath(dir, "amr.L0.T0001.r0000.vtr"))["n_sampled"] ==
+          [24, 24, 1]
     @test boundary_conditions(amr) == (io_per, io_per, io_per)
     rm(dir; recursive=true)
 end

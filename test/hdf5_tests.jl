@@ -657,15 +657,17 @@ end
             @test size(h["grid/x"]) == (nx,)
             @test read(h["meta/t"]) == 0.75
             # The record of the run beside the frame's own entries, as the VTK
-            # FieldData carries it; `n_global` stays the written grid's count.
+            # FieldData carries it: `n_global` is the solver's node count and
+            # `n_sampled` the count of the grid as written.
             @test read(h["meta/species_names"]) == ["gas"]
             @test read(h["meta/gas_constants"]) == [1.0]
             @test read(h["meta/metric"]) == ["cartesian"]
             @test read(h["meta/boundary"]) == fill("periodic", 6)
             @test read(h["meta/domain"]) == [0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-            @test Int.(read(h["meta/solver_n_global"])) == [nx, ny, nz]
             @test Int.(read(h["meta/n_global"])) == [nx, ny, nz]
+            @test Int.(read(h["meta/n_sampled"])) == [nx, ny, nz]
             @test Int.(read(h["meta/stride"])) == [1, 1, 1]
+            @test !haskey(h, "meta/solver_n_global") && !haskey(h, "meta/TIME")
 
             # Every rank's hyperslab landed where the global index says it
             # should. A misplaced block would still be self-consistent within
@@ -719,10 +721,10 @@ end
             # The retained stations are the odd global ones, not a re-spacing.
             @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, i) for i in 1:2:nx]
             # The written count, the solver's count and the stride, from which
-            # the period follows: solver_n_global spacings of the written
-            # spacing over the stride.
-            @test Int.(read(h["meta/n_global"])) == [36, 8, 12]
-            @test Int.(read(h["meta/solver_n_global"])) == [nx, ny, nz]
+            # the period follows: n_global spacings of the written spacing
+            # over the stride.
+            @test Int.(read(h["meta/n_sampled"])) == [36, 8, 12]
+            @test Int.(read(h["meta/n_global"])) == [nx, ny, nz]
             @test Int.(read(h["meta/stride"])) == [2, 2, 1]
             x, dom = read(h["grid/x"]), read(h["meta/domain"])
             @test nx * (x[2] - x[1]) / 2 ≈ dom[2] - dom[1]

@@ -1181,17 +1181,21 @@ _owner(solver::Solver) = solver
 _owner(ps::PatchSolver) = getfield(ps, :solver)
 
 """
-    output_record(solver, stride; level = nothing) -> Vector{Pair{String,Vector}}
+    output_record(solver, stride, n_sampled; level = nothing)
+        -> Vector{Pair{String,Vector}}
 
 The record [`save_vtk`](@ref) writes as `FieldData`, in order: `species_names`,
 `gas_constants` (omitted for an EOS without per-species gas constants),
 `metric`, `boundary` (`open`, `periodic`, `mirror` or `axis`, low then high per
 dimension), `domain` (low then high bound per dimension), `TIME`, `n_global`
-(the root grid's node count) and `stride`, followed by `level` when one is
-given. Strings are `Vector{String}`, integers `Vector{Int64}` and reals
-`Vector{Float64}`.
+(the root grid's node count), `n_sampled` (the node count of the grid as
+written, under the stride and the slice; omitted when `n_sampled` is
+`nothing`, for an index over several grids) and `stride`, followed by `level`
+when one is given. Strings are `Vector{String}`, integers `Vector{Int64}` and
+reals `Vector{Float64}`.
 """
-function output_record(solver::Solver, stride::NTuple{3,Int}; level=nothing)
+function output_record(solver::Solver, stride::NTuple{3,Int}, n_sampled;
+                       level=nothing)
     rec = Pair{String,Vector}["species_names" => String.(species_names(solver.eos))]
     R = _gas_constants(solver.eos)
     R === nothing || push!(rec, "gas_constants" => R)
@@ -1201,6 +1205,7 @@ function output_record(solver::Solver, stride::NTuple{3,Int}; level=nothing)
     push!(rec, "domain" => Float64[x for d in 1:3 for x in (lo[d], hi[d])])
     push!(rec, "TIME" => Float64[solver.t])
     push!(rec, "n_global" => Int64[solver.n_global...])
+    n_sampled === nothing || push!(rec, "n_sampled" => Int64[n_sampled...])
     push!(rec, "stride" => Int64[stride...])
     level === nothing || push!(rec, "level" => Int64[level])
     return rec
@@ -1949,11 +1954,15 @@ keyword:
 - `domain`: six reals, the low and the high bound of each dimension, as
   [`domain_bounds`](@ref) gives them.
 - `TIME`: the solver time.
-- `n_global`, `stride`: the global node count and the stride of this file.
+- `n_global`: the global node count of the solver's grid, whatever the stride
+  and the slice.
+- `n_sampled`: the node count of the grid as written, which a stride or a
+  slice makes smaller than `n_global`.
+- `stride`: the stride of this file.
 
 A strided file's coordinates fix neither the period of a periodic dimension nor
 the position of a mirror plane, half a spacing outside the first node; the
-bounds and the node count fix both. A string array is written as VTK's own
+bounds and the global node count fix both. A string array is written as VTK's own
 writer writes one, the characters' codes with each string zero-terminated.
 
 Subsampling reduces file size and write time only. The fields are still produced
@@ -1985,7 +1994,7 @@ function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
         seams = _output_seams(solver, slice, ranges)
         entries = _close_seams(solver, entries, ranges, seams)
         written = _seam_ranges(ranges, st, seams)
-        record = output_record(_owner(solver), st)
+        record = output_record(_owner(solver), st, _output_global(solver, st, slice))
         return curvilinear ?
             _save_vts(solver, entries, prefix, st, slice, written, record) :
             _save_vtr(solver, entries, prefix, st, slice, written, record)
@@ -2216,7 +2225,10 @@ on that patch's communicator, and the index gathers the piece list.
 The `.vtm` and every piece carry the record described above. Its `n_global`
 and `domain` are the root grid's and its `stride` acts in each patch's own
 node space; a piece adds `level`, its refinement level, at which the spacing
-is the root's divided by 3^`level` along every resolved dimension.
+is the root's divided by 3^`level` along every resolved dimension. A piece's
+`n_sampled` is the node count of its own patch as written, the same in every
+rank's piece of that patch; the `.vtm`, an index over several grids, carries
+none.
 """
 function save_vtk(solver::Solver, states::Vector{<:ConservedState},
                   prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
@@ -2282,8 +2294,9 @@ function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
             (ghost = only(_close_seams(ps.decomp, [ghost], (1,), length.(ranges), seams)))
         written = _seam_ranges(ranges, st, seams)
         lo, hi = _output_piece_extent(ps, st, pslice, written)
+        record = output_record(solver, st, _output_global(ps, st, pslice); level=ℓ)
         _write_vtr_piece(_patch_piece_name(prefix, ℓ, ti, rank), ps, entries, lo,
-                         hi, written, ghost, output_record(solver, st; level=ℓ))
+                         hi, written, ghost, record)
         push!(pieces, ℓ, ti)
     end
     return pieces
@@ -2319,7 +2332,7 @@ function _write_multiblock(solver::Solver, pieces::Vector{Int64},
             write(io, "</Block>\n")
         end
         write(io, "</vtkMultiBlockDataSet>\n")
-        _write_field_data(io, output_record(solver, stride))
+        _write_field_data(io, output_record(solver, stride, nothing))
         write(io, "</VTKFile>\n")
     end
     return prefix

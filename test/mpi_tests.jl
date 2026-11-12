@@ -1301,11 +1301,12 @@ function test_field_writer()
               abs(gsum(inside) - 1), 0.5)
         check("stride $sd: whole extent is the coarse grid",
               abs(gsum(whole_ok) - 1), 0.5)
-        # The record of every piece names the full grid and the stride, from
-        # which the period follows: n_global spacings of the written spacing
-        # over the stride.
+        # The record of every piece names the full grid, the grid as written
+        # and the stride, from which the period follows: n_global spacings of
+        # the written spacing over the stride.
         check_record("stride $sd", "mpi_stride.pvtr",
                      Dict("n_global" => [SPLITN, 16, 16], "stride" => [sd, sd, sd],
+                          "n_sampled" => collect(nkeep),
                           "boundary" => fill("periodic", 6)))
         period_err = 0.0
         if rank == 0
@@ -1422,17 +1423,25 @@ function test_shared_planes()
         check_tiling("patch layout, level $ℓ", listed; expect=rho_of_x)
     end
     # The index and every piece carry the root's record, a piece with its
-    # level besides.
+    # level and its patch's node count as written besides. That count is the
+    # union of the extents of the level's pieces, whichever rank wrote each.
     MPI.Barrier(comm)
     bad = 0
     if rank == 0
         rec = read_vtk_record("mpi_planes_amr.vtm")
         bad += rec["n_global"] != [400, 1, 1] || haskey(rec, "level")
-        for m in eachmatch(r"file=\"([^\"]+)\"", read("mpi_planes_amr.vtm", String))
-            piece = read_vtk_record(m.captures[1])
-            ℓ = parse(Int, match(r"\.L(\d+)\.", m.captures[1]).captures[1])
+        bad += haskey(rec, "n_sampled")
+        files = [m.captures[1]
+                 for m in eachmatch(r"file=\"([^\"]+)\"", read("mpi_planes_amr.vtm", String))]
+        for f in files
+            piece = read_vtk_record(f)
+            ℓ = parse(Int, match(r"\.L(\d+)\.", f).captures[1])
+            exts = [first(read_vtk_piece(g)) for g in files if occursin(".L$ℓ.", g)]
+            span = [maximum(e[2d] for e in exts) - minimum(e[2d-1] for e in exts) + 1
+                    for d in 1:3]
             bad += get(piece, "level", nothing) != [ℓ]
-            bad += delete!(piece, "level") != rec
+            bad += get(piece, "n_sampled", nothing) != span
+            bad += delete!(delete!(piece, "level"), "n_sampled") != rec
         end
     end
     check("patch layout: one record in the index and its pieces", gsum(bad), 0.5)
@@ -1497,6 +1506,7 @@ function test_slicing()
           abs(gsum(inside) - 1), 0.5)
     check_record("sliced pieces", "mpi_slice_z.pvtr",
                  Dict("n_global" => [SPLITN, 16, 16], "stride" => [1, 1, 1],
+                      "n_sampled" => [SPLITN, 16, 1],
                       "domain" => [0.0, 1.0, 0.0, 0.25, 0.0, 0.25]))
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_slice_z"), readdir()))

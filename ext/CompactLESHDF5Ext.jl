@@ -672,20 +672,17 @@ function write_field_frame(solver::Solver, Q, prefix::AbstractString;
             g = create_group(file, "meta")
             write_meta!(g, "t", Float64(solver.t), rank)
             write_meta!(g, "step", Int64(solver.step), rank)
-            write_meta!(g, "n_global", Int64[nglobal...], rank)
-            write_meta!(g, "stride", Int64[st...], rank)
             write_meta!(g, "curvilinear", Int64(curvilinear), rank)
             # The record of the run that `save_vtk` writes as FieldData, under
-            # the names this group already gives two of its entries: `t` is
-            # the time, and `n_global` the written grid's node count, so the
-            # solver's own node count is `solver_n_global`.
-            for (name, value) in CompactLES.output_record(solver, st)
-                name in ("TIME", "stride") && continue
-                key = name == "n_global" ? "solver_n_global" : name
+            # the same names: `n_global` is the solver's node count and
+            # `n_sampled` the count of the grid written here. The time is `t`
+            # above.
+            for (name, value) in CompactLES.output_record(solver, st, nglobal)
+                name == "TIME" && continue
                 if eltype(value) <: AbstractString
-                    write_strings!(g, key, value, rank)
+                    write_strings!(g, name, value, rank)
                 else
-                    write_meta!(g, key, value, rank)
+                    write_meta!(g, name, value, rank)
                 end
             end
             if !curvilinear

@@ -88,7 +88,8 @@ included, carries a record of the run as VTK `FieldData`:
 | `boundary` | low and high face per dimension: `open`, `periodic`, `mirror` or `axis` |
 | `domain` | low and high bound per dimension |
 | `TIME` | solver time |
-| `n_global` | global node count |
+| `n_global` | global node count of the solver's grid |
+| `n_sampled` | node count of the grid as written, smaller under a stride or a slice |
 | `stride` | stride of the file |
 
 A face carrying a [`SymmetryPlaneBC`](@ref) is a `mirror`; an
@@ -97,14 +98,15 @@ every wall, inflow and outflow is `open`. The bounds are the domain's faces,
 so a periodic dimension's period is `domain` high less low, and a mirror plane
 or a fold lies on its bound, half a spacing outside the nearest node. The
 coordinates of a strided or sliced file fix neither of these. The pieces of a
-refined run add `level`, and their `stride` is in the patch's own node space.
+refined run add `level`; their `stride` is in the patch's own node space and
+their `n_sampled` is the node count of their own patch as written, which the
+`.vtm` index, holding no single grid, leaves out.
 A solver answers the same questions through [`boundary_conditions`](@ref),
 [`domain_bounds`](@ref) and [`profile_coordinate`](@ref).
 
-A [`save_hdf5`](@ref) frame carries the same record in its `meta` group,
-beside its `t`, `step`, `n_global` and `stride` entries. There the time is
-`t` and `n_global` is the node count of the written grid, so the solver's
-global node count is `solver_n_global`.
+A [`save_hdf5`](@ref) frame carries the same record in its `meta` group under
+the same names, beside its `step` and `curvilinear` entries; there the time
+is `t`.
 
 ## Restart with the same decomposition
 

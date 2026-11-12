@@ -134,12 +134,13 @@ coordinate vectors.
 This is the form to use at large rank counts. The VTK path writes one file per
 rank per frame; this writes one file per frame regardless.
 
-The `meta` group holds the time `t`, the step count `step`, the node count of
-the written grid `n_global`, the `stride`, whether the grid is `curvilinear`
-(1) or rectilinear (0), and the record of the run that
-`save_vtk` writes as `FieldData`: `species_names`, `gas_constants` (for an
-EOS with per-species gas constants), `metric`, `boundary`, `domain`, and the
-solver's global node count as `solver_n_global`.
+The `meta` group holds the time `t`, the step count `step`, whether the grid
+is `curvilinear` (1) or rectilinear (0), and the record of the run that
+`save_vtk` writes as `FieldData`, under the same names: `species_names`,
+`gas_constants` (for an EOS with per-species gas constants), `metric`,
+`boundary`, `domain`, `n_global` (the solver's global node count), `n_sampled`
+(the node count of the grid as written, smaller under a stride or a slice)
+and `stride`.
 
 The sidecar is XDMF3, not VTKHDF: as of VTKHDF format version 2.5 that container
 supports neither RectilinearGrid nor StructuredGrid, so a stretched or
