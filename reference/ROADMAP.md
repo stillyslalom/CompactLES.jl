@@ -44,15 +44,19 @@ example they block is held until the item closes.
 
 ## Order of work
 
-V4 comes first: it sets the cost of every later commit. The work after it
-is ordered by the two target problems of
-[AMR_GPU.md](AMR_GPU.md#target-problems), the shock tube with a mixing
-layer and the ICF implosion, and work on the two may proceed together,
-subject to one heavy run at a time.
+V4 comes first: it sets the cost of every later commit. A17 follows, since
+both target problems run refined and a tiled refined run is slower today
+than the uniform grid at its refined spacing. The work after them is ordered by
+the two target problems of [AMR_GPU.md](AMR_GPU.md#target-problems), the
+shock tube with a mixing layer and the ICF implosion, and work on the two
+may proceed together, subject to one heavy run at a time.
 
 1. **V4** trims the gate and the test suite, so that a commit pays only for
    the checks its change can affect.
-2. The shock tube with a mixing layer:
+2. **A17** brings a tiled refined run below the wall of the uniform grid at
+   the refined spacing, as one focused effort ahead of further refinement
+   features.
+3. The shock tube with a mixing layer:
    1. **N4** settles `C_mu` on the cases its own text names: the
       one-dimensional battery and a shocked three-dimensional case, for
       which a reshocked interface is a candidate, since after reshock the
@@ -67,7 +71,7 @@ subject to one heavy run at a time.
       N4.
    3. **N18**'s remaining reference and **V2**'s use case, both taken
       from V1.
-3. The indirect-drive capsule, to A21's gate. A capsule run combines
+4. The indirect-drive capsule, to A21's gate. A capsule run combines
    mechanisms that exclude one another today and meets two defects of a
    refined run, each recorded in the text of one of the first three items
    below:
@@ -80,7 +84,7 @@ subject to one heavy run at a time.
       limiter.
    3. **A17**'s first and fourth items, the root step set by covered nodes
       and the tiles near the r-z axis, which A21's first two items cite as
-      its blockers.
+      its blockers, where the effort above has left either open.
 
    Then the physics:
 
@@ -96,10 +100,10 @@ subject to one heavy run at a time.
    7. **H10**, then **H4**: H4's electron and ion conduction run through
       the implicit stage, and by H10's text the refined, decomposed
       capsule run cannot use that stage until H10 carries it there.
-4. **N22** sharpens the species channel's interfaces. The flux is delivered
+5. **N22** sharpens the species channel's interfaces. The flux is delivered
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
-5. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
+6. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
    later stages, then S1 and S2 on rzadams.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
@@ -611,32 +615,44 @@ promotion.
   `test/convergence.jl` unchanged or better.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
-  `bench/amrwin.jl` times warm root-only, box, tiled and uniform-fine runs
-  of a planar Sod tube, three blobs in a periodic box, the converging shock
-  at the r-z axis and `bench/amr_cost.jl`'s 3-D blob, and splits each wall
-  into point-steps and cost per point-step, with a phase profile and an
-  account of what sized each root step
+  The purpose of refinement is the fine grid's answer in less time than the
+  uniform fine grid takes, and on an 8-core desktop a tiled run does not
+  deliver it. At eight ranks it is slower than the uniform fine grid on every
+  problem timed, the three-dimensional one most, and at one rank on every
+  problem but the Sod tube. Reversing that is this item, taken as one focused
+  effort.
+  `bench/amrwin.jl` times, at one rank, warm root-only, box, tiled and
+  uniform-fine runs of a planar Sod tube, three blobs in a periodic box, the
+  converging shock at the r-z axis and `bench/amr_cost.jl`'s 3-D blob, and
+  splits each wall into point-steps and cost per point-step, with a phase
+  profile and an account of what sized each root step
   ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
-  The box is below the fine wall on the Sod tube and the 3-D blob, the tiles
-  on the Sod tube only, and on the blob problems only the tiles reach the
-  fine answer. The remaining work, by measured share:
+  There the box is below the fine wall on the Sod tube and the 3-D blob, the
+  tiles on the Sod tube only, and on the blob problems only the tiles reach
+  the fine answer. The remaining work, the first four items by measured
+  share at one rank:
   1. The level's step count. A parent's nodes that restriction overwrites,
      more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
      0.75 rather than the solver's (commit `f1d420c`; excluding them made
      the axis shock run away). The Sod level then takes the fine run's step
-     count, the tiled Sod tube runs at 0.64 of the fine wall, and the
+     count, the tiled Sod tube runs below the fine wall at one rank, and the
      shock's root steps fall by a third. On the box blobs and the
      three-dimensional box the level's step count is held by the artificial
      rate at 2.2 to 2.6 times the fine count, and on most steps the
      three-dimensional box's root step is bounded by its covered root nodes.
-     The three-dimensional tiles take 1.56 times the fine count under the
-     level's hyperbolic rate.
-  2. The tiles' cost per point, 1.3 to 1.5 times the fine grid's and more
-     than twice it on the shock: the shell fill runs only where a tile has
-     a parent-fed face, each tile's right-hand side reads the level pass's velocity
-     gradients, `Patch` is mutable (commit `3c2bc6a`) and the ghost-flux
-     split runs one body per kind of component over the region the line
-     fills read (commit `74343a7`). The level-wide artificial coefficients cost
+     The three-dimensional tiles took about one and a half times the fine
+     count under the level's hyperbolic rate when the table was taken and
+     take well over twice it now, at an unchanged wall per root step; what
+     bounds their root step now has not been re-read.
+  2. The tiles' cost per point, above the fine grid's on every problem and
+     more than twice it on the Sod tube and the shock. On the Sod tube the
+     uniform run has sped up since the earlier measurement by more than the
+     tiled one, whose ghost-flux divergence has not sped up at all. Delivered
+     so far: the shell fill runs only where a tile has a parent-fed face,
+     each tile's right-hand side reads the level pass's velocity gradients,
+     `Patch` is mutable (commit `3c2bc6a`) and the ghost-flux split runs one
+     body per kind of component over the region the line fills read (commit
+     `74343a7`). The level-wide artificial coefficients cost
      what a uniform patch's do per point. What remains is the ghost-flux
      divergence's second line solve per component on each interface
      dimension, whose one-sided rows carry their own left-hand side, so
@@ -651,6 +667,14 @@ promotion.
   4. Robustness: the tiled shock ends with negative internal energy at the
      axis, and the box leaves the species band after regrid checks when
      the root under-resolves the edge (A18).
+  5. The decomposed run. `bench/amrwin.jl` compares against an undistributed
+     fine run and so runs at one rank; the eight-rank walls came from a copy
+     of its problems without the composite error. There a third or more of a
+     tiled run's wall, on the rank waiting longest, passes inside the
+     run-wide collectives and the level's record exchanges, against under a
+     hundredth of the uniform run's. Running the script decomposed, with that
+     share reported, comes first, so that the items above can be re-read at
+     eight ranks.
   **Gate:** the cost per point-step and the level's step count are
   properties of the code, and the level's share of the fine grid's points
   is set by the problem and the tagging, so the two are gated apart. On the
@@ -658,9 +682,10 @@ promotion.
   uniform fine run's, which the Sod level already takes, and the cost per
   point-step against the fine run's below the ratio recorded in
   [the table](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid);
-  the refined wall below the uniform fine wall only on runs whose level
-  holds a small fraction of the fine grid's points (the table's level
-  points column), as on the Sod tube and the 3-D box; a composite error no
+  the refined wall below the uniform fine wall, at one rank and at eight,
+  required only of runs whose level holds a small fraction of the fine
+  grid's points (the table's level points column), as on the Sod tube and
+  the 3-D box; a composite error no
   larger than the tiles' recorded in the appendix; and bit-identical
   numerics for any change that claims to touch cost only.
 
