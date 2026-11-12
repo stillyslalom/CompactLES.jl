@@ -842,7 +842,10 @@ interpolation chain, the boxes of that stage the shell slots depend on
 decomposition and the faces the parent feeds, which do not change over a
 [`LevelTransfer`](@ref)'s life, so it is built once at setup. A subcycled
 step imposes the shell about twenty times, so the geometry is not rebuilt
-per call.
+per call. The slabs are those of the parent-fed faces. `memo` records the
+Hermite fraction and parent step whose shell the host ring holds, so that a
+second imposition at the same fraction writes it again
+(`_shell_memo_hit`).
 """
 struct ShellRing{T}
     slabs::Vector{NTuple{3,UnitRange{Int}}}
@@ -853,6 +856,7 @@ struct ShellRing{T}
     counts::Vector{Int}
     buffers::GatherBuffers{T}
     boxes::Vector{Vector{NTuple{3,UnitRange{Int}}}} # per chain stage 1 .. K
+    memo::Vector{Float64}            # held, θ, dt of the ring's Hermite fill
 end
 
 """
@@ -2413,10 +2417,13 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
         table, ringlen = _slab_table(slabs)
         shell = ShellRing{T}(slabs, table, ringlen, Matrix{T}(undef, 0, n_cons),
                              Matrix{T}(undef, 0, n_cons), Int[], GatherBuffers{T}(),
-                             Vector{NTuple{3,UnitRange{Int}}}[])
+                             Vector{NTuple{3,UnitRange{Int}}}[], zeros(3))
     else
+        # The slabs of the parent-fed faces, which hold every shell slot: a
+        # face shared with a same-level tile takes its ghosts from the level's
+        # records, and the chain does not fill the box beyond it.
         slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
-                            fine_decomp.n_halo_d, boundary, folded)
+                            fine_decomp.n_halo_d, boundary, folded, imposed)
         table, ringlen = _slab_table(slabs)
         # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
         ring_counts = [ringlen * length((r+1):np_tile:n_cons)
@@ -2424,15 +2431,13 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
         fine_active = ntuple(d -> fine_decomp.active[d], 3)
         _check_ring_cover(table, region, fine_active, fine_decomp.n_halo_d, imposed,
                           boundary, folded)
-        boxes = _chain_boxes(_ring_slabs(region, fine_active, fine_decomp.n_halo_d,
-                                         boundary, folded, imposed),
-                             _box_shift(buffer, folded),
+        boxes = _chain_boxes(slabs, _box_shift(buffer, folded),
                              _chain_extents(boxext, dims_to_refine), dims_to_refine,
                              interpolation_order)
         shell = ShellRing{T}(slabs, table, ringlen,
                              Matrix{T}(undef, ringlen, n_cons),
                              Matrix{T}(undef, ringlen, n_cons), ring_counts,
-                             GatherBuffers{T}(), boxes)
+                             GatherBuffers{T}(), boxes, zeros(3))
     end
     # The gradients are taken on the chain's fine box, whose ends lie
     # 3·LEVEL_BUFFER fine nodes beyond the patch, with the derivative
@@ -3272,17 +3277,31 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp,
     # transfer, the same on every rank of the tile's communicator, so the
     # ranks skip the ring gather together.
     _imposes_shell(lt) || return states
-    ring && return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
+    shell = lt.shell
+    if ring
+        shell.memo[1] = 0
+        return _impose_shell_gradients!(solver, states, lt, fill, fdcp)
+    end
     Qf = states[lt.fine_index]
     comm = fdcp.comm
     np, me = _shell_ranks(fdcp)
     n_cons = solver.equations.n_cons
     K = length(lt.pplans)
-    shell = lt.shell
     slabs = shell.slabs
     table = shell.table
     ringlen = shell.len
     ring = shell.ring
+    host = !_device_path(Qf)
+    # A repeated Hermite fraction (a substep's first stage after the previous
+    # substep's end, the end again after the filter) reads the boxes the last
+    # imposition read, so the ring it left is the ring this one would build.
+    # The memo is the same on every rank of the tile, which skip the gather
+    # together.
+    if host && _shell_memo_hit(shell.memo, fill)
+        _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
+        return states
+    end
+    shell.memo[1] = 0
     padb = lt.pdecomps[K+1].n_halo_d
     shift = _box_shift(lt)
     # This rank's components, as a range, not a filtered vector: the
@@ -3297,7 +3316,7 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp,
     fallback = _shell_fallback(solver)
     gathered = fallback && np > 1
     sendbuf = _fit!(shell.buffers.send, (gathered ? 2 : 1) * ringlen * n_owned)
-    if !_device_path(Qf)
+    if host
         pos = 0
         for c in owned
             _fill_stage0!(fill, lt.pstage[1], lt, c)
@@ -3324,6 +3343,7 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp,
             copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
             fallback && _shell_fallback!(ring, _linear_sources(fill, lt, owned), lt, fdcp,
                                          solver)
+            _shell_memo!(shell.memo, fill)
             _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
             return states
         end
@@ -3353,8 +3373,23 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill, fdcp::Decomp,
         end
     end
     gathered && _select_admissible!(ring, shell.linear, lt, fdcp, solver)
+    host && _shell_memo!(shell.memo, fill)
     _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
     return states
+end
+
+# Whether the host ring holds the shell of the Hermite fill `fill`, and the
+# record that it does. A gathered box is gathered anew at every imposition,
+# so a `BoxFill` never matches; `save_level_boxes!` clears the record.
+_shell_memo_hit(memo, ::BoxFill) = false
+_shell_memo_hit(memo, fill::HermiteFill) =
+    memo[1] == 1 && memo[2] == Float64(fill.θ) && memo[3] == Float64(fill.dt)
+_shell_memo!(memo, ::BoxFill) = (memo[1] = 0; nothing)
+function _shell_memo!(memo, fill::HermiteFill)
+    memo[1] = 1
+    memo[2] = Float64(fill.θ)
+    memo[3] = Float64(fill.dt)
+    return nothing
 end
 
 # The device branch of `_impose_shell!`: the chain and the ring pack on the
@@ -4162,6 +4197,8 @@ function save_level_boxes!(solver, lev::Level, states, dQs, at_end::Bool)
     patches = getfield(solver, :patches)
     for lt in lev.transfers
         _upload_hermite!(lt, patches, at_end)
+        # The ring no longer holds a shell of these boxes.
+        lt.shell.memo[1] = 0
     end
     return lev
 end
