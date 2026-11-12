@@ -592,6 +592,15 @@ promotion.
   registers at a junction; and, for exact conservation of smooth flow, a
   tangential transfer and corner and axis terms of the quadrature high-order
   enough that the ungated correction keeps the interface orders.
+  To try first: the mismatch of a step the gate leaves uncorrected is
+  discarded, and that discarded mismatch is the whole of the default's mass
+  drift on a planar shock crossing. Held on the line until the gate next
+  flags it, it would make such a crossing exact, provided the moving
+  converging shock keeps the fine grid's disturbance ahead of its front. On
+  the radial Noh crossing a second piece of the drift lies in the filter
+  passes under the parent's derivative mask, partly cancels the gate's
+  share, and is not reached by this change; the level rows' mass guards stay
+  as they are until it is tried.
   **Gate:** the device path bitwise against the host on the A14 cases;
   under the limiter, the Noh and Woodward–Colella level rows admissible with
   the composite budget held; ungated, the interface rows of

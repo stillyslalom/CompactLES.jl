@@ -7415,6 +7415,32 @@ the masked level to 1.05 times the fine grid's, where testing either side
 leaves it at 12, and loosens the Sod and Noh conservation
 by one to two orders, still two orders below the uncorrected coupling's.
 
+**Where the default's drift comes from.** With every line corrected in every
+step (`REFLUX_GATED[] = false`) the Sod tube conserves mass to the unrefined
+run's round-off with the mask off or on. The default's drift there is the
+mismatch of the steps the gate leaves uncorrected, which the registers
+discard, and the mask makes the uncorrected mismatch about six times larger.
+The Noh crossing without the mask behaves the same way. With the mask a
+remainder survives the correction of every line, opposite in sign to the
+gate's share, so the default's composite on the crossing is the sum of two
+pieces that partly cancel. The right-hand side's change less its registered
+face fluxes is the same with the mask off and on, which places the remainder
+in the filter passes. Planar Noh crossings, with the level at the wall and
+off it, show no such remainder: there the mask moves the filter and
+correction pieces together by about 1e-7. The table gives the composite mass
+change of the two-level tube of `test/level_tests.jl` at t = 0.2, and of the
+Noh crossing less its inflow as a fraction of the exact mass, from the budget
+ledger (a scratch driver, not kept; `b920d02`, Julia 1.13.3).
+
+| case | mask | uncorrected | gated (default) | every line corrected |
+|---|---|---|---|---|
+| Sod tube | off | +8.52e-5 | +2.09e-6 | −4.9e-11 |
+| Sod tube | on | −5.23e-4 | −6.98e-6 | −1.0e-10 |
+| Noh crossing | off | −1.18e-3 | +4.92e-6 | −2.5e-7 |
+| Noh crossing | on | −1.72e-3 | +8.38e-6 | −7.37e-6 |
+| unrefined tube | | −5.5e-11 | | |
+| uniform Noh at the level's spacing | | −4.45e-7 | | |
+
 **Rejected placements.** A correction added to the parent's face node, which
 the shell copies to the child, fed back through the child's next step and
 grew without bound in the cold radial inflow; the node one out from the face
