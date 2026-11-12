@@ -581,6 +581,17 @@ _reflux_raw(Q) = Q
 _reflux_node_term(solver, d::Int, scale) =
     !(solver.metric isa CartesianMetric) && scale === solver.inv_h[d]
 
+# The inverse Jacobian the hooks divide Ω's increments by, to take them per
+# volume: `nothing` on an unstretched Cartesian grid, where it is exactly one
+# (`_share_uniform_geometry!`) and the division, which would return its
+# dividend, is skipped. Dispatched on the metric and stretch types, as
+# `_ghost_geometry` is, so the result is inferred.
+@inline _reflux_jacobian(solver) = _reflux_jacobian(solver.metric, solver.stretch, solver)
+@inline _reflux_jacobian(::CartesianMetric, ::NTuple{3,Nothing}, solver) = nothing
+@inline _reflux_jacobian(::Metric, stretch, solver) = solver.inv_J
+@inline _per_volume(x, ::Nothing, I) = x
+@inline _per_volume(x, inv_J, I) = @inbounds x / inv_J[I]
+
 # Zero the stage fluxes of a patch, at the start of its right-hand side.
 @noinline function _reflux_zero!(solver)
     for cap in _reflux_captures(solver)
@@ -615,7 +626,7 @@ _reflux_defer!(solver, on::Bool) = nothing
 @noinline function _reflux_component!(solver, dQ, c::Int)
     _reflux_deferred(solver) || return nothing
     q = _reflux_raw(dQ)
-    inv_J = solver.inv_J
+    inv_J = _reflux_jacobian(solver)
     @inbounds for cap in _reflux_captures(solver)
         cap.child || continue
         T = eltype(cap.stage)
@@ -626,7 +637,7 @@ _reflux_defer!(solver, on::Bool) = nothing
                 b = cap.band[k]
                 b == 0 && continue
                 I = _reflux_index(cap, b, i1, i2)
-                Δ += cap.omega[k] * q[I, c] / inv_J[I]
+                Δ += _per_volume(cap.omega[k] * q[I, c], inv_J, I)
             end
             cap.stage[l, c] -= cap.kap[l] * Δ
         end
@@ -678,7 +689,7 @@ end
     deferred = _reflux_deferred(solver)
     node && !deferred && return nothing
     q = _reflux_raw(dQ)
-    inv_J = solver.inv_J
+    inv_J = _reflux_jacobian(solver)
     @inbounds for cap in caps
         T = eltype(cap.stage)
         if node
@@ -690,7 +701,8 @@ end
                     b = cap.band[k]
                     b == 0 && continue
                     I = _reflux_index(cap, b, i1, i2)
-                    Δ += cap.omega[k] * (q[I, c] - cap.snap[l, 6 + k]) / inv_J[I]
+                    Δ += _per_volume(cap.omega[k] * (q[I, c] - cap.snap[l, 6 + k]),
+                                     inv_J, I)
                 end
                 cap.stage[l, c] += cap.kap[l] * Δ
             end
@@ -704,7 +716,8 @@ end
                     b = cap.band[k]
                     b == 0 && continue
                     I = _reflux_index(cap, b, i1, i2)
-                    Δ += cap.omega[k] * (q[I, c] - cap.snap[l, 6 + k]) / inv_J[I]
+                    Δ += _per_volume(cap.omega[k] * (q[I, c] - cap.snap[l, 6 + k]),
+                                     inv_J, I)
                 end
                 cap.stage[l, c] -= cap.kap[l] * Δ
             end
