@@ -19,6 +19,14 @@ end
 using CompactLES: padded_index, xcoord, global_xcoord, hdf5_available, hdf5_parallel
 using HDF5
 
+# A regridded level with fewer tiles than ranks takes a finer lattice, chosen
+# by a cost model that times the run, so a decomposed run's tile layout
+# depends on the machine's load. The hierarchy testsets below read a tile's
+# dataset by its configured size and compare a restarted run bit for bit with
+# the run that wrote the file, so the suite keeps every level on its
+# configured lattice, as test/mpi_tests.jl does. One rank never subdivides.
+CL.SUBDIVIDE_LATTICE[] = false
+
 @testset "HDF5 extension: shared-file checkpoint" begin
     comm = MPI.COMM_WORLD
     np = MPI.Comm_size(comm)
