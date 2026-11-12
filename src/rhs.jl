@@ -1589,42 +1589,83 @@ function _extrapolate_coarse_fine!(solver::SolverLike, d::Int, Q)
         base = side == 1 ? 0 : pad[d] + nl[d]
         edge = side == 1 ? pad[d] + 1 : pad[d] + nl[d]
         dir = side == 1 ? 1 : -1
-        pointwise!(_extrapolate_ghost_point!, G, pad[d], nl[o1], nl[o2],
+        weights = _extrapolation_weights(eltype(G), pad[d], deg)
+        # One line per launch point, its ghost layers in turn.
+        pointwise!(_extrapolate_ghost_point!, G, 1, nl[o1], nl[o2],
                    G, Q, solver.rho, solver.u, solver.v, solver.w, solver.p,
-                   solver.field_tuples.Y, size(G, 4), eq.n_species, m1, m2, m3,
-                   eq.i_energy, d, base, edge, dir, pad, deg)
+                   solver.field_tuples.Y, weights, size(G, 4), eq.n_species,
+                   m1, m2, m3, eq.i_energy, d, base, edge, dir, pad, deg)
     end
     return G
 end
 
-# The ghost-differenced flux of every component at a ghost node `m` spacings
-# beyond the edge node: the inviscid flux there plus the Lagrange
-# extrapolation of the remainder from the edge node and the `degree` nodes
-# inward, whose `G` holds the assembled flux.
-@inline function _extrapolate_ghost_point!(G, Q, rho, u, v, w, p, Y, n_cons, n_species,
-                                           m1, m2, m3, i_energy, d, base, edge, dir,
-                                           pad, degree, a, b, c3)
-    T = eltype(G)
-    @inbounds begin
-        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
-        idx = ntuple(e -> e == d ? base + a : e == o1 ? pad[e] + b : pad[e] + c3, 3)
-        I = CartesianIndex(idx)
-        m = abs(idx[d] - edge)
-        for c in 1:n_cons
-            s = zero(T)
-            for j in 0:degree
+# The ghost layers and the polynomial terms the extrapolation weights cover.
+const EXTRAPOLATION_LAYERS = 8
+const EXTRAPOLATION_TERMS = 6
+
+# The Lagrange weights of the extrapolation to the ghost node `m` spacings
+# beyond the edge node, from the edge node and the `degree` nodes inward: row
+# `m`, term `j + 1` for the node `j` spacings inward, zero past `layers` and
+# `degree`. They depend on the offsets alone, so a face takes them once; the
+# products are formed in the order the extrapolation always formed them.
+function _extrapolation_weights(::Type{T}, layers::Int, degree::Int) where {T}
+    layers <= EXTRAPOLATION_LAYERS && degree < EXTRAPOLATION_TERMS ||
+        throw(ArgumentError("the coarse-fine extrapolation covers " *
+                            "$EXTRAPOLATION_LAYERS ghost layers and degree " *
+                            "$(EXTRAPOLATION_TERMS - 1); got $layers and $degree"))
+    return ntuple(Val(EXTRAPOLATION_LAYERS)) do m
+        ntuple(Val(EXTRAPOLATION_TERMS)) do jj
+            j = jj - 1
+            wt = zero(T)
+            if m <= layers && j <= degree
                 wt = one(T)
                 for k in 0:degree
                     k == j && continue
                     wt *= T(-m - k) / T(j - k)
                 end
-                S = CartesianIndex(ntuple(e -> e == d ? edge + dir * j : idx[e], 3))
-                f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
-                                            m1, m2, m3, i_energy, false, S)
-                s += wt * (G[S, c] - f)
             end
-            G[I, c] = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
-                                              m1, m2, m3, i_energy, false, I) + s
+            wt
+        end
+    end
+end
+
+# The ghost-differenced flux of every component on the ghost layers of one
+# line: at each the inviscid flux there plus the Lagrange extrapolation of
+# the remainder from the edge node and the `degree` nodes inward, whose `G`
+# holds the assembled flux. The remainders are formed once per line and
+# component; a term past `degree` has weight and remainder zero, which adds
+# nothing to the sum.
+@inline function _extrapolate_ghost_point!(G, Q, rho, u, v, w, p, Y, weights, n_cons,
+                                           n_species, m1, m2, m3, i_energy, d, base,
+                                           edge, dir, pad, degree, a, b, c3)
+    T = eltype(G)
+    @inbounds begin
+        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+        t = ntuple(e -> e == o1 ? pad[e] + b : pad[e] + c3, 3)
+        at(n) = CartesianIndex(ntuple(e -> e == d ? n : t[e], 3))
+        for c in 1:n_cons
+            r = ntuple(Val(EXTRAPOLATION_TERMS)) do jj
+                q = zero(T)
+                if jj - 1 <= degree
+                    S = at(edge + dir * (jj - 1))
+                    q = G[S, c] - _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c,
+                                                          d, n_species, m1, m2, m3,
+                                                          i_energy, false, S)
+                end
+                q
+            end
+            for layer in 1:pad[d]
+                n = base + layer
+                wm = weights[abs(n - edge)]
+                s = zero(T)
+                for j in 1:EXTRAPOLATION_TERMS
+                    s += wm[j] * r[j]
+                end
+                I = at(n)
+                G[I, c] = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d,
+                                                  n_species, m1, m2, m3, i_energy,
+                                                  false, I) + s
+            end
         end
     end
     return nothing
