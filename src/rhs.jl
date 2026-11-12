@@ -21,11 +21,12 @@ _ghost_viscous(interface_flux::Symbol, transport) =
 _ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
 
 # Under `interface_flux = :ghost` with the artificial properties on, an
-# interface dimension carries the remainder F − f in `ghost_flux` and
+# interface dimension carries the assembled flux in `ghost_flux` and
 # differences the whole flux through the gradient plans in one solve; the
-# level's records fill its ghost layers at a same-level end. Test/bench
-# toggle, read at construction (the `ghost_flux` arrays and the gradient
-# ring, `_gradient_ring_built`), at every right-hand side and at every shell
+# level's records fill its ghost layers at a same-level end, and the
+# remainder F − f beyond the inviscid flux f is extrapolated at a coarse-fine
+# end. Test/bench toggle, read at construction (the `ghost_flux` arrays and the
+# gradient ring, `_gradient_ring_built`), at every right-hand side and at every shell
 # imposition (`_reads_gradient_ring`), so it is set before a solver is built
 # and left alone during its run; `false` differences the remainder through
 # the divergence plans' one-sided rows instead, a second solve, at an
@@ -1170,24 +1171,28 @@ end
 # imposed at the stage time), so the gradient plans' interface rows, which
 # read ghost layers, apply to it. The rest of the assembled flux has no
 # ghost values of its own. With the artificial properties on, the default
-# (`_remainder_ghosted`), its interior values, the remainder F − f of the
-# molecular and artificial fluxes and the wall corrections, go into the
-# patch's `ghost_flux` array here, and its ghost values enter afterwards,
-# once every patch of the level has evaluated (`_level_ghost_fluxes!`): at a
-# same-level face the neighbour's own interior values arrive through the
-# level's flux records, and at a coarse-fine face they are extrapolated from
-# the interior along the line (`_extrapolate_coarse_fine!`). The whole flux
-# is then differenced through the gradient plans there, in one line solve
-# per component and interface dimension, and the right-hand side here takes
-# at most the pressure gradient (`_pressure_gradient`). With the artificial
-# properties off (or `GHOST_FLUX_REMAINDER` off), `ghost_flux` holds the
-# molecular flux alone, its coarse-fine ghost values evaluated from the
-# shell's gradient ring, and a remainder left beside it (the wall
-# corrections) keeps the one-sided rows of `div_plans` in a second line
-# solve here; without molecular transport as well, every solve runs here.
-# The remainder costs one pointwise pass per component and interface
-# dimension and the halo exchange, records and extrapolation of `ghost_flux`;
-# the molecular part adds one pass over all interface dimensions. It
+# (`_remainder_ghosted`), the assembled flux F goes into the patch's
+# `ghost_flux` array here at the interior points, and its ghost values enter
+# afterwards, once every patch of the level has evaluated
+# (`_level_ghost_fluxes!`): at a same-level face the neighbour's own interior
+# F arrives through the level's flux records, and at a coarse-fine face the
+# ghost value is the inviscid flux of the imposed shell plus the remainder
+# F − f of the molecular and artificial fluxes and the wall corrections,
+# extrapolated from the interior along the line (`_extrapolate_coarse_fine!`).
+# The whole flux is then differenced through the gradient plans there, in one
+# line solve per component and interface dimension, and the right-hand side
+# here takes at most the pressure gradient (`_pressure_gradient`). Carrying F
+# rather than the remainder leaves the pointwise inviscid flux to the ghost
+# layers of the coarse-fine faces and of the boundary ends, where it is read;
+# the interior value differs from f + (F − f) by the rounding of that sum.
+# With the artificial properties off (or `GHOST_FLUX_REMAINDER` off),
+# `ghost_flux` holds the molecular flux alone, its coarse-fine ghost values
+# evaluated from the shell's gradient ring, and a remainder left beside it
+# (the wall corrections) keeps the one-sided rows of `div_plans` in a second
+# line solve here; without molecular transport as well, every solve runs
+# here. Carrying F costs one copy per component and interface dimension and
+# the halo exchange, records and extrapolation of `ghost_flux`; the
+# molecular part adds one pass over the interface dimensions that carry it. It
 # allocates nothing beyond the `ghost_flux` arrays sized at construction;
 # `tmp_b`, `tmp_a` and `sensor_sp` are its scratch.
 #
@@ -1505,10 +1510,12 @@ end
 _ghost_flux_dims(solver::SolverLike) =
     ntuple(d -> solver.decomp.active[d] && _interface_dim(solver, d), 3)
 
-# Phase one of the molecular ghost flux: the interior molecular flux along
-# every interface dimension `d` into the patch's `ghost_flux[d]`, with its
-# rank halos along `d` exchanged, from the gradients this evaluation
-# computed. Collective over the patch's communicator.
+# Phase one of the ghost fluxes: the interior molecular flux along every
+# interface dimension `d` whose remainder is not ghost-differenced, and the
+# assembled flux along every one whose remainder is, into the patch's
+# `ghost_flux[d]`, with its rank halos along `d` exchanged, from the fluxes
+# and gradients this evaluation computed. Collective over the patch's
+# communicator.
 function _molecular_ghost_flux!(solver::SolverLike, Q)
     decomp = solver.decomp
     eq = solver.equations
@@ -1516,11 +1523,14 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
     n1f, n2f, n3f = padded_extent(decomp)
     ft = solver.field_tuples
     dims = _ghost_flux_dims(solver)
+    # A dimension carrying the assembled flux overwrites the molecular one
+    # over every point its readers take, so the molecular pass skips it.
+    viscous = ntuple(d -> dims[d] && !_remainder_ghosted(solver, d), 3)
     G1, G2, G3 = solver.ghost_flux
-    route = dims[1] ? G1 : dims[2] ? G2 : G3
-    _ghost_viscous(solver) &&
+    route = viscous[1] ? G1 : viscous[2] ? G2 : G3
+    _ghost_viscous(solver) && any(viscous) &&
         pointwise!(_molecular_flux_point!, route, n1f, n2f, n3f,
-                   G1, G2, G3, dims, solver.eos, solver.rho, solver.u, solver.v,
+                   G1, G2, G3, viscous, solver.eos, solver.rho, solver.u, solver.v,
                    solver.w, solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u,
                    solver.grad_T_ion, ft.grad_Y, solver.transport, eq.n_species,
                    m1, m2, m3, eq.i_energy, eq.n_cons, decomp.n_local,
@@ -1528,12 +1538,12 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
     for d in 1:3
         _remainder_ghosted(solver, d) || continue
         G = solver.ghost_flux[d]
-        # Over the lines along `d` alone, which every reader of the remainder
+        # Over the lines along `d` alone, which every reader of the flux
         # takes (`_line_box`): its rank halos and records along `d` copy the
         # transverse ghosts too, but nothing reads them.
         b1, b2, b3, o1, o2, o3 = _line_box(solver, d)
         for c in 1:eq.n_cons
-            pointwise!(_remainder_flux_point!, G, b1, b2, b3,
+            pointwise!(_flux_store_point!, G, b1, b2, b3,
                        G, solver.flux[d, c], Q, solver.rho, solver.u, solver.v,
                        solver.w, solver.p, ft.Y, c, d, eq.n_species, m1, m2, m3,
                        eq.i_energy, decomp.n_local, decomp.n_halo_d, n3f, o1, o2, o3)
@@ -1559,12 +1569,16 @@ function _remainder_ghosted(solver::SolverLike, d::Int)
     return !parent_fed(bc_lo) && !parent_fed(bc_hi)
 end
 
-# The remainder's ghost layers at each coarse-fine face of `d` this rank holds,
-# by polynomial extrapolation of the interior values along the line. Phase
-# two, per tile: a stacked level's spanning patch carries the first tile's
-# face kinds only.
-function _extrapolate_coarse_fine!(solver::SolverLike, d::Int)
+# The flux's ghost layers at each coarse-fine face of `d` this rank holds: the
+# inviscid flux of the imposed shell plus the remainder F − f, extrapolated
+# by a polynomial through the interior values along the line, which the
+# interior of `ghost_flux[d]` holds as F (`_flux_store_point!`). `Q` is the
+# patch's state. Phase two, per tile: a stacked level's spanning patch
+# carries the first tile's face kinds only.
+function _extrapolate_coarse_fine!(solver::SolverLike, d::Int, Q)
     decomp = solver.decomp
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
     pad = decomp.n_halo_d
     nl = decomp.n_local
     G = solver.ghost_flux[d]
@@ -1576,59 +1590,83 @@ function _extrapolate_coarse_fine!(solver::SolverLike, d::Int)
         edge = side == 1 ? pad[d] + 1 : pad[d] + nl[d]
         dir = side == 1 ? 1 : -1
         pointwise!(_extrapolate_ghost_point!, G, pad[d], nl[o1], nl[o2],
-                   G, size(G, 4), d, base, edge, dir, pad, deg)
+                   G, Q, solver.rho, solver.u, solver.v, solver.w, solver.p,
+                   solver.field_tuples.Y, size(G, 4), eq.n_species, m1, m2, m3,
+                   eq.i_energy, d, base, edge, dir, pad, deg)
     end
     return G
 end
 
-# Lagrange extrapolation of every component to a ghost node `m` spacings
-# beyond the edge node, from the edge node and the `degree` nodes inward.
-@inline function _extrapolate_ghost_point!(G, n_cons, d, base, edge, dir, pad,
-                                           degree, a, b, c3)
+# The ghost-differenced flux of every component at a ghost node `m` spacings
+# beyond the edge node: the inviscid flux there plus the Lagrange
+# extrapolation of the remainder from the edge node and the `degree` nodes
+# inward, whose `G` holds the assembled flux.
+@inline function _extrapolate_ghost_point!(G, Q, rho, u, v, w, p, Y, n_cons, n_species,
+                                           m1, m2, m3, i_energy, d, base, edge, dir,
+                                           pad, degree, a, b, c3)
     T = eltype(G)
     @inbounds begin
         o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
         idx = ntuple(e -> e == d ? base + a : e == o1 ? pad[e] + b : pad[e] + c3, 3)
+        I = CartesianIndex(idx)
         m = abs(idx[d] - edge)
         for c in 1:n_cons
             s = zero(T)
             for j in 0:degree
-                w = one(T)
+                wt = one(T)
                 for k in 0:degree
                     k == j && continue
-                    w *= T(-m - k) / T(j - k)
+                    wt *= T(-m - k) / T(j - k)
                 end
-                src = ntuple(e -> e == d ? edge + dir * j : idx[e], 3)
-                s += w * G[CartesianIndex(src), c]
+                S = CartesianIndex(ntuple(e -> e == d ? edge + dir * j : idx[e], 3))
+                f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                            m1, m2, m3, i_energy, false, S)
+                s += wt * (G[S, c] - f)
             end
-            G[CartesianIndex(idx), c] = s
+            G[I, c] = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                              m1, m2, m3, i_energy, false, I) + s
         end
     end
     return nothing
 end
 
-# The remainder F − f of component `c` along `d` into `G[I, c]` at points
-# interior along every active dimension, zero elsewhere, as
-# `_molecular_flux_point!` lays out the molecular flux. The body adds the
-# offsets `o1`, `o2`, `o3` to its index, so that a launch may cover part of the
-# padded block.
-@inline function _remainder_flux_point!(G, F, Q, rho, u, v, w, p, Y, c, d,
-                                        n_species, m1, m2, m3, i_energy,
-                                        nl, pad, stride, o1, o2, o3, ib, jb, kb)
-    T = eltype(rho)
+# The ghost-differenced flux of component `c` along `d` into `G[I, c]`: the
+# assembled flux `F` at points interior along every active dimension, the
+# inviscid flux elsewhere. A ghost layer of an interface end or a rank halo
+# takes its value afterwards (`_level_ghost_fluxes!`); the inviscid flux is
+# the value of the layers beyond a boundary end, and of the transverse ghosts
+# a fold's mirror fill reads. The body adds the offsets `o1`, `o2`, `o3` to
+# its index, so that a launch may cover part of the padded block.
+@inline function _flux_store_point!(G, F, Q, rho, u, v, w, p, Y, c, d,
+                                    n_species, m1, m2, m3, i_energy,
+                                    nl, pad, stride, o1, o2, o3, ib, jb, kb)
     @inbounds begin
         i, j, k = ib + o1, jb + o2, kb + o3
         I = CartesianIndex(i, j, k)
         kl = _unchecked_rem(k - 1, stride) + 1
         inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
                  pad[3] < kl <= pad[3] + nl[3]
-        if !inside
-            G[I, c] = zero(T)
-            return nothing
+        if inside
+            G[I, c] = F[I]
+        else
+            G[I, c] = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d,
+                                              n_species, m1, m2, m3, i_energy,
+                                              false, I)
         end
-        f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
-                                    m1, m2, m3, i_energy, false, I)
-        G[I, c] = F[I] - f
+    end
+    return nothing
+end
+
+# The ghost-differenced flux of component `c` along `d` from `G[I, c]` into
+# `out`, less the pressure under `less_p` and times the area factor `Ad`
+# where it is not `nothing`, as `_inviscid_flux_point!` forms it. The body
+# adds the offsets `o1`, `o2`, `o3` to its index.
+@inline function _ghost_flux_copy_point!(out, G, p, Ad, c, less_p, o1, o2, o3,
+                                         i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        f = G[I, c]
+        out[I] = _area_scaled(Ad, I, ifelse(less_p, f - p[I], f))
     end
     return nothing
 end
@@ -1751,7 +1789,9 @@ end
 # one line solve per component and interface dimension. The primitives are the
 # patch's own and the state is unchanged since its right-hand side, so they
 # still describe the evaluated state; the assembled flux, which lives on the
-# shared workspace, is not read.
+# shared workspace, is not read. A dimension whose `ghost_flux` carries the
+# assembled flux (`_remainder_ghosted`) takes it as the ghost-differenced flux
+# directly, and its coarse-fine ghost layers from `_extrapolate_coarse_fine!`.
 
 # Whether the patch's face `side` of `d` is an interface end whose ghost
 # layers this rank holds: a same-level or coarse-fine face (both are
@@ -1908,7 +1948,7 @@ end
 function _coarse_fine_fluxes_at!(solver, p, lt, states, pi::Int)
     ps = PatchSolver(solver, p)
     for d in 1:3
-        _remainder_ghosted(ps, d) && _extrapolate_coarse_fine!(ps, d)
+        _remainder_ghosted(ps, d) && _extrapolate_coarse_fine!(ps, d, states[pi])
     end
     if _reads_gradient_ring(ps)
         lt.gradients === nothing && _unbuilt_ring_error()
@@ -1979,8 +2019,9 @@ function _coarse_fine_ghost_fluxes!(solver::SolverLike, lt, scratch, Q)
 end
 
 # dQ[:, c] -= D_ext(P) along every interface dimension, P the ghost-differenced
-# flux with the molecular part, or the whole remainder, read from `ghost_flux`,
-# ghost layers included.
+# flux: the whole flux read from `ghost_flux` where it carries it
+# (`_remainder_ghosted`), the inviscid flux with the molecular part read from
+# it elsewhere, ghost layers included.
 # Collective over the patch's communicator.
 function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
     eq = solver.equations
@@ -1991,17 +2032,24 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
     for d in 1:3
         G = solver.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
-        viscous || _remainder_ghosted(solver, d) || continue
+        whole = _remainder_ghosted(solver, d)
+        viscous || whole || continue
         Ad, iJ = _ghost_geometry(solver, d)
         # Over the lines the solve along `d` reads (`_line_box`).
         b1, b2, b3, o1, o2, o3 = _line_box(solver, d)
         for c in 1:n_cons
             # The pressure gradient was subtracted in phase one.
-            pointwise!(_inviscid_flux_point!, solver.tmp_b, b1, b2, b3,
-                       solver.tmp_b, solver.flux[d, c], Q, solver.rho, solver.u,
-                       solver.v, solver.w, solver.p, ft.Y, G, Ad, c, d, eq.n_species,
-                       m1, m2, m3, eq.i_energy, false, true,
-                       _pressure_gradient(solver, d, c), o1, o2, o3)
+            less_p = _pressure_gradient(solver, d, c)
+            if whole
+                pointwise!(_ghost_flux_copy_point!, solver.tmp_b, b1, b2, b3,
+                           solver.tmp_b, G, solver.p, Ad, c, less_p, o1, o2, o3)
+            else
+                pointwise!(_inviscid_flux_point!, solver.tmp_b, b1, b2, b3,
+                           solver.tmp_b, solver.flux[d, c], Q, solver.rho, solver.u,
+                           solver.v, solver.w, solver.p, ft.Y, G, Ad, c, d,
+                           eq.n_species, m1, m2, m3, eq.i_energy, false, true, less_p,
+                           o1, o2, o3)
+            end
             _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ,
                                  _flux_sign(solver, d, c))
         end
