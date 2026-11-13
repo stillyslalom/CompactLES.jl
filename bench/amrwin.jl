@@ -74,8 +74,10 @@
 #   shock   1-D cylindrical converging shock toward the axis (the imploding
 #           shock tutorial's case; the fine grid is 3N − 1 points, which puts
 #           its nodes on the refined level's under the half-cell axis offset)
-#   blob3d  bench/amr_cost.jl's 3-D heavy blob, its box and its regrid
-#           settings, against the uniform 3N³ grid at the refined spacing
+#   blob3d  bench/amr_cost.jl's 3-D heavy blob and its regrid settings, the
+#           level's first layout taken from the tags (`blob3d_start=box`
+#           gives that script's box), against the uniform 3N³ grid at the
+#           refined spacing
 #
 # `configs=` selects the configurations, `profile=false` and `diagnose=false`
 # skip the extra run, `art=false` turns off the artificial properties
@@ -130,7 +132,7 @@ const opt = CompactLES.script_args(ARGS, (
     sod_n = 201, sod_ny = 17, sod_tile = 8, sod_t = 0.1,
     blobs_n = 64, blobs_tile = 16, blobs_t = 0.2, blobs_w = 0.01,
     shock_n = 256, shock_tile = 16, shock_t = 0.221,
-    blob3d_n = 24, blob3d_tile = 8, blob3d_t = 1.0))
+    blob3d_n = 24, blob3d_tile = 8, blob3d_t = 1.0, blob3d_start = "sensor"))
 
 const wall2 = (SlipWallBC(), SlipWallBC())
 
@@ -211,7 +213,18 @@ function blob3d_spec(n, tile, tfinal)
     problem = Problem(name="3-D blob", eos=eos,
         domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
         bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()), ic=ic)
-    box = AMR(initial=BlockRegion((n ÷ 8, n ÷ 8, n ÷ 8), (n ÷ 3, n ÷ 3, n ÷ 3)),
+    # The level's first layout comes from the tags. bench/amr_cost.jl's given
+    # box (`blob3d_start=box`) puts a coarse-fine face a few edge widths
+    # outside the blob's edge, which the root does not resolve: the parent's
+    # nodes beside that face leave the species band before the first regrid
+    # check, the check copies the excursion into new tiles, and the
+    # mass-fraction bound of D* then sets the level's step for the rest of the
+    # run, at about twice the fine run's step count on a 48³ root.
+    opt.blob3d_start in ("sensor", "box") ||
+        error("blob3d_start = $(opt.blob3d_start), want sensor or box")
+    initial = opt.blob3d_start == "box" ?
+              BlockRegion((n ÷ 8, n ÷ 8, n ÷ 8), (n ÷ 3, n ÷ 3, n ÷ 3)) : :sensor
+    box = AMR(initial=initial,
               subcycle=true, regrid_interval=10, tag_buffer=4, tag_threshold=0.02)
     return (; name="blob3d", title="bench/amr_cost.jl's 3-D blob", problem,
             n_root=(n, n, n), n_fine=(3n, 3n, 3n), tfinal, cfl=0.5,
