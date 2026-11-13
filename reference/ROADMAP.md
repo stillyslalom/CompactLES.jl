@@ -44,7 +44,8 @@ example they block is held until the item closes.
 
 ## Order of work
 
-V4 comes first: it sets the cost of every later commit. A17 follows, since
+V4 comes first: it sets the cost of every later commit, and what remains of
+it starts from CI readings, so it does not hold A17. A17 follows, since
 both target problems run refined and a tiled refined run is slower today
 than the uniform grid at its refined spacing. The work after them is ordered by
 the two target problems of [AMR_GPU.md](AMR_GPU.md#target-problems), the
@@ -55,7 +56,12 @@ may proceed together, subject to one heavy run at a time.
    the checks its change can affect.
 2. **A17** brings a tiled refined run below the wall of the uniform grid at
    the refined spacing, as one focused effort ahead of further refinement
-   features.
+   features. The cost per point has been measured and its cheap savings
+   taken; what remains is structural. The layout is decided once: clustered
+   boxes, a root that advances no covered node, abutting tiles joined in one
+   line solve and **A19**'s remaining pattern are one decision, since each
+   layout trades coarse-fine face area against same-level faces, halo and
+   covered nodes.
 3. The shock tube with a mixing layer:
    1. **N4** settles `C_mu` on the cases its own text names: the
       one-dimensional battery and a shocked three-dimensional case, for
@@ -72,19 +78,24 @@ may proceed together, subject to one heavy run at a time.
    3. **N18**'s remaining reference and **V2**'s use case, both taken
       from V1.
 4. The indirect-drive capsule, to A21's gate. A capsule run combines
-   mechanisms that exclude one another today and meets two defects of a
+   mechanisms that exclude one another today and meets defects of a
    refined run, each recorded in the text of one of the first three items
    below:
    1. **N32**'s remaining configurations, in its own order, for the
       positivity limiter on the capsule's levels: stacked device tiles,
       then the remaining metrics and the tabulated and NASA-9 equations of
       state.
-   2. **A20**, the conservative coarse-fine correction under the limiter
-      and on device storage; it runs today on host storage without the
-      limiter.
-   3. **A17**'s first and fourth items, the root step set by covered nodes
-      and the tiles near the r-z axis, which A21's first two items cite as
-      its blockers, where the effort above has left either open.
+   2. **A17**'s first item, the root step set by covered nodes, where the
+      effort above has left it open, and then **A20**, the conservative
+      coarse-fine correction under the limiter and on device storage; it
+      runs today on host storage without the limiter. The order is a
+      dependency: A20's registers sit on the parent lines that cross a
+      junction, and a layout without covered nodes ends those lines at the
+      face.
+   3. **A17**'s fourth item, the tiles near the r-z axis, with **A19**: the
+      capsule's band is a tiled level behind a converging shock on an r-z
+      grid, the configuration in which A19's pattern was measured. A21's
+      first two items cite the two A17 items as its blockers.
 
    Then the physics:
 
@@ -104,7 +115,9 @@ may proceed together, subject to one heavy run at a time.
    off by default; its localization and density ratio 1000 remain, and
    become urgent when a case at density ratio 100 or more is in production.
 6. Cluster campaigns run as allocation allows: S12's rzhound probe, S15's
-   later stages, then S1 and S2 on rzadams.
+   later stages, then S1 and S2 on rzadams. **S17** needs no allocation and
+   precedes S1: it is gated on a count of host waits, taken on the
+   workstation.
 
 The remaining items wait for a named target: H6, H7 and H9 for a radiation-,
 laser- or burn-dominated case; H4a and H5a for cold DT, and the rest of H5b
@@ -432,9 +445,32 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   `4b8d4e2`). Building each serial reference of the MPI suite on rank 0 alone
   was measured and did not change the eight-rank wall, since the time is in
   the decomposed runs' collectives, so that trim is dropped.
-  Remaining: read the eight-rank job's wall in the first CI runs with the
-  preference set, trim the step-bound eight-rank phases and the serial
-  Julia 1 and pre jobs.
+  With the preference set, the eight-rank job's image build is longer and
+  its test step shorter, a net cut of about three and a half minutes on
+  runners of one CPU model. The whole run's wall did not move, because the
+  serial pre job is now the longest as often as the eight-rank job, and a
+  job's wall varies with its runner's CPU model by more than any single
+  trim. The serial positivity limiter testset is the largest step-bound
+  testset of every serial job, and its wall doubled when every
+  limited-interface case gained a `:ghost` variant (commit `2d5178f`). The
+  Julia 1.10 job rebuilds its package image on every run, since that release
+  keys the cache on file times.
+
+  ```
+  CI wall, min                     before 4b8d4e2        after
+  whole run                        28.6 (15 runs)        28.1 (10 runs)
+  eight-rank job                   26.8, longest 13/15   27.3, longest 4/10
+  eight-rank job, Zen 3 runners    31.8 (4 runs)         28.2 (6 runs)
+    image build                    7.4                   10.0
+    mpi_tests.jl script            21.2                  15.0
+  serial pre job                   23.1                  23.9, longest 4/10
+  positivity limiter testset,      2.1 (6898dc5)         4.3 (212559f)
+    serial Julia 1
+  ```
+
+  Remaining: trim the step-bound eight-rank phases and the serial jobs. The
+  eight-rank trims alone leave the serial pre job the longest, so the serial
+  positivity limiter testset comes first.
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
 
@@ -625,65 +661,114 @@ promotion.
 
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   The purpose of refinement is the fine grid's answer in less time than the
-  uniform fine grid takes, and on an 8-core desktop a tiled run does not
-  deliver it. At eight ranks it is slower than the uniform fine grid on every
-  problem timed, the three-dimensional one most, and at one rank on every
-  problem but the Sod tube. Reversing that is this item, taken as one focused
-  effort.
-  `bench/amrwin.jl` times, at one rank, warm root-only, box, tiled and
-  uniform-fine runs of a planar Sod tube, three blobs in a periodic box, the
-  converging shock at the r-z axis and `bench/amr_cost.jl`'s 3-D blob, and
-  splits each wall into point-steps and cost per point-step, with a phase
-  profile and an account of what sized each root step
+  uniform fine grid takes. On an 8-core desktop a tiled run delivers it where
+  the level holds a small share of the fine grid's points: the Sod tube, at
+  one rank and at eight, and the three-dimensional blob on a root fine enough
+  to leave most of the domain unrefined, which runs at about a third of the
+  fine wall at eight ranks. A tiled run is still slower than
+  the fine grid on the two-dimensional blobs, whose tiles store most of the
+  fine grid, and on the one-dimensional shock. Closing the rest is this
+  item, taken as one focused effort.
+  `bench/amrwin.jl` times, at one rank or decomposed, warm root-only, box,
+  tiled and uniform-fine runs of a planar Sod tube, three blobs in a periodic
+  box, the converging shock at the r-z axis and `bench/amr_cost.jl`'s 3-D
+  blob. It writes each wall ratio as a product of three factors (commit
+  `6446cbd`): the level's share of the fine grid's point-steps at the fine
+  step count, the level's step count over the fine run's, and the cost per
+  point-step over the fine run's, with a phase profile and an account of what
+  sized each root step
   ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
-  There the box is below the fine wall on the Sod tube and the 3-D blob, the
-  tiles on the Sod tube only, and on the blob problems only the tiles reach
-  the fine answer. The remaining work, the first four items by measured
-  share at one rank:
+  The remaining work:
   1. The level's step count. A parent's nodes that restriction overwrites,
      more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
      0.75 rather than the solver's (commit `f1d420c`; excluding them made
-     the axis shock run away). The Sod level then takes the fine run's step
-     count, the tiled Sod tube runs below the fine wall at one rank, and the
-     shock's root steps fall by a third. On the box blobs and the
-     three-dimensional box the level's step count is held by the artificial
-     rate at 2.2 to 2.6 times the fine count, and on most steps the
-     three-dimensional box's root step is bounded by its covered root nodes.
-     The three-dimensional tiles took about one and a half times the fine
-     count under the level's hyperbolic rate when the table was taken and
-     take well over twice it now, at an unchanged wall per root step; what
-     bounds their root step now has not been re-read.
+     the axis shock run away). The Sod level takes the fine run's step
+     count. On the two-dimensional blobs the covered root nodes bound the
+     root step at their hyperbolic rate, under the box on every step, and
+     the script's account puts the count near the fine run's with those
+     nodes left out. On the three-dimensional blob the level took about
+     twice the fine count under `bench/amr_cost.jl`'s given first box, which
+     puts a coarse-fine face a few edge widths outside the blob's unresolved
+     edge. The parent's nodes beside that face leave the species band before
+     the first regrid check, the check copies the excursion into new tiles,
+     and the mass-fraction bound of the species diffusivity then sets the
+     level's step for the rest of the run. Started from the tagged layout,
+     as the script now starts it, the level takes the fine run's step count
+     to within a few percent and the composite errors fall by more than an
+     order of magnitude. Setup accepts without a warning a given first
+     region whose face lies inside the tag buffer of a tagged feature, and
+     why the parent's nodes beside such a face leave the band is open.
+     The parent's derivative mask acts on the same covered nodes. The
+     blobs' edges are narrower than a root spacing, so the covered nodes hold
+     a restricted jump that the parent's compact derivatives cannot resolve.
+     With the species gradients masked, the species flux drops across one
+     node at the mask's edge, and the divergence of that drop reaches the
+     parent's nodes beside the face. With them plain
+     (`MASK_CHILD_SPECIES_GRADIENTS`, commit `f17d8c5`, masked by default),
+     the gradient's tail reaches the uncovered root nodes: the
+     three-dimensional blob under its given box then takes fewer steps, and
+     under one regridded box the two-dimensional blobs lose their step and
+     their accuracy.
+     Dropping the species flux's sources over the stencil's reach beside the
+     mask recovers part of that step count without that failure, and is not
+     built.
+     A layout in which no covered node is advanced removes the bound that
+     the ceiling only relaxes and the unresolved derivative that the mask
+     only cuts: the root tiled on the level's lattice with its covered tiles
+     dropped, or the root's lines ended at the covered region. Either stays
+     patch-based and adds faces, which carry the face cost of the second
+     item and, at same-level faces, A19's pattern. It is priced from the
+     script's attribution before any code and decided with the third item's
+     layouts.
   2. The tiles' cost per point, above the fine grid's on every problem and
-     more than twice it on the Sod tube and the shock. On the Sod tube the
-     uniform run has sped up since the earlier measurement by more than the
-     tiled one, whose ghost-flux divergence has not sped up at all. Delivered
-     so far: the shell fill runs only where a tile has a parent-fed face,
-     each tile's right-hand side reads the level pass's velocity gradients,
-     `Patch` is mutable (commit `3c2bc6a`) and the ghost-flux split runs one
-     body per kind of component over the region the line fills read (commit
-     `74343a7`). The level-wide artificial coefficients cost
-     what a uniform patch's do per point. What remains is the ghost-flux
-     divergence's second line solve per component on each interface
-     dimension, whose one-sided rows carry their own left-hand side, so
-     removing it is a change of numerics. Differencing the remainder through
-     the gradient rows, now the default, removes it, raises an interface's
-     order on exact data from third to sixth and moves every shock measure
-     by under 2%
-     ([measurements](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
-  3. The cover: tiles of edge 8 and 16 cover the whole fine grid on both
-     blob problems; revisit `tag_buffer`, the tag threshold and the tile
-     edge against the error they buy.
-  4. Robustness: the tiled shock ends with negative internal energy at the
-     axis, and the box leaves the species band after regrid checks when
-     the root under-resolves the edge (A18).
-  5. The decomposed run. `bench/amrwin.jl` compares against an undistributed
-     fine run and so runs at one rank; the eight-rank walls came from a copy
-     of its problems without the composite error. There a third or more of a
-     tiled run's wall, on the rank waiting longest, passes inside the
-     run-wide collectives and the level's record exchanges, against under a
-     hundredth of the uniform run's. Running the script decomposed, with that
-     share reported, comes first, so that the items above can be re-read at
-     eight ranks.
+     nearly twice it on the Sod tube. A tile takes no more line solves than
+     the uniform grid. Delivered: the shell fill runs only where a tile has a
+     parent-fed face and reuses its ring at a repeated fraction, each tile's
+     right-hand side reads the level pass's velocity gradients, the
+     ghost-flux solves read the assembled flux without a copy and form the
+     remainder only at coarse-fine faces, the extrapolation weights are
+     formed once per face, and the strain magnitude reads its gradients as
+     tuples (commits `3c2bc6a`, `74343a7`, `2219279`, `a034d91`, `6f48e90`,
+     `b368f15`, `9d87d21`, `03e7651`). Each pointwise body of a tiled
+     right-hand side was timed with its arithmetic removed and its loads and
+     one store kept. Apart from the copies now removed, the bodies are bound
+     by arithmetic and not by memory traffic, so merging passes is not the
+     lever. Per padded point a level costs little more than the fine grid
+     does per point, in every layout timed, so most of what a small tile
+     pays beyond a fine point is its halo, over which the primitives and the
+     sensors are computed. The rest is the closure and interface rows of
+     short lines and the work at coarse-fine faces (the shell, the
+     ghost-flux extrapolation and the coupling's hooks), a small share of
+     the wall. Each remaining saving of this kind promises a few percent:
+     blending the interpolated endpoint rings of the shell, which the device
+     path must take in the same form; assembling the flux straight into
+     `ghost_flux`; and the extrapolation's run-time tuple indexing.
+  3. The cover: tiles of edge 8 and 16 store most of the fine grid on both
+     blob problems, about twice the tagged region with its buffer. Clustered
+     boxes, or merged small lattice cells, would store about the tagged
+     region and need partly shared faces; on the two-dimensional blobs they
+     are priced at about two thirds of the lattice's level cost. A smaller
+     `tag_buffer` helps them more than it helps the lattice, and today a
+     smaller buffer raises the step count through the first item's bound.
+     They are decided with the layout of the first item.
+  4. Robustness. On the converging shock the uniform fine run itself goes
+     negative in internal energy ahead of the shock near the axis before the
+     focus (N26), so whether a refined run ends admissible depends on the
+     step that lands on the end time, and the axis fold shows no defect.
+     Tiles add an earlier transient at each same-level face the shock
+     crosses, from the explicit derivative row at the shared node; root
+     patches show it too, and the positivity limiter removes it. A compact
+     row at the shared node, or one line solve across abutting tiles, would
+     remove it at every same-level face and is decided with the layout. The
+     box leaves the species band after regrid checks when the root
+     under-resolves the edge (A18).
+  5. The decomposed run. At eight ranks a quarter to a third of a tiled
+     run's wall, averaged over the ranks, passes inside the run-wide
+     collectives and the level's record exchanges, against under a hundredth
+     of the uniform run's, and the busiest rank works about a fifth longer
+     than the mean. That waiting has not been split into the per-substep
+     collectives, the record exchanges and the imbalance; splitting it comes
+     before any change to it.
   **Gate:** the cost per point-step and the level's step count are
   properties of the code, and the level's share of the fine grid's points
   is set by the problem and the tagging, so the two are gated apart. On the
@@ -719,7 +804,10 @@ promotion.
      the root's rate was about four times the band's, and the root's steps
      were about 8 times a uniform fine grid's.
   2. Tiles near the r-z axis: runs at both tile edges tried failed, and a
-     single box ran (A17's fourth item).
+     single box ran. On the one-dimensional converging shock the axis fold
+     shows no defect, and the tiles' only addition is a transient undershoot
+     at the same-level faces the shock crosses, which the positivity limiter
+     removes; repeat the band runs with the limiter on (A17's fourth item).
   3. Cold start: multi-D runs from the cold, uniform-pressure ablator need
      CFL ≤ 0.25, and an undriven r-z run failed at 0.4.
   4. The direction bins must span several coarsest-level cells; finer bins
@@ -1169,11 +1257,44 @@ under [the refinement track](#refinement-for-the-production-geometry).
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
 
+- [ ] **S17 — Cut the host waits of a device step.**
+  A device step is bound by launch submission and by the points at which
+  the host blocks on the device, not by kernel arithmetic
+  ([launch policy](AMR_GPU.md#launch-policy)), and in the stall mode of S1
+  every such wait costs milliseconds. The number of waits in a step is a
+  property of the code, so the item is gated on a count, runs on the
+  workstation and precedes S1. Shaderous, a single-GPU finite-volume code
+  (<https://github.com/guillochon/shaderous>), keeps its time step, block
+  scheduling and ghost fill on the device and reads diagnostics back
+  without blocking, so that none of its steps waits on the host. In order:
+  1. A tally of a step's blocking synchronizations, reductions and
+     downloads beside `TRACK_DEVICE_TRANSFERS`, reported by
+     `bench/device_solver.jl`.
+  2. `max_rate` blocks once per reduced quantity per patch
+     (`_local_max_rate_launch`). One kernel that reduces every quantity of
+     every tile of a stack into a small device buffer leaves one download
+     per level; a maximum and a minimum are exact in any order.
+  3. The reduced stage of a periodic line that one rank holds whole, as a
+     kernel in the host's order of operations, which removes the fence of
+     `apply_along!` on such a line. A decomposed line keeps its fence
+     until MPI takes device pointers (S2).
+  4. The interface records of a stacked level as one gather over the
+     stack, driven by a table built at the regrid, in place of one
+     broadcast per pair of tiles.
+  5. The workgroup shape of planar and stacked launches, probed with
+     `probes/device_floors.jl` after the count has fallen; until then the
+     interior of a kernel does not bound the step.
+  **Gate:** the tally before and after on a uniform, a tiled and a
+  subcycled step; the device output bitwise against the host, as
+  `test/device_tests.jl` pins it; no timing claim from the workstation.
+
 - [ ] **S1 — Complete target-machine GPU measurements and resolve the wait stall.**
   Continue the rzadams/MI300A campaign using the existing measurements as a baseline,
   not as an unmeasured port. Characterize/resolve the intermittent ROCm wait stall
   in [rocm_wait_stall_report.md](bugreports/rocm_wait_stall_report.md) before interpreting
-  performance changes. Record hardware, MPI stack, precision, synchronization
+  performance changes. S17 comes first: a step with fewer host waits loses
+  less to the stall, and its tally bounds the share of a wall the stall can
+  account for. Record hardware, MPI stack, precision, synchronization
   policy, repeat variability, and correctness with every result. Profile a
   `Nasa9Mixture` step there too with `bench/device_nasa9.jl`, which has run only
   on the workstation GPU. The LLVM 22.1.8 `llc` in `AMDGPU_LLVM_Backend_jll`
@@ -1188,9 +1309,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
 - [ ] **S2 — Measure and address compact-solve and transfer scaling limits.**
   Profile the replicated band interface solves, host/device fences and transfers,
   and the level coupling's point-to-point exchanges (S15) as line-rank count and
-  region size grow. Compare gather-solve-scatter, on-device reduced solves and
-  GPU-aware MPI only where profiles justify them.
-  Measure stacked `max_rate` reductions before adding another launch optimization;
+  region size grow. Compare gather-solve-scatter, on-device reduced solves of a
+  decomposed line and GPU-aware MPI only where profiles justify them.
+  The waits that a count can gate, the stacked `max_rate` reductions and the
+  reduced stage of an undecomposed line among them, are S17's;
   revisit extra streams only if batching still leaves useful concurrency.
   The replicated interface solve's cost model, its cluster measurement and
   the conditional distributed reduced solve are S12's.
@@ -1334,6 +1456,13 @@ and the production configuration they lead to are in
 - **Symbolic frontend:** optional only after hand-written equation sets define a
   usable interface; a macro may emit typed code, but runtime PDE-string evaluation
   remains excluded.
+- **Per-tile time steps within a level:** deferred. Every same-level face
+  would need the Hermite box in time that only coarse-fine faces carry
+  today.
+- **Coarse-fine conservation by recomputed face fluxes**, as block-structured
+  finite-volume codes obtain it without registers: excluded, since a compact
+  derivative couples a whole line and has no local face flux that two
+  neighbors could recompute identically.
 - **Excluded:** cell-by-cell/oct-tree AMR, unstructured meshes, a parallel Godunov
   solver path based on Riemann solvers/flux limiters, and general-purpose CFD scope.
   Instrumented state repair remains allowed and must retain intervention budgets.
