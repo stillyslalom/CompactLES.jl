@@ -662,13 +662,13 @@ promotion.
 - [ ] **A17 — Make refinement beat the uniform fine grid in time to solution.**
   The purpose of refinement is the fine grid's answer in less time than the
   uniform fine grid takes. On an 8-core desktop a tiled run delivers it where
-  the level holds a small share of the fine grid's points: the Sod tube, at
-  one rank and at eight, and the three-dimensional blob on a root fine enough
-  to leave most of the domain unrefined, which runs at about a third of the
-  fine wall at eight ranks. A tiled run is still slower than
-  the fine grid on the two-dimensional blobs, whose tiles store most of the
-  fine grid, and on the one-dimensional shock. Closing the rest is this
-  item, taken as one focused effort.
+  the level holds a small share of the fine grid's points: the Sod tube at
+  one rank, and the three-dimensional blob on a root fine enough to leave
+  most of the domain unrefined, which runs at about a third of the fine wall
+  at eight ranks. A tiled run is still slower than the fine grid on the Sod
+  tube at eight ranks, by about a tenth, on the two-dimensional blobs, whose
+  tiles store most of the fine grid, and on the one-dimensional shock.
+  Closing the rest is this item, taken as one focused effort.
   `bench/amrwin.jl` times, at one rank or decomposed, warm root-only, box,
   tiled and uniform-fine runs of a planar Sod tube, three blobs in a periodic
   box, the converging shock at the r-z axis and `bench/amr_cost.jl`'s 3-D
@@ -766,9 +766,20 @@ promotion.
      run's wall, averaged over the ranks, passes inside the run-wide
      collectives and the level's record exchanges, against under a hundredth
      of the uniform run's, and the busiest rank works about a fifth longer
-     than the mean. That waiting has not been split into the per-substep
-     collectives, the record exchanges and the imbalance; splitting it comes
-     before any change to it.
+     than the mean. By the profile's share of samples inside an MPI call,
+     the time a tiled run spends there beyond the uniform run's falls about
+     equally on the regrid's collectives, the same-level synchronization and
+     the staged exchanges of the level-wide sensor pass. The uniform run's
+     own time inside MPI, in its distributed line solves, is not counted as
+     waiting and is about a third of rank 0's samples.
+     A decomposed tiled run also chooses its lattice from timings measured
+     on the run (`_choose_lattice`), so identical processes can take
+     different layouts. On the two-dimensional blobs at eight ranks about
+     one process in three halved the lattice along one dimension at its
+     first ready check, on a predicted gain beside the threshold, and then
+     took more steps to a larger error at no shorter wall. The cost model
+     prices neither a layout's step count nor its error, and a timing
+     comparison at eight ranks has to record the lattice each process took.
   **Gate:** the cost per point-step and the level's step count are
   properties of the code, and the level's share of the fine grid's points
   is set by the problem and the tagging, so the two are gated apart. On the
