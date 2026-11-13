@@ -1232,7 +1232,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components; the metric corrections are in grad_u).
     pointwise!(_strain_mag_point!, f.strain_mag, nx, ny, nz,
-               f.strain_mag, f.ft.grad_u, o1, o2, o3)
+               f.strain_mag, _dims_tuple(f.ft.grad_u, Val(3)), o1, o2, o3)
 
     # Strain sensor: Δ_d² |D_d S| reduced over directions for the selected
     # detector D, smoothed. One pass serves μ* and β* where both are built from
@@ -1412,12 +1412,17 @@ end
 end
 
 # Per-point bodies of the sensor-to-coefficient loops above, in order of use.
-@inline function _strain_mag_point!(strain_mag, grad_u, o1, o2, o3, i, j, k)
+# `gu[a][b]` is `grad_u[a, b]`, the rows as a tuple (`_dims_tuple`): read
+# through the matrix, each of the 18 terms reloaded its array from the matrix
+# and that array's size at every point, which cost 10 ns per point, more than
+# the stage update. The sum runs over b, then a, in the order of the loop it
+# unrolls.
+@inline function _strain_mag_point!(strain_mag, gu, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        ss = zero(grad_u[1, 1][I])
-        for b in 1:3, a in 1:3
-            Sab = (grad_u[a, b][I] + grad_u[b, a][I]) / oftype(ss, 2)
+        ss = zero(gu[1][1][I])
+        Base.Cartesian.@nexprs 3 b -> Base.Cartesian.@nexprs 3 a -> begin
+            Sab = (gu[a][b][I] + gu[b][a][I]) / oftype(ss, 2)
             ss += Sab * Sab
         end
         strain_mag[I] = sqrt(ss)

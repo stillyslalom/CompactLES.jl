@@ -329,7 +329,8 @@ function _sensed_fields!(ps)
     nx, ny, nz = decomp.n_local
     sf = ps.sensed_fields
     grad_u = ps.field_tuples.grad_u
-    pointwise!(_strain_mag_point!, sf[1], nx, ny, nz, sf[1], grad_u, o1, o2, o3)
+    pointwise!(_strain_mag_point!, sf[1], nx, ny, nz, sf[1], _dims_tuple(grad_u, Val(3)),
+               o1, o2, o3)
     _dilatation_sensed(art) &&
         pointwise!(_dilatation_point!, sf[2], nx, ny, nz, sf[2], grad_u, o1, o2, o3)
     return ps
