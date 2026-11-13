@@ -1133,7 +1133,7 @@ const POINTWISE_BODIES = (
     :_max_into_point!, :_metric_src_cyl_point!,
     :_metric_src_sph_point!, :_molecular_flux_point!, :_mole_fraction_point!,
     :_momentum_split_point!, :_flux_store_point!, :_extrapolate_ghost_point!,
-    :_ghost_flux_copy_point!,
+    :_ghost_flux_copy_point!, :_flux_interior_point!,
     :_mu_beta_point!, :_no_slip_flux_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,
     :_nscbc_outflow_point!, :_pair_backward_local_point!,
     :_pair_backward_remote_point!, :_pair_forward_local_point!,

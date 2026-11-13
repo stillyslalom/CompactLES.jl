@@ -1574,6 +1574,10 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
     for d in 1:3
         _remainder_ghosted(solver, d) || continue
         G = solver.ghost_flux[d]
+        if _stack_of(G) === nothing && !_fold_active(_fold_at(solver, d))
+            _store_assembled_flux!(G, solver, Q, d)
+            continue
+        end
         # Over the lines along `d` alone, which every reader of the flux
         # takes (`_line_box`): its rank halos and records along `d` copy the
         # transverse ghosts too, but nothing reads them.
@@ -1731,6 +1735,47 @@ end
                                               false, I)
         end
     end
+    return nothing
+end
+
+# `_flux_store_point!` over the line box of `d` on a patch with no stack and
+# no active fold along `d`, in two launches: the assembled flux over the
+# interior, a copy, and the inviscid flux over the ghost layers of each end
+# along `d` that keeps them, a boundary end at this rank's edge. The layers of
+# every other end are written before any reader takes them: an interface end's
+# by the same-level records or the coarse-fine extrapolation, an end inside
+# the decomposition by the rank halo exchange. The values each reader takes are
+# those of the one launch over the box, bit for bit; the copy, without the
+# test of the point's place, is a loop the compiler vectorizes.
+function _store_assembled_flux!(G, solver::SolverLike, Q, d::Int)
+    decomp = solver.decomp
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
+    nl = decomp.n_local
+    pad = decomp.n_halo_d
+    n3f = padded_extent(decomp)[3]
+    ft = solver.field_tuples
+    for c in 1:eq.n_cons
+        pointwise!(_flux_interior_point!, G, nl[1], nl[2], nl[3],
+                   G, solver.flux[d, c], c, pad[1], pad[2], pad[3])
+    end
+    for side in 1:2
+        at_edge = side == 1 ? at_lo_edge(decomp, d) : at_hi_edge(decomp, d)
+        (at_edge && !(solver.bcs[d][side] isa InterfaceBC)) || continue
+        b1, b2, b3 = ntuple(e -> e == d ? pad[e] : nl[e], 3)
+        o1, o2, o3 = ntuple(e -> e != d ? pad[e] : side == 1 ? 0 : pad[e] + nl[e], 3)
+        for c in 1:eq.n_cons
+            pointwise!(_flux_store_point!, G, b1, b2, b3,
+                       G, solver.flux[d, c], Q, solver.rho, solver.u, solver.v,
+                       solver.w, solver.p, ft.Y, c, d, eq.n_species, m1, m2, m3,
+                       eq.i_energy, nl, pad, n3f, o1, o2, o3)
+        end
+    end
+    return G
+end
+
+@inline function _flux_interior_point!(G, F, c, o1, o2, o3, i, j, k)
+    @inbounds G[i+o1, j+o2, k+o3, c] = F[i+o1, j+o2, k+o3]
     return nothing
 end
 
@@ -2095,6 +2140,15 @@ function _coarse_fine_ghost_fluxes!(solver::SolverLike, lt, scratch, Q)
     return solver
 end
 
+# Whether the solve along `d` reads the ghost-differenced flux of a component
+# from `ghost_flux` itself rather than from a copy in `tmp_b`: host storage and
+# a host plan, unit geometry, the pressure inside the flux, and no fold along
+# `d`, whose mirror fill writes the field's ghosts. The copy would then hold
+# the same values over the lines the solve reads.
+@inline _reads_ghost_flux(solver::SolverLike, G, Ad, d::Int, less_p::Bool) =
+    G isa Array && !_device_path(G) && !_device_plan_at(solver.deriv_plans, d) &&
+    Ad === nothing && !less_p && _fold_at(solver, d) === nothing
+
 # dQ[:, c] -= D_ext(P) along every interface dimension, P the ghost-differenced
 # flux: the whole flux read from `ghost_flux` where it carries it
 # (`_remainder_ghosted`), the inviscid flux with the molecular part read from
@@ -2117,7 +2171,11 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
         for c in 1:n_cons
             # The pressure gradient was subtracted in phase one.
             less_p = _pressure_gradient(solver, d, c)
-            if whole
+            if whole && _reads_ghost_flux(solver, G, Ad, d, less_p)
+                _ext_subtract_along!(dQ, c, view(G, :, :, :, c), solver, d, iJ,
+                                     _flux_sign(solver, d, c))
+                continue
+            elseif whole
                 pointwise!(_ghost_flux_copy_point!, solver.tmp_b, b1, b2, b3,
                            solver.tmp_b, G, solver.p, Ad, c, less_p, o1, o2, o3)
             else
