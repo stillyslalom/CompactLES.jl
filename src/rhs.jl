@@ -183,7 +183,7 @@ end
 @inline _fold_active(fold::FoldSpec) = fold.lo | fold.hi
 
 """
-    deriv_scaled_along!(out, f, solver, d, σf)
+    deriv_scaled_along!(out, f, solver, d, σf, mask=true)
 
 Compact derivative of `f` along active dimension `d`, scaled pointwise by
 `solver.inv_h[d]` inside the scatter of the line solve. Interior results are
@@ -192,15 +192,18 @@ cells of `out` differ (the two-pass rescale also scaled them, but they hold no
 data any consumer reads without a fresh exchange). A self-paired fold takes
 the same fused scatter after its mirror fill; a paired fold, a device plan
 and a parent patch whose derivatives along `d` take the child mask take the
-two-pass route unchanged. Same collective, halo, and fold contract as
-`deriv_along!`.
+two-pass route unchanged. `mask = false` leaves out the parent-level
+derivative mask (`_mask_child_derivative!`), as the species channel's
+gradients do under `MASK_CHILD_SPECIES_GRADIENTS = false`. Same collective,
+halo, and fold contract as `deriv_along!`.
 """
-@noinline function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+@noinline function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int,
+                                      mask::Bool=true)
     fold = _fold_at(solver, d)
     if fold === nothing && !_device_plan_at(solver.deriv_plans, d)
         apply_along_scaled!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp,
                             solver.inv_h[d])
-        _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
+        mask && _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     elseif _fused_fold(solver, fold, d)
         # A self-paired fold is the mirror fill and the plain solve through
         # the fold's plan, so the scale rides the scatter as above. A masked
@@ -209,10 +212,22 @@ two-pass route unchanged. Same collective, halo, and fold contract as
         fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
         apply_along_scaled!(out, _fold_plan(fold, σf, Val(:deriv), 1, false), f,
                             solver.decomp, solver.inv_h[d])
-        _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
+        mask && _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     else
-        deriv_along!(out, f, solver, d, σf)
+        mask ? deriv_along!(out, f, solver, d, σf) :
+               _plain_deriv_along!(out, f, solver, d, σf)
         _scale_grad!(out, solver, d)
+    end
+    return out
+end
+
+# `deriv_along!` without the parent-level derivative mask.
+@noinline function _plain_deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = _fold_at(solver, d)
+    if fold === nothing
+        apply_along!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp)
+    else
+        fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
     return out
 end
@@ -326,6 +341,27 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 # `true`, the default, gives every parent patch the masked derivatives;
 # `false` gives every patch the plain ones.
 const MASK_CHILD_DERIVATIVE = Ref(true)
+
+# `true`, the default, masks the gradients the species channel differences
+# (the mass fractions, the conserved components of a shared-D_b channel, the
+# sharpening flux's volume fractions) as the velocity and temperature
+# gradients are masked; `false` leaves them plain, and the species flux's
+# divergence keeps the mask either way. A masked node's mass-fraction
+# gradient is nearly zero where the artificial species diffusivity is large,
+# so the species flux drops across one node beside the masked ones. The
+# divergence of that drop, spread by the compact solve, builds a
+# mass-fraction overshoot on the parent's own nodes beside a coarse-fine face,
+# which restriction does not overwrite; a regrid fills new tiles from those
+# nodes, and the mass-fraction bound term of D* then limits the level's step.
+# Plain gradients remove that overshoot, but on one regridded box over the
+# two-dimensional blobs of bench/amrwin.jl the parent's uncovered nodes then
+# carry a far larger mass-fraction error, and their artificial diffusivity
+# bounds the step; that cause is not traced.
+const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
+
+# The scaled derivative along `d` of a field the species channel differences.
+_species_deriv_scaled_along!(out, f, solver::SolverLike, d::Int) =
+    deriv_scaled_along!(out, f, solver, d, 1, MASK_CHILD_SPECIES_GRADIENTS[])
 
 # A node may take the mask when it and this many nodes on either side of it
 # along the line are covered over their whole cells, so the first is the
@@ -2155,7 +2191,7 @@ function _species_gradients!(solver::SolverLike)
     for d in 1:3
         decomp.active[d] || continue
         for sp in 1:solver.equations.n_species
-            deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
+            _species_deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d)
         end
     end
     return solver
@@ -2186,7 +2222,7 @@ function _bulk_gradients!(solver::SolverLike, Q, level_smoothed::Bool=false)
                    solver.tmp_a, Q, c)
         for d in 1:3
             decomp.active[d] || continue
-            deriv_scaled_along!(solver.grad_Q[d, c], solver.tmp_a, solver, d, 1)
+            _species_deriv_scaled_along!(solver.grad_Q[d, c], solver.tmp_a, solver, d)
         end
     end
     # A setup constant identical on every rank, so every rank enters the
@@ -2261,7 +2297,7 @@ function _volume_fraction_gradients!(out, solver::SolverLike, sp::Int)
                solver.equations.n_species)
     for d in 1:3
         decomp.active[d] || continue
-        deriv_scaled_along!(out[d], solver.tmp_a, solver, d, 1)
+        _species_deriv_scaled_along!(out[d], solver.tmp_a, solver, d)
     end
     return out
 end

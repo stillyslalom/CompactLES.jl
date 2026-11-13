@@ -1348,6 +1348,53 @@ end
     @test masked == plain
 end
 
+@testset "the derivative mask and a parent's species gradients" begin
+    # A slab of the heavier gas in the same place: the density and the
+    # temperature jump across it, and the mask arms along x. Under
+    # `MASK_CHILD_SPECIES_GRADIENTS = false` the gradients the species channel
+    # differences (the mass fractions and the partial densities) are the plain
+    # ones, bit for bit, and the temperature gradient takes the mask; under
+    # `true` the first take it as well.
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.25, 1.09)])
+    s = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+               eos=eos, transport=ConstantTransport{Float64}(mu0=1e-3),
+               art=ArtificialProperties(enabled=true),
+               refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+    states = allocate_state(s)
+    initialize!(s, states, (x, y, z) -> begin
+        θ = 0.36 < x < 0.64 ? 1.0 : 0.0
+        Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.0, 0.0), p=1.0)
+    end)
+    ps = CL.PatchSolver(s, s.patches[1])
+    Q = states[1]
+    o = ps.decomp.n_halo_d
+    rows = o[1]+1:o[1]+ps.decomp.n_local[1]
+    line(A) = A[rows, 1 + o[2], 1 + o[3]]
+    gradients(derivative, species) = begin
+        saved = (CL.MASK_CHILD_DERIVATIVE[], CL.MASK_CHILD_SPECIES_GRADIENTS[])
+        CL.MASK_CHILD_DERIVATIVE[] = derivative
+        CL.MASK_CHILD_SPECIES_GRADIENTS[] = species
+        try
+            CL.compute_rhs!(ps, Q, ConservedState(zero(parent(Q))))
+        finally
+            CL.MASK_CHILD_DERIVATIVE[], CL.MASK_CHILD_SPECIES_GRADIENTS[] = saved
+        end
+        (Y=line(ps.grad_Y[1, 2]), rhoY=line(ps.grad_Q[1, 2]), T=line(ps.grad_T_ion[1]))
+    end
+    plain = gradients(false, false)
+    species_plain = gradients(true, false)
+    @test ps.patch.child_masked == (true, false, false)
+    masked = gradients(true, true)
+    @test species_plain.Y == plain.Y
+    @test species_plain.rhoY == plain.rhoY
+    @test species_plain.T != plain.T
+    @test masked.T == species_plain.T
+    @test masked.Y != plain.Y
+    @test masked.rhoY != plain.rhoY
+end
+
 @testset "tiled level: multi-tile corner consensus and corner ghosts" begin
     # Four tiles meet at one fine node. Pairwise averaging in one flat pass
     # leaves the four copies unequal (a later pair reads a value an earlier
