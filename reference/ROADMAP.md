@@ -468,9 +468,19 @@ magnetized target; I2–I5 for a low-Mach mixing case.
     serial Julia 1
   ```
 
-  Remaining: trim the step-bound eight-rank phases and the serial jobs. The
-  eight-rank trims alone leave the serial pre job the longest, so the serial
-  positivity limiter testset comes first.
+  Four trims are taken, each giving up the coverage named: the substep-rate
+  test runs at four ranks in the eight-rank job (its eight-rank block
+  shape); the lattice subdivision phase leaves its measured-cost run to the
+  lattice-over-nodes phase (the fit under the machine's own node map); the
+  deep-regrid and folded-regrid phases compare fewer steps (the layouts
+  late in those runs); and the serial limiter's strong shocks on refined
+  levels take the ghost flux subcycled only (its admissibility at the
+  global step on four cases).
+  Remaining: read the CI walls after these trims. Held: running the limiter's
+  full-length shocks and the capability matrix's rejected rows on the Julia 1
+  job alone, which decides what the 1.10 and prerelease jobs cover, and
+  extending the eight-rank precompile block, which waits for a measured
+  image-build cost.
   **Gate:** the measured wall of the core gate before and after, and the
   coverage of `bench/coverage.jl` held or any loss listed.
 

@@ -247,10 +247,10 @@ jobs:
       # which four ranks would not add to. `rank_shape=true` selects them:
       # RANK_SHAPE_PHASES in test/mpi_tests.jl lists them and gives the
       # reasons, and the core gate in CLAUDE.md runs the same selection.
-      # test/substep_rate_tests.jl runs here as well, because its check that
-      # the deepest level sits on a subset of the ranks applies only from
-      # np = 4. `-t 1` because a rank must not also fan out over threads it
-      # does not have.
+      # test/substep_rate_tests.jl runs here as well, at np = 4: its check
+      # that the deepest level sits on a subset of the ranks applies from
+      # four ranks, and eight add no path to it. `-t 1` because a rank must
+      # not also fan out over threads it does not have.
       - name: Run rank-shape phases at 8 ranks
         shell: julia --project=. --color=yes {0}
         run: |
@@ -259,7 +259,7 @@ jobs:
               julia = `$(Base.julia_cmd()) --project=. -t 1`
               t = @elapsed run(`$mpiexec -n 8 $julia test/mpi_tests.jl rank_shape=true`)
               @printf("=== np = 8 finished in %.1f s ===\n", t)
-              run(`$mpiexec -n 8 $julia test/substep_rate_tests.jl`)
+              run(`$mpiexec -n 4 $julia test/substep_rate_tests.jl`)
           end
 
   docs:

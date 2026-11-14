@@ -2136,7 +2136,7 @@ function test_deep_regrid_subsets()
     subsets = 0
     moves = 0
     # At np = 8 a level-2 survivor moves at the checks after steps 6 and 30.
-    for n in 3:3:129
+    for n in 3:3:33
         owners0 = [(lt.region, o) for (lt, o) in
                    zip(solver.levels[3].transfers, solver.levels[3].owners)]
         run!(solver, states; tfinal=1.0, nmax=n)
@@ -2173,8 +2173,8 @@ end
 # off, is regridded with it on: at np = 2, 4 and 8 the level takes 2, 4 and
 # 8 tiles, one per rank, and every node the old tile held as its own
 # solution reads the old value bit for bit, all components. A three-level
-# shock then runs with the subdivision on, and again with the coefficients
-# measured.
+# shock then runs with the subdivision on; the "lattice over nodes" phase
+# runs it with the coefficients measured.
 function subdivision_carry()
     inside(p, I) = begin
         i, j, _ = CL.interior_index(p, I)
@@ -2346,9 +2346,6 @@ function test_lattice_subdivision()
         CL.FIXED_LATTICE_COSTS[] = (1.0, 0.0, 0.0, 0.0, 0.0)
         subdivision_carry()
         subdivision_deep()
-        CL.FIXED_LATTICE_COSTS[] = nothing
-        CL.SUBDIVIDE_LATTICE[] = true
-        subdivision_measured()
     finally
         CL.SUBDIVIDE_LATTICE[] = false
         CL.FIXED_LATTICE_COSTS[] = nothing
@@ -5046,8 +5043,9 @@ function test_fold_regrid()
         folded = falses(levels - 1)
         e = 0.0
         # A rank outside a level's parent holds none of its layout; rank 0
-        # holds every level's, so its reading is the run's.
-        for n in 3:3:30
+        # holds every level's, so its reading is the run's. The second level
+        # of the three reaches the fold at the check after step 21.
+        for n in 3:3:24
             run!(s, q; tfinal=1e9, nmax=n)
             run!(ref, qref; tfinal=1e9, nmax=n)
             differ += MPI.bcast(regions(s) != regions(ref), comm; root=0)

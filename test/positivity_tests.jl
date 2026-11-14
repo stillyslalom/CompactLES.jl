@@ -90,6 +90,13 @@ function pos_flux(f, flux)
     end
 end
 
+# The interface flux and whether the level subcycles, for the strong shocks
+# on refined levels: the closure rows at the global step and subcycled, the
+# ghost flux subcycled. `LIMITED_GHOST_INTERFACES` is off by default, and the
+# ghost flux at the global step is held by the bitwise testsets, which run
+# every combination, and by the regridded Noh tiles.
+const GHOST_FLUX_CASES = ((:closure, false), (:closure, true), (:ghost, true))
+
 # A deterministic field in [−½, ½), from a linear congruential generator.
 function pos_noise(N)
     s = UInt64(0x9e3779b97f4a7c15)
@@ -699,9 +706,10 @@ end
 
     @testset "a strong shock through a refined box stays admissible" begin
         # Woodward–Colella with a box over the collision, at the global step
-        # and subcycled, under either interface flux. The parent's nodes the
-        # restriction overwrites are not held, and their state reaches no
-        # first-order flux of a held node.
+        # and subcycled with the closure rows and subcycled with the ghost
+        # flux (`GHOST_FLUX_CASES`). The parent's nodes the restriction
+        # overwrites are not held, and their state reaches no first-order
+        # flux of a held node.
         N = 200
         h = 1.0 / (N - 1)
         prob = Problem(eos=POS_GAS, transport=ConstantTransport(mu0=0.0),
@@ -711,7 +719,7 @@ end
                             p=1000 * (1 - tanh_blend(x, 0.1, 2h)) +
                               0.01 * (tanh_blend(x, 0.1, 2h) - tanh_blend(x, 0.9, 2h)) +
                               100 * tanh_blend(x, 0.9, 2h)))
-        for flux in (:closure, :ghost), sub in (false, true)
+        for (flux, sub) in GHOST_FLUX_CASES
             bads = map((false, true)) do on
                 s, Q = pos_flux(flux) do
                     setup(prob, pos_level((N, 1, 1),
@@ -756,8 +764,10 @@ end
     @testset "Noh through the axis on a level under strict validity" begin
         # The cylindrical implosion on a box at the axis over the first N ÷ 6 + 1
         # root nodes, whose shock leaves the box through its coarse-fine face.
+        # The level advances at the global step, so it runs with the closure
+        # rows alone (`GHOST_FLUX_CASES`).
         N = Dict(NOH_N)[2]
-        for flux in (:closure, :ghost)
+        for flux in (:closure,)
             s, Q = pos_flux(flux) do
                 setup(noh_problem(2; N, t0=0.0),
                       Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
@@ -805,8 +815,8 @@ end
     @testset "a converging shock through r-z tiles at the corner stays admissible" begin
         # The converging shock of the corner reproducer on tiles over the
         # corner of the axis and the plane at z = 0, whose shared faces it
-        # crosses, at the global step and subcycled, under either interface
-        # flux: three by three tiles over the first 25 root nodes along r and z.
+        # crosses, in the configurations of `GHOST_FLUX_CASES`: three by three
+        # tiles over the first 25 root nodes along r and z.
         prob = Problem(eos=POS_GAS, metric=CylindricalMetric(),
                        domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                        bcs=((AxisBC(), SlipWallBC()), per3[2],
@@ -814,7 +824,7 @@ end
                        ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
                                         Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
         corner = BlockRegion((0, 0, 0), (25, 1, 25))
-        for flux in (:closure, :ghost), sub in (false, true)
+        for (flux, sub) in GHOST_FLUX_CASES
             s, Q = pos_flux(flux) do
                 setup(prob, Numerics(n_global=(32, 1, 32), patch_interfaces=flux,
                                      amr=AMR(initial=corner, tile=8, subcycle=sub),
@@ -831,8 +841,8 @@ end
     @testset "Noh through the axis on tiles under strict validity" begin
         # The cylindrical implosion on tiles of edge 8 at the axis over the
         # first 25 root nodes, whose shared faces the shock crosses on its way
-        # out, at the global step and subcycled, under either interface flux.
-        for flux in (:closure, :ghost), sub in (false, true)
+        # out, in the configurations of `GHOST_FLUX_CASES`.
+        for (flux, sub) in GHOST_FLUX_CASES
             s, Q = pos_flux(flux) do
                 setup(noh_problem(2; N=96, t0=0.0),
                       Numerics(n_global=(96, 1, 1), cfl=NOH_CFL,
