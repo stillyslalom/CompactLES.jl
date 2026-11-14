@@ -76,7 +76,9 @@ more tiles to rebuild at each regrid. At each regrid check every level is
 tiled on the lattice with the shortest predicted step, from a cost model
 fitted to the run's own timings of its tiles, its exchanges and its regrids,
 with each level weighted by its share of the step; a level changes lattice
-only for a step predicted at least a tenth shorter. On a run over several
+only for a step predicted at least a tenth shorter at three consecutive
+checks, so the load of the machine during one interval does not set the
+layout. On a run over several
 nodes, a level with more tiles than ranks keeps neighboring tiles on one
 node where it can, and the model prices an exchange leaving a node apart
 from one within it; a lattice of the chain holding more than a million

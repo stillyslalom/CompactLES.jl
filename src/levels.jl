@@ -4280,11 +4280,15 @@ mutable struct LatticeCosts
     root::Float64                    # the root's measured seconds per root step
     m_x::Float64                     # per message leaving the node
     nodes::Vector{Int}               # node of each rank of the run
+    # Per level, the lattice the measured model last preferred to the
+    # level's own and the consecutive checks it has (`_persistent_lattice!`).
+    favored::Dict{Int,Tuple{NTuple{3,Int},Int}}
 end
 
 LatticeCosts() = LatticeCosts(false, UInt64[], UInt64[], UInt64[], 0, 0.0, 0.0, 0, false,
                               zero(UInt64), Float64[], Float64[], Float64[], false, 1.0,
-                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Int[])
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Int[],
+                              Dict{Int,Tuple{NTuple{3,Int},Int}}())
 
 """
     RegridSpec

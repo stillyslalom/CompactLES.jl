@@ -282,6 +282,17 @@ function fresh(spec, config)
     return solver, states, Workspace(states), (time_ns() - t0) / 1e9
 end
 
+# The lattice each tiled level of `solver` is on, as "L1 16x16x16 L2 8x8x8",
+# empty for a run without tiles. A decomposed run chooses it from its own
+# timings (`_choose_lattice`), so the timed run and the census run of one
+# process can differ here, as two processes can.
+function lattice_text(solver)
+    spec = getfield(solver, :regrid)
+    (spec === nothing || !CL._tiled(spec.tile)) && return ""
+    return join(("L$ℓ " * join(CL._level_edges(spec, ℓ), "x")
+                 for ℓ in 1:(length(solver.levels) - 1)), " ")
+end
+
 function timed_run(spec, config; nmax=opt.nmax, callback=nothing, profiled=false)
     GC.gc()
     solver, states, workspace, t_setup = fresh(spec, config)
@@ -544,16 +555,23 @@ mutable struct Census
     steps::Vector{Vector{ClassMax}}  # per root step, the class maxima after it
     rate_next::Vector{Float64}       # the rate that sized each step, from run!
     regrid_checks::Vector{Int}
+    lattices::Vector{Vector{NTuple{3,Int}}} # per root step, each tiled level's edges
     zero_cache::Dict{Any,Array{Float64,3}}
 end
 Census() = Census(zeros(Int, 4), zeros(4), zeros(4), zeros(4), NTuple{4,Int}[], Int[],
-                  Vector{ClassMax}[], Float64[], Int[], Dict{Any,Array{Float64,3}}())
+                  Vector{ClassMax}[], Float64[], Int[], Vector{NTuple{3,Int}}[],
+                  Dict{Any,Array{Float64,3}}())
 
 function census_callback(census::Census, rates::Bool)
     return function (solver, states)
         push!(census.rate_next, solver.rate_prev)
         spec = getfield(solver, :regrid)
         push!(census.regrid_checks, spec === nothing ? 0 : spec.checks)
+        # Every rank holds each level's lattice (`_set_level_edges!`).
+        tiled = spec !== nothing && CL._tiled(spec.tile)
+        push!(census.lattices, tiled ? [CL._level_edges(spec, ℓ)
+                                        for ℓ in 1:(length(solver.levels) - 1)] :
+                                       NTuple{3,Int}[])
         present = falses(4)
         classes = [ClassMax() for _ in CLASSES]
         ntiles = 0
@@ -828,6 +846,27 @@ function print_profile(spec, config, prof, wall, steps, points)
     end
 end
 
+# The lattice each tiled level was on, with the root step of each change. A
+# decomposed run chooses it from its own timings (`_choose_lattice`), so two
+# processes of one configuration can differ here, and a wall or an error is
+# compared between processes that took the same lattices.
+function print_lattices(spec, config, census)
+    nlev = maximum(length, census.lattices; init=0)
+    for ℓ in 1:nlev
+        @printf("  level %d lattice:", ℓ)
+        held = nothing
+        for (step, edges) in enumerate(census.lattices)
+            (length(edges) >= ℓ && edges[ℓ] != held) || continue
+            @printf("%s %s from step %d", held === nothing ? "" : ",",
+                    join(edges[ℓ], "x"), step)
+            held = edges[ℓ]
+        end
+        println()
+        held === nothing || row(spec.name, config, "lattice:L$ℓ", join(held, "x"))
+    end
+    return nothing
+end
+
 function print_census(spec, config, census, steps, coarse_steps)
     nfine = prod(spec.n_fine)
     @printf("\n%s %s: steps per level", spec.name, config)
@@ -856,6 +895,7 @@ function print_census(spec, config, census, steps, coarse_steps)
                                                sum(census.level_points); sigdigits=4))
     row(spec.name, config, "padded_ratio_L1",
         round(census.level_padded[2] / census.level_size[2]; sigdigits=4))
+    print_lattices(spec, config, census)
     isempty(census.steps) && return
     # The step-size account. Step i's rate after it sizes step i + 1, which
     # `run!` records as rate_prev at the next callback.
@@ -977,6 +1017,8 @@ function run_problem(spec, configs)
             res["busy_max"] = ws.busy_max
             res["busy_mean"] = ws.busy_mean
         end
+        lattice = lattice_text(s)
+        isempty(lattice) || (res["lattice"] = lattice)
         padded_root, padded_level = padded_ratios(s)
         res["padded_end_root"] = padded_root
         isfinite(padded_level) && (res["padded_end_L1"] = padded_level)
@@ -1065,6 +1107,8 @@ function run_problem(spec, configs)
                     np, 100res["wait_share_max"], 100res["wait_share_mean"])
             @printf(" busy %.2f s at most, %.2f s on average (%.3f)\n", res["busy_max"],
                     res["busy_mean"], res["busy_max"] / res["busy_mean"])
+            haskey(res, "lattice") &&
+                @printf("  lattice at the end of the timed run: %s\n", res["lattice"])
         end
         for (name, sp) in spec.compare
             label = name === :Y ? "Y$sp" : String(name)

@@ -597,6 +597,27 @@ end
     # A level taking a small share of the step keeps its lattice although
     # another would halve its own time.
     @test CL._cheapest_lattice([1.0, 0.5], 20.0, 1, false) == 1
+    # Under measured coefficients a level leaves its lattice once the model
+    # has preferred the same other one at three consecutive checks; a check
+    # preferring the level's own, or a third lattice, starts the count again.
+    # Fixed coefficients, a level holding no tile and a lattice outside the
+    # chain take the cheapest at once.
+    let chain = [(16, 16, 16), (8, 16, 16), (8, 8, 16)], measured = CL.LatticeCosts()
+        persist(c, cheapest, current=1, fresh=false) =
+            CL._persistent_lattice!(c, 1, chain, cheapest, current, fresh)
+        @test persist(measured, 2) == 2
+        measured.timing = true
+        @test [persist(measured, i) for i in (2, 2, 2)] == [1, 1, 2]
+        @test [persist(measured, i) for i in (2, 2, 1, 2, 2, 2)] == [1, 1, 1, 1, 1, 2]
+        @test [persist(measured, i) for i in (2, 2, 3, 3, 3)] == [1, 1, 1, 1, 3]
+        @test isempty(measured.favored)
+        @test persist(measured, 2, 1, true) == 2
+        @test persist(measured, 2, nothing) == 2
+        # Each level counts on its own.
+        @test CL._persistent_lattice!(measured, 1, chain, 2, 1, false) == 1
+        @test CL._persistent_lattice!(measured, 2, chain, 2, 1, false) == 1
+        @test measured.favored == Dict(1 => ((8, 16, 16), 1), 2 => ((8, 16, 16), 1))
+    end
     # The level's price: per rank, s (a V + b V g + k) over its tiles and
     # m s per message (one coupling per tile, one per face shared with
     # another rank's tile), at the most loaded rank. Two abutting 13 × 13

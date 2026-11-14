@@ -121,10 +121,12 @@ copies `base` with the given keywords replaced.
   cubes of twelve, at more tiles per front. Each tile is held whole by one
   rank. Regridding then moves tiles in and out of the set, a surviving tile
   never changing its region, and the set may become empty. A regridded
-  level with fewer tiles than its parent has ranks takes a finer lattice,
-  its largest edge halved in turn down to four parent nodes, until it holds
-  a tile per rank, so the layout of a decomposed run, and its solution to
-  within the truncation error, depend on the rank count.
+  level of a decomposed run may take a finer lattice, its largest edge
+  halved in turn down to four parent nodes, when a cost model fitted to the
+  run's own timings predicts a shorter step at three consecutive regrid
+  checks. The layout, and the solution to within the truncation error,
+  then depend on the rank count and can differ between two runs of one
+  configuration.
 - `level_boundaries` (default `true`): shapes and tags may place a level on
   a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or
   `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the `AxisBC` of an r-z

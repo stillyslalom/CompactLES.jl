@@ -787,9 +787,14 @@ promotion.
      different layouts. On the two-dimensional blobs at eight ranks about
      one process in three halved the lattice along one dimension at its
      first ready check, on a predicted gain beside the threshold, and then
-     took more steps to a larger error at no shorter wall. The cost model
-     prices neither a layout's step count nor its error, and a timing
-     comparison at eight ranks has to record the lattice each process took.
+     took more steps to a larger error at no shorter wall. A level now
+     changes lattice only once the measured model has preferred the same
+     one at several consecutive checks (`_persistent_lattice!`), which
+     removes the change made on one interval's timings and leaves the
+     choice timing-dependent at a real margin. The cost model prices
+     neither a layout's step count nor its error, and `bench/amrwin.jl`
+     prints the lattice each level took, which a timing comparison at
+     eight ranks has to record.
   **Gate:** the cost per point-step and the level's step count are
   properties of the code, and the level's share of the fine grid's points
   is set by the problem and the tagging, so the two are gated apart. On the

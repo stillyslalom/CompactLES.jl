@@ -1068,8 +1068,12 @@ end
 # every rank takes the same lattice (`_harvest_lattice_costs!`). Until an
 # interval has been measured the configured lattice holds. Because they are
 # timings, the choice of lattice, and with it the layout and the solution at
-# the level of the truncation error, can differ from one run to the next;
-# `FIXED_LATTICE_COSTS` fixes the coefficients for a reproducible layout.
+# the level of the truncation error, can differ from one run to the next. A
+# level therefore changes lattice under measured coefficients only once the
+# model has preferred the same lattice at `LATTICE_PERSIST` consecutive
+# checks (`_persistent_lattice!`), so the load of the machine during one
+# interval does not set the layout, and `FIXED_LATTICE_COSTS` fixes the
+# coefficients for a reproducible one.
 
 # The least lattice edge, in parent nodes, the subdivision reaches: the
 # edge at which a lattice still reaches a domain face (`_lattice_reach`
@@ -1561,10 +1565,49 @@ function _choose_lattice(solver, spec::RegridSpec, ℓ::Int, chain::Vector{NTupl
         i == current ||
             (level[i] += costs.c * held / (spec.interval * LATTICE_HORIZON))
     end
-    pick = _cheapest_lattice(level, rest, current, fresh)
+    cheapest = _cheapest_lattice(level, rest, current, fresh)
+    pick = _persistent_lattice!(costs, ℓ, chain, cheapest, current, fresh)
     LATTICE_TRACE[] && MPI.Comm_rank(getfield(solver, :comm)) == 0 &&
         _trace_lattice(solver, spec, ℓ, chain, wanted_sets, level, rest, current, pick)
     return pick
+end
+
+# The consecutive regrid checks at which a measured model must prefer one
+# lattice to the level's own before the level takes it. The coefficients are
+# timings, and on the eight-rank blobs of bench/amrwin.jl the predicted gain
+# of a finer lattice sat within a few percent of `PLACEMENT_GAIN` at the
+# first check after the model was ready, so the load of the machine during
+# one interval decided the layout of the run.
+const LATTICE_PERSIST = 3
+
+"""
+    _persistent_lattice!(costs, ℓ, chain, cheapest, current, fresh) -> Int
+
+The lattice level ℓ takes given the one the model prices `cheapest`
+(`_cheapest_lattice`): `cheapest` itself under fixed coefficients, for a
+level holding no tile and for one whose lattice is not in the chain, whose
+choice does not depend on a timing or cannot wait. Under measured
+coefficients a level on `current` changes only once the model has preferred
+the same other lattice at `LATTICE_PERSIST` consecutive checks, counted in
+`costs.favored`; a check that prefers `current`, or a third lattice, starts
+the count again. The count advances alike on every rank deciding, since
+each reads the same broadcast model at every check.
+"""
+function _persistent_lattice!(costs::LatticeCosts, ℓ::Int, chain::Vector{NTuple{3,Int}},
+                              cheapest::Int, current::Union{Nothing,Int}, fresh::Bool)
+    (costs.timing && !fresh && current !== nothing) || return cheapest
+    if cheapest == current
+        delete!(costs.favored, ℓ)
+        return cheapest
+    end
+    edges, count = get(costs.favored, ℓ, (chain[cheapest], 0))
+    count = edges == chain[cheapest] ? count + 1 : 1
+    if count >= LATTICE_PERSIST
+        delete!(costs.favored, ℓ)
+        return cheapest
+    end
+    costs.favored[ℓ] = (chain[cheapest], count)
+    return current
 end
 
 # Bench toggle: rank 0 prints each lattice choice, the model and the

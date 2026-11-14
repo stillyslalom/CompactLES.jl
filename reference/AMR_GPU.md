@@ -1385,7 +1385,11 @@ of the 8 ranks. The root and the levels
 above enter as laid out, so a level taking a small share of the step never
 gains enough to change. A level changes lattice only for a step
 `PLACEMENT_GAIN` times shorter, its own rebuild of every tile amortized over
-`LATTICE_HORIZON` checks. The coefficients are measured on the
+`LATTICE_HORIZON` checks, and under measured coefficients only once the
+model has preferred the same lattice at `LATTICE_PERSIST` consecutive checks
+(`_persistent_lattice!`): on the eight-rank blobs of `bench/amrwin.jl` the
+predicted gain sat within a few percent of the threshold, and identical
+processes took different lattices. The coefficients are measured on the
 run itself: per-tile timers around the tile phases (`_charge_tile!`, the
 ghost-flux solves apart), timers on the level exchange windows
 (`_charge_exchange!`) and the wall of each check, gathered on rank 0 at the
