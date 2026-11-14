@@ -173,6 +173,43 @@ end
     @test !covers(regions, 58) && !covers(regions, 77)
 end
 
+@testset "AMR frontend widens a given start to the tagged cells" begin
+    # A density bump at x = 0.72 (node 70) beside a given region over nodes
+    # 41 to 56, which leaves the bump and its tag buffer outside it. A run
+    # that regrids takes the two together as its first layout, as one box and
+    # as tiles, with a warning, and fills it from the initial condition at
+    # each patch's own spacing. A fixed layout stays as given, and so does a
+    # region of a regridded run that holds the buffered bump.
+    profile(x) = 1.0 + 0.3exp(-((x - 0.72) / 0.025)^2)
+    bump = amr_test_problem((x, y, z, h) -> Prim(p=1.0, rho=profile(x) + h,
+                                                 u=(0.0, 0.0, 0.0)))
+    region = BlockRegion((40, 0, 0), (16, 1, 1))
+    common = (n_global=(96, 1, 1), filter=nothing,
+              art=ArtificialProperties(enabled=false))
+    covers(regions, g) = any(r -> r.offset[1] < g <= r.offset[1] + r.extent[1], regions)
+    fixed, _ = setup(bump, Numerics(; common..., amr=AMR(initial=region)))
+    @test refined_region(fixed) == region
+    for tile in (0, 8)
+        num = Numerics(; common..., amr=AMR(initial=region, regrid_interval=5,
+                                            tag_buffer=2, tile=tile))
+        solver, states = @test_logs (:warn, r"were widened") match_mode=:any setup(bump, num)
+        regions = level_regions(solver, 1)
+        @test covers(regions, 41) && covers(regions, 56) && covers(regions, 70)
+        tile == 0 && @test length(regions) == 1
+        spec = getfield(solver, :regrid)
+        @test spec.checks == 0 && all(==(0), values(spec.created))
+        for (p, Q) in zip(getfield(solver, :patches), states)
+            ps = CompactLES.PatchSolver(solver, p)
+            @test Q[padded_index(ps, 1, 1, 1), 1] ≈
+                  profile(CompactLES.xcoord(ps, 1, 1)) + ps.h[1]
+        end
+    end
+    holding = BlockRegion((56, 0, 0), (28, 1, 1))
+    kept, _ = @test_logs min_level=Base.CoreLogging.Warn setup(bump,
+        Numerics(; common..., amr=AMR(initial=holding, regrid_interval=5, tag_buffer=2)))
+    @test refined_region(kept) == holding
+end
+
 @testset "AMR frontend rejects ambiguous or invalid configuration" begin
     prob = amr_test_problem()
     region = BlockRegion((40, 0, 0), (16, 1, 1))

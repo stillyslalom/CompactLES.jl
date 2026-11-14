@@ -219,7 +219,11 @@ function blob3d_spec(n, tile, tfinal)
     # nodes beside that face leave the species band before the first regrid
     # check, the check copies the excursion into new tiles, and the
     # mass-fraction bound of D* then sets the level's step for the rest of the
-    # run, at about twice the fine run's step count on a 48³ root.
+    # run, at about twice the fine run's step count on a 48³ root. `setup`
+    # now widens a region given to a regridded run to the tagged cells and
+    # their buffer, with a warning, so `blob3d_start=box` runs the widened
+    # layout; bench/amr_cost.jl, built by the `Solver` constructor, keeps
+    # the box as given.
     opt.blob3d_start in ("sensor", "box") ||
         error("blob3d_start = $(opt.blob3d_start), want sensor or box")
     initial = opt.blob3d_start == "box" ?

@@ -705,9 +705,12 @@ promotion.
      level's step for the rest of the run. Started from the tagged layout,
      as the script now starts it, the level takes the fine run's step count
      to within a few percent and the composite errors fall by more than an
-     order of magnitude. Setup accepts without a warning a given first
-     region whose face lies inside the tag buffer of a tagged feature, and
-     why the parent's nodes beside such a face leave the band is open.
+     order of magnitude. Setup now widens the regions given to a regridded
+     run to hold the tagged cells and their buffer, with a warning
+     (`_widen_given_start!`); a solver built by the `Solver` constructor has
+     no state at construction and keeps its given region, as
+     `bench/amr_cost.jl` does. Why the parent's nodes beside such a face
+     leave the band is open.
      The parent's derivative mask acts on the same covered nodes. The
      blobs' edges are narrower than a root spacing, so the covered nodes hold
      a restricted jump that the parent's compact derivatives cannot resolve.

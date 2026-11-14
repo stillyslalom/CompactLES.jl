@@ -502,6 +502,29 @@ function tagged_region(solver::Solver, Qc)
                        ntuple(d -> offext[d][2], 3))
 end
 
+# The bounding box of two regions of the root's node space, each a legal
+# refined box. Either end of the result is an end of one of them, so it keeps
+# the margin or lies on the face that region reached. Along a dimension the
+# placement wraps (`wrap`, its period) the image of `b` nearest `a` is taken,
+# the span is capped at the period less the margin at either end, about its
+# centre, as `tagged_region` caps it, and the offset is brought into [0, P).
+function _region_union(a::BlockRegion, b::BlockRegion, wrap::NTuple{3,Int}, margin::Int)
+    offext = ntuple(3) do d
+        alo, ahi = a.offset[d], a.offset[d] + a.extent[d]
+        blo, bhi = b.offset[d], b.offset[d] + b.extent[d]
+        lo, hi = min(alo, blo), max(ahi, bhi)
+        P = wrap[d]
+        P == 0 && return (lo, hi - lo)
+        for s in (-P, P)
+            slo, shi = min(alo, blo + s), max(ahi, bhi + s)
+            shi - slo < hi - lo && ((lo, hi) = (slo, shi))
+        end
+        n = min(hi - lo, P - 2 * margin)
+        (mod(fld(lo + hi - n, 2), P), n)
+    end
+    return BlockRegion(ntuple(d -> offext[d][1], 3), ntuple(d -> offext[d][2], 3))
+end
+
 # The domain faces automatic placement may reach, per dimension and side:
 # under `level_boundaries` those whose root condition a level carries, the
 # faces `_region_boundaries` gives, a fold (a symmetry plane, the axis)
@@ -794,6 +817,17 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     newregion = tagged_region(solver, states[1])
     newregion === nothing && return false
     newregion == lt.region && return false
+    return _move_box!(solver, states, workspace, newregion)
+end
+
+# The refined box of a two-level hierarchy rebuilt over `newregion`, a region
+# every rank holds alike: the body of the box regrid, which the setup of a
+# run started from a given region calls as well (`_widen_given_start!`).
+function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
+                    workspace::Workspace, newregion::BlockRegion) where {T}
+    spec = getfield(solver, :regrid)
+    levels = getfield(solver, :levels)
+    lt = levels[2].transfers[1]
     delete!(spec.created, lt.region)
     spec.created[newregion] = spec.checks
     patches = getfield(solver, :patches)

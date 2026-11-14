@@ -89,8 +89,11 @@ two runs of one configuration can differ. A run over many ranks should give
 an edge: the interpolation over a single box does not divide beyond one
 rank per conserved variable. [`BlockRegion`](@ref)s remain available for an
 exact layout; a single region may move when regridding is enabled, and a
-multi-level vector moves only with a positive `tile`. A vector of shapes
-stays fixed.
+multi-level vector moves only with a positive `tile`. Regions given to a
+run that regrids are its first layout, and setup widens them, with a
+warning, to hold the cells the tag criteria select on the initial state
+and their buffer, so that no face of the level starts beside a feature the
+first regrid check would refine. A vector of shapes stays fixed.
 
 | Keyword | Default | Meaning |
 |:--|:--|:--|

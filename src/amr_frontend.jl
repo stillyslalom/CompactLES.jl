@@ -55,7 +55,11 @@ refined region; give it explicitly to combine the two.
 
 Regions use root node indices; the ratio between successive levels is three.
 An explicit vector of nested regions is static unless `regrid_interval` and
-`tile` are given, when it is the initial layout. `AMR(base; keywords...)`
+`tile` are given, when it is the initial layout. Regions given to a run that
+regrids are widened at setup, with a warning, to hold the cells the tag
+criteria select on the initial state and their `tag_buffer`: a level whose
+face lies inside the buffer of a tagged feature degrades the solution beside
+that face before the first regrid check. `AMR(base; keywords...)`
 copies `base` with the given keywords replaced.
 
 # Keywords
@@ -433,6 +437,82 @@ function _amr_seed_region(n_global::NTuple{3,Int}, n_halo::Int)
                        ntuple(d -> offext[d][2], 3))
 end
 
+"""
+    _widen_given_start!(solver, states, prob, num, amr) -> Bool
+
+The first layout of a regridded run started from given regions: the regions
+united with what the tag criteria select on the initial state, their tag
+buffer included. One box becomes the bounding box of the two
+(`_region_union`); tiles are regridded once per level with every given tile
+held, so the tagged tiles join them. A layout that changed is filled from
+the initial condition again and starts its hysteresis clock at zero, as a
+sensor-selected start does, and rank 0 warns that the regions were widened.
+Returns whether they were; collective, and alike on every rank.
+
+A given region that leaves a tagged feature's buffer outside it puts a
+coarse-fine face beside the feature. On the three-dimensional blob of
+bench/amrwin.jl (`blob3d_start=box`) the parent's nodes beside such a face
+left the species band before the first regrid check, the check copied the
+excursion into new tiles, and the mass-fraction bound of the species
+diffusivity then set the level's step for the rest of the run.
+"""
+function _widen_given_start!(solver, states, prob, num, amr::AMR)
+    @nospecialize prob
+    spec = getfield(solver, :regrid)
+    workspace = Workspace(states)
+    if amr.tag_sensor_threshold > 0 && solver.art.enabled
+        root = PatchSolver(solver, first(getfield(solver, :patches)))
+        apply_bcs!(root, states[1])
+        compute_rhs!(root, states[1], workspace.dQ[1])
+    end
+    widened = false
+    if _tiled(spec.tile)
+        # No given tile has reached its lifetime, so each is held whether or
+        # not it is tagged, and the passes only add tiles. A deeper level is
+        # tagged on its parent, filled from the initial condition before its
+        # pass.
+        lifetime = spec.lifetime
+        spec.lifetime = typemax(Int)
+        try
+            for pass in 2:nlevels(solver)
+                pass > 2 && initialize!(solver, states, prob.ic)
+                widened |= _regrid_impl!(solver, states, workspace, nothing;
+                                         bootstrap=true)
+            end
+        finally
+            spec.lifetime = lifetime
+        end
+    else
+        # `tagged_region` is reduced, so every rank takes the same branch.
+        given = getfield(solver, :levels)[2].transfers[1].region
+        tagged = tagged_region(solver, states[1])
+        wide = tagged === nothing ? given :
+               _region_union(given, tagged, _placement_period(solver, spec, 0),
+                             spec.margin)
+        if wide != given
+            _move_box!(solver, states, workspace, wide)
+            widened = true
+        end
+    end
+    widened || return false
+    initialize!(solver, states, prob.ic)
+    validate_state!(solver, states; control=num.control,
+                    stage="the AMR initial state")
+    spec.checks = 0
+    for record in (spec.created, spec.deep_created...), region in keys(record)
+        record[region] = 0
+    end
+    MPI.Comm_rank(getfield(solver, :comm)) == 0 &&
+        @warn "AMR: the regions given as `initial` were widened to hold the cells " *
+              "the tag criteria select on the initial state and their buffer of " *
+              "$(spec.buffer) nodes. A refined level whose face lies inside the tag " *
+              "buffer of a tagged feature degrades the solution beside that face " *
+              "until the first regrid check, which then refines the degraded " *
+              "state. Give a region that holds the buffered feature, or " *
+              "regrid_interval = 0 for a layout kept exactly as given."
+    return true
+end
+
 function _setup_amr(prob, num, amr::AMR)
     @nospecialize prob
     _check_amr_scope(prob, num)
@@ -475,9 +555,11 @@ function _setup_amr(prob, num, amr::AMR)
         amr.initial isa Vector{BlockRegion} && isempty(amr.initial) &&
             throw(ArgumentError("AMR initial region vector cannot be empty"))
         solver, states = _setup_with_amr_keywords(prob, num, _amr_keywords(amr))
+        amr.regrid_interval > 0 || return solver, states
         # The constructor checks a static hierarchy under the limiter; the
         # tiles of a regridded one, from the regions given, are checked here.
-        amr.regrid_interval > 0 && _check_limiter_tiles(solver)
+        _check_limiter_tiles(solver)
+        _widen_given_start!(solver, states, prob, num, amr)
         return solver, states
     end
     seed = _amr_seed_region(num.n_global, num.n_halo)
