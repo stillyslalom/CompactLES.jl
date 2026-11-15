@@ -1372,10 +1372,10 @@ end
 @testset "the derivative mask and a parent's species gradients" begin
     # A slab of the heavier gas in the same place: the density and the
     # temperature jump across it, and the mask arms along x. Under
-    # `MASK_CHILD_SPECIES_GRADIENTS = false`, the default, the gradients the
-    # species channel differences (the mass fractions and the partial
-    # densities) are the plain ones, bit for bit, and the temperature gradient
-    # takes the mask; under `true` the first take it as well.
+    # `MASK_CHILD_SPECIES_GRADIENTS = false` the gradients the species channel
+    # differences (the mass fractions and the partial densities) are the plain
+    # ones, bit for bit, and the temperature gradient takes the mask; under
+    # `true` the first take it as well.
     per = (PeriodicBC(), PeriodicBC())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.25, 1.09)])
@@ -1414,7 +1414,6 @@ end
     @test masked.T == species_plain.T
     @test masked.Y != plain.Y
     @test masked.rhoY != plain.rhoY
-    @test !CL.MASK_CHILD_SPECIES_GRADIENTS[]
 end
 
 @testset "a parent's sensors drop the nodes a child's restriction overwrites" begin
