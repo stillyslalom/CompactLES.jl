@@ -359,9 +359,11 @@ const MASK_CHILD_DERIVATIVE = Ref(true)
 # mass-fraction error on the parent's uncovered nodes, whose artificial
 # diffusivity bounded the step. With the sensors dropped that box runs alike
 # masked and plain, and the boxed three-dimensional blob's errors are several
-# times smaller plain. The default stays masked: plain, a capsule's shell of
-# three materials under a tiled band on an r-z grid fails within a tenth of a
-# nanosecond of drive, where it runs masked.
+# times smaller plain. The default stays masked: plain, a layer thousands of
+# times denser than the gas around it, at rest under a level, moves that gas
+# on the parent's uncovered nodes by tens of percent within thirty steps
+# (test/level_tests.jl), which fails a capsule's shell under a refined band
+# before its drive acts.
 const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
 
 # `true`, the default, drops the sensors of a parent patch's artificial

@@ -1515,6 +1515,66 @@ end
     @test masked.t > whole.t
 end
 
+@testset "a parent's gas beside a dense layer its child holds" begin
+    # A layer three thousand times denser than the gas around it, of another
+    # species, at rest at uniform pressure, its edges half a root spacing wide,
+    # deep inside a level. The root's uncovered nodes hold the light gas alone,
+    # and nothing should move. With the parent's species gradients masked, the
+    # default, the gas on those nodes keeps its density and composition and
+    # the root keeps its hyperbolic rate. With them plain the gas's density
+    # there moves by tens of percent within thirty steps, its heavy fraction
+    # leaves [0, 1] and the root's rate rises a hundredfold: the failure of a
+    # capsule's shell under a refined band, whose gas fill is four orders
+    # lighter than its ablator, without the capsule.
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 5 / 3),
+                        IdealSpecies{Float64}("heavy", 0.25, 5 / 3)])
+    n = 64
+    layer(x, y, z) = begin
+        θ = 1 - tanh_blend(abs(x - 0.5), 0.1, 0.5 / n)
+        ρl, ρh = (1 - θ) + 1e-8, 3000θ + 1e-8
+        Prim(Y=(ρl / (ρl + ρh), ρh / (ρl + ρh)), rho=ρl + ρh, u=(0.0, 0.0, 0.0), p=1.0)
+    end
+    gas(masked) = begin
+        previous = CL.MASK_CHILD_SPECIES_GRADIENTS[]
+        CL.MASK_CHILD_SPECIES_GRADIENTS[] = masked
+        try
+            s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+                       eos=eos, cfl=0.25, art=ArtificialProperties(enabled=true),
+                       refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+            states = allocate_state(s)
+            initialize!(s, states, layer)
+            root, Q = s.patches[1], states[1]
+            o = root.decomp.n_halo_d
+            nodes = [CartesianIndex(i + o[1], 1 + o[2], 1 + o[3]) for i in 1:n
+                     if root.covered[i + o[1], 1 + o[2], 1 + o[3]] == 0x00]
+            density() = [Q[I, 1] + Q[I, 2] for I in nodes]
+            ρ0 = density()
+            try
+                run!(s, states; tfinal=1e9, nmax=30)
+            catch e
+                # The plain run ends in a state the validity check rejects.
+                e isa CL.SolverFailure || rethrow()
+            end
+            ratio = density() ./ ρ0
+            heavy = [Q[I, 2] / (Q[I, 1] + Q[I, 2]) for I in nodes]
+            (low=minimum(ratio), high=maximum(ratio),
+             excursion=maximum(max.(-heavy, heavy .- 1)),
+             rate=CL._patch_rate!(s, root, Q)[1], nodes=length(nodes))
+        finally
+            CL.MASK_CHILD_SPECIES_GRADIENTS[] = previous
+        end
+    end
+    @test CL.MASK_CHILD_SPECIES_GRADIENTS[]
+    masked, plain = gas(true), gas(false)
+    @test masked.nodes > 25
+    @test 0.999 < masked.low && masked.high < 1.001
+    @test masked.excursion < 1e-3
+    @test plain.low < 0.9 && plain.high > 1.1
+    @test plain.excursion > 0.1
+    @test plain.rate > 50 * masked.rate
+end
+
 @testset "tiled level: multi-tile corner consensus and corner ghosts" begin
     # Four tiles meet at one fine node. Pairwise averaging in one flat pass
     # leaves the four copies unequal (a later pair reads a value an earlier
