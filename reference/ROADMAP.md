@@ -673,8 +673,8 @@ promotion.
   uniform fine grid takes. On an 8-core desktop a tiled run delivers it where
   the level holds a small share of the fine grid's points: the Sod tube at
   one rank, and the three-dimensional blob on a root fine enough to leave
-  most of the domain unrefined, which runs at about a third of the fine wall
-  at eight ranks. A tiled run is still slower than the fine grid on the Sod
+  most of the domain unrefined, which runs at about a quarter of the fine
+  wall at eight ranks. A tiled run is still slower than the fine grid on the Sod
   tube at eight ranks, by about a tenth, on the two-dimensional blobs, whose
   tiles store most of the fine grid, and on the one-dimensional shock.
   Closing the rest is this item, taken as one focused effort.
@@ -690,31 +690,29 @@ promotion.
   The remaining work:
   1. The level's step count. A parent's sensors are set to zero, before
      smoothing, at the nodes its child's restriction overwrites
-     (`MASK_CHILD_SENSORS`): the coefficients the parent sensed there on the
-     restricted fine solution had bounded its step and reached the nodes
-     beside the face that it keeps. The levels of the Sod tube, the
+     (`MASK_CHILD_SENSORS`, commit `fce4795`): the coefficients the parent
+     sensed there on the restricted fine solution had bounded its step and
+     reached the nodes beside the face that it keeps. The levels of the Sod tube, the
      two-dimensional blobs, the axis shock and the tiled three-dimensional
      blob now take the fine run's step count to within two percent. The two
      box runs that failed complete, and the boxed blobs' composite errors
-     fall by most of an order of magnitude. Setup widens the regions given
+     fall by most of an order of magnitude. With the sensors dropped the
+     parent's species gradients are plain by default
+     (`MASK_CHILD_SPECIES_GRADIENTS`): plain gradients used to cost the
+     boxed blobs their step and their accuracy, and now cut the boxed
+     three-dimensional blob's errors severalfold. Setup widens the regions given
      to a regridded run to hold the tagged cells and their buffer, with a
      warning (`_widen_given_start!`); a solver built by the `Solver`
      constructor has no state at construction and keeps its given region, as
      `bench/amr_cost.jl` does. What remains:
      - Under the box of the three-dimensional blob the level takes a quarter
-       more steps than the fine run. The root's nodes on the box's faces and
-       beside them bound most of those steps at their hyperbolic rate.
+       more steps than the fine run, and the level's own rate bounds nearly
+       all of them.
      - The CFL ceiling on a parent's overwritten nodes (`OVERWRITTEN_CFL`,
        commit `f1d420c`) acts in no run of the script any longer, since
        those nodes stay at or below the solver's CFL number. It is retired
        once the axis shock, which set its value, and the capsule band run
        without it.
-     - With the species gradients plain (`MASK_CHILD_SPECIES_GRADIENTS`,
-       commit `f17d8c5`, masked by default) the two-dimensional blobs run as
-       they do masked and the boxed three-dimensional blob's errors fall
-       severalfold, where plain gradients used to cost the boxed blobs their
-       step and their accuracy. The default changes once the moving-level
-       cases and the validation rows agree.
      - Where a shock passes out of a level, the mass the coupling's
        correction leaves is larger with the mask than before it, within a
        percent of the defect corrected (`test/validation.jl`, the

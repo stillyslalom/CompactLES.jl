@@ -194,7 +194,7 @@ the same fused scatter after its mirror fill; a paired fold, a device plan
 and a parent patch whose derivatives along `d` take the child mask take the
 two-pass route unchanged. `mask = false` leaves out the parent-level
 derivative mask (`_mask_child_derivative!`), as the species channel's
-gradients do under `MASK_CHILD_SPECIES_GRADIENTS = false`. Same collective,
+gradients do by default (`MASK_CHILD_SPECIES_GRADIENTS`). Same collective,
 halo, and fold contract as `deriv_along!`.
 """
 @noinline function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int,
@@ -342,25 +342,25 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 # `false` gives every patch the plain ones.
 const MASK_CHILD_DERIVATIVE = Ref(true)
 
-# `true`, the default, masks the gradients the species channel differences
-# (the mass fractions, the conserved components of a shared-D_b channel, the
-# sharpening flux's volume fractions) as the velocity and temperature
-# gradients are masked; `false` leaves them plain, and the species flux's
+# `false`, the default, leaves plain the gradients the species channel
+# differences (the mass fractions, the conserved components of a shared-D_b
+# channel, the sharpening flux's volume fractions); `true` masks them as the
+# velocity and temperature gradients are masked. The species flux's
 # divergence keeps the mask either way. A masked node's mass-fraction
 # gradient is nearly zero where the artificial species diffusivity is large,
 # so the species flux drops across one node beside the masked ones. The
 # divergence of that drop, spread by the compact solve, builds a
 # mass-fraction overshoot on the parent's own nodes beside a coarse-fine face,
-# which restriction does not overwrite; a regrid fills new tiles from those
-# nodes, and the mass-fraction bound term of D* then limits the level's step.
-# Plain gradients remove that overshoot. Before the parent's sensors were
-# dropped at its overwritten nodes (`MASK_CHILD_SENSORS`), one regridded box
-# over the two-dimensional blobs of bench/amrwin.jl then carried a far larger
-# mass-fraction error on the parent's uncovered nodes, whose artificial
-# diffusivity bounded the step. With the sensors dropped that box runs alike
+# which restriction does not overwrite, and a regrid fills new tiles from
+# those nodes. Plain gradients remove that overshoot. They were not the
+# default before the parent's sensors were dropped at its overwritten nodes
+# (`MASK_CHILD_SENSORS`): one regridded box over the two-dimensional blobs of
+# bench/amrwin.jl then carried a far larger mass-fraction error on the
+# parent's uncovered nodes, whose artificial diffusivity bounded the step.
+# With the sensors dropped, that box and a moving helium bubble run alike
 # masked and plain, and the boxed three-dimensional blob's errors are several
 # times smaller plain.
-const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
+const MASK_CHILD_SPECIES_GRADIENTS = Ref(false)
 
 # `true`, the default, drops the sensors of a parent patch's artificial
 # coefficients at the nodes a child's restriction overwrites, before they are

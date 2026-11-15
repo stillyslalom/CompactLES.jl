@@ -9485,7 +9485,8 @@ near-discontinuous interface.
 `julia --project=. -t 1 bench/amrwin.jl problems=<problem>`, one problem per
 process, one rank and one thread on the i9-12900K. The tables of walls, steps
 and errors and the root-step account were taken under Julia 1.13.3 at the
-commit that records them. The overhead profile and the per-point timings
+commits that record them, the blob rows one commit after the others. The
+overhead profile and the per-point timings
 further down are older, taken under Julia 1.11.4 before the root-step change
 described here. Each problem runs warm as the root grid alone (coarse), the
 root with one subcycled regridded box, the same with lattice tiles, and the
@@ -9518,14 +9519,14 @@ substep, and its points are the time average of the level-1 nodes.
 | sod | box | 0.329 | 0.240 | 1.37 | 0.996 | 0.203 | 3.75e-5 |
 | sod | tiles | 0.522 | 0.284 | 1.84 | 0.996 | 0.247 | 6.79e-5 |
 | blobs | coarse | 0.055 | 0.047 | 1.17 | | | 4.5e-2 |
-| blobs | box | 1.04 | 0.776 | 1.34 | 1.01 | 0.73 | 3.90e-5 |
-| blobs | tiles | 1.27 | 0.867 | 1.46 | 1.01 | 0.82 | 1.75e-4 |
+| blobs | box | 1.03 | 0.776 | 1.33 | 1.01 | 0.73 | 3.92e-5 |
+| blobs | tiles | 1.24 | 0.867 | 1.43 | 1.01 | 0.82 | 1.75e-4 |
 | shock | coarse | 0.118 | 0.111 | 1.06 | | | 1.6e-2 |
 | shock | box | 1.04 | 0.523 | 2.00 | 0.997 | 0.41 | 8.02e-4 |
 | shock | tiles | 1.18 | 0.418 | 2.82 | 0.994 | 0.31 | 7.81e-4 |
 | blob3d | coarse | 0.016 | 0.016 | 0.96 | | | 4.9e-3 |
-| blob3d | box | 0.576 | 0.339 | 1.70 | 1.24 | 0.26 | 9.26e-5 |
-| blob3d | tiles | 1.23 | 0.930 | 1.32 | 1.01 | 0.91 | 5.29e-5 |
+| blob3d | box | 0.551 | 0.339 | 1.63 | 1.24 | 0.26 | 2.56e-5 |
+| blob3d | tiles | 1.19 | 0.930 | 1.28 | 1.01 | 0.91 | 5.29e-5 |
 
 Every run completes under the default validity policy. The shock's runs take
 about a second, short enough that a single process's wall moves its ratios.
@@ -9535,8 +9536,8 @@ under the box and under the tiles:
 
 | mixedness ∫Y(1−Y)dV against the fine run's | coarse | box | tiles |
 |---|---|---|---|
-| blobs | +122% | −0.004% | +0.34% |
-| blob3d | +114% | −0.54% | +0.51% |
+| blobs | +122% | −0.003% | +0.34% |
+| blob3d | +114% | −0.17% | +0.51% |
 
 **The root step.** A parent's covered nodes carry the restricted fine
 solution, in which a feature the level resolves is a jump on the parent's
@@ -9566,25 +9567,29 @@ three measured, and is the remainder of a correction a hundred times larger.
 | sensors, written | 72 | 3.90e-5 | 1.05e-3 | 0.080 | 43 | 9.26e-5 | 1.12e-2 | −1.72e-5 |
 | a third of the fine run's steps | 71 | | | | 35 | | | |
 
-Between the forms the tiled runs of the four problems differ by a few percent
+The forms were measured with the parent's species gradients masked, the
+default at that commit; the tables above and the account below have them
+plain, the default since (`MASK_CHILD_SPECIES_GRADIENTS`), under which the
+boxed 3-D blob's errors are several times smaller and the other runs' are
+the same. Between the forms the tiled runs of the four problems differ by a few percent
 or less. The last column is the composite mass of test/validation.jl's
 cylindrical implosion on a level over 43 root nodes, relative to the exact
 mass.
 
 With the mask the level's own rate bounds nearly every root step, and no
-bounding rate is mostly artificial diffusivity. Under the box of the 3-D blob
-the root's nodes on the level's faces and beside them bound most steps
-instead, at their hyperbolic rate.
+bounding rate is mostly artificial diffusivity. That holds under the box of
+the 3-D blob as well, whose level's rate is a quarter above the fine
+run's.
 
 | run | root steps / root-only | level steps / fine | class bounding the root step | overwritten nodes' largest CFL over the solver's |
 |---|---|---|---|---|
 | sod box | 0.941 | 0.996 | level 100% | 0.73 |
 | sod tiles | 0.941 | 0.996 | level 100% | 0.73 |
-| blobs box | 0.791 | 1.01 | level 79%, root covered 19%, root partly covered 1% | 0.98 |
+| blobs box | 0.791 | 1.01 | level 79%, root covered 17%, root partly covered 4% | 0.98 |
 | blobs tiles | 0.791 | 1.01 | level 99%, root covered 1% | 0.99 |
 | shock box | 0.999 | 0.997 | level 99.4% | 1.00 |
 | shock tiles | 0.996 | 0.994 | level 100% | 1.00 |
-| blob3d box | 0.935 | 1.24 | root partly covered 49%, level 35%, root covered 16% | 0.93 |
+| blob3d box | 0.935 | 1.24 | level 98%, root partly covered 2% | 0.93 |
 | blob3d tiles | 0.761 | 1.01 | level 100% | 0.99 |
 
 `max_rate` also holds a parent's overwritten nodes that lie at least
