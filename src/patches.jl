@@ -529,7 +529,7 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     covered::Array{UInt8,3}
     # Nonzero at the interior nodes a child level's restriction overwrites
     # after every step: 1 there, and 2 at those deep inside the child, which
-    # `max_rate` holds to `OVERWRITTEN_CFL` (`_fill_overwritten!`).
+    # the positivity limiter leaves free (`_fill_overwritten!`).
     # Zero-extent on a patch of a solver with one level.
     overwritten::A
     # The device scratch of this patch's level transfer (`LevelScratch`,
@@ -778,17 +778,17 @@ end
 # The parent nodes a child level's restriction overwrites after every step,
 # in two grades. Grade 1 is every such node (`_restriction_writes`): the
 # sensors of the parent's artificial coefficients are dropped there
-# (`_mask_child_sensor!`, rhs.jl). Grade 2 is those of them `max_rate` holds
-# to `OVERWRITTEN_CFL` and the positivity limiter leaves free: the ones whose
-# values within the step neither reach the child's ghost layers nor outlive
-# the step. A node takes grade 2 when every node within `LEVEL_BUFFER` of it
+# (`_mask_child_sensor!`, rhs.jl). Grade 2 is those of them the positivity
+# limiter leaves free (`_limiter_exempt`): the ones whose values within the
+# step neither reach the child's ghost layers nor outlive the step. A node
+# takes grade 2 when every node within `LEVEL_BUFFER` of it
 # along each active dimension is covered over its whole cell (mask byte 0xFF)
 # or lies beyond a face closing the domain. That set starts `LEVEL_BUFFER + 1`
 # nodes inside every face a child shares with its parent: past the
 # `RESTRICT_MARGIN` nodes the restriction does not write, which carry the
 # parent's solution into the next step, and past the Lagrange stencils of the
 # shell fill, which reach `interp_order ÷ 2` ≤ 5 nodes in, so the child's
-# ghost layers read only nodes advanced at the solver's CFL number.
+# ghost layers read only nodes the limiter holds.
 function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
                             pad::NTuple{3,Int}, base, edge_lo, edge_hi, closed,
                             decomp::Decomp)

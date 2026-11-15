@@ -2971,13 +2971,12 @@ Base.@propagate_inbounds function _limiter_rate(uvw, c, inv_W, act, L, I)
 end
 
 # The nodes of a parent patch deep inside a child, which its restriction
-# overwrites after every step and `max_rate` holds to `OVERWRITTEN_CFL` (the
-# second grade of `Patch.overwritten`), which the limiter does not hold. Under subcycling
-# the parent's step runs there at up to `OVERWRITTEN_CFL`, beyond the
-# first-order bound, and held to their cell bounds stage after stage they fell
-# to temperatures of 1e-12, at which κ* = ρc/T set the root step. Their
-# neighbours' first-order fluxes do not read them where they are not
-# admissible. Empty where no node is exempt.
+# overwrites after every step (the second grade of `Patch.overwritten`), which
+# the limiter does not hold. Held to their cell bounds stage after stage,
+# while `max_rate` let the parent's step run there beyond the first-order
+# bound, they fell to temperatures of 1e-12, at which κ* = ρc/T set the root
+# step. Their neighbours' first-order fluxes do not read them where they are
+# not admissible. Empty where no node is exempt.
 _limiter_exempt(solver) = similar(solver.tmp_a, eltype(solver.tmp_a), 0, 0, 0)
 _limiter_exempt(ps::PatchSolver) =
     isempty(ps.patch.overwritten) ?

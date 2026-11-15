@@ -9587,25 +9587,14 @@ instead, at their hyperbolic rate.
 | blob3d box | 0.935 | 1.24 | root partly covered 49%, level 35%, root covered 16% | 0.93 |
 | blob3d tiles | 0.761 | 1.01 | level 100% | 0.99 |
 
-`max_rate` also holds a parent's overwritten nodes that lie at least
-`LEVEL_BUFFER` nodes from any node a child does not fully cover to a CFL
-number of 0.75 where the solver's is lower (`OVERWRITTEN_CFL`). Before the
-mask that ceiling relaxed the bound the covered coefficients set. With the
-mask those nodes stay at or below the solver's CFL number in every run of the
-table above, so the ceiling does not act in them. Its value was set on the
-shock, before the mask. With the overwritten nodes left out of the rate
-altogether, the covered nodes nearest the axis ran away within one root step
-at the focus. Under the highest ceiling tried the box run's step still
-collapsed, and under the two lower ones both runs completed.
-
-| overwritten nodes in the rate | run | root steps | wall / fine | L1 ρ | covered nodes' rate after the step over the step's rate |
-|---|---|---|---|---|---|
-| left out | blobs tiles | 90 | 2.55 | 4.24e-4 | |
-| left out | shock box | 673 | | | 1.85e6, from 3.7 the step before |
-| left out | shock tiles | | | | 36, from 19 the step before |
-| held to CFL 1.0 | shock box | | | | the step collapsed at t = 0.22096 |
-| held to CFL 1.0 | shock tiles | | | | 9.6e4 |
-| held to CFL 0.9 or 0.75 | shock box and tiles | | | | at most 28 after the last step |
+Before the mask, `max_rate` held a parent's overwritten nodes that lie at
+least `LEVEL_BUFFER` nodes from any node a child does not fully cover to a
+CFL number of 0.75 where the solver's was lower, which relaxed the bound the
+covered coefficients set. The table's last column was taken under that
+ceiling: with the mask those nodes stay at or below the solver's CFL number
+in every run, so the ceiling no longer acted and was removed. Without it the
+four problems reproduce the step counts and errors above to the digits
+printed, as does an r-z capsule band run under a flat drive.
 
 **Where the tiled overhead goes.** On tiles the level-wide artificial
 coefficients and the ghost-flux divergence take about three fifths of the

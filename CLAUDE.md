@@ -502,7 +502,7 @@ Names are spelled out in full. Current vocabulary:
   stations). A diagnostic's `Vector` form is the composite, masked one; the
   single-array form is the one-patch quadrature and applies no mask
 - `overwritten` (a `Patch` field: 1 at the nodes a child's restriction
-  writes, 2 at those of them `max_rate` holds to `OVERWRITTEN_CFL`),
+  writes, 2 at those of them the positivity limiter leaves free),
   `MASK_CHILD_SENSORS` / `_mask_child_sensor!` / `smooth_sensor!` (a
   parent's sensors set to zero at those nodes before smoothing),
   `_tag_coefficients!` and `RegridSpec.whole_sensors` (the coefficients a

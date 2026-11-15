@@ -4006,11 +4006,9 @@ function test_level_subset()
     check("regrid: the replaced level communicator was freed",
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    # Serial values under the default hold band. The root step follows the
-    # uncovered nodes, the level's interior held to a CFL ceiling and the
-    # root's sensors dropped where the level's restriction overwrites it, so
-    # the times reached here and in the regridded Sod case are those of
-    # these rules.
+    # Serial values under the default hold band, with the root's sensors
+    # dropped where the level's restriction overwrites it: the times reached
+    # here and in the regridded Sod case are those of that rule.
     check("regrid under subsets: region offset tracks as serial (171)",
           abs(gmax(region.offset[1]) - 171), 0.5)
     check("regrid under subsets: region extent tracks as serial (24)",
