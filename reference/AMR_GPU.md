@@ -479,6 +479,13 @@ composite conservation, and the coupling's gate tests only the parent's
 uncovered nodes, since a correction for the restricted shock at the covered
 ones put the parent's error ahead of the front
 ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+The parent's artificial coefficients read the same jump at full strength, so
+its sensors are set to zero before smoothing at the nodes the restriction
+overwrites (`MASK_CHILD_SENSORS`). The coefficients sensed there had bounded
+the parent's step and reached the nodes beside the face that the parent
+keeps; a regrid check's sensor criterion tags from coefficients that keep
+every sensor
+([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
 
 **Distribution of the coupling.** Data moves point to point and work
 divides over a tile's own ranks (`LevelCoupling`, `src/levels.jl`). A

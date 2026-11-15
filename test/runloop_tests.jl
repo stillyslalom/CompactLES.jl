@@ -211,10 +211,13 @@ end
                   Prim(u=(0, 0, 0), p=0.1, rho=0.125))
     run!(solver, states; tfinal=1e6, nmax=6)
     # The primitives the criterion reads are the ones the previous step's last
-    # stage left, which are not those of the state under test. The sweep
-    # refreshes them, which is what makes the decision a function of that state.
+    # stage left, which are not those of the state under test, and its
+    # coefficients drop the sensors of the root's overwritten nodes, where the
+    # shock is. A regrid check computes both from the state before it tags,
+    # which is what makes the decision a function of that state.
     root = CL.PatchSolver(solver, solver.patches[1])
     stale = copy(root.rho)
+    CL._tag_coefficients!(solver, states)
     region = CL.tagged_region(solver, states[1])
     @test region !== nothing
     @test root.rho != stale

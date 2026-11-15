@@ -1130,7 +1130,7 @@ const POINTWISE_BODIES = (
     :_limiter_offset_point!, :_limiter_radial_correct_point!,
     :_limiter_radial_rate_point!, :_limiter_radial_theta_point!,
     :_limiter_scan_point!, :_limiter_subtract_point!, :_limiter_theta_point!,
-    :_max_into_point!, :_metric_src_cyl_point!,
+    :_mask_sensor_point!, :_max_into_point!, :_metric_src_cyl_point!,
     :_metric_src_sph_point!, :_molecular_flux_point!, :_mole_fraction_point!,
     :_momentum_split_point!, :_flux_store_point!, :_extrapolate_ghost_point!,
     :_ghost_flux_copy_point!, :_flux_interior_point!,

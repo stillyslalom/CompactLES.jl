@@ -75,7 +75,8 @@
 #       last RK stage. `prepared` (timestep.jl) asserts them current, and
 #       `run!` passes it only after its own `max_rate` with no write to Q since.
 #   mu_art beta_art kappa_art D_art   `compute_artificial!`. Read by the next
-#       `max_rate` and the sensor tag criterion, so they outlive the step.
+#       `max_rate`, so they outlive the step; a regrid check with the sensor
+#       tag criterion on recomputes them for it (`_tag_coefficients!`).
 #       `preserving_artificial` restores them after an observation; a rollback
 #       and `load_checkpoint!` restore them from the banked or recorded block;
 #       `regrid!` recomputes them on the new hierarchy. On a tiled level with
@@ -526,10 +527,10 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # every regrid from the child regions every rank of this level's subset
     # holds, so a diagnostic on this level's ranks alone reads it.
     covered::Array{UInt8,3}
-    # Nonzero at the interior nodes deep inside a child level, which its
-    # restriction overwrites after every step and `max_rate` holds to
-    # `OVERWRITTEN_CFL` (`_fill_overwritten!`). Zero-extent on a patch of a
-    # solver with one level.
+    # Nonzero at the interior nodes a child level's restriction overwrites
+    # after every step: 1 there, and 2 at those deep inside the child, which
+    # `max_rate` holds to `OVERWRITTEN_CFL` (`_fill_overwritten!`).
+    # Zero-extent on a patch of a solver with one level.
     overwritten::A
     # The device scratch of this patch's level transfer (`LevelScratch`,
     # levels.jl): the Hermite boxes and the interpolation chain's stages on
@@ -733,6 +734,18 @@ function _fully_covered_ext(bits_ext::Array{UInt8,3}, pad, base, edge_lo, edge_h
     return full
 end
 
+# Whether the node `K` of `full` and the `w` nodes on either side of it along
+# `d` are all set.
+_covered_span(full, K, d::Int, w::Int) =
+    all(t -> full[K + t * CartesianIndex(ntuple(e -> Int(e == d), 3))], -w:w)
+
+# Whether a child's restriction writes the node `K` of `full`: it and its
+# neighbours along every active dimension are covered over their whole cells,
+# which holds `RESTRICT_MARGIN` = 2 nodes off a face a child shares with its
+# parent and up to a face it shares with another tile or with the domain.
+_restriction_writes(full, K, active) =
+    all(d -> !active[d] || _covered_span(full, K, d, 1), 1:3)
+
 # The parent nodes the derivative mask may take along each dimension
 # (`_mask_child_derivative!`, rhs.jl), as bit d − 1 of a small integer stored
 # in the field's element type. A node qualifies along `d` when the restriction
@@ -746,14 +759,12 @@ function _fill_child_deep!(deep, bits_ext::Array{UInt8,3}, pad::NTuple{3,Int}, b
     o = decomp.n_halo_d
     active = decomp.active
     full = _fully_covered_ext(bits_ext, pad, base, edge_lo, edge_hi, closed, decomp)
-    span(K, d, w) = all(t -> full[K + t * CartesianIndex(ntuple(e -> Int(e == d), 3))],
-                        -w:w)
+    span(K, d, w) = _covered_span(full, K, d, w)
     T = eltype(deep)
     host = zeros(T, size(deep))
     @inbounds for J in CartesianIndices(n)
         K = J + CartesianIndex(pad)
-        written = all(d -> !active[d] || span(K, d, 1), 1:3)
-        written || continue
+        _restriction_writes(full, K, active) || continue
         bits = 0
         for d in 1:3
             active[d] && span(K, d, CHILD_DERIVATIVE_DEPTH) && (bits |= 1 << (d - 1))
@@ -764,22 +775,20 @@ function _fill_child_deep!(deep, bits_ext::Array{UInt8,3}, pad::NTuple{3,Int}, b
     return deep
 end
 
-# The parent nodes `max_rate` holds to `OVERWRITTEN_CFL`: those a child
-# level's restriction overwrites after every step, less those whose values
-# within the step reach the child's ghost layers or outlive the step. A
-# covered node carries the restricted fine solution, at which the parent's
-# artificial coefficients, sensed at the parent spacing, take the diffusivity
-# of a feature thinner than that spacing; at the solver's CFL number the
-# rate there bounded most root steps of the refined runs measured and made
-# them about 1.5 times as short as the uncovered solution needs. A node
-# qualifies when every node within `LEVEL_BUFFER` of it along each active
-# dimension is covered over its whole cell (mask byte 0xFF) or lies beyond a
-# face closing the domain. The set then starts `LEVEL_BUFFER + 1` nodes inside
-# every face a child shares with its parent: past the `RESTRICT_MARGIN`
-# nodes the restriction does not write, which carry the parent's solution
-# into the next step, and past the Lagrange stencils of the shell fill, which
-# reach `interp_order ÷ 2` ≤ 5 nodes in, so the child's ghost layers read
-# only nodes advanced at the solver's CFL number.
+# The parent nodes a child level's restriction overwrites after every step,
+# in two grades. Grade 1 is every such node (`_restriction_writes`): the
+# sensors of the parent's artificial coefficients are dropped there
+# (`_mask_child_sensor!`, rhs.jl). Grade 2 is those of them `max_rate` holds
+# to `OVERWRITTEN_CFL` and the positivity limiter leaves free: the ones whose
+# values within the step neither reach the child's ghost layers nor outlive
+# the step. A node takes grade 2 when every node within `LEVEL_BUFFER` of it
+# along each active dimension is covered over its whole cell (mask byte 0xFF)
+# or lies beyond a face closing the domain. That set starts `LEVEL_BUFFER + 1`
+# nodes inside every face a child shares with its parent: past the
+# `RESTRICT_MARGIN` nodes the restriction does not write, which carry the
+# parent's solution into the next step, and past the Lagrange stencils of the
+# shell fill, which reach `interp_order ÷ 2` ≤ 5 nodes in, so the child's
+# ghost layers read only nodes advanced at the solver's CFL number.
 function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
                             pad::NTuple{3,Int}, base, edge_lo, edge_hi, closed,
                             decomp::Decomp)
@@ -787,6 +796,12 @@ function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
     o = decomp.n_halo_d
     active = decomp.active
     full = _fully_covered_ext(bits_ext, pad, base, edge_lo, edge_hi, closed, decomp)
+    T = eltype(overwritten)
+    host = zeros(T, size(overwritten))
+    @inbounds for J in CartesianIndices(n)
+        _restriction_writes(full, J + CartesianIndex(pad), active) &&
+            (host[J + CartesianIndex(o)] = one(T))
+    end
     # Erosion by a box of half-width `LEVEL_BUFFER`, one active dimension at a
     # time. A node in the pad takes a truncated window, and no interior node's
     # result reads such a node along a dimension already eroded.
@@ -807,10 +822,8 @@ function _fill_overwritten!(overwritten, bits_ext::Array{UInt8,3},
             full[J] = ok
         end
     end
-    T = eltype(overwritten)
-    host = zeros(T, size(overwritten))
     @inbounds for J in CartesianIndices(n)
-        full[J + CartesianIndex(pad)] && (host[J + CartesianIndex(o)] = one(T))
+        full[J + CartesianIndex(pad)] && (host[J + CartesianIndex(o)] = T(2))
     end
     _upload!(overwritten, host)
     return overwritten

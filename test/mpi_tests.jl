@@ -3550,7 +3550,7 @@ function test_partitioned_coupling()
     run!(solver, states; tfinal=1.0, nmax=2)
     mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
     check("partitioned coupling: composite mass after two steps as serial",
-          abs(mass - 1.9874998033962905) / 2, 1e-14)
+          abs(mass - 1.9874998034111817) / 2, 1e-14)
 
     # One tile over every rank, up to eight: past five ranks some hold no
     # share of the chains' five components, so they receive no box and must
@@ -3754,7 +3754,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.006478071821173504), 1e-13)
+              abs(gmax(solver.t) - 0.006478053648320283), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -3856,7 +3856,7 @@ function test_tiled_level()
         check("rebalance on: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.006324103244598575), 1e-13)
+              abs(gmax(solver.t) - 0.006476645618274905), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -4007,14 +4007,16 @@ function test_level_subset()
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
     # Serial values under the default hold band. The root step follows the
-    # uncovered nodes, the level's interior held to a CFL ceiling, so the
-    # times reached here and in the regridded Sod case are those of that rule.
+    # uncovered nodes, the level's interior held to a CFL ceiling and the
+    # root's sensors dropped where the level's restriction overwrites it, so
+    # the times reached here and in the regridded Sod case are those of
+    # these rules.
     check("regrid under subsets: region offset tracks as serial (171)",
           abs(gmax(region.offset[1]) - 171), 0.5)
     check("regrid under subsets: region extent tracks as serial (24)",
           abs(gmax(region.extent[1]) - 24), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.006895860842124445), 1e-13)
+          abs(gmax(solver.t) - 0.006980662716575952), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

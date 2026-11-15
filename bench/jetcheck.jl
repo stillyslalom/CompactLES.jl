@@ -106,7 +106,8 @@ summarize("compute_rhs! (bulk species)", @report_opt target_modules=(CL,) comput
 summarize("compute_dt (bulk species)", @report_opt target_modules=(CL,) compute_dt(sb, Qb))
 # Callees the solver reaches only through an intended dynamic dispatch, probed
 # at the concrete types they are compiled for at run time (see `summarize`).
-summarize("smooth!", @report_opt target_modules=(CL,) CL.smooth!(solver.sensor, solver))
+summarize("smooth_sensor!",
+          @report_opt target_modules=(CL,) CL.smooth_sensor!(solver.sensor, solver))
 summarize("_detect!", @report_opt target_modules=(CL,) CL._detect!(solver.sensor, solver.tmp_a, solver, 1, true))
 summarize("_bulk_diffusivity!", @report_opt target_modules=(CL,) CL._bulk_diffusivity!(sb))
 summarize("_bulk_gradients!", @report_opt target_modules=(CL,) CL._bulk_gradients!(sb, Qb))

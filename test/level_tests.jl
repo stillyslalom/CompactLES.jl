@@ -1416,6 +1416,105 @@ end
     @test masked.rhoY != plain.rhoY
 end
 
+@testset "a parent's sensors drop the nodes a child's restriction overwrites" begin
+    # The slab of the heavier gas deep inside a level, and a second one the
+    # root alone holds. The level's region spans root nodes 17 to 49: the
+    # restriction writes 19 to 47 (grade 1 of `Patch.overwritten`), and the
+    # nodes five and more inside a face take grade 2.
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.25, 1.09)])
+    slabs(x, y, z) = begin
+        θ = (0.36 < x < 0.64 || 0.86 < x < 0.92) ? 1.0 : 0.0
+        Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.0, 0.0), p=1.0)
+    end
+    mk(; kw...) = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(per, per, per), eos=eos,
+                         art=ArtificialProperties(enabled=true),
+                         refine=BlockRegion((16, 0, 0), (33, 1, 1)); kw...)
+    s = mk()
+    states = allocate_state(s)
+    initialize!(s, states, slabs)
+    ps = CL.PatchSolver(s, s.patches[1])
+    Q = states[1]
+    o = ps.decomp.n_halo_d
+    rows = o[1]+1:o[1]+ps.decomp.n_local[1]
+    line(A) = A[rows, 1 + o[2], 1 + o[3]]
+    grade = line(ps.patch.overwritten)
+    @test findall(>(0), grade) == 19:47
+    @test findall(==(2), grade) == 22:44
+    coefficients(masked) = begin
+        previous = CL.MASK_CHILD_SENSORS[]
+        CL.MASK_CHILD_SENSORS[] = masked
+        try
+            CL.compute_rhs!(ps, Q, ConservedState(zero(parent(Q))))
+        finally
+            CL.MASK_CHILD_SENSORS[] = previous
+        end
+        (kappa=line(ps.kappa_art), D=line(ps.D_art[1]))
+    end
+    whole = coefficients(false)
+    masked = coefficients(true)
+    # The smoother reaches four nodes, so the coefficients vanish from the
+    # fifth overwritten node in, where the whole sensors hold the slab's
+    # edges, and are the whole ones, bit for bit, five nodes outside.
+    inside, outside = 23:43, 52:64
+    @test minimum(whole.kappa[[24, 42]]) > 0 && minimum(whole.D[[24, 42]]) > 0
+    @test all(iszero, masked.kappa[inside]) && all(iszero, masked.D[inside])
+    @test maximum(whole.D[outside]) > 0
+    @test masked.kappa[outside] == whole.kappa[outside]
+    @test masked.D[outside] == whole.D[outside]
+    # A regrid check with the sensor criterion on tags from coefficients that
+    # keep every sensor, and its priming leaves the masked ones for the step.
+    r = mk(regrid_interval=4, tag_sensor_threshold=0.05)
+    rstates = allocate_state(r)
+    initialize!(r, rstates, slabs)
+    rline(A) = A[rows, 1 + o[2], 1 + o[3]]
+    CL._tag_coefficients!(r, rstates)
+    @test !getfield(r, :regrid).whole_sensors
+    @test rline(r.patches[1].D_art[1])[inside] == whole.D[inside]
+    CL._regrid_prime!(r, rstates, CL.Workspace(rstates), nothing, false)
+    @test all(iszero, rline(r.patches[1].D_art[1])[inside])
+end
+
+@testset "a level that resolves a feature sets its parent's step" begin
+    # A disc of the heavier gas advected inside a subcycled level. The root's
+    # nodes under the level hold the restricted disc, whose edge is narrower
+    # than a root spacing. With the root's sensors dropped where the
+    # restriction overwrites it, the level's rate sets the step: a third of
+    # it exceeds the root's. With every sensor kept the root's rate does, and
+    # the same number of steps covers less time.
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.25, 1.09)])
+    disc(x, y, z) = begin
+        θ = hypot(x - 0.5, y - 0.5) < 0.1 ? 1.0 : 0.0
+        Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.5, 0.0), p=1.0)
+    end
+    rates(masked) = begin
+        previous = CL.MASK_CHILD_SENSORS[]
+        CL.MASK_CHILD_SENSORS[] = masked
+        try
+            s = Solver(n_global=(64, 64, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(per, per, per), eos=eos, cfl=0.5, subcycle=true,
+                       art=ArtificialProperties(enabled=true),
+                       refine=BlockRegion((16, 16, 0), (33, 33, 1)))
+            states = allocate_state(s)
+            initialize!(s, states, disc)
+            run!(s, states; tfinal=1e6, nmax=20)
+            r = [CL._patch_rate!(s, p, states[i])[1] for (i, p) in enumerate(s.patches)]
+            (root=r[1], level=r[2], t=s.t)
+        finally
+            CL.MASK_CHILD_SENSORS[] = previous
+        end
+    end
+    masked, whole = rates(true), rates(false)
+    @test 3 * masked.root < masked.level
+    @test 3 * whole.root > whole.level
+    @test masked.root < 0.8 * whole.root
+    @test masked.t > whole.t
+end
+
 @testset "tiled level: multi-tile corner consensus and corner ghosts" begin
     # Four tiles meet at one fine node. Pairwise averaging in one flat pass
     # leaves the four copies unequal (a later pair reads a value an earlier
@@ -1894,7 +1993,9 @@ end
         end
     end
 
-    # Sensor: the artificial diffusivity number of the last RHS. The Sod
+    # Sensor: the artificial diffusivity number of the coefficients a regrid
+    # check computes from the state, which keep the sensors a step drops where
+    # the level's restriction overwrites the root, the shock's here. The Sod
     # shock runs ten steps with the δ⁴ criterion parked at a threshold
     # nothing reaches; the number is then measured over the root, and half
     # of its maximum tags the shock where twice its maximum tags nothing.
@@ -1905,6 +2006,10 @@ end
     states = allocate_state(ss)
     initialize!(ss, states, icS)
     run!(ss, states; tfinal=1.0, nmax=10)
+    spec = getfield(ss, :regrid)
+    spec.sensor_threshold = 1.0         # on, so that the check's pass runs
+    CL._tag_coefficients!(ss, states)
+    spec.sensor_threshold = 0.0
     root = PatchSolver(ss, ss.patches[1])
     qmax = 0.0
     for i in 1:root.decomp.n_local[1]
@@ -1916,7 +2021,6 @@ end
     end
     @info "artificial diffusivity number at the Sod shock" qmax
     @test qmax > 0
-    spec = getfield(ss, :regrid)
     @test CL.tagged_region(ss, states[1]) === nothing
     spec.sensor_threshold = 2 * qmax
     @test CL.tagged_region(ss, states[1]) === nothing

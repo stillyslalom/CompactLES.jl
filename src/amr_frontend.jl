@@ -460,11 +460,7 @@ function _widen_given_start!(solver, states, prob, num, amr::AMR)
     @nospecialize prob
     spec = getfield(solver, :regrid)
     workspace = Workspace(states)
-    if amr.tag_sensor_threshold > 0 && solver.art.enabled
-        root = PatchSolver(solver, first(getfield(solver, :patches)))
-        apply_bcs!(root, states[1])
-        compute_rhs!(root, states[1], workspace.dQ[1])
-    end
+    _root_tag_coefficients!(solver, states, workspace, amr)
     widened = false
     if _tiled(spec.tile)
         # No given tile has reached its lifetime, so each is held whether or
@@ -511,6 +507,20 @@ function _widen_given_start!(solver, states, prob, num, amr::AMR)
               "state. Give a region that holds the buffered feature, or " *
               "regrid_interval = 0 for a layout kept exactly as given."
     return true
+end
+
+# The root's artificial coefficients from the initial state, for the sensor
+# criterion of a tag sweep at setup: one right-hand side of the root with
+# every sensor kept, as a regrid check computes them (`_tag_coefficients!`),
+# the nodes under the level given or seeded included.
+function _root_tag_coefficients!(solver, states, workspace, amr::AMR)
+    (amr.tag_sensor_threshold > 0 && solver.art.enabled) || return nothing
+    root = PatchSolver(solver, first(getfield(solver, :patches)))
+    _with_whole_sensors(getfield(solver, :regrid)) do
+        apply_bcs!(root, states[1])
+        compute_rhs!(root, states[1], workspace.dQ[1])
+    end
+    return nothing
 end
 
 function _setup_amr(prob, num, amr::AMR)
@@ -567,11 +577,7 @@ function _setup_amr(prob, num, amr::AMR)
         prob, num, _amr_keywords(amr; refine=seed, bootstrap=true);
         seed_only=true)
     workspace = Workspace(states)
-    if amr.tag_sensor_threshold > 0 && solver.art.enabled
-        root = PatchSolver(solver, first(getfield(solver, :patches)))
-        apply_bcs!(root, states[1])
-        compute_rhs!(root, states[1], workspace.dQ[1])
-    end
+    _root_tag_coefficients!(solver, states, workspace, amr)
     candidate = tagged_region(solver, states[1])
     spec = getfield(solver, :regrid)
     # At a jump in density and pressure at rest the artificial coefficients

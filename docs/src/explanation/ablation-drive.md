@@ -222,16 +222,20 @@ The `Y₂₂` run grows to −0.28 % at 0.9 ns and fails at 0.97 ns, as 1-D does
 1.24 ns on this grid. A 3-D band (60 µm root, 20 µm tiles of 8 root nodes over
 0.93 < R < 1.22 mm, bins 16 × 64; 32 × 128 failed at 0.03 ns, one root cell per bin)
 runs the level path and reproduces the uniform run at 0.1 ns (ablator left 0.9995,
-front within 0.4 µm), but its covered-node timestep (below) kept it from 0.2 ns in
-30 minutes.
+front within 0.4 µm), but the root's covered-node timestep, since removed (below),
+kept it from 0.2 ns in 30 minutes; it has not been rerun.
 
 **Not yet.** At 1 µm a full 3-D capsule shell is about 10⁹ cells: 3-D needs the band,
-and the band's cost is set by two CompactLES limits met here, not by the drive. (1) A
-root level under a band takes the timestep of its covered nodes, which hold the
-restricted shell: their artificial diffusivity at the root spacing made the level-0
-rate 3865 ns⁻¹ against the band's 958 at 0.15 ns, eight times the steps of the
-uniform 10 µm grid (subcycling does not help; covered nodes are held to CFL 0.75 in
-`max_rate`). (2) Tiled levels are fragile on this problem: r–z tiles of 10 root
+and the band's cost is set by CompactLES's refinement, not by the drive. A root level
+under a band used to take the timestep of its covered nodes, which hold the
+restricted shell: their artificial diffusivity at the root spacing put the root's
+rate at 3190 ns⁻¹ against the band's 290 at 0.15 ns, three times the steps of the
+uniform 10 µm grid. The root's sensors are now set to zero where the band's solution
+overwrites it. The same r–z run (30 µm root, 10 µm tiles of 8 root nodes, a 1.44 mm
+extent) then has a root rate of 40 ns⁻¹ against the band's 370, reaches 0.15 ns in
+72 steps where the uniform 10 µm grid takes 81, and reaches 0.7 ns in a quarter of
+the steps it took before, with the front within 0.04 µm. What remains is that tiled
+levels are fragile on this problem: r–z tiles of 10 root
 nodes failed at 0.03–0.08 ns near the axis where tile corners meet (8 and 16 run),
 and the 8-node run failed at 0.62 ns. A single box (`tile = 0`) ran stably in the
 same test. Moving refinement exists (a time-dependent predicate or `:sensor`, with

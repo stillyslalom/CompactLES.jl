@@ -160,10 +160,11 @@ end
 end
 
 # ((μ* + β*)/ρ + κ*/(ρ c_p) + max_k D*_k) / (c h_min) > threshold: the
-# artificial diffusivity of the last right-hand side in units of the
-# acoustic cell diffusivity. The primitives ρ, c and c_p are the same
-# evaluation's, so the ratio is consistent; a node the positivity
-# placeholder wrote (c = 0) never tags.
+# artificial diffusivity the patch holds in units of the acoustic cell
+# diffusivity. At a regrid check the coefficients and the primitives ρ, c and
+# c_p are computed from the state under test (`_tag_coefficients!`), so the
+# ratio is consistent; a node the positivity placeholder wrote (c = 0) never
+# tags.
 @inline function _tag_sensor_point!(tags, mu, beta, kappa, D, rho, c, cp, thr,
                                     thr_lo, hmin, n_species, o, i, j, k)
     @inbounds begin
@@ -239,8 +240,9 @@ function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
     # of the previous step left in them. Refreshing them from the state under
     # test makes the tag a function of that state alone, so a restart, and an
     # observational call between steps, leave the decision unchanged. The
-    # artificial coefficients the same criterion reads are the previous step's
-    # by design, as they are in `max_rate`.
+    # artificial coefficients the same criterion reads are the ones the patch
+    # holds: a regrid check computes them from the same state first
+    # (`_tag_coefficients!`), and a direct call reads the last evaluation's.
     spec.sensor_threshold > 0 && primitives!(PatchSolver(solver, coarse), Qc)
     o = dcp.n_halo_d
     n = dcp.n_local
@@ -436,7 +438,9 @@ widened until its box spans the interpolation order; along a periodic
 dimension the bounds are the shortest arc of the period holding the tagged
 cells, and the region may cross the seam, spanning at most the period less
 the margin at either end. Returns `nothing` when no cell qualifies.
-Collapsed dimensions keep offset 0 and extent 1. Collective over the coarse
+Collapsed dimensions keep offset 0 and extent 1. The sensor criterion reads
+the artificial coefficients the root holds, which a regrid check computes
+from the state first (`_tag_coefficients!`). Collective over the coarse
 communicator (one Allreduce of the tag bounds, and one of their occupancy
 along a periodic dimension under `level_boundaries`), so every rank returns
 the identical region.
@@ -935,6 +939,7 @@ rebuilt only after an actual layout change. Returns whether it changed.
 """
 function regrid!(solver::Solver, states::Vector{<:ConservedState},
                  workspace::Workspace, save)
+    _tag_coefficients!(solver, states)
     changed = _regrid_impl!(solver, states, workspace, save)
     # The coefficient refresh is a regrid-check cadence, not a layout-change
     # side effect: otherwise a timing-dependent rebalance decision changes the
@@ -942,6 +947,36 @@ function regrid!(solver::Solver, states::Vector{<:ConservedState},
     _regrid_prime!(solver, states, workspace, save, changed)
     _close_lattice_check!(solver, getfield(solver, :regrid), 0.0)
     return changed
+end
+
+# The artificial coefficients the sensor criterion tags from, computed from the
+# state under test on every level before a check's sweeps, with every sensor
+# kept: a parent's sensors are otherwise dropped at the nodes a child's
+# restriction overwrites (`MASK_CHILD_SENSORS`, rhs.jl), where the criterion
+# would then find nothing to hold the child with and a level tagged by it
+# would leave at every check. The check's own priming restores the masked
+# coefficients before the next step reads them (`_regrid_prime!`). A no-op
+# with the criterion off; collective otherwise, the record alike on every
+# rank.
+function _tag_coefficients!(solver::Solver, states::Vector{<:ConservedState})
+    spec = getfield(solver, :regrid)
+    (spec.sensor_threshold > 0 && solver.art.enabled) || return nothing
+    _with_whole_sensors(spec) do
+        solver.tstage = solver.t
+        _presync!(solver, states)
+        _prime_level_coefficients!(solver, states)
+    end
+    return nothing
+end
+
+# `f()` with every patch's sensors kept whole (`_sensor_mask_patch`).
+function _with_whole_sensors(f::F, spec::RegridSpec) where {F}
+    spec.whole_sensors = true
+    try
+        return f()
+    finally
+        spec.whole_sensors = false
+    end
 end
 
 # Grow or shrink this rank's patch vector (and the state vectors aligned with
@@ -3250,6 +3285,7 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     compiled0 = _counted_compile_ns(spec.costs)
     wait0 = solver.wall_wait
     # `regrid!` with the savepoint refresh after the sweep.
+    _tag_coefficients!(solver, states)
     changed = _regrid_impl!(solver, states, workspace, save)
     _regrid_prime!(solver, states, workspace, nothing, changed)
     control.validity_interval > 0 &&

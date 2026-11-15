@@ -840,6 +840,11 @@ function smooth!(f, solver)
     return f
 end
 
+# `smooth!` of a detector output on its way to a coefficient: on a parent
+# patch the nodes a child's restriction overwrites are dropped from it first
+# (`_mask_child_sensor!`, rhs.jl).
+smooth_sensor!(f, solver) = smooth!(_mask_child_sensor!(f, solver), solver)
+
 # Whether the pass along `d` may write its result straight into the field it
 # reads. A host solve fills a line's buffer from that line of the field alone,
 # before it scatters the line back, and the self-paired mirror fill writes
@@ -922,7 +927,7 @@ function velocity_mu!(solver, C_mu)
                     parity=ntuple(d -> vel_parity(solver, d, j), 3),
                     wall_parity=ntuple(d -> d == j ? -1 : 1, 3), ghosts=true)
     end
-    smooth!(solver.sensor, solver)
+    smooth_sensor!(solver.sensor, solver)
     rho_sensor!(solver.mu_art, solver, C_mu)
     return solver
 end
@@ -1077,7 +1082,7 @@ function dilatation_beta!(solver, C_beta, gated::Bool)
     end
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
-    smooth!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
+    smooth_sensor!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
     if !gated
         rho_sensor!(solver.beta_art, solver, C_beta)
         return solver
@@ -1135,6 +1140,11 @@ Every sensor weight is the local physical spacing, `solver.h[d]` divided by
 `solver.inv_h[d]` at the point ([`delta4_sum!`](@ref)), and the mass-fraction
 bound takes the geometric mean of the active ones at the same point. On a
 Cartesian grid with no `Stretch` those are the constant `solver.h`.
+
+On a patch with a refined level inside it, each sensor is set to zero before
+smoothing at the nodes the level's restriction overwrites: the level resolves
+what those nodes hold, and the coefficients sensed there at the patch's
+spacing would otherwise bound the patch's step.
 
 The caller supplies the primitives and the velocity gradients: `compute_rhs!`
 runs `compute_primitives_and_gradients!` on the same `Q` immediately before
@@ -1245,7 +1255,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     if strain_mu || strain_beta
         exchange_halos!(f.strain_mag, decomp)
         _detect!(f.sensor, f.strain_mag, ops, 2, false)
-        smooth!(f.sensor, ops)
+        smooth_sensor!(f.sensor, ops)
         if strain_mu && strain_beta
             pointwise!(_mu_beta_point!, f.mu_art, nx, ny, nz,
                        f.mu_art, f.beta_art, f.rho,
@@ -1279,7 +1289,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
                f.tmp_a, Q, f.rho, m1, m2, m3, i_energy)
     exchange_halos!(f.tmp_a, decomp)
     _detect!(f.sensor, f.tmp_a, ops, 1, true)
-    smooth!(f.sensor, ops)
+    smooth_sensor!(f.sensor, ops)
     pointwise!(_kappa_point!, f.kappa_art, nx, ny, nz,
                f.kappa_art, eos, f.rho, f.c,
                f.T_ion, f.cp_mix, f.sensor, C_kappa,
@@ -1305,7 +1315,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
             pointwise!(_species_bound_point!, f.sensor_sp, nx, ny, nz,
                        f.sensor_sp, f.Y[sp], C_D, C_Y, h_bound, inv_n,
                        ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
-            smooth!(f.sensor_sp, ops)
+            smooth_sensor!(f.sensor_sp, ops)
             pointwise!(_species_diffusivity_point!, f.sensor_sp,
                        nx, ny, nz, f.D_art[sp], f.c,
                        f.sensor_sp, o1, o2, o3)
@@ -1353,7 +1363,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
     acc = solver.sensor_sp
     _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
                           a1, a2, a3, Y_tolerance)
-    smooth!(acc, solver)
+    smooth_sensor!(acc, solver)
     for sp in 1:solver.equations.n_species
         pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
                    solver.D_art[sp], solver.c, acc, o1, o2, o3)

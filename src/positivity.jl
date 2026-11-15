@@ -2970,8 +2970,9 @@ Base.@propagate_inbounds function _limiter_rate(uvw, c, inv_W, act, L, I)
     return Λ
 end
 
-# The nodes of a parent patch a child's restriction overwrites after every
-# step (`Patch.overwritten`), which the limiter does not hold. Under subcycling
+# The nodes of a parent patch deep inside a child, which its restriction
+# overwrites after every step and `max_rate` holds to `OVERWRITTEN_CFL` (the
+# second grade of `Patch.overwritten`), which the limiter does not hold. Under subcycling
 # the parent's step runs there at up to `OVERWRITTEN_CFL`, beyond the
 # first-order bound, and held to their cell bounds stage after stage they fell
 # to temperatures of 1e-12, at which κ* = ρc/T set the root step. Their
@@ -2986,7 +2987,7 @@ _limiter_exempt(ps::PatchSolver) =
 # (`_limiter_exempt`).
 Base.@propagate_inbounds _limiter_constrained(free, I) =
     !(free[1][I[1]] | free[2][I[2]] | free[3][I[3]]) &&
-    (isempty(free[4]) || iszero(free[4][I]))
+    (isempty(free[4]) || free[4][I] <= 1)
 
 # The half-state scale of a cell along d: 2Λ/(|u_d| + c) at a stage, its rate
 # over |u_d| + c along an area-weighted direction, Inf where that speed

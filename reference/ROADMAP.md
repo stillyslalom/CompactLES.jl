@@ -85,17 +85,16 @@ may proceed together, subject to one heavy run at a time.
       positivity limiter on the capsule's levels: stacked device tiles,
       then the remaining metrics and the tabulated and NASA-9 equations of
       state.
-   2. **A17**'s first item, the root step set by covered nodes, where the
-      effort above has left it open, and then **A20**, the conservative
-      coarse-fine correction under the limiter and on device storage; it
-      runs today on host storage without the limiter. The order is a
-      dependency: A20's registers sit on the parent lines that cross a
-      junction, and a layout without covered nodes ends those lines at the
-      face.
+   2. **A20**, the conservative coarse-fine correction under the limiter
+      and on device storage; it runs today on host storage without the
+      limiter. **A17**'s first item, the root step set by covered nodes, is
+      delivered by a mask on the parent's sensors, so the root keeps its
+      lines through the covered region and A20's registers stay on the
+      parent lines that cross a junction.
    3. **A17**'s fourth item, the tiles near the r-z axis, with **A19**: the
       capsule's band is a tiled level behind a converging shock on an r-z
       grid, the configuration in which A19's pattern was measured. A21's
-      first two items cite the two A17 items as its blockers.
+      second item cites it as its blocker.
 
    Then the physics:
 
@@ -689,50 +688,43 @@ promotion.
   sized each root step
   ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
   The remaining work:
-  1. The level's step count. A parent's nodes that restriction overwrites,
-     more than `LEVEL_BUFFER` inside the child, are held to a CFL ceiling of
-     0.75 rather than the solver's (commit `f1d420c`; excluding them made
-     the axis shock run away). The Sod level takes the fine run's step
-     count. On the two-dimensional blobs the covered root nodes bound the
-     root step at their hyperbolic rate, under the box on every step, and
-     the script's account puts the count near the fine run's with those
-     nodes left out. On the three-dimensional blob the level took about
-     twice the fine count under `bench/amr_cost.jl`'s given first box, which
-     puts a coarse-fine face a few edge widths outside the blob's unresolved
-     edge. The parent's nodes beside that face leave the species band before
-     the first regrid check, the check copies the excursion into new tiles,
-     and the mass-fraction bound of the species diffusivity then sets the
-     level's step for the rest of the run. Started from the tagged layout,
-     as the script now starts it, the level takes the fine run's step count
-     to within a few percent and the composite errors fall by more than an
-     order of magnitude. Setup now widens the regions given to a regridded
-     run to hold the tagged cells and their buffer, with a warning
-     (`_widen_given_start!`); a solver built by the `Solver` constructor has
-     no state at construction and keeps its given region, as
-     `bench/amr_cost.jl` does. Why the parent's nodes beside such a face
-     leave the band is open.
-     The parent's derivative mask acts on the same covered nodes. The
-     blobs' edges are narrower than a root spacing, so the covered nodes hold
-     a restricted jump that the parent's compact derivatives cannot resolve.
-     With the species gradients masked, the species flux drops across one
-     node at the mask's edge, and the divergence of that drop reaches the
-     parent's nodes beside the face. With them plain
-     (`MASK_CHILD_SPECIES_GRADIENTS`, commit `f17d8c5`, masked by default),
-     the gradient's tail reaches the uncovered root nodes: the
-     three-dimensional blob under its given box then takes fewer steps, and
-     under one regridded box the two-dimensional blobs lose their step and
-     their accuracy.
-     Dropping the species flux's sources over the stencil's reach beside the
-     mask recovers part of that step count without that failure, and is not
-     built.
-     A layout in which no covered node is advanced removes the bound that
-     the ceiling only relaxes and the unresolved derivative that the mask
-     only cuts: the root tiled on the level's lattice with its covered tiles
-     dropped, or the root's lines ended at the covered region. Either stays
-     patch-based and adds faces, which carry the face cost of the second
-     item and, at same-level faces, A19's pattern. It is priced from the
-     script's attribution before any code and decided with the third item's
-     layouts.
+  1. The level's step count. A parent's sensors are set to zero, before
+     smoothing, at the nodes its child's restriction overwrites
+     (`MASK_CHILD_SENSORS`): the coefficients the parent sensed there on the
+     restricted fine solution had bounded its step and reached the nodes
+     beside the face that it keeps. The levels of the Sod tube, the
+     two-dimensional blobs, the axis shock and the tiled three-dimensional
+     blob now take the fine run's step count to within two percent. The two
+     box runs that failed complete, and the boxed blobs' composite errors
+     fall by most of an order of magnitude. Setup widens the regions given
+     to a regridded run to hold the tagged cells and their buffer, with a
+     warning (`_widen_given_start!`); a solver built by the `Solver`
+     constructor has no state at construction and keeps its given region, as
+     `bench/amr_cost.jl` does. What remains:
+     - Under the box of the three-dimensional blob the level takes a quarter
+       more steps than the fine run. The root's nodes on the box's faces and
+       beside them bound most of those steps at their hyperbolic rate.
+     - The CFL ceiling on a parent's overwritten nodes (`OVERWRITTEN_CFL`,
+       commit `f1d420c`) acts in no run of the script any longer, since
+       those nodes stay at or below the solver's CFL number. It is retired
+       once the axis shock, which set its value, and the capsule band run
+       without it.
+     - With the species gradients plain (`MASK_CHILD_SPECIES_GRADIENTS`,
+       commit `f17d8c5`, masked by default) the two-dimensional blobs run as
+       they do masked and the boxed three-dimensional blob's errors fall
+       severalfold, where plain gradients used to cost the boxed blobs their
+       step and their accuracy. The default changes once the moving-level
+       cases and the validation rows agree.
+     - Where a shock passes out of a level, the mass the coupling's
+       correction leaves is larger with the mask than before it, within a
+       percent of the defect corrected (`test/validation.jl`, the
+       cylindrical implosion on a level over 43 nodes).
+
+     A layout in which no covered node is advanced is no longer needed for
+     the step count. It would remove the unresolved derivative that the
+     derivative mask only cuts, at the cost of faces, which carry the face
+     cost of the second item and, at same-level faces, A19's pattern; it is
+     decided with the third item's layouts.
   2. The tiles' cost per point, above the fine grid's on every problem and
      nearly twice it on the Sod tube. A tile takes no more line solves than
      the uniform grid. Delivered: the shell fill runs only where a tile has a
@@ -761,9 +753,10 @@ promotion.
      boxes, or merged small lattice cells, would store about the tagged
      region and need partly shared faces; on the two-dimensional blobs they
      are priced at about two thirds of the lattice's level cost. A smaller
-     `tag_buffer` helps them more than it helps the lattice, and today a
-     smaller buffer raises the step count through the first item's bound.
-     They are decided with the layout of the first item.
+     `tag_buffer` helps them more than it helps the lattice; a smaller
+     buffer raised the step count through the bound the first item removed,
+     and has not been re-measured since. They are decided with the layout
+     of the first item.
   4. Robustness. On the converging shock the uniform fine run itself goes
      negative in internal energy ahead of the shock near the axis before the
      focus (N26), so whether a refined run ends admissible depends on the
@@ -802,7 +795,7 @@ promotion.
   properties of the code, and the level's share of the fine grid's points
   is set by the problem and the tagging, so the two are gated apart. On the
   Sod tube, the blob case and the 3-D case: the level's step count at the
-  uniform fine run's, which the Sod level already takes, and the cost per
+  uniform fine run's, which every level but the last case's box takes, and the cost per
   point-step against the fine run's below the ratio recorded in
   [the table](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid);
   the refined wall below the uniform fine wall, at one rank and at eight,
@@ -829,11 +822,15 @@ promotion.
   runs on r-z and 3-D Cartesian levels, and `ablation_band` tags a band that
   follows the front. A 1 µm shell is only practical refined, and the band runs
   are blocked by the hierarchy, not the source:
-  1. The root's covered nodes set its step (A17's first item). In a band run
-     the root's rate was about four times the band's, and the root's steps
-     were about 8 times a uniform fine grid's.
+  1. The root's covered nodes set its step until A17's first item dropped
+     the parent's sensors there. In the r-z band run the root's rate was
+     eleven times the band's and is now a ninth of it, and the run takes
+     fewer steps than the uniform fine grid where it took three times as
+     many. The three-dimensional band has not been rerun.
   2. Tiles near the r-z axis: runs at both tile edges tried failed, and a
-     single box ran. On the one-dimensional converging shock the axis fold
+     single box ran. With the sensors dropped the edge-8 band still fails
+     on one of the two root grids tried, later than with them kept, and on
+     the other it runs past that time either way. On the one-dimensional converging shock the axis fold
      shows no defect, and the tiles' only addition is a transient undershoot
      at the same-level faces the shock crosses, which the positivity limiter
      removes; repeat the band runs with the limiter on (A17's fourth item).
@@ -843,12 +840,16 @@ promotion.
      on a three-dimensional root failed.
 
   ```
-  band run, 10–20 µm band over a 30–60 µm root, at 0.15 ns
-    rate of the root                    3865
-    rate of the band                    958
-  3-D band run                          0.1 ns in 30 minutes
+  r-z band run, 10 µm tiles of edge 8 over a 30 µm root of 48 nodes,
+  flat drive                            sensors kept    sensors dropped
+    rate of the root at 0.15 ns         3188            40
+    rate of the band at 0.15 ns         293             369
+    steps to 0.15 ns                    247             72
+    steps of the uniform 10 µm grid                     81
+    steps to 0.7 ns                     6072            1508
+  the same on a root of 47 nodes        failed at 0.46 ns   failed at 0.62 ns
+  3-D band run, sensors kept            0.1 ns in 30 minutes
   r-z tiles near the axis, edge 10      failed within 0.1 ns
-  r-z tiles near the axis, edge 8       failed at 0.62 ns
   undriven r-z cold start at 15 µm      failed within 0.035 ns
   3-D root at 60 µm, 32 × 128 bins      failed at 0.03 ns
   ```

@@ -156,7 +156,10 @@ const RESTRICT_MARGIN = 2
 # patches.jl). It stays below the strong-shock ceiling: on the converging
 # shock at the r-z axis of bench/amrwin.jl, covered nodes at the axis left
 # out of the rate ran away within one parent step at the focus, and held to
-# 1.0 they still did, where held to 0.9 or 0.75 they did not.
+# 1.0 they still did, where held to 0.9 or 0.75 they did not. Those runs
+# predate the mask on the parent's sensors at its overwritten nodes
+# (`MASK_CHILD_SENSORS`, rhs.jl), with which the held nodes stay at or below
+# the solver's CFL number in every run of that script.
 const OVERWRITTEN_CFL = 0.75
 
 # --- Level ownership ----------------------------------------------------------
@@ -4308,7 +4311,9 @@ resumed on the same solver keeps the cadence. Constructed by the
 The tag is the union of the criteria `_tag_sweep!` evaluates over the
 parent level's state: `threshold` on the relative undivided fourth
 difference of the mixture density, always on; `sensor_threshold` on the
-artificial diffusivity number of the last right-hand side; `gradient_threshold`
+artificial diffusivity number, from coefficients a check computes on that
+state with `whole_sensors` set, which keeps the sensors a parent otherwise
+drops at its overwritten nodes (`_tag_coefficients!`); `gradient_threshold`
 on the mass-fraction change per cell; `vorticity_threshold` on the vorticity
 magnitude; and `predicate`, a user closure over the parent patch. A zero
 threshold or a `nothing` predicate leaves that criterion off. `tags` is the
@@ -4378,6 +4383,8 @@ mutable struct RegridSpec{T}
     boundaries::Bool                 # tags may place a level on a domain face
     edges::Vector{NTuple{3,Int}}     # per refined level, its lattice's edges
     costs::LatticeCosts              # the lattice cost model and its timers
+    whole_sensors::Bool              # a check is computing the coefficients its
+                                     # sensor criterion tags from
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -4388,7 +4395,8 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts())
+                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts(),
+                  false)
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]

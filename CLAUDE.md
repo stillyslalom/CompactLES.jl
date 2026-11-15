@@ -501,6 +501,12 @@ Names are spelled out in full. Current vocabulary:
   `_plane_accumulate!` (the composite plane average at the root's
   stations). A diagnostic's `Vector` form is the composite, masked one; the
   single-array form is the one-patch quadrature and applies no mask
+- `overwritten` (a `Patch` field: 1 at the nodes a child's restriction
+  writes, 2 at those of them `max_rate` holds to `OVERWRITTEN_CFL`),
+  `MASK_CHILD_SENSORS` / `_mask_child_sensor!` / `smooth_sensor!` (a
+  parent's sensors set to zero at those nodes before smoothing),
+  `_tag_coefficients!` and `RegridSpec.whole_sensors` (the coefficients a
+  regrid check's sensor criterion reads, computed with every sensor kept)
 - `junction` (one coarse-fine face of one tile as the conservative coupling
   treats it, its `box` the parent lines crossing it, `_reflux_junctions`),
   `RefluxCapture` / `reflux_captures` (a `Patch` field: the patch's side of

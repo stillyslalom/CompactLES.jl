@@ -978,9 +978,12 @@ discipline requires.
 On a refined run a parent's nodes deep inside a child level, which the
 child's restriction overwrites after every step, are held to a CFL number of
 `OVERWRITTEN_CFL` = 0.75 rather than the solver's, when the solver's is the
-smaller: their rate enters scaled by `cfl / OVERWRITTEN_CFL`. There the
-parent's artificial coefficients, sensed at the parent spacing on the
-restricted fine solution, would otherwise size the parent's step. A node is
+smaller: their rate enters scaled by `cfl / OVERWRITTEN_CFL`. The rule
+predates the mask that drops the parent's sensors at the nodes the
+restriction overwrites (`compute_artificial!`): before it the
+artificial coefficients sensed there on the restricted fine solution sized
+the parent's step, and with it the held nodes carry little more than their
+hyperbolic rate. A node is
 held so when every node within `LEVEL_BUFFER` of it is fully covered, which
 leaves every node that outlives the step or feeds the child's ghost layers
 at the solver's CFL number. The density minimum and the direction rates
@@ -1124,10 +1127,11 @@ end
 
 # The factor on the rate at node `I`: `held = (overwritten, weight)` with the
 # patch's `overwritten` mask and `_overwritten_weight`, or `nothing` on a
-# patch with no overwritten node, whose launch then reads no mask.
+# patch with no overwritten node, whose launch then reads no mask. The nodes
+# held are the mask's second grade (`_fill_overwritten!`).
 @inline _rate_weight(::Nothing, I) = true
 @inline _rate_weight(held, I) =
-    @inbounds ifelse(held[1][I] != 0, held[2], one(held[2]))
+    @inbounds ifelse(held[1][I] > 1, held[2], one(held[2]))
 
 # The factor `max_rate` scales an overwritten node's rate by, so that the
 # node is held to `OVERWRITTEN_CFL` where the solver's CFL number is lower.
@@ -1265,7 +1269,7 @@ function _rate_sweep(fields, outer, range, nx)
             # An overwritten node's rate is scaled (`Patch.overwritten`); its
             # density and its direction rates above, which the positivity check
             # and the filter's relaxation read, are not.
-            masked && overwritten[I] != 0 && (acc *= weight)
+            masked && overwritten[I] > 1 && (acc *= weight)
             rate = max(rate, acc)
         end
     end

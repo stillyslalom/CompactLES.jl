@@ -226,7 +226,16 @@ function _unit_sensed!(ps, Q, prepared::Bool)
     _sensed_fields!(ps)
     return nothing
 end
-_unit_detect!(ps, Q, ::Nothing) = (_level_sensor_detect!(ps, Q); nothing)
+function _unit_detect!(ps, Q, ::Nothing)
+    _level_sensor_detect!(ps, Q)
+    # A tile with a child level drops its overwritten nodes from every sensor
+    # before the first smoothing pass, as `smooth_sensor!` does on one patch.
+    _sensor_mask_patch(ps) &&
+        _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f
+            _mask_child_sensor!(f, ps)
+        end
+    return nothing
+end
 _unit_coefficients!(ps, Q, ::Nothing) = (_level_coefficients!(ps); nothing)
 function _unit_smooth_sensors!(ps, Q, d::Int)
     _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f

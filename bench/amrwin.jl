@@ -539,7 +539,7 @@ function patch_rates!(classes, ps, Q, scale, zero_cache)
         ν0 = CL._diffusive_rate(ps.eos, ρ, ps.p[I], ps.T_ion[I], cp, molecular,
                                 Z, Z, Z, Dz, I, nsp)
         acc += CL._sharpening_rate(sharp, c, ps.inv_h, ps.h, act, I)
-        cls = !isempty(overwritten) && overwritten[I] != 0 ? 7 :
+        cls = !isempty(overwritten) && overwritten[I] > 1 ? 7 :
               level > 0 ? 3 + min(level, 3) :
               covered[I] == 0x00 ? 1 : covered[I] == 0xff ? 3 : 2
         record!(classes[cls], acc + 2 * ν * dsum, acc + 2 * ν0 * dsum, scale)

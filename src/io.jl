@@ -53,12 +53,10 @@
 # one step size, which the nonlinear sensors amplify over the run. The
 # checkpoint carries the four arrays beside Q, written only when the
 # artificial properties are enabled (they are zero from allocation
-# otherwise), with the field count recorded and checked. What the sensor tag
-# criterion reads beside them, the primitives of the evaluation that wrote
-# them, is not carried: a restart refreshes the primitives from the restored
-# state instead, so with `tag_sensor_threshold > 0` a marginal node may tag
-# differently at the first regrid check after a restart. Every other criterion
-# reads Q.
+# otherwise), with the field count recorded and checked. The sensor tag
+# criterion needs nothing carried: a regrid check computes the coefficients
+# and the primitives it reads from the state (`_tag_coefficients!`), and
+# every other criterion reads Q.
 #
 # The checkpoint does not carry the caller's own bookkeeping. Callback schedules
 # and a `FieldWriter`'s frame index live outside the solver, and both docstrings
@@ -1349,10 +1347,10 @@ end
 #
 # The artificial coefficient arrays are the one piece of per-point state the
 # integrator carries between steps. `max_rate` reads them for its diffusive
-# rate at the top of the next step, and the sensor tag criterion reads them at
-# a regrid check. `compute_artificial!` rebuilds them from whatever state it is
-# handed, so an observational call that asks for a coefficient field at a step
-# boundary replaces the coefficients the last Runge–Kutta stage left, and the
+# rate at the top of the next step. `compute_artificial!` rebuilds them from
+# whatever state it is handed, so an observational call that asks for a
+# coefficient field at a step boundary replaces the coefficients the last
+# Runge–Kutta stage left, and the
 # next timestep changes although the conserved state did not. Measured on a
 # 64-point Sod at cfl = 0.15: one `field_array(solver, Q, :beta_art)` after the
 # first step moved the next dt from 1.8692671e-3 to 1.8683252e-3.

@@ -353,11 +353,73 @@ const MASK_CHILD_DERIVATIVE = Ref(true)
 # mass-fraction overshoot on the parent's own nodes beside a coarse-fine face,
 # which restriction does not overwrite; a regrid fills new tiles from those
 # nodes, and the mass-fraction bound term of D* then limits the level's step.
-# Plain gradients remove that overshoot, but on one regridded box over the
-# two-dimensional blobs of bench/amrwin.jl the parent's uncovered nodes then
-# carry a far larger mass-fraction error, and their artificial diffusivity
-# bounds the step; that cause is not traced.
+# Plain gradients remove that overshoot. Before the parent's sensors were
+# dropped at its overwritten nodes (`MASK_CHILD_SENSORS`), one regridded box
+# over the two-dimensional blobs of bench/amrwin.jl then carried a far larger
+# mass-fraction error on the parent's uncovered nodes, whose artificial
+# diffusivity bounded the step. With the sensors dropped that box runs alike
+# masked and plain, and the boxed three-dimensional blob's errors are several
+# times smaller plain.
 const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
+
+# `true`, the default, drops the sensors of a parent patch's artificial
+# coefficients at the nodes a child's restriction overwrites, before they are
+# smoothed; `false` smooths them whole. Those nodes carry the restricted fine
+# solution, in which a feature the child resolves is a jump narrower than the
+# parent's spacing, and the parent's detectors read it at full strength. The
+# coefficients built from that reading dissipated values the restriction
+# replaces at the end of the step, bounded the parent's step through
+# `max_rate` and, spread by the smoother, reached the nodes beside a
+# coarse-fine face that the parent keeps. With the sensors dropped the
+# coefficients fall to zero over the smoother's width inside the child and are
+# continuous across the first overwritten node, which a mask on the smoothed
+# coefficients is not. The node the restriction leaves to the parent inside
+# the face keeps its sensor: with it dropped there as well, the box run of
+# the converging shock at the r-z axis of bench/amrwin.jl fails at the focus,
+# as it does with no mask. The measurements are under bench/amrwin.jl in
+# reference/CALIBRATION_APPENDIX.md.
+const MASK_CHILD_SENSORS = Ref(true)
+
+# Whether this patch's sensors take that mask: it holds overwritten nodes'
+# storage (a solver of more than one level), a child level holds a patch, and
+# no regrid check is computing the coefficients its sensor criterion tags
+# from, which keep every sensor (`_tag_coefficients!`). Read from the
+# hierarchy and the regrid record every rank of the patch holds.
+_sensor_mask_patch(solver::SolverLike) = false
+function _sensor_mask_patch(ps::PatchSolver)
+    MASK_CHILD_SENSORS[] || return false
+    isempty(ps.patch.overwritten) && return false
+    spec = getfield(ps.solver, :regrid)
+    (spec === nothing || !spec.whole_sensors) || return false
+    levels = getfield(ps.solver, :levels)
+    child = ps.patch.level + 2
+    return child <= length(levels) && !isempty(levels[child].transfers)
+end
+
+"""
+    _mask_child_sensor!(f, solver)
+
+Set the detector output `f` to zero at the nodes of a parent patch that a
+child's restriction overwrites (`Patch.overwritten`), ahead of its smoothing,
+and return it; `f` unchanged on a patch with no child level
+(`MASK_CHILD_SENSORS` has the reason). Rank-local.
+"""
+function _mask_child_sensor!(f, solver::SolverLike)
+    _sensor_mask_patch(solver) || return f
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    pointwise!(_mask_sensor_point!, f, nx, ny, nz, f, solver.overwritten, o1, o2, o3)
+    return f
+end
+
+@inline function _mask_sensor_point!(f, overwritten, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        f[I] = ifelse(overwritten[I] != 0, zero(eltype(f)), f[I])
+    end
+    return nothing
+end
 
 # The scaled derivative along `d` of a field the species channel differences.
 _species_deriv_scaled_along!(out, f, solver::SolverLike, d::Int) =
