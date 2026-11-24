@@ -2873,36 +2873,37 @@ end
         run!(s, q; tfinal=1.0, kw...)
         return CL.RESTRICTION_COUNT[] - n0
     end
-    try
+    # A callback that writes nothing. `run!` cannot know that, and takes the
+    # state as written.
+    written = (_, _) -> nothing
+    let
         # Five steps of a continuing call: one restriction per step after the
         # step, and one before the first step, where the state may have been
         # written since the previous call. Before, every step restricted twice.
         s, q = nest()
         run!(s, q; tfinal=1.0, nmax=2)
         @test counted(s, q; nmax=s.step + 5) == 6
-        CL.FORCE_PRESYNC_RESTRICT[] = true
-        @test counted(s, q; nmax=s.step + 5) == 10
-        CL.FORCE_PRESYNC_RESTRICT[] = false
-        # A bare callback runs every step and may write the state.
-        @test counted(s, q; nmax=s.step + 3, callback=(_, _) -> nothing) == 6
-    finally
-        CL.FORCE_PRESYNC_RESTRICT[] = false
+        # A bare callback runs every step and may write the state, so the
+        # run restricts before every step, as it did before the pre-step
+        # restriction became conditional.
+        @test counted(s, q; nmax=s.step + 5, callback=written) == 10
+        @test counted(s, q; nmax=s.step + 3, callback=written) == 6
     end
-    # Each case run under both schedules, compared bit for bit, halos included.
+    # Each case run under both schedules, compared bit for bit, halos
+    # included: as it is, and with `written` beside its own callback, which
+    # restores the restriction before every step.
     function same_both_ways(build, runner)
-        out = map((true, false)) do force
-            CL.FORCE_PRESYNC_RESTRICT[] = force
-            try
-                s, q = build()
-                runner(s, q)
-                (s.t, s.step, s.cfl, s.floor_tally.cells, [copy(parent(Q)) for Q in q])
-            finally
-                CL.FORCE_PRESYNC_RESTRICT[] = false
-            end
+        out = map((written, nothing)) do extra
+            s, q = build()
+            runner(s, q, extra)
+            (s.t, s.step, s.cfl, s.floor_tally.cells, [copy(parent(Q)) for Q in q])
         end
         return isequal(out[1], out[2]), out[2]
     end
-    steps(n; kw...) = (s, q) -> run!(s, q; tfinal=1.0, nmax=n, kw...)
+    beside(callback, extra) = extra === nothing ? callback :
+                              callback === nothing ? extra : (callback, extra)
+    steps(n; callback=nothing, kw...) = (s, q, extra) ->
+        run!(s, q; tfinal=1.0, nmax=n, callback=beside(callback, extra), kw...)
     # A callback writing the refined state every third step, and one spoiling
     # a root density once at step 5, which rolls back to step 4.
     bump = Callback(EveryStep(3), (s, q) -> (foreach(Q -> parent(Q) .*= 1 + 1e-6,
@@ -2914,10 +2915,9 @@ end
         "static" => (nest, steps(8)),
         "subcycled" => (() -> nest(subcycle=true), steps(6)),
         "callback" => (nest, steps(8; callback=bump)),
-        "rollback" => (nest, (s, q) -> run!(s, q; tfinal=1.0, nmax=7,
-                                            callback=spoil(Ref(false)),
-                                            control=StepControl(retries=1,
-                                                                savepoint_interval=2))),
+        "rollback" => (nest, (s, q, extra) ->
+            run!(s, q; tfinal=1.0, nmax=7, callback=beside(spoil(Ref(false)), extra),
+                 control=StepControl(retries=1, savepoint_interval=2))),
         "tiled regrid" => (() -> sod(N=201, subcycle=true, regrid_interval=5,
                                      refine=BlockRegion((85, 0, 0), (31, 1, 1))),
                            steps(20)),
@@ -4301,46 +4301,43 @@ const SEAM_REGRID_TOL = 5e-9
     # One box does not wrap around onto itself.
     @test_throws "periodic dimension 1" seam(region=BlockRegion((0, 0, 0), (N - 7, 1, 1)))
 
-    # --- A density step through a box across the seam, the correction on ---
-    # The step crosses the box's low face as the run goes, so the gate flags
-    # the junction and the coarse-fine correction runs; across the seam the
-    # junction's parent face node, its correction node and its stencil lie
-    # in different images of the box. The gate tests the uncovered nodes
+    # --- Density steps through a box across the seam, the correction on ---
+    # A single step crosses the box's low face as the run goes, so the gate
+    # flags the junction and the coarse-fine correction runs; across the seam
+    # the junction's parent face node, its correction node and its stencil
+    # lie in different images of the box. The gate tests the uncovered nodes
     # alone, so the steps after the step has entered the box go uncorrected
-    # and the composite mass drifts, by 4.3e-5 in both images; with the gate
-    # off every junction line is corrected in every step, and the mass holds
-    # to 3.4e-15.
-    step_ic(s) = (x, y, z) -> begin
-        xs = mod(x - s / N, 1.0)
-        Prim(rho=xs < 0.15 ? 2.0 : 1.0, u=(0.5, 0.0, 0.0), p=1.0)
-    end
-    for gated in (true, false)
-        CL.REFLUX_GATED[] = gated
-        contact = try
-            map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
-                 (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
-                local sv = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                  bcs=(per, per, per), cfl=0.4, refine=r)
-                local q = allocate_state(sv)
-                initialize!(sv, q, step_ic(s))
-                local m0 = volume_integral(sv, q, :rho)
-                CL._ledger_begin!(sv, q)
-                steps!(sv, q, 1, 30, 30, 0.3)
-                local led = CL._ledger_end!(sv, q)
-                (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
-                 reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
-            end
-        finally
-            CL.REFLUX_GATED[] = true
+    # and the composite mass drifts, by 4.3e-5 in both images. A square wave
+    # of six-node plateaus keeps a step among the gate's nodes at both faces
+    # in every step of the run, so every junction line is corrected in every
+    # step and the mass holds to round-off, measured 4.6e-15. Its edges lie
+    # between nodes, so both translations sample the same values.
+    density = (single=xs -> xs < 0.15 ? 2.0 : 1.0,
+               wave=xs -> iseven(floor(Int, (xs * N + 0.5) / 6)) ? 2.0 : 1.0)
+    for (profile, bound) in ((:single, 1e-4), (:wave, 1e-12))
+        step_ic(s) = (x, y, z) ->
+            Prim(rho=density[profile](mod(x - s / N, 1.0)), u=(0.5, 0.0, 0.0), p=1.0)
+        contact = map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
+                       (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
+            local sv = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                              bcs=(per, per, per), cfl=0.4, refine=r)
+            local q = allocate_state(sv)
+            initialize!(sv, q, step_ic(s))
+            local m0 = volume_integral(sv, q, :rho)
+            CL._ledger_begin!(sv, q)
+            steps!(sv, q, 1, 30, 30, 0.3)
+            local led = CL._ledger_end!(sv, q)
+            (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
+             reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
         end
         @test all(c -> c.reflux != 0, contact)
         e = shifted_difference(contact[1].s, contact[1].q, contact[2].s, contact[2].q,
                                36)
-        @info("density step through a box across the seam", gated, e,
+        @info("density steps through a box across the seam", profile, e,
               contact[1].drift, contact[2].drift)
         @test e < SEAM_SHIFT_TOL
         @test abs(contact[1].drift - contact[2].drift) < 1e-12
-        @test all(c -> abs(c.drift) < (gated ? 1e-4 : 1e-12), contact)
+        @test all(c -> abs(c.drift) < bound, contact)
     end
 
     # --- A corner box across both seams, and a tiled level, 2-D -----------------

@@ -7418,8 +7418,8 @@ The default's row was re-measured with the parent's sensors dropped at its
 overwritten nodes (`MASK_CHILD_SENSORS`); the other rows predate that mask.
 
 **Where the default's drift comes from.** With every line corrected in every
-step (`REFLUX_GATED[] = false`) the Sod tube conserves mass to the unrefined
-run's round-off with the mask off or on. The default's drift there is the
+step the Sod tube conserves mass to the unrefined run's round-off with the mask
+off or on. The default's drift there is the
 mismatch of the steps the gate leaves uncorrected, which the registers
 discard, and the mask makes the uncorrected mismatch about six times larger.
 The Noh crossing without the mask behaves the same way. With the mask a

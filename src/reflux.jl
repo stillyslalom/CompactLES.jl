@@ -821,12 +821,6 @@ const GATE_REACH = 8
 # The gate's nodes of a junction line: the tested ones and two either side.
 const GATE_WIDTH = 2GATE_REACH + 5
 
-"""
-Benchmark toggle: `false` corrects every junction line in every step, the
-form `bench/archive/reflux.jl` measures the gate against.
-"""
-const REFLUX_GATED = Ref(true)
-
 # The density at the gate's nodes a parent capture holds, per line. The test
 # itself is taken on every rank from these values summed over the level's
 # ranks, so that it reads no halo: at the step's start and after the
@@ -1008,8 +1002,7 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     change = zeros(Float64, base[end] * n_cons)
     for (jn, jc) in enumerate(junctions)
         n1, n2 = length(jc.box[1]), length(jc.box[2])
-        flagged = BitVector([!REFLUX_GATED[] ||
-                             _reflux_gated(buf, at(jn, k, n_cons + 1), jc.side) ||
+        flagged = BitVector([_reflux_gated(buf, at(jn, k, n_cons + 1), jc.side) ||
                              any(c -> carry[cat(jn, k, c)] != 0, 1:n_cons)
                              for k in 1:n1*n2])
         for run in _flagged_runs(flagged, n1, n2)

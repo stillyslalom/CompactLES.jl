@@ -1909,11 +1909,6 @@ function _presync!(solver, states::Vector{<:ConservedState}, restrict::Bool=true
     return states
 end
 
-# Test toggle: `run!` restricts before every step, as it did before the
-# pre-step restriction became conditional, so a test can compare the two
-# schedules bit for bit in one process.
-const FORCE_PRESYNC_RESTRICT = Ref(false)
-
 # Per-step level maintenance, after the state filter: restrict the fine state
 # onto the covered coarse region, then re-impose the fine shell from the
 # restricted coarse state. No-ops without refinement.
@@ -2168,7 +2163,7 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
         _ledger_open!(solver, Q)
         _maybe_regrid!(solver, Q, workspace, save, control,
                        (rho_floor, e_floor)) && (levels_synced = false)
-        _presync!(solver, Q, !levels_synced || FORCE_PRESYNC_RESTRICT[])
+        _presync!(solver, Q, !levels_synced)
         levels_synced = false
         # Boundary conditions before the rate measurement, for two reasons. The
         # step should be sized from the state it is about to advance, and the
