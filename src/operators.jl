@@ -260,17 +260,6 @@ end
 @inline _odims(::Val{2}) = (1, 3)
 @inline _odims(::Val{3}) = (1, 2)
 
-function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
-                      ::Val{D}) where {T,D}
-    n_halo_d = decomp.n_halo_d
-    o1, _ = _odims(Val(D))
-    n1 = decomp.n_local[o1]
-    @threaded plan.lines*plan.n for l in 1:plan.lines
-        _fill_line!(B, plan, f, l, n1, n_halo_d, Val(D))
-    end
-    return B
-end
-
 # The explicit stencil of one line `l` into column `l` of `B` (n × lines), the
 # line's orthogonal coordinates from `l` with the first of them, of extent
 # `n1`, varying fastest.
@@ -491,21 +480,6 @@ end
     plan.lo_closed && jr <= length(plan.clo) && return 1
     plan.hi_closed && jr > plan.n - length(plan.chi) && return 2
     return 0
-end
-
-function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
-    n = plan.n
-    nx = decomp.n_local[1]
-    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]   # threaded outer orthogonal dim
-    # Flattened (jr, kk), allowing a run whose orthogonal dimension is collapsed
-    # to divide over the line index. That case is nout = 1, which covers
-    # every transverse direction of a planar-2-D grid. Each (kk, jr) writes a
-    # distinct nx-long block of B, so the pair is as independent as kk alone was.
-    @threaded nout*n*nx for jk in outer_indices(n, nout)
-        jr, kk = Tuple(jk)
-        _fill_t_row!(B, plan, f, jr, kk, 1, nx, nx, decomp.n_halo_d, Val(D))
-    end
-    return B
 end
 
 # Row `jr` of the lines `(i, kk)`, `i` in `i0:i1`, into B (lines × n): the

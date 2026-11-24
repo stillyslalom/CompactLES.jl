@@ -1208,7 +1208,3 @@ function _junction_integral(solver::PatchSolver, f)
     end
     return acc
 end
-
-# The composite budget in the conserved quadrature, which `_conserved_budget`
-# takes on a composite solver.
-_reflux_budget(solver::Solver, states) = _conserved_budget(solver, states)

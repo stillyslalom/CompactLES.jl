@@ -123,6 +123,44 @@ const DEFAULTS = (N = "96", dims = "", derivs = "c6,c10", reps = 50, warmup = 5,
                   mode = "timing", operators = "c6,c10,filter,d8,pyranda",
                   rhs = "smooth")
 
+# The whole-array fills of the line buffer and the dense reduced matrix,
+# which only this script calls: the solver fills per cache block
+# (`_fill_line!`, `_fill_t_row!`) and never forms the reduced matrix.
+function _fill_lines!(B::Matrix{T}, plan, f, decomp::CL.Decomp,
+                      ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    o1, _ = CL._odims(Val(D))
+    n1 = decomp.n_local[o1]
+    CL.@threaded plan.lines*plan.n for l in 1:plan.lines
+        CL._fill_line!(B, plan, f, l, n1, n_halo_d, Val(D))
+    end
+    return B
+end
+
+function _fill_t!(B::Matrix{T}, plan, f, decomp::CL.Decomp, ::Val{D}) where {T,D}
+    n = plan.n
+    nx = decomp.n_local[1]
+    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]   # threaded outer orthogonal dim
+    # Flattened (jr, kk), allowing a run whose orthogonal dimension is collapsed
+    # to divide over the line index. That case is nout = 1, which covers
+    # every transverse direction of a planar-2-D grid. Each (kk, jr) writes a
+    # distinct nx-long block of B, so the pair is as independent as kk alone was.
+    CL.@threaded nout*n*nx for jk in CL.outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        CL._fill_t_row!(B, plan, f, jr, kk, 1, nx, nx, decomp.n_halo_d, Val(D))
+    end
+    return B
+end
+
+# The reduced matrix of a line solver, dense in the natural order, or
+# `nothing` without a reduced stage; for diagnostics.
+function _reduced_matrix(line_solver)
+    band = line_solver.band
+    band === nothing || return CL._band_matrix(band)
+    red = line_solver.red
+    return red === nothing ? nothing : Matrix(red)
+end
+
 function deriv_scheme(name)
     name == "c6" && return lele_d1_6(Float64)
     name == "c8" && return lele_d1_8(Float64)
@@ -175,9 +213,9 @@ function time_plan(plan, out, f, decomp, reps, warmup)
     solve! = plan.tr ? CL.solve_lines_t! : CL.solve_lines!
     fill!(B, 0)
     if plan.tr
-        CL._fill_t!(B, plan, f, decomp, Val(d))
+        _fill_t!(B, plan, f, decomp, Val(d))
     else
-        CL._fill_lines!(B, plan, f, decomp, Val(1))
+        _fill_lines!(B, plan, f, decomp, Val(1))
     end
     B0 = copy(B)
     restore_B = () -> copyto!(B, B0)
@@ -415,7 +453,7 @@ function decomposed_solve(scheme, N, Nt, P, B, comm)
         CL.solve_lines!(Bl, ls)
         X[o+1:o+n, :] .= Bl
         if rank == 0
-            R = CL._reduced_matrix(ls)
+            R = _reduced_matrix(ls)
             cond_reduced = R === nothing ? NaN : cond(R)
             cond_local = cond(local_block(ls.F))
         end

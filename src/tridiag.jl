@@ -389,15 +389,6 @@ function _band_matrix(band::ReducedBand{T}) where {T}
     return X[band.pos, band.pos]
 end
 
-# The reduced matrix of a line solver, dense in the natural order, or
-# `nothing` without a reduced stage; for diagnostics.
-function _reduced_matrix(line_solver)
-    band = line_solver.band
-    band === nothing || return _band_matrix(band)
-    red = line_solver.red
-    return red === nothing ? nothing : Matrix(red)
-end
-
 mutable struct LineSolver{T}
     n::Int
     F::TriFactor{T}
