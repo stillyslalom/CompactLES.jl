@@ -368,7 +368,7 @@ end
 
 # The factorized matrix multiplied back out, dense, in the natural order: the
 # eliminations undone from the last to the first, each followed by its row
-# interchange. A diagnostic for `bench/reducedsolve.jl`, not a solve path.
+# interchange. A diagnostic for `bench/archive/reducedsolve.jl`, not a solve path.
 function _band_matrix(band::ReducedBand{T}) where {T}
     n, kl, kv = band.n, band.kl, band.kl + band.ku
     X = zeros(T, n, n)

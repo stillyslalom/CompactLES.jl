@@ -991,7 +991,7 @@ end
 # every point of such a state.
 # `mixture_temperature_status` gives the reasoning for eps^(2/3). A criterion
 # of 32 eps sits below the residual's round-off floor, where the fits' large
-# terms cancel: `bench/nasa9_inversion.jl part=sweep` finds it unmet on up to a
+# terms cancel: `bench/archive/nasa9_inversion.jl part=sweep` finds it unmet on up to a
 # sixth of the states at 6-13 kK whose recovered T is correct to that floor.
 @inline _nasa9_rtol(::Type{T}) where {T<:AbstractFloat} =
     max(T(1e-10), cbrt(eps(T))^2)
@@ -1156,7 +1156,7 @@ end
 end
 
 # The inversion itself, returning the number of Newton iterations as well, which
-# `bench/nasa9_inversion.jl` reads; the public forms drop it after inlining.
+# `bench/archive/nasa9_inversion.jl` reads; the public forms drop it after inlining.
 @inline function _nasa9_temperature(eos::Nasa9Model, e, Yat::F) where {F}
     n = length(eos.Rk)
     table = eos.intervals

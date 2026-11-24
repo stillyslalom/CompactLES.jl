@@ -681,7 +681,7 @@ say("\n=== Acoustic pulse at an air/SF6 interface (analytic: impedance) ===")
 
 # The captured interface is two cells wide, so the reflection coefficient
 # converges to the sharp-interface value with the grid (second order in the
-# width, measured 400 to 3200 by bench/interfaceacoustics.jl); the guards are
+# width, measured 400 to 3200 by bench/archive/interfaceacoustics.jl); the guards are
 # on the N = 1600 row.
 for case in (:lh, :hl)
     r = interface_pulse(case, IA_N)

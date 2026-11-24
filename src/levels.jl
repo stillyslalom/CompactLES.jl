@@ -42,7 +42,7 @@
 #     removes the term but moves the error against the exact solution at
 #     the default cfl, and on a Sod crossing, by under 2%, at seven
 #     restrictions per step instead of one, so the schedule stays per step
-#     (bench/restrictcost.jl). Under subcycling the parent's step precedes
+#     (bench/archive/restrictcost.jl). Under subcycling the parent's step precedes
 #     its children's, so there is no stage to restrict at; there most of a
 #     refined level's time error is fourth order at the root step, the
 #     integrator's and the Hermite shell's reconstruction of the parent.

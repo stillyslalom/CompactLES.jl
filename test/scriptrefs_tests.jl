@@ -1,7 +1,8 @@
-# Script reference guard. No testset runs the scripts under bench/, examples/,
-# probes/ and docs/literate/, so an API change that removes or renames a
-# binding or a keyword, or changes the arguments of a per-point body, would
-# leave them broken with no failing test. This file parses every script
+# Script reference guard. No testset runs the scripts under bench/ (its
+# archive/ excepted, see `ARCHIVE`), examples/, probes/ and docs/literate/, so
+# an API change that removes or renames a binding or a keyword, or changes the
+# arguments of a per-point body, would leave them broken with no failing
+# test. This file parses every script
 # without running it, since the scripts load JET, CairoMakie, AMDGPU, HDF5 and
 # other packages the package environment does not carry, and checks its
 # references to CompactLES against the loaded package:
@@ -783,12 +784,20 @@ function check_scope!(failures, stats, skipped, scope, targets)
     end
 end
 
+# bench/archive/ holds the scripts behind measurements already recorded in
+# reference/. They are kept for provenance and are not maintained against the
+# current API, so a walk of bench/ skips them; a path given inside the archive
+# is still checked.
+const ARCHIVE = joinpath(ROOT, "bench", "archive")
+_archived(dir) = dir == ARCHIVE || startswith(dir, ARCHIVE * Base.Filesystem.path_separator)
+
 function script_files(paths)
     files = String[]
     for p in paths
         p = normpath(abspath(p))
         if isdir(p)
             for (root, _, names) in walkdir(p), n in names
+                _archived(root) && !_archived(p) && continue
                 endswith(n, ".jl") && push!(files, joinpath(root, n))
             end
         else

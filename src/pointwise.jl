@@ -254,7 +254,7 @@ backend's in-order stream and returns; [`DEVICE_SYNC`](@ref) restores the
 synchronize-per-launch conservative mode. Called with
 `KernelAbstractions.CPU()`, the backend `get_backend` returns for an `Array`,
 this runs the same bodies through the kernel path on ordinary storage, which
-is how `bench/pointwise_ka.jl` times the two paths against each other on one
+is how `bench/archive/pointwise_ka.jl` times the two paths against each other on one
 machine. The test suite uses [`FORCE_KA`](@ref) to route a whole run through the
 same path.
 """

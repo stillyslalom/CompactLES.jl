@@ -640,7 +640,7 @@ end
 # which needs the local solution of every line first, the correction and
 # the scatter follow in a second region.
 #
-# Measured on the line solves of bench/stepcost.jl's cases, pinned, at -t 8:
+# Measured on the line solves of bench/archive/stepcost.jl's cases, pinned, at -t 8:
 # the velocity gradients of the planar helium cylinder fall from 0.97 to
 # 0.54 ms and its flux divergence from 1.80 to 1.31 ms, the 64^3
 # Taylor-Green vortex's from 1.92 to 1.71 and from 3.21 to 2.96 ms. At -t 1

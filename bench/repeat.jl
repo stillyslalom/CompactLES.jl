@@ -93,7 +93,7 @@
 #               its ranks running; check for orphans by command line.
 #   out         transcript path (default none): the header, every run's full
 #               output and the summary. The convention for an instrument's
-#               record is `bench/results/<script>.txt`.
+#               record is `bench/archive/results/<script>.txt`.
 #   echo        print every run's output as it arrives (default false; the
 #               terminal otherwise shows one status line per run).
 #

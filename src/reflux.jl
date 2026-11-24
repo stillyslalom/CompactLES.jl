@@ -823,7 +823,7 @@ const GATE_WIDTH = 2GATE_REACH + 5
 
 """
 Benchmark toggle: `false` corrects every junction line in every step, the
-form `bench/reflux.jl` measures the gate against.
+form `bench/archive/reflux.jl` measures the gate against.
 """
 const REFLUX_GATED = Ref(true)
 

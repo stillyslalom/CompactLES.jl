@@ -568,7 +568,7 @@ end
 # other directions dominate. Line relaxation does not smooth an error that
 # varies slowly along both dominant directions and oscillates along the weak
 # one, and a coarse level that keeps the weak dimension represents it
-# (bench/implicitstage.jl). Near the spherical origin the two angular
+# (bench/archive/implicitstage.jl). Near the spherical origin the two angular
 # directions dominate the radial one, which neither order of coarsening
 # covers. Under `keep_two` no dimension is coarsened below two global nodes:
 # without a mass, a line whose transverse dimensions hold one aggregate

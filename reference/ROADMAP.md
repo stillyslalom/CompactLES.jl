@@ -12,11 +12,11 @@ Defects found while building the Examples pages, filed here as found; each
 example they block is held until the item closes.
 
 - [ ] **A19 — Remove the grid-scale pattern tiled levels leave behind a
-  converging shock.** On `bench/levelpattern.jl`'s spherical shock
+  converging shock.** On `bench/archive/levelpattern.jl`'s spherical shock
   converging on an r-z quadrant, the mean undivided fourth difference of ρ
   in the shell behind the shock is, against the uniform run on the level's
   nodes, 1.00 times for one box and 1.19 times for fixed and for regridded
-  tiles ([measurements](CALIBRATION_APPENDIX.md#benchlevelpatternjl-the-grid-scale-pattern-of-a-refined-level)).
+  tiles ([measurements](CALIBRATION_APPENDIX.md#bencharchivelevelpatternjl-the-grid-scale-pattern-of-a-refined-level)).
   The regridded excess was A18's mechanism, removed by commit `04d3cff`;
   the sharpening flux's filtered gradients are smoothed over the level
   (commit `ef5a52d`). The tiled remainder is the explicit face rows of the
@@ -206,7 +206,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   - the shocked interface at density ratio 100 against the unsharpened
     channel: width in volume and mass fraction, TV−1 and worst Y;
   - the same at density ratio 1000;
-  - the smooth-slab deposit of `bench/falseactivation.jl`, the He/CO2 tube
+  - the smooth-slab deposit of `bench/archive/falseactivation.jl`, the He/CO2 tube
     and the N20 budgets;
   - `test/validation.jl` baselines explained.
 
@@ -228,11 +228,11 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   grows more slowly but still runs away, and filtered its largest error is 2%
   larger; on a Cartesian square and on an annulus without the axis the same
   vortex completes unfiltered, so the runaway belongs to the axis and its
-  mechanism is open (`bench/axisvortex.jl`).
+  mechanism is open (`bench/archive/axisvortex.jl`).
   **Gate:** the origin blast at `cfl = 0.5` without retries.
 
 - [ ] **N26 — Keep the internal energy positive ahead of a strong shock.**
-  Measured (`bench/shockfoot.jl`, commit `105f787`;
+  Measured (`bench/archive/shockfoot.jl`, commit `105f787`;
   [negative internal energy ahead of a shock](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)):
   on Woodward–Colella, Noh and Sedov the inadmissible cells are the compact
   scheme's odd-even undershoot ahead of a captured shock, whose depth is set
@@ -245,7 +245,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   stay under `validity = :permissive`. The divergence is already a
   difference of face fluxes under node weights, so a blend toward a
   first-order flux (Hu, Adams and Shu 2013) applies as a correction at the
-  faces it limits. In one dimension (`bench/positivity.jl`;
+  faces it limits. In one dimension (`bench/archive/positivity.jl`;
   [the face-flux limiter](CALIBRATION_APPENDIX.md#the-face-flux-limiter)) the
   limit on each Runge–Kutta stage's increment, which needs a face register
   per direction under the low-storage integrator, together with the limit on
@@ -348,7 +348,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   fallback is admissible, on host and device storage, limiter on or off
   (commit `c85a315`); the correction pass gives both nodes of a face beside an
   unheld inadmissible node one first-order flux (commit `6debed0`). Every
-  refined case of `bench/positivity.jl part=levels`, the blast with tiles
+  refined case of `bench/archive/positivity.jl part=levels`, the blast with tiles
   included, then leaves no inadmissible point. With the bound on ρe held at
   least 16 eps |E| (commit `fec3e93`), so that it stays above the rounding step
   of E in cold gas moving fast, the planar Noh on four patches and on static
@@ -370,7 +370,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   are a running sum of a divergence the mask does not conserve: registers
   holding the masked divergence, or restoring its dropped source at the
   masked nodes, broke the refined Noh and Woodward–Colella rows
-  ([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+  ([measurements](CALIBRATION_APPENDIX.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
   **Depends on:** N26's stage in `src/`.
   **Gate:** per configuration, no inadmissible point on its strong-shock
   validation cases (Sedov and Noh ν = 2, 3 for the folds; the Noh level rows
@@ -517,13 +517,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   keywords against the package without running it
   (`test/scriptrefs_tests.jl`, commit `743fdb4`). Remaining: parallel-HDF5
   execution in CI where the required stack exists (verified locally under
-  S6); each instrument's current transcript under `bench/results/<script>.txt`,
+  S6); each instrument's current transcript under `bench/archive/results/<script>.txt`,
   so that an appendix table is a quoted output and never a retyped one, each
   landing with that script's next run rather than assembled from the tables it
   would replace. The runner taking medians over repeated processes, with an
   order-alternated paired mode for a before/after comparison, is
   `bench/repeat.jl` (commit `2290c83`), and its first paired transcript is
-  `bench/results/derivcost.txt` (commit `a2d7311`).
+  `bench/archive/results/derivcost.txt` (commit `a2d7311`).
   **Gate:** KA-on-CPU equality does not substitute for hardware-GPU tests
   under S1.
 
@@ -538,7 +538,7 @@ are in the appendix's smooth-evolution
 the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md). The
 instruments for a new interface or boundary closure are the N6 matrix
 (`bench/boundaryorder.jl`, gated in `test/convergence.jl`),
-`bench/wallfilter.jl`, `bench/wallclosure.jl` and `bench/leveltransfer.jl`; a
+`bench/archive/wallfilter.jl`, `bench/archive/wallclosure.jl` and `bench/archive/leveltransfer.jl`; a
 candidate is qualified on the N10 budgets and the N11 shock crossings before
 promotion.
 
@@ -550,8 +550,8 @@ promotion.
   1. Done with `LevelCoupling`: the level coupling moves point to point
      (`LevelCoupling`), a transfer's chains and boxes exist on its tile's ranks
      only, interface tags number the messages of one rank pair, and owner
-     sizing starts at the count a tile admits; `bench/amr_scaling.jl` measures
-     the weak scaling ([table](CALIBRATION_APPENDIX.md#benchamr_scalingjl-weak-scaling-of-the-level-coupling)).
+     sizing starts at the count a tile admits; `bench/archive/amr_scaling.jl` measures
+     the weak scaling ([table](CALIBRATION_APPENDIX.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
   2. A nested hierarchy at scale, which needs S8's deep-regrid items: the
      measured rebalance and the device backend on the levels below the first
      refined level, which has both (commits `603af33`, `602002c`). A moved
@@ -565,7 +565,7 @@ promotion.
   4. Tagging at scale: `_tag_tiles` Allreduces a dense flag per lattice cell
      at every check; replace it with a sparse reduction if a cluster profile
      shows it.
-  5. Qualify on rzhound with the system MPI: `bench/amr_scaling.jl dim=3`
+  5. Qualify on rzhound with the system MPI: `bench/archive/amr_scaling.jl dim=3`
      weak-scaled to at least a thousand ranks, then a production-shaped 3-D
      case (a shock through a perturbed heavy-gas interface, tiles tagged by
      the mass-fraction gradient and the sensor) against a uniform-fine
@@ -589,7 +589,7 @@ promotion.
   nested hierarchy at scale.
   **Gate:** the level rows of `test/convergence.jl` unchanged, the migration
   audit bitwise, the coupling's point-to-point traffic per rank falling in
-  `bench/amr_scaling.jl` when children are placed with their parents.
+  `bench/archive/amr_scaling.jl` when children are placed with their parents.
 
 - [ ] **A10 — Let a refined level reach every domain boundary.**
   A level reaches a wall, a symmetry plane, an NSCBC face and the r-z axis
@@ -631,7 +631,7 @@ promotion.
   two grids' tangential quadratures differ at order H³ per line and
   corrected everywhere they took a 2-D entropy wave from sixth order to
   second
-  ([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+  ([measurements](CALIBRATION_APPENDIX.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
   Remaining: device kernels for the captures, the fold and the application,
   and a stacked level's per-stack captures; the limiter's stage and filter
   registers at a junction; and, for exact conservation of smooth flow, a
@@ -658,7 +658,7 @@ promotion.
   resolution; it sets the order of a second nested level. A filter pass at
   any tested cadence removes it; the closure rows are stable at lower order;
   interpolation order and a wider restriction margin do not help
-  (`bench/couplingspectrum.jl`,
+  (`bench/archive/couplingspectrum.jl`,
   [the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
   Candidates: a dissipative band at coarse-fine faces active without the
   global filter, or a restriction window blended at its edge instead of
@@ -680,7 +680,7 @@ promotion.
   Closing the rest is this item, taken as one focused effort.
   `bench/amrwin.jl` times, at one rank or decomposed, warm root-only, box,
   tiled and uniform-fine runs of a planar Sod tube, three blobs in a periodic
-  box, the converging shock at the r-z axis and `bench/amr_cost.jl`'s 3-D
+  box, the converging shock at the r-z axis and `bench/archive/amr_cost.jl`'s 3-D
   blob. It writes each wall ratio as a product of three factors (commit
   `6446cbd`): the level's share of the fine grid's point-steps at the fine
   step count, the level's step count over the fine run's, and the cost per
@@ -701,7 +701,7 @@ promotion.
      to a regridded run to hold the tagged cells and their buffer, with a
      warning (`_widen_given_start!`); a solver built by the `Solver`
      constructor has no state at construction and keeps its given region, as
-     `bench/amr_cost.jl` does. The CFL ceiling that `max_rate` held a
+     `bench/archive/amr_cost.jl` does. The CFL ceiling that `max_rate` held a
      parent's overwritten nodes to (commit `f1d420c`) acted in no run once
      the sensors were dropped, the axis shock that set its value and the
      capsule band included, and is removed. What remains:
@@ -1265,9 +1265,9 @@ under [the refinement track](#refinement-for-the-production-geometry).
   stage 1's run on rzhound, and stage 3 only if that run shows the
   Allgather volume.
   Stages, in order:
-  1. Instrument first: `bench/reducedsolve.jl` (commit `3fb37a9`) times the
+  1. Instrument first: `bench/archive/reducedsolve.jl` (commit `3fb37a9`) times the
      local sweep, the Allgather and the reduced solve separately for both
-     solvers, and its run on rzhound (`bench/slurm/s12_reducedsolve.sbatch`)
+     solvers, and its run on rzhound (`bench/archive/slurm/s12_reducedsolve.sbatch`)
      remains.
   2. Done in commit `6bfeb55`: a pivoted band LU of the block-tridiagonal
      reduced matrix, periodic lines by an interleaved ordering, the dense LU
@@ -1329,7 +1329,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   less to the stall, and its tally bounds the share of a wall the stall can
   account for. Record hardware, MPI stack, precision, synchronization
   policy, repeat variability, and correctness with every result. Profile a
-  `Nasa9Mixture` step there too with `bench/device_nasa9.jl`, which has run only
+  `Nasa9Mixture` step there too with `bench/archive/device_nasa9.jl`, which has run only
   on the workstation GPU. The LLVM 22.1.8 `llc` in `AMDGPU_LLVM_Backend_jll`
   miscompiles a short-circuit choice between two kernel arguments on gfx942 as
   on gfx1030 ([amdgpu_shortcircuit_bug_report.md](bugreports/amdgpu_shortcircuit_bug_report.md)).
@@ -1381,10 +1381,10 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
   per point and per Runge–Kutta stage, which makes the recovery several times
   as costly as under `IdealMixture` and the CPU step a third dearer
-  ([NASA-9 on the device](CALIBRATION_APPENDIX.md#benchdevice_nasa9jl-nasa-9-on-the-device)).
+  ([NASA-9 on the device](CALIBRATION_APPENDIX.md#bencharchivedevice_nasa9jl-nasa-9-on-the-device)).
   The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
-  `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). The
+  `9e0f126`, `405037f`, measured with `bench/archive/nasa9_inversion.jl`). The
   convergence criterion is eps^(2/3), which saves most of one iteration. Its
   floor is 1e-10 (commit `dc67f71`), and the iterates stay inside the fitted
   range (commit `3ede230`). What remains is a warm start from the stored
@@ -1427,7 +1427,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `4fa1a55`); calibration/defaults and the spherical azimuth remain. The rate
   cap also caps the θ rate that `filter_weight` reads, so the θ filter pass
   weakens wherever the inner rings set that rate; the calibration measures it.
-  On the axis-crossing vortex (`bench/axisvortex.jl`) the error grows with the
+  On the axis-crossing vortex (`bench/archive/axisvortex.jl`) the error grows with the
   number of truncated steps. At κ = 1 the density error comes within a
   factor 1.33 of the untruncated run's. At κ = 2, with the second ring
   truncated as well, it stays near 45 times the untruncated run's

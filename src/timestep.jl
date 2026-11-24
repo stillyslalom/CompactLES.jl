@@ -2528,7 +2528,7 @@ on any metric because it never reads the volume. The weighted form is the
 less conservative at a cylindrical axis or a spherical pole, where the odd-parity
 fold of the product does not have unit column sums, and it moves the Noh wall
 deficit in opposite directions at the axis and at the origin; the
-measurements are `bench/filter_conservation.jl`'s and the default rests on
+measurements are `bench/archive/filter_conservation.jl`'s and the default rests on
 them.
 """
 function filter_state!(solver::SolverLike, Q)
@@ -2584,10 +2584,10 @@ end
 # waves through a level by up to a factor of three. Closure rows keep their
 # residual, so the mask applies on the interior rows only, and a line with no
 # masked node takes the plain pass unchanged. The measurements are under
-# bench/movinglevel.jl in reference/CALIBRATION_APPENDIX.md.
+# bench/archive/movinglevel.jl in reference/CALIBRATION_APPENDIX.md.
 
 # Test and bench toggle: `false` gives every patch the plain pass, the
-# comparison in bench/movinglevel.jl.
+# comparison in bench/archive/movinglevel.jl.
 const MASK_CHILD_RESIDUAL = Ref(true)
 
 # The resolution test of the mask: the undivided fourth difference of the

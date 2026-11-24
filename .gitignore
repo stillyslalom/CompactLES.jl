@@ -18,7 +18,7 @@ src/*.cov
 *.ckpt
 # cluster job logs; the conclusions are extracted into reference/ and the data
 # is regenerable in hours
-bench/logs/*.out
+bench/archive/logs/*.out
 
 # questions for outside authors, kept locally
 reference/AUTHOR_QUESTIONS.md

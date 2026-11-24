@@ -130,7 +130,7 @@
 # WALL, not to the fold: the global max is attained at the last interior cell
 # in all four of them, and splitting the norm by region shows the fold's own
 # error converging at 6.05-7.01 and sitting three to five orders of magnitude
-# below the interior. `bench/foldorder.jl` does that split and carries the
+# below the interior. `bench/archive/foldorder.jl` does that split and carries the
 # numbers; the write-up is in reference/CALIBRATION_APPENDIX.md under "The fold
 # closure is not third order". The symmetry-plane studies close neither end
 # with a wall, which is why they report the fold's own order directly.
@@ -1159,7 +1159,7 @@ evolution_study("two levels across a periodic seam, C6", SEAM_LEVEL_NS,
 # difference over the conserved components against the same case on the
 # same grid in many more steps (`temporal_errors` in test/smooth_cases.jl).
 # The spatial error cancels exactly, so the slope against the step is the
-# time integration's; bench/temporalorder.jl runs the full set.
+# time integration's; bench/archive/temporalorder.jl runs the full set.
 #
 # The inflow rows carry their time dependence in the boundary data alone, a
 # `DirichletBC` state and an `NSCBCInflowBC` target, both evaluated at the

@@ -3,7 +3,7 @@
 This document is the design for roadmap items H1 (implicit diffusion
 infrastructure) and H2 (compatible IMEX time integration). The operator and
 integrator choices below rest on the
-1-D model studies of `bench/stiffdiffusion.jl`, whose tables are in the
+1-D model studies of `bench/archive/stiffdiffusion.jl`, whose tables are in the
 appendix under [stiff diffusion](CALIBRATION_APPENDIX.md#stiff-diffusion).
 The material, closure and energy contracts that H3–H6 bring to the implicit
 system are specified in [DESIGN.md](DESIGN.md#material-and-physics-interfaces);
@@ -234,7 +234,7 @@ one residual and are not updated in sequence, as H2 requires.
    the first node of the singular folds, first at a curved wall node), the
    adjoint and symmetry identities in the serial suite, the decomposed solve against the undivided one in the MPI suite,
    off-rank folds included, and an explicit conduction run against the
-   wide form (`bench/staggeredconduction.jl`).
+   wide form (`bench/archive/staggeredconduction.jl`).
 2. **Implicit solve on one patch.** `src/implicit.jl`: the matrix-free
    stage operator on the volume-weighted system, `L₂` assembled on the patch
    metric, conjugate gradients (GMRES at the axis and poles) preconditioned

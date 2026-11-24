@@ -1116,7 +1116,7 @@ end
 
     # The conduction pulse on [-1, 1): c_v = 1, κ = α, and a gas constant small
     # enough that the flow the pulse drives stays below the time error
-    # (bench/imexconduction.jl, which also measures the step rules).
+    # (bench/archive/imexconduction.jl, which also measures the step rules).
     α, σ, A = 1.0, 0.2, 0.5
     t0 = σ^2 / (2α)
     noart = ArtificialProperties(enabled=false)
@@ -1437,7 +1437,7 @@ end
 
 @testset "volume-weighted filter: identity, constants, and the measured defects" begin
     # `filter_weighting = :volume` is the form of the public Pyranda
-    # implementation, F(J q) / F(J). bench/filter_conservation.jl measures it
+    # implementation, F(J q) / F(J). bench/archive/filter_conservation.jl measures it
     # against the unweighted operator on every geometry; the facts pinned here
     # are the ones the default rests on (reference/CALIBRATION_APPENDIX.md, the
     # filter on non-uniform volumes). One directional pass on a line is the
@@ -1669,7 +1669,7 @@ end
 
     # Fine → coarse → fine loses subsampled content and converges at the
     # interpolation order: measured 5.93 between n_coarse = 32 and 64 at the
-    # default order 6 (3.97 at order 4, 7.97 at order 8; bench/amr_transfer.jl).
+    # default order 6 (3.97 at order 4, 7.97 at order 8; bench/archive/amr_transfer.jl).
     errs = Float64[]
     for nc in (32, 64)
         nf = 3nc
@@ -1721,7 +1721,7 @@ end
 
 @testset "AMR transfer: sensor injection near a transfer end" begin
     # The deconvolution amplifies fine-Nyquist content by ≈ 20
-    # (bench/amr_transfer.jl), and the risk named in the plan is that content
+    # (bench/archive/amr_transfer.jl), and the risk named in the plan is that content
     # injected by the Cook sensor chain near a transfer boundary rides through
     # prolongation. Measured: the smoothed δ⁴ sensor of a 2h shock profile
     # round-trips with amplification ≤ 1.13 at any distance from the end, the

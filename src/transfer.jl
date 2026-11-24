@@ -14,7 +14,7 @@
 # f given f̄ (deconvolution). The Gaussian symbol a + 2b cos k + 2c cos 2k is
 # positive over [0, π] (0.0526 at k = π), so the pentadiagonal side is
 # symmetric positive definite and factorizes without pivoting; its inverse
-# amplifies the fine Nyquist by ≈ 20 (`bench/amr_transfer.jl`).
+# amplifies the fine Nyquist by ≈ 20 (`bench/archive/amr_transfer.jl`).
 #
 # Sampling convention (pinned numerically by the bench and the test gate,
 # since the source kernels do not fully specify it): the grid is node-centered

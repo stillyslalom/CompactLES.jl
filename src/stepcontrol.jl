@@ -48,7 +48,7 @@
 #      reducing every step.
 #   4. The state floor repairs the state, where the first three detect failure,
 #      and is disabled by default. The first three mechanisms read reduced
-#      scalars. `bench/nohprobe.jl` measured six to eight interior cells with
+#      scalars. `bench/archive/nohprobe.jl` measured six to eight interior cells with
 #      negative internal energy moving with the front throughout Noh runs that
 #      otherwise complete and pass their guards. `primitives!` floors `T_ion`
 #      at 1e-300 where `e <= 0`, while the positivity check reads density, which
@@ -63,7 +63,7 @@
 # 24991 cell-steps of e < 0, peaking at 8 cells at once and reaching -718 e0.
 # Total energy density and mixture density stay positive at every cell of every
 # step. The cells sit ahead of the shock front in an odd-even pattern that
-# travels with it (bench/shockfoot.jl), and the scheme remains stable there for
+# travels with it (bench/archive/shockfoot.jl), and the scheme remains stable there for
 # the whole run.
 #
 # Raising e above zero requires 5% velocity damping on the worst cell after

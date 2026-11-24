@@ -115,7 +115,7 @@ the conservation drift across level boundaries, the artificial-property
 sensor behavior where a shock crosses a coarse–fine boundary, and the cost
 of the level coupling per step rather than the tile geometry. The delivered
 two-level solver is closest to this class, and the mixing cost case of
-`bench/amr_cost.jl` is of this shape.
+`bench/archive/amr_cost.jl` is of this shape.
 
 Both classes share the general demands: several levels, restart, diagnostics
 that exclude covered coarse nodes, and a rank assignment that does not put
@@ -166,7 +166,7 @@ numbering.
    injected at an inexact interface therefore decays about 3× per point into
    the patch, and the default tagging buffer of 4 coarse cells is sized from
    the measured rate. The `closure_localization` study of
-   `bench/amr_transfer.jl` measures the decay of the derivative's response
+   `bench/archive/amr_transfer.jl` measures the decay of the derivative's response
    to a unit error in the first ghost layer, through the interface closure
    rows and the interior solve, and finds it at exactly the root of the LHS
    symbol. The root grows with the band, so a C10 interface pollutes
@@ -176,7 +176,7 @@ numbering.
 
 ## Transfer operators
 
-`src/transfer.jl`; measurements in `bench/amr_transfer.jl`, guarded by
+`src/transfer.jl`; measurements in `bench/archive/amr_transfer.jl`, guarded by
 serial testsets and a multi-rank section.
 
 **Source.** Pyranda's
@@ -296,7 +296,7 @@ node because a correction on the node the shell copies to the child fed back
 on itself, and a positivity guard holds back the part of a correction that
 would take a node below half its density or internal energy, for a later
 step
-([measurements](CALIBRATION_APPENDIX.md#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+([measurements](CALIBRATION_APPENDIX.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
 It runs on host storage and not under the positivity limiter.
 
 ## Patches and same-level interfaces
@@ -466,7 +466,7 @@ and the margin of 2 is kept for the Sod crossing's mass drift, which a
 smaller margin raises ([measurements](CALIBRATION_APPENDIX.md#amr)). Restricting before
 every stage of the global step removes a coupling term first order in the step but not a
 measurable error, so the write-back stays once per step
-([measurements](CALIBRATION_APPENDIX.md#benchrestrictcostjl-restriction-before-every-stage)).
+([measurements](CALIBRATION_APPENDIX.md#bencharchiverestrictcostjl-restriction-before-every-stage)).
 
 **The parent's operators on restricted data.** A feature the child resolves
 is a jump on the parent's spacing, and the parent's compact solves spread its
@@ -478,7 +478,7 @@ removes a converging shock's precursor and is the default
 composite conservation, and the coupling's gate tests only the parent's
 uncovered nodes, since a correction for the restricted shock at the covered
 ones put the parent's error ahead of the front
-([measurements](CALIBRATION_APPENDIX.md#benchmovingleveljl-disturbances-a-moving-level-carries)).
+([measurements](CALIBRATION_APPENDIX.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
 The parent's artificial coefficients read the same jump at full strength, so
 its sensors are set to zero before smoothing at the nodes the restriction
 overwrites (`MASK_CHILD_SENSORS`). The coefficients sensed there had bounded
@@ -500,7 +500,7 @@ the parent's subset, with every tile's chain held on every rank, makes the
 per-rank level memory and the coupling wall grow with the rank count on a
 weak-scaled slab of tiles; point to point, both follow the tiles a rank
 holds
-([measurements](CALIBRATION_APPENDIX.md#benchamr_scalingjl-weak-scaling-of-the-level-coupling)).
+([measurements](CALIBRATION_APPENDIX.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
 The data moved are copies applied in tile order, so the result does not
 depend on the rank count beyond the decomposition's own round-off. Work
 divides over a tile's ranks: a
@@ -964,7 +964,7 @@ on the one-dimensional entropy wave or a 2×2 nest in two dimensions with its
 corner, decomposed
 runs reproduce serial to round-off, and the tiled regrid tracks the Sod
 shock through lattice cells that stay contiguous. On an annular tag set in
-2-D (`bench/amr_tiles.jl`) the lattice covers well under half the bounding
+2-D (`bench/archive/amr_tiles.jl`) the lattice covers well under half the bounding
 box, which is the implosion argument for tiles
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
@@ -1177,7 +1177,7 @@ masked composite energy history tracks the single-level history to the fine
 sampling's own quadrature difference, where the unmasked sum sits nearly two
 orders above it ([measurements](CALIBRATION_APPENDIX.md#amr)); the same check
 runs in `bench/tgv_energy.jl` with `refine=`. The mixing-layer cost case's
-∫Y(1−Y)dV (`bench/amr_cost.jl`) is this quadrature.
+∫Y(1−Y)dV (`bench/archive/amr_cost.jl`) is this quadrature.
 
 ### Startup and rollback traps
 
@@ -1197,7 +1197,7 @@ retry's first step at zero.
 
 ### Cost structure
 
-**The cost case** (`bench/amr_cost.jl`) is a heavy-gas blob mixing case
+**The cost case** (`bench/archive/amr_cost.jl`) is a heavy-gas blob mixing case
 with a subcycled, regridding region covering a sixth of the volume,
 compared against a uniform run on the root grid and a uniform run at the
 level's spacing:
@@ -1230,7 +1230,7 @@ typed `Vector{Patch}` rather than a splat, whose `promote_typeof`
 specialization cost seconds per distinct patch count. The shared RHS
 scratch cuts the patch set's footprint by a factor near two on the annular
 case, about half of each tile's arrays being shared, and leaves the warm
-per-step wall inside the run-to-run spread; `bench/amr_tiles.jl` times
+per-step wall inside the run-to-run spread; `bench/archive/amr_tiles.jl` times
 steps after a warm-up and is the instrument. Under MPI each tile is
 decomposed over its own rank range, so a tile pays its owners' collective
 latency per imposition, and on a many-tile run that is one rank; the box and
@@ -1466,10 +1466,10 @@ coefficient for both otherwise. The nodes come from
 `MPI.COMM_TYPE_SHARED` (`_node_map`), or from `NODE_SIZE`, the toggle the
 MPI suite's "lattice over nodes" phase uses to group a workstation's ranks.
 A level of fewer tiles than ranks takes a prefix of the ranks, which under
-block rank numbering lies on the fewest nodes. `bench/latticescale.jl` times
+block rank numbering lies on the fewest nodes. `bench/archive/latticescale.jl` times
 the decision and prices the rules from one node to 100 nodes of 112 ranks
 (`reference/CALIBRATION_APPENDIX.md`), and
-`bench/slurm/rmicost_lattice.sbatch` is the A/B on rzhound.
+`bench/archive/slurm/rmicost_lattice.sbatch` is the A/B on rzhound.
 
 Each regrid frees the tile groups and splits them afresh; a surviving
 tile's Cartesian communicator is independent of the group it was split from
@@ -1506,7 +1506,7 @@ on the clusters differ from the workstation's by more than an order of
 magnitude and move with rank placement (`CLUSTER.md`).
 The default is off (`rebalance = 0`),
 and a threshold of one repartitions whenever the streak reaches `persist`,
-since any measured spread exceeds it. `bench/amr_balance.jl` prints the
+since any measured spread exceeds it. `bench/archive/amr_balance.jl` prints the
 per-check max/mean, the owner ranges, and the transient memory of each
 moved tile of a tiled Sod run with rebalancing off and on, as a check of
 the mechanics only; on that case the stored groups drift apart in tile
@@ -1857,10 +1857,10 @@ The oracle hierarchy, strongest first:
    two-conforming-patch and level-boundary orders, the moving-region Sod
    and Shu–Osher gates, the cost case's ∫Y(1−Y)dV.
 
-Bench scripts: `bench/amr_transfer.jl` (operator conditioning),
-`bench/amr_tiles.jl` (tiled cover and per-step wall), `bench/amr_cost.jl`
-(the cost case), `bench/amr_balance.jl` (rebalance and migration
-mechanics), `bench/pointwise_ka.jl` (launcher acceptance),
+Bench scripts: `bench/archive/amr_transfer.jl` (operator conditioning),
+`bench/archive/amr_tiles.jl` (tiled cover and per-step wall), `bench/archive/amr_cost.jl`
+(the cost case), `bench/archive/amr_balance.jl` (rebalance and migration
+mechanics), `bench/archive/pointwise_ka.jl` (launcher acceptance),
 `probes/device_bringup.jl` (kernel-level bring-up), `bench/device_solver.jl`
 (whole-solver device battery), `bench/device_mpi.jl` (distributed device
 runs with transfer accounting), `probes/device_floors.jl` (the cross-machine
@@ -1974,7 +1974,7 @@ guarded somewhere; none should be re-derived.
     rank count each passed every workstation test and would each have
     stopped a many-node run. A rank's coupling state and traffic must follow
     the tiles it holds; the MPI suite's partitioned-coupling phase pins the
-    pieces, and `bench/amr_scaling.jl` measures the growth. Both sides of a
+    pieces, and `bench/archive/amr_scaling.jl` measures the growth. Both sides of a
     point-to-point exchange must drop the same empty pieces: a tile over more
     ranks than conserved components leaves some of them no share, and a
     receive posted for a message its sender skips waits forever.
@@ -2021,7 +2021,7 @@ Configurations rejected at setup, and the reason:
   coarse-fine one. The smoother keeps closed-edge rows at every interface
   face, since its input has no ghosts. The measured cost of each, and of
   the filter's interface rows, is in the appendix
-  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+  ([interface sensors](CALIBRATION_APPENDIX.md#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 
 ## Open work
 
@@ -2055,7 +2055,7 @@ leaves each tile on a few ranks.
 
 **Dense output.** Retain cubic Hermite reconstruction: the measured parent
 endpoint RHS share does not justify replacing it on the tested three- and
-four-level nests ([substep study](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)).
+four-level nests ([substep study](CALIBRATION_APPENDIX.md#bencharchivesubstepratesjl-refreshed-refined-level-rates)).
 The estimate excludes the box exchanges and does not qualify distributed or
 device layouts, whose endpoint costs should be measured if they become
 limiting.

@@ -2,7 +2,7 @@
 
 **Status:** characterization for an LC ticket and/or upstream report
 (AMDGPU.jl, ROCR). Raw session transcripts:
-`bench/logs/rzadams_20260819.txt`, `bench/logs/rzadams_20260819_floors.txt`.
+`bench/archive/logs/rzadams_20260819.txt`, `bench/archive/logs/rzadams_20260819_floors.txt`.
 Reproducer: `probes/device_floors.jl only=watch watch=60` (times a fixed
 small compact-solve apply, consisting of several kernel launches, a
 device→host and a host→device copy, and one stream synchronize,

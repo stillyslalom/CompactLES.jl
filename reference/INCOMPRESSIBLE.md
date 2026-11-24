@@ -190,7 +190,7 @@ prototype covers its first part.
    work on the kinetic energy at round-off, the decomposed run against the
    undivided one at two, four and eight ranks, and the three-dimensional
    vortex at Re = 1600 without a filter or a model
-   (`bench/incompressible_tgv.jl`).
+   (`bench/archive/incompressible_tgv.jl`).
 2. **Scalars and the variable-density form.** Passive scalars in
    divergence form transported by the projected face velocity, then the
    variable-density equations with the pressure equation

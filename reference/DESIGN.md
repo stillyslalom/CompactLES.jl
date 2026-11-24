@@ -837,7 +837,7 @@ properties follow from the form alone.
    The discrete update inherits none of this by argument: the compact
    derivative is not summation-by-parts against the trapezoid quadrature,
    and the filter and the Runge–Kutta step are separate operators. Measured
-   (`bench/bulkentropy.jl`), the semi-discrete channel term produces entropy
+   (`bench/archive/bulkentropy.jl`), the semi-discrete channel term produces entropy
    at every sample and matches the quadratic form closely, while the filter
    pass and the Runge–Kutta step on an interface with mass fractions outside
    [0, 1] both lower ∫ρs
@@ -876,7 +876,7 @@ wherever every partial density is positive. The internal energy in the
 energy flux is what makes the bracket collapse; the enthalpy would leave a
 term in ∇ln p_k of no sign. The inequality is for the physical entropy only,
 not for every generalized entropy as under `:bulk`, and it fails where a
-partial density has gone negative. `bench/bulkentropy.jl` measures the
+partial density has gone negative. `bench/archive/bulkentropy.jl` measures the
 semi-discrete channel term against σ and the fully discrete update
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species
 channel in three dimensions"). The form adds no stress and no conduction: on
@@ -911,7 +911,7 @@ schemes at multicomponent contacts (Abgrall, J. Comput. Phys. 125, 1996). It
 is absent at uniform T and at equal constant γ, where p is linear in
 (ρ_k, ρe), and present under unequal heat capacities and under NASA-9 heat
 capacities. At uniform u every split form of a product reduces to u D q, so no
-split form removes it. `bench/thermalcontact.jl` evaluates the continuous
+split form removes it. `bench/archive/thermalcontact.jl` evaluates the continuous
 rates beside the discrete ones and measures the drift
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)).
 
@@ -1292,7 +1292,7 @@ CO₂, fit range ending at 20000 K    temperature returned
 The default is
 `:linear` because a non-monotone extension can give an energy a second root
 inside the fitted range, which the inversion returns with no failure status
-(`reference/CALIBRATION_APPENDIX.md`, `bench/nasa9_inversion.jl`).
+(`reference/CALIBRATION_APPENDIX.md`, `bench/archive/nasa9_inversion.jl`).
 
 That setting also decides whether leaving the range ends a run. `:polynomial`
 and `:linear` are statements that the extension is acceptable for the
@@ -1761,7 +1761,7 @@ at a coarse–fine face the quadrature the coupling conserves: a parent node
 its whole cell unless a child covers all of it, a child's nodes from the
 third in from a parent-fed face, and the correction Ω on the child's nodes
 beside each face (`src/reflux.jl`). This is `_conserved_budget`, the
-instrument of `bench/interfaceconservation.jl` and `bench/reflux.jl`.
+instrument of `bench/interfaceconservation.jl` and `bench/archive/reflux.jl`.
 
 `src/ledger.jl` attributes the change of that budget to the mechanism that
 made it. Every state write in `run!`, the global-step driver and the

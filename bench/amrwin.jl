@@ -72,7 +72,7 @@
 #   shock   1-D cylindrical converging shock toward the axis (the imploding
 #           shock tutorial's case; the fine grid is 3N − 1 points, which puts
 #           its nodes on the refined level's under the half-cell axis offset)
-#   blob3d  bench/amr_cost.jl's 3-D heavy blob and its regrid settings, the
+#   blob3d  bench/archive/amr_cost.jl's 3-D heavy blob and its regrid settings, the
 #           level's first layout taken from the tags (`blob3d_start=box`
 #           gives that script's box), against the uniform 3N³ grid at the
 #           refined spacing
@@ -211,7 +211,7 @@ function blob3d_spec(n, tile, tfinal)
     problem = Problem(name="3-D blob", eos=eos,
         domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
         bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()), ic=ic)
-    # The level's first layout comes from the tags. bench/amr_cost.jl's given
+    # The level's first layout comes from the tags. bench/archive/amr_cost.jl's given
     # box (`blob3d_start=box`) puts a coarse-fine face a few edge widths
     # outside the blob's edge, which the root does not resolve: the parent's
     # nodes beside that face leave the species band before the first regrid
@@ -220,7 +220,7 @@ function blob3d_spec(n, tile, tfinal)
     # run, at about twice the fine run's step count on a 48³ root. `setup`
     # now widens a region given to a regridded run to the tagged cells and
     # their buffer, with a warning, so `blob3d_start=box` runs the widened
-    # layout; bench/amr_cost.jl, built by the `Solver` constructor, keeps
+    # layout; bench/archive/amr_cost.jl, built by the `Solver` constructor, keeps
     # the box as given.
     opt.blob3d_start in ("sensor", "box") ||
         error("blob3d_start = $(opt.blob3d_start), want sensor or box")
@@ -228,7 +228,7 @@ function blob3d_spec(n, tile, tfinal)
               BlockRegion((n ÷ 8, n ÷ 8, n ÷ 8), (n ÷ 3, n ÷ 3, n ÷ 3)) : :sensor
     box = AMR(initial=initial,
               subcycle=true, regrid_interval=10, tag_buffer=4, tag_threshold=0.02)
-    return (; name="blob3d", title="bench/amr_cost.jl's 3-D blob", problem,
+    return (; name="blob3d", title="bench/archive/amr_cost.jl's 3-D blob", problem,
             n_root=(n, n, n), n_fine=(3n, 3n, 3n), tfinal, cfl=0.5,
             box, tiles=AMR(box; tile=tile), compare=[(:rho, 1), (:Y, 2)],
             mixture=true, dims=nothing)

@@ -64,7 +64,7 @@ const CKPT_FORMAT = 7
 # parallel libhdf5. The metadata datasets keep the default independent mode:
 # rank 0 alone writes them, which a collective transfer would not admit.
 #
-# Measured with `bench/hdf5xfer.jl` on a parallel libhdf5 over a workstation's
+# Measured with `bench/archive/hdf5xfer.jl` on a parallel libhdf5 over a workstation's
 # local disk, the collective mode is faster on every block dataset of any
 # size, by a quarter to a half on the checkpoint and the frame, and equal on a
 # sliced plane, where one rank holds all the data. The appendix section "The
@@ -127,7 +127,7 @@ end
 
 # The MPI transfer mode of the block datasets under the parallel backend,
 # `:collective` or `:independent`; see the transfer-mode note above.
-# `bench/hdf5xfer.jl` times both.
+# `bench/archive/hdf5xfer.jl` times both.
 const BLOCK_TRANSFER = Ref(:collective)
 
 # A dataset covering the whole global array, created once and written in

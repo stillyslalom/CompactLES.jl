@@ -177,7 +177,7 @@
 #             the same accounting that excludes callbacks on the CPU.
 #   snapshots comma-separated times at which to write an HDF5 checkpoint of the
 #             state, empty (default) for none. The spectra under N1 are taken
-#             offline from these by `bench/tgv_spectrum.jl`, so nothing here
+#             offline from these by `bench/archive/tgv_spectrum.jl`, so nothing here
 #             computes a transform and no distributed FFT exists. Requires HDF5
 #             to be loadable, which the package environment cannot do (it is a
 #             weakdep); run from a project carrying both. Files land in
@@ -733,7 +733,7 @@ end
 
 """
 The stem naming one configuration's snapshot files. Every sweep axis appears,
-so a sweep writes one set per point and `bench/tgv_spectrum.jl` can label a
+so a sweep writes one set per point and `bench/archive/tgv_spectrum.jl` can label a
 curve from the filename alone.
 """
 function snapshot_stem(dir, N, T, cfg, alphaf, cfl, filter_cfl, smoother)

@@ -11,7 +11,7 @@
 # tagging needs no primitives pass and can run at the head of the step loop.
 # A coarse cell tags when that ratio exceeds `RegridSpec.threshold`; the tagged
 # set is grown by `RegridSpec.buffer` coarse cells (measured: shock round-trip
-# pollution decays ≈ 3.4× per point, bench/amr_transfer.jl, so a ~4-cell
+# pollution decays ≈ 3.4× per point, bench/archive/amr_transfer.jl, so a ~4-cell
 # buffer drops interface pollution by two orders of magnitude) and its
 # bounding box, clamped to the nesting margin, becomes the new refined region.
 # The region is a single box, not a tile set, because the solver carries one

@@ -206,7 +206,7 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtificialProperties(enabled=
     # ahead of the front, carry a negative internal energy (and a negative total
     # energy), which the ideal-gas EOS reports as outside its domain. The case
     # states that rather than rejecting on it, and its caller bounds the count
-    # and the defect. bench/shockfoot.jl locates the cells.
+    # and the defect. bench/archive/shockfoot.jl locates the cells.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter=StateFilter(filt; cfl=filter_cfl,
                                                         weighting=filter_weighting),
@@ -847,8 +847,8 @@ end
 # c0 = 1.18, reaches the wall near t = 0.42 and is back at x0 near t = 0.85.
 # At amp = 0.01 the simple wave steepens over a distance of about seven
 # domain lengths and stays smooth; at amp = 0.1 it shocks about 0.7 into its
-# path, after the reflection. bench/wallfilter.jl measures the filter's
-# wall rows on it and bench/wallclosure.jl the derivative closures.
+# path, after the reflection. bench/archive/wallfilter.jl measures the filter's
+# wall rows on it and bench/archive/wallclosure.jl the derivative closures.
 
 const PULSE_G = 1.4
 const PULSE_X0 = 0.5

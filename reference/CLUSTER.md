@@ -156,7 +156,7 @@ $P/bin/mpiexec -n 4 julia --project=$HOME/phdf5env -t 1 test/hdf5_tests.jl
 
 Verified under WSL2 with the checkout on the Windows drive, at the versions
 below; `hdf5_parallel()` is true, and `test/hdf5_tests.jl` passes at one, two
-and four ranks under either transfer mode. `bench/hdf5xfer.jl` times the two
+and four ranks under either transfer mode. `bench/archive/hdf5xfer.jl` times the two
 modes from the same environment.
 
 | component | version |
@@ -326,7 +326,7 @@ hybrid mode, likewise published its large-scale TGV scaling as pure MPI.
 
 **On a hybrid desktop, two further effects sit on top of that.** Measured on
 the development workstation on the two-species tube of
-`bench/he_co2_shock_tube.jl` under C10, `detector = :d8` and
+`bench/archive/he_co2_shock_tube.jl` under C10, `detector = :d8` and
 `mu_sensor = :velocity`:
 
 | setting | value |
@@ -416,7 +416,7 @@ reports `nthreads` for this reason.
 
 ### Batch scripts
 
-`bench/slurm/` holds the scripts submitted for the N1 filter campaign,
+`bench/archive/slurm/` holds the scripts submitted for the N1 filter campaign,
 `n1_legs23.sbatch` and `n1_closure128.sbatch` at 224 ranks and
 `n1_confirm256.sbatch` at 896, kept as worked examples rather than as tooling.
 Four practices in them are not implied by the launch rules above and belong in

@@ -1,5 +1,5 @@
 # Cross-machine device performance survey. One machine's timings are not a
-# property of the code: the rzadams MI300A log (bench/logs/rzadams_20260819.txt)
+# property of the code: the rzadams MI300A log (bench/archive/logs/rzadams_20260819.txt)
 # shows C6 Float64 line solves at 3.0/6.0 ms in dims 1-2 against ~0.3 ms for
 # every other scheme x dim, and a 26x Float64/Float32 whole-step ratio on
 # hardware whose FP64 vector rate is half its FP32 rate — neither visible on

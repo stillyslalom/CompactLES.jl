@@ -4,7 +4,7 @@
 # is the Oscillating sphere tutorial's (docs/literate/oscillating_sphere.jl).
 #
 # `test/serial_suite.jl` includes this and asserts the reflection on a coarse
-# grid; `bench/sphereoutflow.jl` includes it and tabulates the reflection
+# grid; `bench/archive/sphereoutflow.jl` includes it and tabulates the reflection
 # over outer radii, relaxation strengths and resolutions. Include after
 # CompactLES.
 

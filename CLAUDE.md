@@ -282,7 +282,8 @@ overstates coverage; watch the executable-line count too.
 
 **The test suite does not import `bench/` or `examples/`.** The serial suite
 includes `test/scriptrefs_tests.jl`, which parses every script under `bench/`,
-`examples/`, `probes/` and `docs/literate/` without running it and fails on a
+`examples/`, `probes/` and `docs/literate/` without running it (`bench/archive/`
+excepted) and fails on a
 CompactLES name, imported name or keyword that no longer exists; after a
 cross-cutting API change, run it standalone before the suite. A script that
 resolves can still compute the wrong thing, so also identify and run the
@@ -769,7 +770,10 @@ be revisited.
   Most prose in this repository is model output. When an edit exposes poor style
   in the surrounding prose, follow these guidelines and flag it for correction.
 - `bench/` is scratch tooling, not tests. Each script's header comment says
-  what it measures and how to run it; read that before running one. `probes/`
+  what it measures and how to run it; read that before running one.
+  `bench/archive/` holds the scripts and raw output behind measurements already
+  recorded in `reference/`; they are kept for provenance, no check parses
+  them, and one may need repair against the current API before it runs. `probes/`
   holds the environment diagnostics (MPI configuration, depot cost, launch
   sizing, device bring-up and floors, thread spawn floor, step profiling on a
   slow machine); they measure the machine, not the solver, and run from the

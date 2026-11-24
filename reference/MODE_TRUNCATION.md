@@ -119,7 +119,7 @@ Each is structural or follows from a repo convention; none is a preference.
    on the first ring, r = Δr/2, the order of the axis closure. A floor of 1
    deletes the O(Δr²) curvature of every scalar there, and one limit for
    every component deletes the m = 2 content of u_r and u_θ, which a uniform
-   strain carries at O(r); the vortex of `bench/axisvortex.jl` loses
+   strain carries at O(r); the vortex of `bench/archive/axisvortex.jl` loses
    positivity under the artificial properties with both, and its density
    error at the axis is far above the untruncated run's with either
    ([measurements](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
@@ -318,5 +318,5 @@ guards; the serial and MPI gates.
   alone afterwards.
 - **Interaction with `filter_cfl`.** The truncation is an exact projection
   and idempotent, so it has no per-application-versus-per-unit-time ambiguity
-  and needs no relaxation weight. No coupling is expected; `bench/filterrate.jl`
+  and needs no relaxation weight. No coupling is expected; `bench/archive/filterrate.jl`
   is the instrument if one appears.

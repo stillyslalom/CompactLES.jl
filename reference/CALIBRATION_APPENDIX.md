@@ -16,63 +16,63 @@ section that moved it says so in one sentence and the older figure is gone.
 ## Contents
 
 1. [The shock battery](#the-shock-battery) (`bench/artcal.jl`, `test/cases.jl`)
-2. [Taylor-Green](#taylor-green) (`bench/tgv_energy.jl`, `bench/tgv_spectrum.jl`)
-3. [The filter's dissipation](#the-filters-dissipation) (`bench/filterrate.jl`)
+2. [Taylor-Green](#taylor-green) (`bench/tgv_energy.jl`, `bench/archive/tgv_spectrum.jl`)
+3. [The filter's dissipation](#the-filters-dissipation) (`bench/archive/filterrate.jl`)
 4. [Filtering on non-uniform volumes](#filtering-on-non-uniform-volumes)
-   (`bench/filter_conservation.jl`)
+   (`bench/archive/filter_conservation.jl`)
 5. [The CFL restriction and the symmetry cell](#the-cfl-restriction-and-the-symmetry-cell)
-   (`bench/nohprobe.jl`)
+   (`bench/archive/nohprobe.jl`)
 6. [Negative internal energy ahead of a shock](#negative-internal-energy-ahead-of-a-shock)
-   (`bench/shockfoot.jl`)
-7. [Directional bulk viscosity](#directional-bulk-viscosity) (`bench/anisotropic.jl`)
+   (`bench/archive/shockfoot.jl`)
+7. [Directional bulk viscosity](#directional-bulk-viscosity) (`bench/archive/anisotropic.jl`)
 8. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
-   (`bench/boundaryorder.jl`, `bench/temporalorder.jl`, `test/convergence.jl`)
-9. [The filter's wall rows](#the-filters-wall-rows) (`bench/wallfilter.jl`)
-10. [Wall closures in production](#wall-closures-in-production) (`bench/wallclosure.jl`)
+   (`bench/boundaryorder.jl`, `bench/archive/temporalorder.jl`, `test/convergence.jl`)
+9. [The filter's wall rows](#the-filters-wall-rows) (`bench/archive/wallfilter.jl`)
+10. [Wall closures in production](#wall-closures-in-production) (`bench/archive/wallclosure.jl`)
 11. [The wall flux contracts](#the-wall-flux-contracts) (`test/wall_flux_tests.jl`)
-12. [Constant annihilation](#constant-annihilation) (`bench/constantfloor.jl`)
-13. [Closure certificates](#closure-certificates) (`bench/closurecertify.jl`,
-    `bench/neutralsearch8.jl`, `bench/neutralsearch10.jl`)
+12. [Constant annihilation](#constant-annihilation) (`bench/archive/constantfloor.jl`)
+13. [Closure certificates](#closure-certificates) (`bench/archive/closurecertify.jl`,
+    `bench/archive/neutralsearch8.jl`, `bench/archive/neutralsearch10.jl`)
 14. [The fifth-order closure search](#the-fifth-order-closure-search)
-    (`bench/closuresearch.jl`, `bench/closuredamping.jl`)
-15. [The sensor operators at walls](#the-sensor-operators-at-walls) (`bench/sensorwall.jl`)
+    (`bench/archive/closuresearch.jl`, `bench/archive/closuredamping.jl`)
+15. [The sensor operators at walls](#the-sensor-operators-at-walls) (`bench/archive/sensorwall.jl`)
 16. [The face-centred symmetry plane](#the-face-centred-symmetry-plane)
-    (`bench/wallclosure.jl`, `test/mpi_tests.jl`)
+    (`bench/archive/wallclosure.jl`, `test/mpi_tests.jl`)
 17. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
-    (`bench/noh_transverse.jl`)
-18. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
-19. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`,
-    `bench/axismass.jl`)
+    (`bench/archive/noh_transverse.jl`)
+18. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/archive/nscbcinflow.jl`)
+19. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/archive/foldorder.jl`,
+    `bench/archive/axismass.jl`)
 20. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
-    `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
-21. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
-    `test/level_tests.jl`, `bench/amrwin.jl`, `bench/movinglevel.jl`,
-    `bench/levelpattern.jl`)
+    `bench/phases.jl`, `bench/archive/reducedsolve.jl`, `bench/archive/nasa9_inversion.jl`)
+21. [AMR](#amr) (`bench/archive/amr_transfer.jl`, `bench/archive/leveltransfer.jl`,
+    `test/level_tests.jl`, `bench/amrwin.jl`, `bench/archive/movinglevel.jl`,
+    `bench/archive/levelpattern.jl`)
 22. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 23. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
-    (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
+    (`bench/archive/bulkchannel.jl`, `bench/archive/bulkentropy.jl`)
 24. [The contact with a temperature jump](#the-contact-with-a-temperature-jump)
-    (`bench/thermalcontact.jl`, `bench/tubebudget.jl`)
-25. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
-26. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
+    (`bench/archive/thermalcontact.jl`, `bench/archive/tubebudget.jl`)
+25. [The species validity band](#the-species-validity-band) (`bench/archive/speciesband.jl`)
+26. [The shared-file write](#the-shared-file-write) (`bench/archive/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
 27. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-28. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`, `bench/staggeredclosure.jl`, `bench/implicitstage.jl`)
+28. [Stiff diffusion](#stiff-diffusion) (`bench/archive/stiffdiffusion.jl`, `bench/archive/staggeredconduction.jl`, `bench/archive/staggeredfolds.jl`, `bench/archive/staggeredclosure.jl`, `bench/archive/implicitstage.jl`)
 29. [False activation on smooth fields](#false-activation-on-smooth-fields)
-    (`bench/falseactivation.jl`)
+    (`bench/archive/falseactivation.jl`)
 30. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
-    (`bench/interfaceacoustics.jl`, `test/validation.jl`)
-31. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/sharpening.jl`,
+    (`bench/archive/interfaceacoustics.jl`, `test/validation.jl`)
+31. [The interface sharpening flux](#the-interface-sharpening-flux) (`bench/archive/sharpening.jl`,
     `test/sharpening_tests.jl`)
 32. [Grid-scale growth at the r-z axis](#grid-scale-growth-at-the-r-z-axis)
-    (`bench/axisspectrum.jl`, `bench/axisrunaway.jl`)
+    (`bench/archive/axisspectrum.jl`, `bench/archive/axisrunaway.jl`)
 33. [The outflow face on a radial grid](#the-outflow-face-on-a-radial-grid)
-    (`bench/sphereoutflow.jl`, `test/sphere_dipole.jl`)
+    (`bench/archive/sphereoutflow.jl`, `test/sphere_dipole.jl`)
 34. [The slip wall of the r-z annulus](#the-slip-wall-of-the-r-z-annulus)
-    (`bench/annuluswall.jl`, `test/convergence.jl`)
+    (`bench/archive/annuluswall.jl`, `test/convergence.jl`)
 35. [The incompressible prototype](#the-incompressible-prototype)
-    (`bench/incompressible_checks.jl`, `bench/incompressible_tgv.jl`)
+    (`bench/archive/incompressible_checks.jl`, `bench/archive/incompressible_tgv.jl`)
 36. [The ablation rate of the Briareus-driven capsule](#the-ablation-rate-of-the-briareus-driven-capsule)
     (`examples/briareus_capsule.jl`)
 
@@ -290,7 +290,7 @@ forms in the He/CO2 shock tube and persists to a larger constant, under either
 thermodynamics:
 
 ```
-1-D reduction of the bench/he_co2_shock_tube.jl tube: 10:1 helium driver, flat He/CO2 contact
+1-D reduction of the bench/archive/he_co2_shock_tube.jl tube: 10:1 helium driver, flat He/CO2 contact
 at x = 3 m, slip walls, 768 nodes, to 2.5 ms (scratch script, no bench entry). TV − 1 of
 Y_CO2 is the time mean from 0.77 ms, when the transmitted shock has crossed the contact;
 light-side is |δ⁴Y_CO2|/16 at the end, more than four cells from the contact.
@@ -321,7 +321,7 @@ On the two-dimensional tube a larger constant reduces the worst undershoot and s
 run:
 
 ```
-2-D deck of bench/he_co2_shock_tube.jl, 384 × 24 to 2.5 ms (scratch script, same setup)
+2-D deck of bench/archive/he_co2_shock_tube.jl, 384 × 24 to 2.5 ms (scratch script, same setup)
 C_D     worst undershoot over the run   steps
 0.1     −4.67e-3                        1758
 0.3     −3.27e-3                        1691
@@ -1222,7 +1222,7 @@ contact six- to fifteenfold against the Fickian channel, and the bulk channel's 
 the weakest of the three:
 
 ```
-2-D deck of bench/he_co2_shock_tube.jl, 768 × 48 to 2.5 ms at C_D = 1 (scratch script, same
+2-D deck of bench/archive/he_co2_shock_tube.jl, 768 × 48 to 2.5 ms at C_D = 1 (scratch script, same
 setup). Grid-scale p is max |δ⁴_x p|/16p over pure helium (Y_CO2 < 1e-3) within 0.25 m
 behind the contact on each row, six cells and more from it. The helium dip is 1 − Y_CO2 at
 its minimum on the line y = L/2 beyond the first point where Y_CO2 exceeds 0.9, and max |v|
@@ -1394,7 +1394,7 @@ less dissipation per unit time.
 
 ```text
 julia --project=. bench/tgv_energy.jl 128 10 configs=on:1 smoother=gaussian cfl=0.35 alphaf=0.45
-julia --project=. bench/tgv_spectrum.jl <checkpoint>
+julia --project=. bench/archive/tgv_spectrum.jl <checkpoint>
 ```
 
 `bench/tgv_energy.jl` runs Taylor–Green at Re = 1600 and splits −dKE/dt by mechanism. The
@@ -1716,7 +1716,7 @@ line solve and its collective interface stage:
 
 ### Spectra
 
-`bench/tgv_spectrum.jl` takes the shell-averaged kinetic-energy spectrum from a checkpoint
+`bench/archive/tgv_spectrum.jl` takes the shell-averaged kinetic-energy spectrum from a checkpoint
 offline; the solver computes no transform. The spectrum sums to the solver's own kinetic
 energy to 4e-4 relative, the Parseval check, the residual being the density fluctuation.
 
@@ -1840,7 +1840,7 @@ All three 64³ peaks are below the tabulated reference, and β\* is 0.0% in all 
 ## The filter's dissipation
 
 ```text
-julia --project=. -t 1 bench/filterrate.jl filter_cfl=0.4
+julia --project=. -t 1 bench/archive/filterrate.jl filter_cfl=0.4
 ```
 
 A parallel shear layer, `u_x = 0.1 sin(4y)` at uniform ρ and p, is an exact steady solution
@@ -2070,7 +2070,7 @@ numbers ([the shock battery](#the-shock-battery)).
 ## Filtering on non-uniform volumes
 
 ```text
-julia --project=. -t 1 bench/filter_conservation.jl
+julia --project=. -t 1 bench/archive/filter_conservation.jl
 ```
 
 The alternative to the unweighted component filter on cylindrical, spherical and stretched
@@ -2168,7 +2168,7 @@ a metric one. At the symmetry cell the weighting is a per-case adjustment, not a
 ## The CFL restriction and the symmetry cell
 
 ```text
-julia --project=. -t 1 bench/nohprobe.jl 1 cfl=0.15 nmax=5000 every=2000 floor=1e-8 scope=representable
+julia --project=. -t 1 bench/archive/nohprobe.jl 1 cfl=0.15 nmax=5000 every=2000 floor=1e-8 scope=representable
 ```
 
 No setting of the four constants stabilizes a converging strong shock at the default `cfl =
@@ -2345,7 +2345,7 @@ alternation; re-running it at `every = 25` would settle that and has not been do
 
 ### The origin cell is a startup transient
 
-`bench/nohprobe.jl` reports the symmetry cell on every line, since the argmin columns track
+`bench/archive/nohprobe.jl` reports the symmetry cell on every line, since the argmin columns track
 the front and hide it. Spherical Noh, N = 256, `rho1/rho2` is that cell over its neighbour:
 
 ```
@@ -2557,11 +2557,11 @@ through cfl 0.5 even unprimed.
 ## Negative internal energy ahead of a shock
 
 ```text
-julia --project=. -t 1 bench/shockfoot.jl
-julia --project=. -t 1 bench/shockfoot.jl part=defaults cases=sedov
+julia --project=. -t 1 bench/archive/shockfoot.jl
+julia --project=. -t 1 bench/archive/shockfoot.jl part=defaults cases=sedov
 ```
 
-The transcript of the first command is `bench/results/shockfoot.txt`.
+The transcript of the first command is `bench/archive/results/shockfoot.txt`.
 
 Woodward–Colella, planar Noh and Sedov from `test/cases.jl` carry points with
 ρe = E − ½|m|²/ρ ≤ 0 under the defaults from early in each run:
@@ -2709,30 +2709,30 @@ compact divergence is written in face-flux form, is measured below.
 ### The face-flux limiter
 
 ```text
-julia --project=. -t 1 bench/positivity.jl
-julia --project=. -t 1 bench/positivity.jl part=variants cases=noh variants=none,A+B
-julia --project=. -t 1 bench/positivity.jl part=cost cases=woodward,noh,sedov,noh2,noh3 steps=1000
-julia --project=. -t 1 bench/positivity.jl part=cost cases=rz,blast steps=300 N=64
-julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3
-julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80
-julia --project=. -t 1 bench/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
-julia --project=. -t 1 bench/positivity.jl part=levels levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,nohuniform,a19,tiles,tilessub
-julia --project=. -t 1 bench/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
-julia --project=. -t 1 bench/positivity.jl part=levels levels=noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
-julia --project=. -t 1 bench/positivity.jl part=levels levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
-julia --project=. -t 1 bench/positivity.jl part=tilecost levels=a19,a19tiles a19n=33 reps=3
-julia --project=. -t 1 bench/positivity.jl part=levels levels=a19regrid a19n=32
-julia --project=. -t 1 bench/positivity.jl part=patches patches=2,3 flux=ghost
-julia --project=. -t 1 bench/positivity.jl part=levels flux=ghost levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,tiles,tilessub,noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
-julia --project=. -t 1 bench/positivity.jl part=levels flux=ghost levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
-julia --project=. -t 1 bench/positivity.jl part=levelcost flux=ghost levels=wc,wcsub,noh85,tiles,a19
-julia --project=. -t 1 bench/positivity.jl part=tilecost flux=ghost levels=a19,a19tiles a19n=33 reps=3
-julia --project=. -t 1 bench/positivity.jl part=tiledrift
-julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true conservative=false
-julia --project=. -t 1 bench/positivity.jl part=tiledrift ledger=true drift=regridbox pulse= planar=
-julia --project=. -t 1 bench/positivity.jl part=levels conservative=false levels=wcregrid,tiles,tilessub,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
-julia --project=. -t 1 bench/positivity.jl part=levels conservative=false levels=a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
-julia --project=. -t 1 bench/filter_conservation.jl parts=shared N=48
+julia --project=. -t 1 bench/archive/positivity.jl
+julia --project=. -t 1 bench/archive/positivity.jl part=variants cases=noh variants=none,A+B
+julia --project=. -t 1 bench/archive/positivity.jl part=cost cases=woodward,noh,sedov,noh2,noh3 steps=1000
+julia --project=. -t 1 bench/archive/positivity.jl part=cost cases=rz,blast steps=300 N=64
+julia --project=. -t 1 bench/archive/positivity.jl part=patches patches=2,3
+julia --project=. -t 1 bench/archive/positivity.jl part=cost cases=blast steps=300 N=80
+julia --project=. -t 1 bench/archive/positivity.jl part=cost cases=blast steps=300 N=80 patches=2
+julia --project=. -t 1 bench/archive/positivity.jl part=levels levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,nohuniform,a19,tiles,tilessub
+julia --project=. -t 1 bench/archive/positivity.jl part=levelcost levels=wc,wcsub,noh85,tiles,a19
+julia --project=. -t 1 bench/archive/positivity.jl part=levels levels=noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/archive/positivity.jl part=levels levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/archive/positivity.jl part=tilecost levels=a19,a19tiles a19n=33 reps=3
+julia --project=. -t 1 bench/archive/positivity.jl part=levels levels=a19regrid a19n=32
+julia --project=. -t 1 bench/archive/positivity.jl part=patches patches=2,3 flux=ghost
+julia --project=. -t 1 bench/archive/positivity.jl part=levels flux=ghost levels=wc,wcsub,wcregrid,noh85,noh43,noh85sub,noh43sub,tiles,tilessub,noh81,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/archive/positivity.jl part=levels flux=ghost levels=a19,a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/archive/positivity.jl part=levelcost flux=ghost levels=wc,wcsub,noh85,tiles,a19
+julia --project=. -t 1 bench/archive/positivity.jl part=tilecost flux=ghost levels=a19,a19tiles a19n=33 reps=3
+julia --project=. -t 1 bench/archive/positivity.jl part=tiledrift
+julia --project=. -t 1 bench/archive/positivity.jl part=tiledrift ledger=true conservative=false
+julia --project=. -t 1 bench/archive/positivity.jl part=tiledrift ledger=true drift=regridbox pulse= planar=
+julia --project=. -t 1 bench/archive/positivity.jl part=levels conservative=false levels=wcregrid,tiles,tilessub,noh81tiles,noh81tilessub,noh81regrid,noh81regridsub
+julia --project=. -t 1 bench/archive/positivity.jl part=levels conservative=false levels=a19tiles,a19tilessub,a19regrid,a19regridsub a19n=33
+julia --project=. -t 1 bench/archive/filter_conservation.jl parts=shared N=48
 ```
 
 On a closed line the collocated divergence is a difference of face fluxes under node
@@ -3147,7 +3147,7 @@ the shared faces as the shock crosses them, and the filter passes carry most of 
 nodes, unlimited and under `patch_interfaces = :closure` except where a row says otherwise, on
 one layout and with one change at a time. The table below was taken with the identity row
 (`conservative=false` on the current tree) at package commit `2d5178f5` on Julia 1.13.3
-(transcript `bench/results/tiledrift.txt`). Beside the composite mass it prints two that use no
+(transcript `bench/archive/results/tiledrift.txt`). Beside the composite mass it prints two that use no
 covered mask and no junction weight: each refined patch's single-patch quadrature plus the
 root's from the level's last node out (split), and the root's alone over the whole line, which
 holds the restricted level (root). Drift is against the exact mass at t = 0.6:
@@ -3287,7 +3287,7 @@ tiles of 8, limited, :ghost      +3.1e-4    +8.5e-5
 
 The conservative rows conserve the composite pass to round-off for every filter that takes rows,
 and they converge to the single line's pass one order faster than the identity row.
-`bench/filter_conservation.jl parts=shared N=48` assembles the composite operator of a periodic
+`bench/archive/filter_conservation.jl parts=shared N=48` assembles the composite operator of a periodic
 line held as two patches sharing two nodes, each patch's line closed by the interface rows and its
 ghost layers holding the other patch's nodes, a shared node the mean of its two copies. The table
 gives the defect d = Mᵀ V − V relative to V = h and the composite pass against the single line's
@@ -3393,7 +3393,7 @@ two patches, limited          1.000
 ## Directional bulk viscosity
 
 ```text
-julia --project=. -t 1 bench/anisotropic.jl
+julia --project=. -t 1 bench/archive/anisotropic.jl
 ```
 
 A directional artificial bulk viscosity carries one coefficient per grid direction with the
@@ -3540,7 +3540,7 @@ grid is used for, by a mechanism intrinsic to a bulk stress with unequal diagona
 coefficients rather than to a constant or a sensor. The reference's success on a blast wave
 and a nozzle boundary layer is neither reproduced nor contradicted here: both carry pressure
 everywhere, and neither converges cold gas onto a point. The two cases remain, guarded in
-`test/validation.jl` under the scalar form, with `bench/anisotropic.jl` as the instrument
+`test/validation.jl` under the scalar form, with `bench/archive/anisotropic.jl` as the instrument
 for the scalar form's aspect-ratio penalty.
 
 ## The smooth-evolution accuracy matrix
@@ -3950,7 +3950,7 @@ and the subcycled run's Hermite shell adds 25% at the largest step and 1.5% at t
 ### Temporal order
 
 ```text
-julia --project=. -t 1 bench/temporalorder.jl [study=all] [restrict=step|stage|none]
+julia --project=. -t 1 bench/archive/temporalorder.jl [study=all] [restrict=step|stage|none]
 ```
 
 Each row integrates one case on one grid in equal steps through `run!` and reads the
@@ -4052,7 +4052,7 @@ effect on a wave the root resolves; without restriction the coarse state under t
 which the shell is interpolated from, never receives what the fine level resolves and the
 root does not. The
 injection is kept once per step in both modes
-([bench/restrictcost.jl](#benchrestrictcostjl-restriction-before-every-stage)).
+([bench/archive/restrictcost.jl](#bencharchiverestrictcostjl-restriction-before-every-stage)).
 
 ### What the matrix settles
 
@@ -4089,7 +4089,7 @@ integrated error vanishes while the pointwise error does not.
 ## The filter's wall rows
 
 ```text
-julia --project=. -t 1 bench/wallfilter.jl
+julia --project=. -t 1 bench/archive/wallfilter.jl
 ```
 
 The cascade rows of `compact_filter` leave the end row unfiltered and apply centered
@@ -4304,9 +4304,9 @@ annihilation](#constant-annihilation) and removed by the neutral closure rows.
 ## Wall closures in production
 
 ```text
-julia --project=. -t 1 bench/wallclosure.jl
-julia --project=. -t 1 bench/closurequalify.jl parts=dilatation schemes=neutral3,brady_livescu
-julia --project=. -t 1 bench/closurequalify.jl parts=jacobian schemes=neutral3 jns=51,101 jwalls=slip
+julia --project=. -t 1 bench/archive/wallclosure.jl
+julia --project=. -t 1 bench/archive/closurequalify.jl parts=dilatation schemes=neutral3,brady_livescu
+julia --project=. -t 1 bench/archive/closurequalify.jl parts=jacobian schemes=neutral3 jns=51,101 jwalls=slip
 ```
 
 Unless a table says otherwise the case is the standing wave or the shear mode of
@@ -4791,7 +4791,7 @@ Coverage: the direct face tests seed artificial conductivity and species diffusi
 independently of the detector, `:fickian` and `:bulk` both, over both precisions, all six
 physical faces and their corners, ideal/NASA-9 and stiffened-gas EOS, nonsingular
 cylindrical/spherical metrics, `SwitchableBC` and KernelAbstractions CPU execution. The
-24-case `bench/wallflux.jl` matrix also passes on a Radeon RX 6800 XT at zero maximum CPU/GPU
+24-case `bench/archive/wallflux.jl` matrix also passes on a Radeon RX 6800 XT at zero maximum CPU/GPU
 evolved-state difference for every precision, normal, thermal condition and species channel.
 The abstract face dispatch costs a fixed 16 B per active face and nothing proportional to wall
 area, and adds the expected `correct_flux!` dispatch to the JET reports:
@@ -4915,7 +4915,7 @@ transverse mode](#the-aligned-noh-transverse-mode)); every other battery row hol
 digits printed. No row of `test/convergence.jl` moves: with `mu0 = 0` and the artificial
 properties off the wall-plane fluxes the contract writes are already exactly zero, so it is a
 no-op there, and the file's viscous slip-wall row reads 4.00 beside the viscous no-slip
-wall's 4.00. The inviscid slip-wall rows of `bench/wallclosure.jl` hold to four digits
+wall's 4.00. The inviscid slip-wall rows of `bench/archive/wallclosure.jl` hold to four digits
 and the smooth reflected pulse is unchanged; the shocked pulse moves in the third digit, where
 the reflection leaves a nonzero κ\* at the wall. The viscous slip-wall table matches the
 viscous no-slip table to three digits at every closure:
@@ -4934,7 +4934,7 @@ viscous no-slip table to three digits at every closure:
 ## Constant annihilation
 
 ```text
-julia --project=. -t 1 bench/constantfloor.jl
+julia --project=. -t 1 bench/archive/constantfloor.jl
 ```
 
 A periodic or interior row differences its taps before it multiplies, so a constant is
@@ -5143,10 +5143,10 @@ spurious gradient of 1 Pa/m at a wall. Through the mode it becomes a wall-normal
 ## Closure certificates
 
 ```text
-julia --project=. -t 16 bench/closurecertify.jl
-julia --project=. -t 1 bench/neutralsearch8.jl parts=scan grid=81
-julia --project=. -t 1 bench/neutralsearch10.jl parts=validate,scan,wide,errors
-julia --project=. -t 16 bench/closurecertify.jl wall=folded schemes=c6,c8,c10 parts=spectrum,pseudo,transient
+julia --project=. -t 16 bench/archive/closurecertify.jl
+julia --project=. -t 1 bench/archive/neutralsearch8.jl parts=scan grid=81
+julia --project=. -t 1 bench/archive/neutralsearch10.jl parts=validate,scan,wide,errors
+julia --project=. -t 16 bench/archive/closurecertify.jl wall=folded schemes=c6,c8,c10 parts=spectrum,pseudo,transient
 ```
 
 The instability of [constant annihilation](#constant-annihilation) is removed by new closure
@@ -5650,11 +5650,11 @@ closure's wall phases, so the selection sweeps over every line length and not ov
 
 ### The same model on a face-centred symmetry plane
 
-`bench/closuresearch.jl` holds `folded_derivative_matrix` (the interior stencil on every row,
+`bench/archive/closuresearch.jl` holds `folded_derivative_matrix` (the interior stencil on every row,
 the taps outside the line folded back with the field's sign, the ghost coupling of the result
 folded onto the diagonal with the opposite sign) and `folded_acoustic_operator`,
 `L = [0 −D_odd; −D_even 0]` on the 2N unknowns (p even, u odd) with no endpoint
-elimination; `bench/closurecertify.jl` takes `wall=folded`. The folded matrix reproduces the
+elimination; `bench/archive/closurecertify.jl` takes `wall=folded`. The folded matrix reproduces the
 package's fold plan, equals the periodic operator on 2N nodes restricted by parity, and
 differentiates at the interior order:
 
@@ -5706,17 +5706,17 @@ spectrum 19 s, pseudo 118 s, transient 106 s, scan 999 s
 ## The fifth-order closure search
 
 ```text
-julia --project=. -t 1 bench/closuresearch.jl mode=report
-julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=polynomial,jacobian,smooth,stress
-julia --project=. -t 1 bench/closureenergy.jl
-julia --project=. -t 1 bench/closuredamping.jl parts=jacobian,uniform schemes=candidate strength=0.1 components=acoustic
+julia --project=. -t 1 bench/archive/closuresearch.jl mode=report
+julia --project=. -t 1 bench/archive/closurequalify.jl schemes=de parts=polynomial,jacobian,smooth,stress
+julia --project=. -t 1 bench/archive/closureenergy.jl
+julia --project=. -t 1 bench/archive/closuredamping.jl parts=jacobian,uniform schemes=candidate strength=0.1 components=acoustic
 ```
 
 A dead end kept for its instruments and its constraints. The search constructs fifth-order
 boundary rows while retaining the C6 interior and its tridiagonal solve, and measures them
 through the production derivative and timestep. Nothing established here is an energy bound
 or an impossibility result. The archived vectors, seeds, populations, generation counts and
-training grids are in `bench/closuresearch_results.md`.
+training grids are in `bench/archive/closuresearch_results.md`.
 
 **The family.** Each row reads the first six field values. With a unit diagonal on the
 implicit side, the first row has one free superdiagonal and rows 2–4 have two free
@@ -5746,7 +5746,7 @@ sampled resolvents are diagnostics, not proofs.
   that growth. The `:neutral3` control at the same settings is neutral, so the growth
   belongs to these rows. The filter does remove its one unfiltered slip resonance, at
   N = 171.
-- The joint derivative/filter treatment of `bench/closuredamping.jl`: the filtered-objective
+- The joint derivative/filter treatment of `bench/archive/closuredamping.jl`: the filtered-objective
   candidate with an extra rank-one wall pass `Fwall = I − σ v vᵀ/(vᵀv)`, `v =
   [1,-6,15,-20,15,-6,1]`, σ = 0.1, which preserves degree-five polynomials and is an O(h^5)
   boundary perturbation at fixed hyperbolic CFL. Applied to every conserved component it is
@@ -5782,7 +5782,7 @@ joint, acoustic components   full production Jacobian                           
 ```
 
 **An exact energy-norm feasibility probe.** A simple norm ansatz is ruled out, though not
-other compact SBP norms. `bench/closureenergy.jl` tests a restricted construction:
+other compact SBP norms. `bench/archive/closureenergy.jl` tests a restricted construction:
 symmetric implicit A, `B + B' = (5/3) diag(-1,0,...,1)`, fifth-order boundary
 moments, and the unchanged C6 interior. Positive A would give an SBP norm `H = (3/5)A`, and
 decoupling its endpoint would make strong injection orthogonal in that norm. Exact rational
@@ -5827,17 +5827,17 @@ limitations remain: Brady–Livescu has a filtered slip-wall resonance, the unfi
 set has the N = 171 resonance, the filtered-objective candidate has a held-out line-length
 failure, and DE has a filtered Dirichlet radius above one. A resumption would measure
 closures under `beta_sensor = :dilatation`, where the wall is no longer capped, rather than
-begin at the derivative rows. The instruments are kept: `bench/closuresearch.jl` holds the
-family, the reduced models and the searches, `bench/closurequalify.jl` the production
-polynomial, Jacobian, evolution and shock checks, `bench/closureenergy.jl` the exact
-energy-norm probe, and `bench/closuredamping.jl` the joint trial. Search assembly agrees
+begin at the derivative rows. The instruments are kept: `bench/archive/closuresearch.jl` holds the
+family, the reduced models and the searches, `bench/archive/closurequalify.jl` the production
+polynomial, Jacobian, evolution and shock checks, `bench/archive/closureenergy.jl` the exact
+energy-norm probe, and `bench/archive/closuredamping.jl` the joint trial. Search assembly agrees
 with production basis-vector applications to 1.066e-14 for the derivative and exactly for
 the filter.
 
 ## The sensor operators at walls
 
 ```text
-julia --project=. -t 1 bench/sensorwall.jl
+julia --project=. -t 1 bench/archive/sensorwall.jl
 ```
 
 Three operators around the artificial-property sensors take node-centred rows at a wall and
@@ -5910,7 +5910,7 @@ cells 2, 3, 4 and 8 read 1.0000 of the exact value under both extensions
 
 At a node-centred wall the half-offset rows make the `:d8` detector second order on an even
 field and first order on an odd one, and the `:gaussian` smoother second order; the
-node-centred rows reproduce the periodic result to round-off. `bench/sensorwall.jl` prints
+node-centred rows reproduce the periodic result to round-off. `bench/archive/sensorwall.jl` prints
 |wall − periodic| at a node over the input amplitude, on an even and an odd field that
 reflect about the wall nodes. The first table is the low wall under the half-offset rows.
 
@@ -6041,9 +6041,9 @@ pentadiagonal inverse carries a decaying tail of that mismatch to the axis.
 ## The face-centred symmetry plane
 
 ```text
-julia --project=. -t 1 bench/wallclosure.jl parts=smooth wall=folded
-julia --project=. -t 1 bench/sensorwall.jl wall=folded
-julia --project=. -t 1 bench/closurequalify.jl parts=jacobian schemes=neutral3 jns=51,101 jwalls=symmetry,slip
+julia --project=. -t 1 bench/archive/wallclosure.jl parts=smooth wall=folded
+julia --project=. -t 1 bench/archive/sensorwall.jl wall=folded
+julia --project=. -t 1 bench/archive/closurequalify.jl parts=jacobian schemes=neutral3 jns=51,101 jwalls=symmetry,slip
 mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl "phases=symmetry plane"
 ```
 
@@ -6098,19 +6098,19 @@ C8 filter pass, planes         16/24/32/48 4.051e-7  1.711e-8  1.762e-9  7.016e-
 
 The resolutions fall with the order because a field this smooth reaches round-off quickly.
 With a plane at the low end and a node-centred `SlipWallBC` at the high end,
-`bench/foldorder.jl` splits the norm: the fold window converges at or above the interior
+`bench/archive/foldorder.jl` splits the norm: the fold window converges at or above the interior
 order, and the maximum sits at the last node of the wall window, which converges at third to
 fourth order. Both rows are bitwise identical to the cylindrical-axis rows of the same file.
 
 ```text
-bench/foldorder.jl     even    odd
+bench/archive/foldorder.jl     even    odd
 fold window            7.01    6.05
 wall window            2.99    3.76
 ```
 
 At a plane every sensor operator reproduces the periodic mirror to round-off, at the level
 of the node-centred wall rows of [the sensor operators at
-walls](#the-sensor-operators-at-walls). `bench/sensorwall.jl wall=folded` runs the `:delta4`
+walls](#the-sensor-operators-at-walls). `bench/archive/sensorwall.jl wall=folded` runs the `:delta4`
 and `:d8` detectors on an even and an odd field and the `:gaussian` and `:compact` smoothers
 on the even field, at a plane against the periodic mirror, on both faces.
 
@@ -6124,7 +6124,7 @@ node-centred wall rows                             2.8e-16 (smoother), 2.5e-15 (
 ### The smooth wall matrix
 
 The node-centred rows carry a closure defect that converges near fourth order, and the
-folded rows are round-off. The table is `bench/wallclosure.jl parts=smooth wall=folded`, the
+folded rows are round-off. The table is `bench/archive/wallclosure.jl parts=smooth wall=folded`, the
 wall-window maximum norm at t = 0.4 against the mirror at the same spacing, the default
 filter every step, cfl 0.25:
 
@@ -6186,7 +6186,7 @@ Julia 1.11.4 and 1.13.0 on the workstation agree to every printed digit
 
 The plane's radius is one to the finite-difference noise, and its filtered rate is six to
 thirty times below the node-centred slip wall's, the one configuration in which the neutral
-rows show a measurable positive rate. The table is `bench/closurequalify.jl parts=jacobian
+rows show a measurable positive rate. The table is `bench/archive/closurequalify.jl parts=jacobian
 jwalls=symmetry,slip`, the finite-differenced `step!` about a uniform state, radius and rate
 per unit time at three differencing steps:
 
@@ -6257,13 +6257,13 @@ half a cell inside the plane folded; `noh_plane_density`, the even continuation
 ## The aligned Noh transverse mode
 
 ```text
-julia --project=. -t 1 bench/noh_transverse.jl trace sample=100
-julia --project=. -t 1 bench/noh_transverse.jl seeds seed_mode=2 sample=100
-julia --project=. -t 1 bench/noh_transverse.jl uniform seed_mode=2 seed=1e-10 sample=50
-julia --project=. -t 1 bench/noh_transverse.jl warm t0=0.1 seed_mode=2 seed=1e-10
-julia --project=. -t 1 bench/noh_transverse.jl widths sample=100
-julia --project=. -t 1 bench/noh_transverse.jl seed_channels seed_mode=2 seed=1e-10 sample=100
-julia --project=. -t 1 bench/noh_transverse.jl extended tfinal=2.0 sample=200 nmax=20000
+julia --project=. -t 1 bench/archive/noh_transverse.jl trace sample=100
+julia --project=. -t 1 bench/archive/noh_transverse.jl seeds seed_mode=2 sample=100
+julia --project=. -t 1 bench/archive/noh_transverse.jl uniform seed_mode=2 seed=1e-10 sample=50
+julia --project=. -t 1 bench/archive/noh_transverse.jl warm t0=0.1 seed_mode=2 seed=1e-10
+julia --project=. -t 1 bench/archive/noh_transverse.jl widths sample=100
+julia --project=. -t 1 bench/archive/noh_transverse.jl seed_channels seed_mode=2 seed=1e-10 sample=100
+julia --project=. -t 1 bench/archive/noh_transverse.jl extended tfinal=2.0 sample=200 nmax=20000
 ```
 
 The aligned Noh case grows a transverse disturbance from round-off. The baseline is the
@@ -6419,13 +6419,13 @@ guard is 5e-9 ([the face-centred symmetry plane](#the-face-centred-symmetry-plan
 ## The inflow transverse terms
 
 ```text
-julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow betas=0,0.15,0.3,0.5,0.7,0.85,1 etas=4,16,64
-julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.1 betas=0,-1,0.9,1 etas=16
-julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.5 betas=0,-1,0.5,1 etas=16
-julia --project=. -t 1 bench/nscbcinflow.jl vortex betas=0,0.5,1 etas=256,1024
+julia --project=. -t 1 bench/archive/nscbcinflow.jl pulse vortex outflow betas=0,0.15,0.3,0.5,0.7,0.85,1 etas=4,16,64
+julia --project=. -t 1 bench/archive/nscbcinflow.jl pulse vortex outflow M=0.1 betas=0,-1,0.9,1 etas=16
+julia --project=. -t 1 bench/archive/nscbcinflow.jl pulse vortex outflow M=0.5 betas=0,-1,0.5,1 etas=16
+julia --project=. -t 1 bench/archive/nscbcinflow.jl vortex betas=0,0.5,1 etas=256,1024
 ```
 
-The transcript of the four commands is `bench/results/nscbcinflow.txt`.
+The transcript of the four commands is `bench/archive/results/nscbcinflow.txt`.
 
 Every imposed amplitude of `NSCBCInflowBC` carries `−beta_t·𝒯`, the
 weighted transverse contribution of its characteristic, except the transverse
@@ -6606,7 +6606,7 @@ that of a weight of 0.5. For an inflow that admits no structure and faces outgoi
 ## Fold order and geometry limits
 
 ```text
-julia --project=. -t 1 bench/foldorder.jl
+julia --project=. -t 1 bench/archive/foldorder.jl
 ```
 
 `test/convergence.jl` reports a global max norm, and every one of its fold studies closes
@@ -6651,7 +6651,7 @@ sharp edge completes. `test/cases.jl` initializes Sedov with a Gaussian deposit.
 
 The case is a top hat of the Sedov deposit's energy with a tanh edge of w cells, run without
 retries; "area form" restores the area form of the radial pressure term through
-`bench/axisvariant.jl`, and the axis and the plane take the same p_in over the same line.
+`bench/archive/axisvariant.jl`, and the axis and the plane take the same p_in over the same line.
 With retries both blasts complete, at half the starting CFL.
 
 ```
@@ -6682,10 +6682,10 @@ initialization singularity. The cylindrical axis accepts the cold start at 16× 
 ### Mass through the cylindrical axis face
 
 ```text
-julia --project=. -t 1 bench/axismass.jl
+julia --project=. -t 1 bench/archive/axismass.jl
 ```
 
-The transcript is `bench/results/axismass.txt`.
+The transcript is `bench/archive/results/axismass.txt`.
 
 Under the node weights W of the positivity limiter (h on the fold's half of the line,
 the closed line's tail at the far end) the folded divergence telescopes to
@@ -6820,12 +6820,12 @@ MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 30 dims=2,2,2
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 10 dims=2,2,2 phases=true cases=periodic
 julia --project=. -t 1 bench/phases.jl
-julia --project=. -t 1 bench/reducedsolve.jl 48 derivs=c6,c10
-"$MPIEXEC" -n 2 julia --project=. -t 1 bench/reducedsolve.jl 96 derivs=c6,c10
-"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 dims=8,1,1   # also 2, 4
-"$MPIEXEC" -n 16 julia --project=. -t 1 bench/reducedsolve.jl 192 dims=16,1,1
-"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 mode=accuracy
-"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96,192 mode=accuracy operators=filter,pyranda rhs=random
+julia --project=. -t 1 bench/archive/reducedsolve.jl 48 derivs=c6,c10
+"$MPIEXEC" -n 2 julia --project=. -t 1 bench/archive/reducedsolve.jl 96 derivs=c6,c10
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/archive/reducedsolve.jl 96 dims=8,1,1   # also 2, 4
+"$MPIEXEC" -n 16 julia --project=. -t 1 bench/archive/reducedsolve.jl 192 dims=16,1,1
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/archive/reducedsolve.jl 96 mode=accuracy
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/archive/reducedsolve.jl 96,192 mode=accuracy operators=filter,pyranda rhs=random
 ```
 
 Run-to-run spread on this workstation is 10–20%, so every ratio below is formed within a
@@ -6906,7 +6906,7 @@ process-to-process spread
 
 ### The x-direction pentadiagonal solve
 
-`bench/reducedsolve.jl` (`48 derivs=c6,c10` serially, `96` at np = 2, `-t 1`, fully
+`bench/archive/reducedsolve.jl` (`48 derivs=c6,c10` serially, `96` at np = 2, `-t 1`, fully
 periodic) splits a line solve into the local sweep, the reduced interface stage, and the spike
 correction (total − sweep − reduced). On the x layout, where a line is a column of the n ×
 lines block, the cost of the C10 spike correction is set by whether its interface values
@@ -6953,7 +6953,7 @@ A decomposed solve of a system of condition number κ reproduces serial to betwe
 twentieth and a half of κ·eps, and 3e-15 is that bar only for the operators with cond(A)
 near 20. The departure from serial is the same fraction of cond(A)·eps for every operator,
 including `pyranda_filter`, whose left-hand-side symbol nearly vanishes near k = π and
-sets a condition number two orders above the others'. `bench/reducedsolve.jl
+sets a condition number two orders above the others'. `bench/archive/reducedsolve.jl
 mode=accuracy` applies the x line solver once with the line split over P ranks, against the
 P = 1 solve and against a 256-bit dense solve, max-norm relative to the largest exact value.
 
@@ -7091,7 +7091,7 @@ the default smoother, most of it in the smoothing of the sensors, one sweep per 
 only at three or more species; cutting it is a numerics decision, a shared against a
 per-species sensor, and not a code tweak.
 
-### bench/nasa9_inversion.jl: the NASA-9 temperature inversion
+### bench/archive/nasa9_inversion.jl: the NASA-9 temperature inversion
 
 Under `:linear` the sweep finds no failure in either precision. Every remaining failure is
 the four-species mixture above 6000 K under `:polynomial`, where the H2O fit ends and its
@@ -7104,7 +7104,7 @@ under `:polynomial` and `:linear`. "Wrong" is a recovery more than 1e-3 from the
 the energy was formed at; "silent" is a wrong one whose status carries no flag.
 
 ```
-julia --project=. -t 1 bench/nasa9_inversion.jl
+julia --project=. -t 1 bench/archive/nasa9_inversion.jl
     N2/O2/CO2/H2O, 300–3000 K, three processes per checkout, alternating
 ... 200000 part=sweep
     200,000 states per case over 200–20,000 K, for N2, CO2, He and N2/O2/CO2/H2O,
@@ -7250,7 +7250,7 @@ subcycled shows no excursion at all.
 **Decision.** Every layout is inside its conservation budget, the fixed
 layouts by an order of magnitude, so smooth flow takes no surface-flux
 correction; the correction of
-[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling) is
+[bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-fine-coupling) is
 gated to lines beside an unresolved density feature, and the density of these
 cases is uniform. The root-edge
 mass-fraction undershoot under global stepping is an imposed-shell accuracy
@@ -7321,11 +7321,11 @@ subcycled run reduces its largest drift over t ≤ 5π by a factor of 93.
 non-conservation is the junction's flux mismatch, more than three orders of
 magnitude inside the budget at this resolution and converging at high order,
 and a correction applied on every line of a 2-D face costs the interface its
-order ([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling)).
+order ([bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
 
-### bench/reflux.jl: the conservative coarse-fine coupling
+### bench/archive/reflux.jl: the conservative coarse-fine coupling
 
-`julia --project=. -t 4 bench/reflux.jl`, serial, Float64, C6 and the default
+`julia --project=. -t 4 bench/archive/reflux.jl`, serial, Float64, C6 and the default
 filter; the cases are described in the script's header. The uncorrected rows
 set `REFLUX[] = false`.
 
@@ -7390,7 +7390,7 @@ moving shock's junction in nearly every step, and the correction lands in the
 gas at rest ahead of the shock; testing the uncovered nodes alone, the
 default, keeps the masked level's error ahead of the shock at the fine
 grid's. The
-shock problem of `bench/movinglevel.jl` (256 root nodes, a subcycled box
+shock problem of `bench/archive/movinglevel.jl` (256 root nodes, a subcycled box
 placed by the density sensor four root nodes ahead of the shock) keeps the
 shock inside the box's inner face and within `GATE_REACH` of it. The moving
 shock column is the level's largest |ρ − 1| beyond 0.02 inside the front,
@@ -7454,9 +7454,9 @@ guard the Noh crossing reached a negative density at t = 0.459, and without
 the filter passes' junction fluxes in the register the corrected composite
 gained 4.9e-3 of its mass.
 
-### bench/interfacesensor.jl: the sensors and the filter at an interface
+### bench/archive/interfacesensor.jl: the sensors and the filter at an interface
 
-`julia --project=. -t 16 bench/interfacesensor.jl` (`probe`, `crossing`,
+`julia --project=. -t 16 bench/archive/interfacesensor.jl` (`probe`, `crossing`,
 `filter` and `undershoot`; the toggle `SENSOR_INTERFACE_GHOSTS` selects
 the detector's interface taps).
 
@@ -7523,8 +7523,8 @@ base row       C6, subcycled, one tile, filter_cfl = 0.35, the default rows,
 ```
 
 Each other row changes one setting. Package at `b4388f9`, Julia 1.13.3, from
-`julia --project=. -t 1 bench/interfacesensor.jl crossing`, whose
-transcript is `bench/results/interfacesensor.txt`. The noise is the momentum
+`julia --project=. -t 1 bench/archive/interfacesensor.jl crossing`, whose
+transcript is `bench/archive/results/interfacesensor.txt`. The noise is the momentum
 ahead of the shock at t = 0.1 and x > 0.85, the level suite's gate quantity,
 and ρ_min and p_min are the minimum density and pressure over every patch on
 any step. The shell number is the artificial diffusivity number
@@ -7691,10 +7691,10 @@ the integrated relaxation strength different in these rows. The experiments
 identify sensitivity to this filter schedule, not a CFL violation or a
 restriction-frequency failure, and do not isolate an individual operator
 commutator. Keep subcycling as the demonstrated remedy; the subsequent
-[level-aware filter qualification](#benchlevelfilterjl-level-aware-filtering-under-global-stepping)
+[level-aware filter qualification](#bencharchivelevelfilterjl-level-aware-filtering-under-global-stepping)
 measures candidate global-step policies and their accuracy tradeoffs.
 
-Reproduce with `julia --project=. -t 1 bench/interfacesensor.jl undershoot
+Reproduce with `julia --project=. -t 1 bench/archive/interfacesensor.jl undershoot
 layerN=96 layerny=24 layer_tfinal=50.26548245743669 samples=8 nmax=40000
 undershoot_depths=2 "undershoot_variants=depth-3 dt" undershoot_ghosts=on`;
 select `"undershoot_variants=sparse projection"` for the restriction
@@ -7720,7 +7720,7 @@ stated workaround, the second is removed by subcycling.
 
 ```text
 julia --project=. -t 1 bench/boundaryorder.jl study=idiv
-julia --project=. -t 1 bench/interfacesensor.jl crossing "crossing_variants=base,idiv,reversed,two patches,three patches"
+julia --project=. -t 1 bench/archive/interfacesensor.jl crossing "crossing_variants=base,idiv,reversed,two patches,three patches"
 julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 idiv=brady_livescu
 ```
 
@@ -7800,7 +7800,7 @@ two patches           9.740e-6  6.060e-5  1.543e-5     2.049e-6  8.356e-6  1.139
 **Shocks.** Neither candidate survives a discontinuity on a shared plane, and the
 Brady–Livescu rows halve the minimum pressure where the shock crosses a same-level face. The
 case is the Sod crossing of
-[the interface sensor instrument](#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface),
+[the interface sensor instrument](#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface),
 root N = 201, `cfl = 0.4`, the artificial properties and the filter live; shell and root
 columns are the density error against the uniform run at t = 0.2:
 
@@ -7847,10 +7847,10 @@ stays experimental, a Float64 smooth-flow setting.
 
 ```text
 julia --project=. -t 1 bench/boundaryorder.jl study=gflux
-julia --project=. -t 1 bench/interfacesensor.jl crossing
-julia --project=. -t 1 bench/interfacesensor.jl startup
+julia --project=. -t 1 bench/archive/interfacesensor.jl crossing
+julia --project=. -t 1 bench/archive/interfacesensor.jl startup
 julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost [mu=1e-3]
-julia --project=. -t 1 bench/interfacecost.jl
+julia --project=. -t 1 bench/archive/interfacecost.jl
 ```
 
 `interface_flux = :ghost` evaluates the inviscid flux on the padded block, the interface ghosts
@@ -7872,7 +7872,7 @@ or leads the Brady–Livescu (BL) rows. The polynomial row, `polynomial_case(96)
 inviscid flux component of degree at most five, is differenced to round-off in the interface
 window by the ghost path alone. The closure-row and BL columns are those of the section
 above, which this study reproduces to every digit. Package at `b4388f9`, Julia 1.13.3; the
-transcript of the first command is `bench/results/boundaryorder.txt`.
+transcript of the first command is `bench/archive/results/boundaryorder.txt`.
 
 ```text
 serial, Float64, cfl = 0.25, the matrix's interface window
@@ -7959,7 +7959,7 @@ under both, and they complete the run with the diaphragm on a shared plane, whic
 the closure rows. The case is the Sod crossing, root N = 201, `cfl = 0.4`, the artificial
 properties and the filter live, inviscid, at the ghost path's default order 8. Package at
 `b4388f9`, Julia 1.13.3; the transcript of the `crossing` and `startup` commands is
-`bench/results/interfacesensor.txt`. Shell and root are the density errors against the
+`bench/archive/results/interfacesensor.txt`. Shell and root are the density errors against the
 uniform run at the fine spacing at t = 0.2, p_min the smallest pressure on any step. In the
 default ghost column the remainder goes through the gradient rows (the transcript's
 `rem-extrap` rows on a nest, `grad-rem` on patches); in the middle column it takes the
@@ -8100,7 +8100,7 @@ the transcript above, np = 1, at t = 0.2. On the untiled nests the shell error f
 On `test/validation.jl`'s Noh with a level at the axis and the coarse-fine correction on, the
 toggles leave the run holding the shock unchanged in plateau and mass drift. The run passing
 the shock out moves slightly, its most negative internal energy rising.
-`bench/couplingspectrum.jl` (art off) and `bench/interfaceconservation.jl iflux=ghost`'s
+`bench/archive/couplingspectrum.jl` (art off) and `bench/interfaceconservation.jl iflux=ghost`'s
 mixing layer, whose remainder is zero, are unchanged to every printed digit.
 
 | Noh at the axis, at `d346d35` | plateau | mass drift | steps | tile error | shock radius | e_min |
@@ -8125,12 +8125,12 @@ the third digit. The case is the layer on that section's grid to t = 8, inviscid
 **Cost.** With the artificial properties on, the ghost fluxes cost between a sixth and a half
 more per step than the closure rows, the most on a subcycled tiled level. With them off, the
 gradient ring built at every shell imposition doubles the cost on that level.
-`bench/interfacecost.jl`: serial, one thread, Float64, the median step over nine rounds of a
+`bench/archive/interfacecost.jl`: serial, one thread, Float64, the median step over nine rounds of a
 few steps per configuration, the ghost and closure solvers of a round stepping in alternating
 order in one process, periodic, with the artificial properties and the filter on, at the
 default level interpolation order of each path. Package at the commit that builds the shell's
 gradient ring only where a coarse-fine face reads it, Julia 1.13.3. The machine is the Core
-i9-12900K, and the transcript is `bench/results/interfacecost.txt`.
+i9-12900K, and the transcript is `bench/archive/results/interfacecost.txt`.
 
 | ghost over closure, per step | ratio |
 |---|---|
@@ -8157,10 +8157,10 @@ gradients. Coarse–fine faces: at the ghost path's default order it reads 5.8�
 smooth row the time integrator leaves, viscous included, and matches or leads the BL rows
 everywhere, so one treatment serves both interface kinds. It is the default (ROADMAP N15b).
 
-### bench/levelfilter.jl: level-aware filtering under global stepping
+### bench/archive/levelfilter.jl: level-aware filtering under global stepping
 
 N12a compares the production filter with two benchmark-only policies. The
-driver explicitly loads `bench/level_filter_policy.jl` in a fresh process;
+driver explicitly loads `bench/archive/level_filter_policy.jl` in a fresh process;
 it does not install a solver option or change the package default. These
 are Float64 CPU measurements on an Intel Core i9-12900K, one Julia thread
 per process. The Julia version is 1.11.4. The helper adds a rate sweep and a
@@ -8210,7 +8210,7 @@ make their operators equivalent: one applies a weak pass at every
 fine-sized step, the other interleaves fewer stronger passes with shell
 imposition.
 
-Reproduce with `julia --project=. -t 1 bench/levelfilter.jl
+Reproduce with `julia --project=. -t 1 bench/archive/levelfilter.jl
 policy=normalized instrument=budgets N=96 ny=24
 tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16
 check=true`. Use `parts=mixing layouts=uniform,depth3 stepping=global`
@@ -8283,7 +8283,7 @@ three levels and both stepping modes.
 | cadence | 1.46e-9 |
 
 Subcycled accuracy and reflection rows are unchanged by the trial hooks.
-Reproduce with `bench/levelfilter.jl policy=normalized instrument=accuracy
+Reproduce with `bench/archive/levelfilter.jl policy=normalized instrument=accuracy
 parts=all ns=48,96,192` after `julia --project=. -t 1`.
 
 **Shock crossings.** Under global stepping both candidates raise the
@@ -8318,7 +8318,7 @@ trials. This tests passage into and out of a refined region; it does not
 remove the separate discontinuity-on-a-same-level-plane limitation.
 
 Reproduce the crossing rows with
-`julia --project=. -t 1 bench/levelfilter.jl policy=normalized
+`julia --project=. -t 1 bench/archive/levelfilter.jl policy=normalized
 instrument=sensors parts=crossing N=201
 "crossing_variants=base,global,three levels,two species"`, substituting
 `policy=default` or `policy=cadence` for the controls.
@@ -8338,7 +8338,7 @@ Eight ranks use `ns=96,192`, since a 48-node root leaves a rank fewer
 nodes than the filter's nine. Over common resolutions, the largest absolute
 difference from serial in any reported smooth error norm is below
 3.6e-14. Every reflection row passes. The standalone
-`bench/level_filter_policy_check.jl` checks default delegation, shortened
+`bench/archive/level_filter_policy_check.jl` checks default delegation, shortened
 steps, skipped and due cadence passes, subcycle trajectory equality, and
 propagation of a fastest rate present only on deep-level owners to root
 ranks that own no deep tile.
@@ -8361,15 +8361,15 @@ before it could become a production policy. This qualification is bounded
 to the tested Float64 CPU cases; it does not identify an operator mode or
 promote a general filter-interval multiplier.
 
-### bench/restrictcost.jl: restriction before every stage
+### bench/archive/restrictcost.jl: restriction before every stage
 
-`julia --project=. -t 8 bench/restrictcost.jl study=time case=2d` (and `case=3d`),
-`julia --project=. -t 1 bench/restrictcost.jl study=shock`.
+`julia --project=. -t 8 bench/archive/restrictcost.jl study=time case=2d` (and `case=3d`),
+`julia --project=. -t 1 bench/archive/restrictcost.jl study=shock`.
 
 Restricting before every stage instead of once per step adds one to two percent to the step
 and leaves a shock crossing nearly unchanged. The per-stage schedule injects the fine level
 into the covered parent nodes before the shell imposition that follows every stage of the
-global step, as `restrict=stage` of `bench/temporalorder.jl` does. The cost rows alternate
+global step, as `restrict=stage` of `bench/archive/temporalorder.jl` does. The cost rows alternate
 the two schedules in one process, five repetitions of ten steps each, one rank at eight
 threads, the default numerics on a smooth advected field; the ratio is the median of the
 paired per-repetition ratios.
@@ -8381,7 +8381,7 @@ paired per-repetition ratios.
 | 64³ root, 31³ box in 8 tiles, per step | 1.10 | 1.57 | 0.20% | |
 | same, per stage | 7.00 | 10.1 | 1.26% | 1.007 |
 
-The Sod crossing of `bench/interfacesensor.jl` gives the minimum density and pressure over
+The Sod crossing of `bench/archive/interfacesensor.jl` gives the minimum density and pressure over
 every step and the density error at t = 0.2 against the uniform run at the level-1 spacing:
 
 ```text
@@ -8403,16 +8403,16 @@ the smooth error against the exact solution by under 2%
 deepens the three-level pressure minimum by a tenth. The once-per-step injection is retained
 under both stepping modes.
 
-### bench/substeprates.jl: refreshed refined-level rates
+### bench/archive/substeprates.jl: refreshed refined-level rates
 
-`bench/substeprates.jl` measures the rates after the refined RK right-hand
+`bench/archive/substeprates.jl` measures the rates after the refined RK right-hand
 sides refresh the artificial coefficients, using the production subcycling
 driver. The root estimate is taken after startup priming or regrid priming,
 and the state filter uses the production cadence and relaxation.
 
 At startup the refreshed substep CFL of a refined level reaches about
 eight times the root target, in the first root step at both depths.
-Reproduction: `julia --project=. -t 1 bench/substeprates.jl steps=3
+Reproduction: `julia --project=. -t 1 bench/archive/substeprates.jl steps=3
 levels=3,4 regrid_steps=6`.
 
 ```text
@@ -8498,9 +8498,9 @@ Retain cubic Hermite output: removing this small RHS share does not justify
 a new temporal reconstruction and its accuracy qualification. Revisit the
 choice if a measured layout makes parent endpoint work dominant.
 
-### bench/amr_transfer.jl: the 3:1 transfer pair
+### bench/archive/amr_transfer.jl: the 3:1 transfer pair
 
-`julia --project=. bench/amr_transfer.jl` (`7dbf319`; banded schemes
+`julia --project=. bench/archive/amr_transfer.jl` (`7dbf319`; banded schemes
 `8271bd7`).
 
 The transfer pair is exact to round-off as a round trip and converges at
@@ -8546,9 +8546,9 @@ symbol.
 Settled: the default 4-coarse-cell tagging buffer holds two orders at C10
 where it holds five at C6, which is enough; the buffers did not move.
 
-### bench/leveltransfer.jl: the live interpolation order
+### bench/archive/leveltransfer.jl: the live interpolation order
 
-`julia --project=. -t 1 bench/leveltransfer.jl orders=2,4,6,8,10` (about a
+`julia --project=. -t 1 bench/archive/leveltransfer.jl orders=2,4,6,8,10` (about a
 minute).
 
 An interpolation of order p reaches that order in values, p − 1 in the
@@ -9025,7 +9025,7 @@ second level against the uniform run on 9N nodes:
 | face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 | 3.1 |
 
 The loss is a growing mode of the unfiltered coupling under the ghost fluxes.
-`bench/couplingspectrum.jl` linearizes the map over one step of 0.4/(18N)
+`bench/archive/couplingspectrum.jl` linearizes the map over one step of 0.4/(18N)
 about the state after the first and reads its eigenvalues of largest modulus.
 The nest's leading eigenvalue is real, a mode that does not oscillate, whose
 eigenvector peaks on the first level's node beside the restriction window and
@@ -9143,7 +9143,7 @@ crossing and the post-shock plateau inside the tile falls. On the axis it
 falls to within 1.5% of the battery's uniform cylindrical row at the root's
 resolution, and at the plane by 1.2%. Under the global step the conservative
 coupling
-([bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling))
+([bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-fine-coupling))
 leaves the axis crossing's plateau where the uncorrected run puts it:
 
 | axis crossing, global step | mass drift in the conserved quadrature | plateau |
@@ -9163,9 +9163,9 @@ reproduces the every-rank answer to round-off, not bitwise.
 | tiled Sod regrid with rebalancing on, its final time against the serial one | 5e-18 |
 | a decomposed patch | 1e-15 to 6e-15 |
 
-### bench/amr_tiles.jl: tiled cover and per-tile cost
+### bench/archive/amr_tiles.jl: tiled cover and per-tile cost
 
-`julia --project=. bench/amr_tiles.jl [N=192] [tile=6] [steps=3]` (`eb0cb38`;
+`julia --project=. bench/archive/amr_tiles.jl [N=192] [tile=6] [steps=3]` (`eb0cb38`;
 workspace pooling `41d212f`, patch-type compile `556d69a`).
 
 Settled: the lattice cover is worth having. A tiled lattice covers an annular
@@ -9363,9 +9363,9 @@ and leaves out the observations of a rank that compiled in an interval.
 Without that exclusion it swung between the configured lattice and the
 half-subdivided one on compile spikes.
 
-### bench/latticescale.jl: the lattice decision at a cluster's rank count
+### bench/archive/latticescale.jl: the lattice decision at a cluster's rank count
 
-`julia --project=. -t 1 bench/latticescale.jl affinity=0x5555`, serial on
+`julia --project=. -t 1 bench/archive/latticescale.jl affinity=0x5555`, serial on
 one P-core, on synthetic three-dimensional Richtmyer–Meshkov fronts at 48³
 root nodes per rank and a configured edge of 16. The table gives seconds of
 each step of one regrid check's decision, which every rank (or rank 0, for a
@@ -9424,7 +9424,7 @@ times one within a node, placing a level's tiles by node takes 12 to 23% off
 the predicted step. Where it costs the same, placement by node is predicted
 4 to 5% slower than the single-node knapsack, since the runs cut per node
 balance a little worse, so the gain rests on the ratio rzhound measures
-(bench/slurm/rmicost_lattice.sbatch, not yet run).
+(bench/archive/slurm/rmicost_lattice.sbatch, not yet run).
 
 The workstation smoke at eight ranks (bench/rmicost.jl, P-cores, two runs a
 tree alternated, base `593f673`) shows the new decision at the base's step in
@@ -9452,9 +9452,9 @@ In the MPI suite's measured three-level shock on fake nodes of two ranks, the
 fit separated m_x (3.9e-5 s) from m (9.4e-5 s) in one run of four and fitted
 one coefficient in the others.
 
-### bench/amr_cost.jl: the mixing cost case
+### bench/archive/amr_cost.jl: the mixing cost case
 
-`mpiexec -n 8 julia --project=. -t 1 bench/amr_cost.jl 48 1.0` (`6382d8e`;
+`mpiexec -n 8 julia --project=. -t 1 bench/archive/amr_cost.jl 48 1.0` (`6382d8e`;
 masked quadrature and tag criteria `f8e1a23`).
 
 Settled: the composite buys most of the fine answer at a third to a half of
@@ -9689,9 +9689,9 @@ mass-fraction minimum to t = 0.4 (a scratch script, not kept):
 | | one | box | above −0.021 | |
 | | a third | tiles | above −0.015 | |
 
-### bench/movinglevel.jl: disturbances a moving level carries
+### bench/archive/movinglevel.jl: disturbances a moving level carries
 
-`julia --project=. -t 1 bench/movinglevel.jl`, one rank and one thread on the
+`julia --project=. -t 1 bench/archive/movinglevel.jl`, one rank and one thread on the
 i9-12900K. The runs use Julia 1.11.4.
 
 A fixed cover carries the uniform fine grid's disturbance to within a factor
@@ -9760,7 +9760,7 @@ The coarse-fine correction under the gate testing either side of the face
 raises the moving shock's disturbance. With the correction off, or under the
 default gate, which tests the uncovered nodes alone, the moving row comes
 within a fifth of the fine grid's. How the correction does it is under
-[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling).
+[bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-fine-coupling).
 
 | moving shock, beyond 0.02 | moving | moving-plainD |
 |---|---|---|
@@ -9902,7 +9902,7 @@ box at `tag_buffer` 4:
 The last arrangement gives 2.61e-4 at `tag_buffer` 8, every run ending
 admissible. Under the limiter the mask nevertheless stays off, even when it
 is enabled, because neither register arrangement holds up on the limiter's
-refined rows of `bench/positivity.jl part=levels`. Registers holding the
+refined rows of `bench/archive/positivity.jl part=levels`. Registers holding the
 masked divergence carried its dropped flux to every face beyond the masked
 nodes, and registers restoring the dropped source left inadmissible nodes and
 unguaranteed faces where the plain derivatives leave none.
@@ -9924,7 +9924,7 @@ since that coupling builds no captures). The table was taken at `d346d35`,
 with the correction's gate testing either side of the face; under the default
 gate, which tests the uncovered nodes alone, the masked crossings drift by the
 figure in the default row of the gate table of
-[bench/reflux.jl](#benchrefluxjl-the-conservative-coarse-fine-coupling):
+[bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-fine-coupling):
 
 | case | plain | mask | plain, uncorrected | mask, uncorrected |
 |---|---|---|---|---|
@@ -9958,10 +9958,10 @@ pass, under which a tile of its second level still changes owner.
 | MPI suite's deep regrid (121-node Sod tube, diaphragm at x = 0.35, tiles of 4, three levels, np = 8): checks within 240 steps at which a second-level tile changes owner | 5 | 2 |
 | refined Advected bubbles tutorial, single runs: wall, tiles at the end | 40 s, 25 | 35 s, 23 |
 
-### bench/levelpattern.jl: the grid-scale pattern of a refined level
+### bench/archive/levelpattern.jl: the grid-scale pattern of a refined level
 
-`julia --project=. -t 8 bench/levelpattern.jl` and `julia --project=. -t 8
-bench/levelpattern.jl problems=interface configs=uniform,box,tiles`, one rank
+`julia --project=. -t 8 bench/archive/levelpattern.jl` and `julia --project=. -t 8
+bench/archive/levelpattern.jl problems=interface configs=uniform,box,tiles`, one rank
 and eight threads on the i9-12900K, single runs. The runs use Julia 1.11.4 and
 the package at the commit that adds the script unless a row says otherwise.
 The pattern is the mean undivided fourth difference of the density over the
@@ -10017,9 +10017,9 @@ normals changed along the tile lattice. The level test `tiled level: sharpening
 gradients across shared faces` checks the smoothed gradients against one
 patch over the same region.
 
-### bench/amr_balance.jl: rebalance and migration mechanics
+### bench/archive/amr_balance.jl: rebalance and migration mechanics
 
-`mpiexec -n 4 julia --project=. -t 1 bench/amr_balance.jl [N=800] [interval=10]
+`mpiexec -n 4 julia --project=. -t 1 bench/archive/amr_balance.jl [N=800] [interval=10]
 [steps=200] [persist=1]` (`603af33`).
 
 Settled: mechanics only, and the reason `rebalance` and `rebalance_persist`
@@ -10038,9 +10038,9 @@ The case is a 1-D Sod shock crossing a tiled refined level at np = 4.
 `MIGRATION_AUDIT` holds the migrated state bitwise against the replicated
 carry it replaced, at zero differing slots, in the MPI suite.
 
-### bench/amr_scaling.jl: weak scaling of the level coupling
+### bench/archive/amr_scaling.jl: weak scaling of the level coupling
 
-`mpiexec -n <np> julia --project=. -t 1 bench/amr_scaling.jl [N=96] [tile=8]
+`mpiexec -n <np> julia --project=. -t 1 bench/archive/amr_scaling.jl [N=96] [tile=8]
 [dim=2] [steps=3] [reps=20]`; before is `235d557`, after is `d54f019`.
 
 The distributed level coupling weak-scales as the root does: its memory
@@ -10133,9 +10133,9 @@ was accepted on `max |device − cpu| = 0` over full runs at two, four and eight
 ranks, in both launch-policy modes. The staged transfer volumes are the halo and
 reduced-interface percentages recorded above.
 
-### bench/device_nasa9.jl: NASA-9 on the device
+### bench/archive/device_nasa9.jl: NASA-9 on the device
 
-`julia --project=<env-with-AMDGPU> -t 8 bench/device_nasa9.jl backend=amdgpu`,
+`julia --project=<env-with-AMDGPU> -t 8 bench/archive/device_nasa9.jl backend=amdgpu`,
 RX 6800 XT, He/CO2/N2 unless noted. The recovery set is hard states (joins
 to a few ulp, range edges and beyond, no-root energies, no-bracket
 compositions) and a temperature sweep, sized in the table's first row. On the
@@ -10172,7 +10172,7 @@ the 6000 K join. The others lie near 10–11 kK.
 ### probes/device_floors.jl: rzadams floors and the wait stall
 
 `julia --project=<env> probes/device_floors.jl` on the MI300A APUs of
-rzadams, logs in `bench/logs/rzadams_20260819*.txt`. The ROCm version is
+rzadams, logs in `bench/archive/logs/rzadams_20260819*.txt`. The ROCm version is
 6.4.3.
 
 | measurement | value |
@@ -10213,7 +10213,7 @@ without a stall watch beside it.
 ```text
 julia --project=. -t 1 test/transport_tests.jl
 julia --project=. -t 1 test/transport_integration_tests.jl
-julia --project=. -t 1 bench/transport.jl
+julia --project=. -t 1 bench/archive/transport.jl
 ```
 
 N8 retains `ConstantTransport()` as the default and adds `CeaTransport(eos)` as an
@@ -10249,10 +10249,10 @@ against the analytic acoustic-plus-diffusive bound; host and
 KernelAbstractions CPU paths agree. Float32 coefficients retain their scalar
 type. Hardware GPU coverage is unavailable in this environment.
 
-### bench/neutraldiffusion.jl: the Marrero--Mason fits
+### bench/archive/neutraldiffusion.jl: the Marrero--Mason fits
 
 ```text
-julia --project=. -t 1 bench/neutraldiffusion.jl [degree]
+julia --project=. -t 1 bench/archive/neutraldiffusion.jl [degree]
 julia --project=. -t 1 test/neutral_diffusion_tests.jl
 ```
 
@@ -10395,7 +10395,7 @@ data or change the provenance and source distinctions recorded above.
 
 ## The bulk species channel in three dimensions
 
-`bench/bulkchannel.jl` runs `species_flux = :bulk` against `:fickian` on two
+`bench/archive/bulkchannel.jl` runs `species_flux = :bulk` against `:fickian` on two
 three-dimensional cases at the package's constants, eight ranks at `-t 1`, each at density
 ratios 5.04 and 100. The slab is `brill_slab` as a sphere of the heavy gas advected through
 a periodic cube at uniform pressure and temperature. The bubble is `shock_interface` as a
@@ -10481,7 +10481,7 @@ R = 5.04                       7.9e-3
 R = 100                        2.1e-1
 ```
 
-`bench/bulkentropy.jl` measures what the discrete operators make of the entropy inequalities
+`bench/archive/bulkentropy.jl` measures what the discrete operators make of the entropy inequalities
 of `reference/DESIGN.md` ("The species channel", property 3 and its partial-density form),
 on a Taylor–Green velocity field carrying a sphere of the heavy gas through a periodic cube
 and on the one-dimensional `brill_slab`. The entropy variables w = ∂(ρs)/∂q of an ideal
@@ -10530,7 +10530,7 @@ filter and the bounded-fraction excursions are outside it.
 
 ## The contact with a temperature jump
 
-`bench/thermalcontact.jl`, serial at `-t 1`, all parts at their defaults (about four
+`bench/archive/thermalcontact.jl`, serial at `-t 1`, all parts at their defaults (about four
 minutes). The slab is a layer of CO2 filling the middle half of a periodic domain of He at
 uniform pressure and velocity, with physical transport off and the production filter and
 constants. `ideal` is the `IdealMixture` of the same two species with heat capacities fixed
@@ -10653,8 +10653,8 @@ no channel removes. The product form of the consistency fluxes is kept.
 
 ### The energy budget and the layer widths of the shocked tube
 
-`bench/tubebudget.jl`, serial at `-t 16`. The tube is the He/CO2 deck of
-`bench/he_co2_shock_tube.jl` under NASA-9 thermodynamics with Euler fluxes, measured under
+`bench/archive/tubebudget.jl`, serial at `-t 16`. The tube is the He/CO2 deck of
+`bench/archive/he_co2_shock_tube.jl` under NASA-9 thermodynamics with Euler fluxes, measured under
 `detector = :delta4` at `C_D = 0.1` and `compact_filter(0.45)`; [the partial-density
 channel's](#the-partial-density-species-channel) two-dimensional comparison runs the same
 deck calorically perfect under the current defaults. A callback replays every accepted step with
@@ -10783,7 +10783,7 @@ measurement here decides which roll-up is right; that waits for a converged refe
 
 ## The species validity band
 
-`julia --project=. bench/speciesband.jl` (about three minutes, serial). The cases are
+`julia --project=. bench/archive/speciesband.jl` (about three minutes, serial). The cases are
 `species_advection`, `shock_interface` and `brill_slab` of `test/cases.jl` under the
 defaults; `worst run` is the largest max(−Y_k, Y_k − 1) over every point and completed step,
 `worst end` the same on the state the run returns, and the last column counts end-state
@@ -10852,9 +10852,9 @@ six cases bounds its closing inadmissible count and e_min in `test/validation.jl
 ## The shared-file write
 
 ```text
-"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 64 5
-"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 128 5
-"$MPIEXEC" -n 8 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 128 5
+"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/archive/hdf5xfer.jl 64 5
+"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/archive/hdf5xfer.jl 128 5
+"$MPIEXEC" -n 8 julia --project=<env with HDF5> -t 1 bench/archive/hdf5xfer.jl 128 5
 ```
 
 The MPI transfer mode of the block datasets, `:collective` (the default) against
@@ -10898,8 +10898,8 @@ conda-forge `nompi` libhdf5, which selects the serialized relay, at one and two 
 ## Azimuthal mode truncation
 
 ```text
-julia --project=. -t 1 bench/axisvortex.jl
-julia --project=. -t 1 bench/axisvortex.jl N=32,64 configs=1:on:0.5,1:off:0.5,0:on:0.5
+julia --project=. -t 1 bench/archive/axisvortex.jl
+julia --project=. -t 1 bench/archive/axisvortex.jl N=32,64 configs=1:on:0.5,1:off:0.5,0:on:0.5
 ```
 
 The isentropic vortex of the Axis-crossing vortex tutorial is carried straight through the
@@ -11014,7 +11014,7 @@ resolution of the core away from the axis, which the tutorial describes, and not
 ## Stiff diffusion
 
 ```text
-julia --project=. -t 1 bench/stiffdiffusion.jl
+julia --project=. -t 1 bench/archive/stiffdiffusion.jl
 ```
 
 One-dimensional model problems with dense matrices, periodic but for the wall treatment,
@@ -11084,7 +11084,7 @@ stage converged in every row.
 ### Wall treatment of the staggered operator
 
 ```text
-julia --project=. -t 1 bench/stiffdiffusion.jl parts=walls
+julia --project=. -t 1 bench/archive/stiffdiffusion.jl parts=walls
 ```
 
 `L = G K D_s` on a closed line with nodes on the walls. The rows close each end with
@@ -11139,7 +11139,7 @@ at the wall), so the loss is confined to incompatible initial data.
 ### The staggered operator at an odd-area fold
 
 ```text
-julia --project=. -t 1 bench/staggeredfolds.jl
+julia --project=. -t 1 bench/archive/staggeredfolds.jl
 ```
 
 `L = J⁻¹ G C K D_s` along one line through a fold whose area vanishes oddly, the flux
@@ -11175,7 +11175,7 @@ area r² sinθ is even, and there the smooth continuation is the adjoint one.
 ### Symmetric closures at an odd-area fold
 
 ```text
-julia --project=. -t 1 bench/staggeredclosure.jl
+julia --project=. -t 1 bench/archive/staggeredclosure.jl
 ```
 
 The operators searched are symmetric in a diagonal node norm by construction:
@@ -11265,7 +11265,7 @@ exact closure order 3   odd              5.5e-04  3.2e-02  8.4e-02  1.0e-01  1.5
 ### Staggered conduction against the wide form
 
 ```text
-julia --project=. -t 1 bench/staggeredconduction.jl
+julia --project=. -t 1 bench/archive/staggeredconduction.jl
 ```
 
 `T_t = (κ₀ T^{5/2} T_x)_x + S` with a manufactured T, integrated by RK4 on the package plans:
@@ -11295,9 +11295,9 @@ staggered form removes it. Behind the adiabatic wall mirror the staggered run ke
 ### The implicit stage
 
 ```text
-julia --project=. -t 16 bench/implicitstage.jl part=iterations
-julia --project=. -t 16 bench/implicitstage.jl part=manufactured
-julia --project=. -t 16 bench/implicitstage.jl part=preconditioner
+julia --project=. -t 16 bench/archive/implicitstage.jl part=iterations
+julia --project=. -t 16 bench/archive/implicitstage.jl part=manufactured
+julia --project=. -t 16 bench/archive/implicitstage.jl part=preconditioner
 ```
 
 `(I − γΔt L) T = r` by `solve_stage!` of `src/implicit.jl` to rtol = 1e-10 in the L2 norm of
@@ -11385,11 +11385,11 @@ angular dimensions coarsened with the others  axis grid, 3-D (12/24/48)  29/38/5
 ### The additive pair on the conduction
 
 ```text
-julia --project=. -t 1 bench/imexconduction.jl part=pulse explicit=true
-julia --project=. -t 1 bench/imexconduction.jl part=pulse rtol=1e-12
-julia --project=. -t 1 bench/imexconduction.jl part=rules
-julia --project=. -t 1 bench/imexconduction.jl part=stiff
-julia --project=. -t 1 bench/imexconduction.jl part=cfl
+julia --project=. -t 1 bench/archive/imexconduction.jl part=pulse explicit=true
+julia --project=. -t 1 bench/archive/imexconduction.jl part=pulse rtol=1e-12
+julia --project=. -t 1 bench/archive/imexconduction.jl part=rules
+julia --project=. -t 1 bench/archive/imexconduction.jl part=stiff
+julia --project=. -t 1 bench/archive/imexconduction.jl part=cfl
 ```
 
 `ARK4(3)6L[2]SA` with the molecular conduction implicit (`ImplicitConduction`,
@@ -11470,17 +11470,17 @@ largest bounded cfl, inviscid acoustic wave on 64 periodic  2.305   2.195       
 ## False activation on smooth fields
 
 ```text
-julia --project=. -t 1 bench/falseactivation.jl                  # every part
-julia --project=. -t 1 bench/falseactivation.jl composition thermal acoustic probe   # no battery
-julia --project=. -t 1 bench/falseactivation.jl species            # the species-only split
-julia --project=. -t 16 bench/falseactivation.jl speciescost       # its cost
-julia --project=. -t 16 bench/he_co2_shock_tube.jl 384 24 2.5e-3 detector=species C_D=1 every=5
-julia --project=. -t 1 bench/interfacewidth.jl                 # width on several definitions
-julia --project=. -t 1 bench/interfacewidth.jl configs ratios=100 only=5,9 N=800
+julia --project=. -t 1 bench/archive/falseactivation.jl                  # every part
+julia --project=. -t 1 bench/archive/falseactivation.jl composition thermal acoustic probe   # no battery
+julia --project=. -t 1 bench/archive/falseactivation.jl species            # the species-only split
+julia --project=. -t 16 bench/archive/falseactivation.jl speciescost       # its cost
+julia --project=. -t 16 bench/archive/he_co2_shock_tube.jl 384 24 2.5e-3 detector=species C_D=1 every=5
+julia --project=. -t 1 bench/archive/interfacewidth.jl                 # width on several definitions
+julia --project=. -t 1 bench/archive/interfacewidth.jl configs ratios=100 only=5,9 N=800
 ```
 
 The rows labelled `default` in this section and its `δ4` rows are δ⁴ on every sensor at
-`C_D = 0.1`, the default before the species-only split replaced it; bench/falseactivation.jl
+`C_D = 0.1`, the default before the species-only split replaced it; bench/archive/falseactivation.jl
 pins them. Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
 `compact_filter(0.45)` every step, `filter_cfl = 0.35` and `cfl = 0.5`, inviscid. Every
 slab edge has a fixed physical width W, so N·W is the number of cells per W. The cases:
@@ -11627,7 +11627,7 @@ deposits nothing there; the thermal slab's κ\* error would remain. It is measur
 
 ### The species-only split
 
-`:d8` on the mass and mole fractions, δ⁴ on every other field (bench/detector_split.jl,
+`:d8` on the mass and mole fractions, δ⁴ on every other field (bench/archive/detector_split.jl,
 selected by `SPECIES_ONLY[]`). Under the default `:partial_density` channel those two
 fields are sensed only inside `bulk_diffusivity!`, so the redefinition brackets that call;
 the Lax tube under the split is the δ⁴ run bit for bit (max |Δρ| = 0), as every
@@ -11676,7 +11676,7 @@ the diffusivity as a larger `C_D`. The serial suite guards the high-ratio interf
 both consistent channels on the volume-fraction width, at most 7 cells, and on the ringing
 measure, below 0.04, since `width_cells` counts the heavy-gas tail there.
 
-The He/CO2 tube of bench/he_co2_shock_tube.jl, in two dimensions with a 10:1 driver,
+The He/CO2 tube of bench/archive/he_co2_shock_tube.jl, in two dimensions with a 10:1 driver,
 compares δ⁴ at `C_D = 0.1` with the split at `C_D = 1` on a coarse and a fine grid. The
 incident shock strikes the perturbed contact between 0.5 and 1.0 ms. Worst Y is the most
 negative mass fraction over every fifth step; the integral width is ∫ Ȳ(1 − Ȳ) dx of the
@@ -11762,7 +11762,7 @@ maximum-gradient thickness     1/max|∂V/∂x| = 4ε
 width_cells                    0.05 < Y_air < 0.95, at R = 100 0.84 < V_air < 0.9995
 ```
 
-`bench/interfacewidth.jl` reads the final profile of `shock_interface` on each definition:
+`bench/archive/interfacewidth.jl` reads the final profile of `shock_interface` on each definition:
 `count` is `width_cells`, `core` the same count on the contiguous run through Y_air = 1/2,
 and the interpolated widths are in cells. Reference profiles, evaluated in closed form:
 
@@ -11779,7 +11779,7 @@ their eqs. 82, 85 erf(x/2Δ)          |  –       4.7     3.6      3.5
 The initial interface of `shock_interface`, a tanh of Y over 2h, is the ε = Δ equilibrium
 (measured row `initial` below, which carries the bias of linear interpolation). The final
 profiles at t = 0.25 on N = 400 (`configs`) follow, `*` marking the default. In the
-configurations `species` is the species-only split of bench/detector_split.jl at the C_D
+configurations `species` is the species-only split of bench/archive/detector_split.jl at the C_D
 given, `d8` the detector on every field, and `c_air` and `c_hvy` a uniform sound speed in
 D_b alone, the pre-shock value of either gas at R = 100:
 
@@ -11873,8 +11873,8 @@ channel does.
 ## The gas-gas acoustic interface
 
 ```text
-julia --project=. bench/interfaceacoustics.jl art=on,off
-julia --project=. bench/interfaceacoustics.jl n=1600,3200 delta=4 cases=lh art=on,off
+julia --project=. bench/archive/interfaceacoustics.jl art=on,off
+julia --project=. bench/archive/interfaceacoustics.jl n=1600,3200 delta=4 cases=lh art=on,off
 ```
 
 `interface_pulse` of `test/cases.jl`: a periodic line of air and a gas of SF6's density
@@ -11931,8 +11931,8 @@ two cells at N = 800          −2.86e-2
 ## The interface sharpening flux
 
 ```text
-julia --project=. -t 1 bench/sharpening.jl interface ratios=100,1000 gammas=0.3,1,3 widths=1 ungated=1
-julia --project=. -t 1 bench/sharpening.jl slab gammas=0.3,1
+julia --project=. -t 1 bench/archive/sharpening.jl interface ratios=100,1000 gammas=0.3,1,3 widths=1 ungated=1
+julia --project=. -t 1 bench/archive/sharpening.jl slab gammas=0.3,1
 ```
 
 `ArtificialProperties.C_sharpen` (`reference/DESIGN.md`, "The species channel"): the flux of
@@ -11983,7 +11983,7 @@ smaller constant and rang far more at the larger:
 raw-gradient form   count 10 for C_sharpen ≤ 0.3, TV − 1 of 1.5 at C_sharpen = 1
 ```
 
-**The smooth slab** (the composition slab of `bench/falseactivation.jl`; its edges are
+**The smooth slab** (the composition slab of `bench/archive/falseactivation.jl`; its edges are
 logistic profiles N·W/2 cells thick; `frac on` is the largest fraction of points at which
 the flux was nonzero, `deposit` the L1 difference in Y_heavy from the unsharpened run):
 
@@ -12022,7 +12022,7 @@ is differenced as here, with the same compact divergence as every other flux), h
 limits the step, and whether their runs localize the flux at all. The He/CO2 tube completes
 on a coarse grid in under four times the steps, but on the example's default grid the
 sharpened run had not finished after ten times the unsharpened wall time and was stopped.
-The tube budget with the flux (`bench/tubebudget.jl sharpen=`, which attributes it to its
+The tube budget with the flux (`bench/archive/tubebudget.jl sharpen=`, which attributes it to its
 own row) was not run.
 
 ```
@@ -12036,7 +12036,7 @@ He/CO2 tube              C_sharpen   steps or wall time
 
 ## Grid-scale growth at the r-z axis
 
-The instruments are `bench/axisspectrum.jl` and `bench/axisrunaway.jl`. The
+The instruments are `bench/archive/axisspectrum.jl` and `bench/archive/axisrunaway.jl`. The
 first is the one-step map of an unrefined line from the axis to r = 2,
 linearized by central differences about ρ = p = 1 in ρ, ρu_r (and ρu_θ on
 a resolved θ) and E at every node. The second runs the converging pulse of
@@ -12045,7 +12045,7 @@ a resolved θ) and E at every node. The second runs the converging pulse of
 term is ∂p/∂r on θ-collapsed r-z and under the spherical metric
 (`_radial_pressure_gradient`), and the area form on a resolved cylindrical θ; the spherical θ-momentum takes (1/r)∂p/∂θ
 (`_polar_pressure_gradient`). The other forms are source terms and the
-near-axis filter a callback (`bench/axisvariant.jl`): `areap` restores the
+near-axis filter a callback (`bench/archive/axisvariant.jl`): `areap` restores the
 area form on θ-collapsed r-z and at the spherical origin, `gradp` takes ∂p/∂r
 on a resolved θ, `areatheta` restores the area form of the θ-momentum at the
 poles, `product` writes every radial divergence of the mass, radial momentum
@@ -12235,8 +12235,8 @@ The consequences for runs at the origin are under [the CFL
 restriction](#the-cfl-restriction-and-the-symmetry-cell) and [fold order and geometry
 limits](#fold-order-and-geometry-limits).
 
-**The vortex across the resolved-θ axis.** `bench/axisvortex.jl`
-(`bench/results/axisvortex.txt`) runs the isentropic vortex of the
+**The vortex across the resolved-θ axis.** `bench/archive/axisvortex.jl`
+(`bench/archive/results/axisvortex.txt`) runs the isentropic vortex of the
 Axis-crossing vortex tutorial on its disk with the artificial properties, in
 the package's area form and in ∂p/∂r (`gradp`), with the filter off and at the
 default. The controls carry the same vortex in the area form on two grids
@@ -12280,9 +12280,9 @@ mean step                           4.3e-5, against 4.3e-4 filtered
 ## The outflow face on a radial grid
 
 ```text
-julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1,4.1 sigmas=0,0.25,1
-julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1 sigmas=0 ns=64,128,256
-julia --project=. -t 1 bench/sphereoutflow.jl radii=2.1,4.1 sigmas=0.25 betas=1
+julia --project=. -t 1 bench/archive/sphereoutflow.jl radii=2.1,4.1 sigmas=0,0.25,1
+julia --project=. -t 1 bench/archive/sphereoutflow.jl radii=2.1 sigmas=0 ns=64,128,256
+julia --project=. -t 1 bench/archive/sphereoutflow.jl radii=2.1,4.1 sigmas=0.25 betas=1
 ```
 
 The dipole of the Oscillating sphere tutorial leaves through
@@ -12378,7 +12378,7 @@ annulus r ∈ [1/2, 3/2], n_c = 1, a level over the outer sixth; pulse amplitude
 ## The slip wall of the r-z annulus
 
 ```text
-julia --project=. -t 1 bench/annuluswall.jl
+julia --project=. -t 1 bench/archive/annuluswall.jl
 ```
 
 A standing wave between the slip walls of the axisymmetric annulus converged
@@ -12460,10 +12460,10 @@ annulus                                          2.77e-4    1.01e-5   4.60e-7   
 ## The incompressible prototype
 
 ```text
-julia --project=. -t 1 bench/incompressible_checks.jl part=order
-julia --project=. -t 1 bench/incompressible_checks.jl part=energy
-julia --project=. -t 1 bench/incompressible_tgv.jl 32 10.0
-mpiexec -n 8 julia --project=. -t 1 bench/incompressible_tgv.jl 64 10.0
+julia --project=. -t 1 bench/archive/incompressible_checks.jl part=order
+julia --project=. -t 1 bench/archive/incompressible_checks.jl part=energy
+julia --project=. -t 1 bench/archive/incompressible_tgv.jl 32 10.0
+mpiexec -n 8 julia --project=. -t 1 bench/archive/incompressible_tgv.jl 64 10.0
 ```
 
 `convection=divergence` on either script gives the divergence-form rows.

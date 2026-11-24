@@ -130,7 +130,7 @@ end
 # Two opposed streams, a heavy gas from the top and a light gas from the
 # bottom, meet at a stagnation plane and leave through a slot in each side
 # wall at the interface height. The slots are characteristic outflows in a
-# slip wall. This is a short run; `bench/composite_faces.jl` runs the case to
+# slip wall. This is a short run; `bench/archive/composite_faces.jl` runs the case to
 # a steady interface.
 @testset "composite face: two-slot stagnation plane, short run" begin
     eos = IdealMixture([IdealSpecies{Float64}("heavy", 0.2, 1.1),
