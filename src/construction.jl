@@ -75,8 +75,9 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 [`Problem`](@ref); `art`, `deriv`, `cfl`, `control`, `polar_truncation`,
 `implicit`, `n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
 `filter_cfl` and `filter_weighting` from [`StateFilter`](@ref) (its `scheme`,
-`interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs` and
-`interface_divergence` from [`PatchInterfaces`](@ref); and `dims`, `comm`,
+`interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs`,
+`interface_divergence` and `interface_conservative` from
+[`PatchInterfaces`](@ref); and `dims`, `comm`,
 `backend`, `precision` and `patch_grid` from [`Execution`](@ref). Without
 `precision`, the element type is the one shared by the components passed
 explicitly (`eos`, `transport`, `art`,
@@ -314,6 +315,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 interface_rhs::Symbol=:extended,
                 interface_divergence::Union{Nothing,AbstractCompactScheme},
                 interface_flux::Symbol=:ghost,
+                interface_conservative::Bool=true,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
                 level_interpolation_order::Union{Nothing,Int}=nothing,
@@ -547,7 +549,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         something(level_interpolation_order,
                   default_interpolation_order(deriv, interface_flux))
     schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
-                             level_interpolation_order, level_restriction, bcs)
+                             interface_conservative, level_interpolation_order, level_restriction, bcs)
     # --- Azimuthal mode truncation (modes.jl) ----------------------------
     # The ring projection is a Fourier series in θ over the whole circle on
     # host storage, and the limit table assumes a uniform Δr.

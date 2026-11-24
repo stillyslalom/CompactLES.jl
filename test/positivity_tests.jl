@@ -90,6 +90,11 @@ function pos_flux(f, flux)
     end
 end
 
+# The interface settings of a bitwise comparison between a limited run and an
+# unlimited one: the conservative coarse-fine coupling is not taken under the
+# limiter, so the unlimited run is built without it.
+uncorrected(flux) = PatchInterfaces(flux=flux, conservative=false)
+
 # The interface flux and whether the level subcycles, for the strong shocks
 # on refined levels: the closure rows at the global step and subcycled, the
 # ghost flux subcycled. `LIMITED_GHOST_INTERFACES` is off by default, and the
@@ -682,14 +687,13 @@ end
                                                                 (y - 0.5)^2) / 0.01)))
         # The conservative coarse-fine coupling is not taken under the
         # limiter, so the unlimited run goes without it too.
-        CL.REFLUX[] = false
         for flux in (:closure, :ghost), sub in (false, true)
             runs = map((false, true)) do on
                 s, Q = pos_flux(flux) do
                     setup(prob, pos_level((48, 48, 1),
                                           AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
                                               tile=8, subcycle=sub), on;
-                                          patch_interfaces=flux))
+                                          patch_interfaces=uncorrected(flux)))
                 end
                 run!(s, Q; tfinal=1.0, nmax=6)
                 (s, Q)
@@ -701,7 +705,6 @@ end
             @test s0.step == s1.step && s0.t == s1.t
             @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
         end
-        CL.REFLUX[] = true
     end
 
     @testset "a strong shock through a refined box stays admissible" begin
@@ -788,13 +791,12 @@ end
         # shared faces along r and along z.
         pulse(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                               p=1 + 1e-2 * exp(-20 * (r^2 + (z - 0.2)^2)))
-        CL.REFLUX[] = false
         for flux in (:closure, :ghost), sub in (false, true)
             runs = map((false, true)) do on
                 s, Q = pos_flux(flux) do
                     pos_rz(; N=40, ic=pulse, art=ArtificialProperties(enabled=true),
                            filter=StateFilter(compact_filter(); cfl=0.35),
-                           patch_interfaces=flux, positivity_limiter=on,
+                           patch_interfaces=uncorrected(flux), positivity_limiter=on,
                            amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
                                    subcycle=sub))
                 end
@@ -809,7 +811,6 @@ end
             @test s0.step == s1.step && s0.t == s1.t
             @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
         end
-        CL.REFLUX[] = true
     end
 
     @testset "a converging shock through r-z tiles at the corner stays admissible" begin

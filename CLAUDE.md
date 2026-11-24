@@ -512,7 +512,8 @@ Names are spelled out in full. Current vocabulary:
   treats it, its `box` the parent lines crossing it, `_reflux_junctions`),
   `RefluxCapture` / `reflux_captures` (a `Patch` field: the patch's side of
   each junction it takes part in, parent or child, with the per-line
-  `stage`, `du` and `reg` registers), `REFLUX` (test/bench toggle),
+  `stage`, `du` and `reg` registers), `interface_conservative`
+  (`PatchInterfaces.conservative`, the request for the coupling),
   `_reflux_open!` / `_reflux_close!` (the hooks in the two divergence
   funnels), `_reflux_fold!`, `_reflux_filter!`, `_reflux_begin_step!`,
   `_reflux_apply!`, `_junction_omega` (the weights of Ω, the conserved

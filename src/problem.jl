@@ -811,7 +811,8 @@ _state_filter(x) =
                         "scheme or nothing, got $(typeof(x))"))
 
 """
-    PatchInterfaces(; flux = :ghost, rhs = :extended, divergence = nothing)
+    PatchInterfaces(; flux = :ghost, rhs = :extended, divergence = nothing,
+                    conservative = true)
     PatchInterfaces(base::PatchInterfaces; keywords...)
 
 How the flux divergence closes at a patch or level interface: a plane shared
@@ -821,8 +822,8 @@ fluids. Without a patch or level interface these settings have no effect. The
 second form copies `base` with the given fields replaced;
 `Numerics(patch_interfaces = :closure)` is shorthand for
 `PatchInterfaces(flux = :closure)`. The solver keywords, checkpoint records
-and error messages name the three fields `interface_flux`, `interface_rhs`
-and `interface_divergence`.
+and error messages name the fields `interface_flux`, `interface_rhs`,
+`interface_divergence` and `interface_conservative`.
 
 - `flux`: `:ghost` (default) differentiates the inviscid and molecular fluxes
   through the interface from ghost values with the interior stencil;
@@ -847,16 +848,24 @@ and `interface_divergence`.
   `lele_d1_6(closures = :brady_livescu)`. Under `flux = :ghost` it affects
   only the wall corrections of a run with the artificial properties off.
   Experimental and Float64 only.
+- `conservative`: `true` (default) corrects the coarse-fine faces of a
+  refined level so that the fluxes on their two sides agree; `false` leaves
+  them uncorrected. The correction runs on host storage without the
+  positivity limiter and without implicit conduction, and a configuration
+  outside that scope goes uncorrected under either value. It has no effect
+  on a plane shared by two same-level patches.
 """
 struct PatchInterfaces
     flux::Symbol
     rhs::Symbol
     divergence::Union{Nothing,AbstractCompactScheme}
+    conservative::Bool
 end
 
 PatchInterfaces(; flux::Symbol=:ghost, rhs::Symbol=:extended,
-                divergence::Union{Nothing,AbstractCompactScheme}=nothing) =
-    PatchInterfaces(flux, rhs, divergence)
+                divergence::Union{Nothing,AbstractCompactScheme}=nothing,
+                conservative::Bool=true) =
+    PatchInterfaces(flux, rhs, divergence, conservative)
 PatchInterfaces(base::PatchInterfaces; kw...) = _with(base, kw)
 
 _patch_interfaces(interfaces::PatchInterfaces) = interfaces
@@ -1253,6 +1262,7 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                interface_rhs=num.patch_interfaces.rhs,
                interface_divergence=num.patch_interfaces.divergence,
                interface_flux=num.patch_interfaces.flux,
+               interface_conservative=num.patch_interfaces.conservative,
                precision=num.execution.precision, kw...)
     Q = allocate_state(solver)
     if seed_only

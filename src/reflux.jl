@@ -89,13 +89,6 @@
 # Scope. Host storage, without the positivity limiter, which closes the
 # interfaces with their closure rows and limits its own faces.
 
-"""
-Test and benchmark toggle: `false` leaves the coarse-fine faces uncorrected,
-as before the conservative coupling. Read when the captures are built and at
-the start of every root step.
-"""
-const REFLUX = Ref(true)
-
 # --- Face relations -------------------------------------------------------------
 
 # The left-hand-side band of a scheme, l_1 .. l_q.
@@ -244,9 +237,12 @@ function _replaced_rows(settings::SchemeSettings)
     return max(nd, nv), nf
 end
 
-# Whether the solver's configuration takes the conservative coupling.
+# Whether the solver's configuration takes the conservative coupling:
+# `interface_conservative` (`PatchInterfaces(conservative = ...)`) asks for it,
+# and the rest is its scope. Read when the captures are built and at the start
+# of every root step.
 function _reflux_supported(solver::Solver)
-    REFLUX[] || return false
+    getfield(solver, :schemes).interface_conservative || return false
     nlevels(solver) > 1 || return false
     getfield(solver, :positivity) === nothing || return false
     getfield(solver, :implicit) === nothing || return false
@@ -316,7 +312,7 @@ _reflux_carry(solver) = get!(() -> RefluxCarry(-1, Dict{Int,Vector{Float64}}(),
                                                 Dict{Int,Vector{Float64}}()),
                              REFLUX_CARRY, solver)
 _reflux_key(solver::Solver) =
-    hash((REFLUX[], map(objectid, getfield(solver, :patches)),
+    hash((map(objectid, getfield(solver, :patches)),
           [lt.region for lev in getfield(solver, :levels) for lt in lev.transfers]))
 
 """

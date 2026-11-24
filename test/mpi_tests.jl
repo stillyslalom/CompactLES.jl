@@ -3248,6 +3248,7 @@ function test_staged_exchange()
                    bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                    subdivide_lattice=false,
                    regrid_interval=5, tag_buffer=2, tile=8,
+                   interface_conservative=false,
                    refine=BlockRegion((176, 0, 0), (16, 1, 1)), backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> x < 0.45 ?
@@ -3263,6 +3264,7 @@ function test_staged_exchange()
         s = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                    art=ArtificialProperties(enabled=false),
                    transport=ConstantTransport(mu0=2e-2), interface_flux=:ghost,
+                   interface_conservative=false,
                    refine=BlockRegion((80, 0, 0), (32, 1, 1)), backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
@@ -3283,7 +3285,8 @@ function test_staged_exchange()
                    metric=CylindricalMetric(), filter_interval=1, cfl=0.5,
                    art=ArtificialProperties(enabled=false),
                    transport=ConstantTransport(mu0=1e-3),
-                   refine=BlockRegion((0, 0, 0), (25, 1, 9)), tile=8, backend=backend)
+                   refine=BlockRegion((0, 0, 0), (25, 1, 9)), tile=8, backend=backend,
+                   interface_conservative=false)
         states = allocate_state(s)
         initialize!(s, states, (r, θ, z) -> begin
             rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
@@ -3293,8 +3296,8 @@ function test_staged_exchange()
         return s, states
     end
     # The conservative coarse-fine coupling is host-only and leaves a stacked
-    # device level uncorrected (src/reflux.jl), so both runs go without it.
-    CL.REFLUX[] = false
+    # device level uncorrected (src/reflux.jl), so the refined builds above
+    # pass `interface_conservative = false` and both runs go without it.
     for (label, build) in (("two viscous slabs", slabs),
                            ("tiled regridding Sod", tiled),
                            ("ghost-flux viscous level", ghost_level),
@@ -3316,7 +3319,6 @@ function test_staged_exchange()
         check("staged $label: step count matches", abs(s5.step - s6.step), 0.5)
         check("staged $label: bitwise", gmax(d), 1e-300)
     end
-    CL.REFLUX[] = true
 end
 
 # ---------------------------------------------------------------------------

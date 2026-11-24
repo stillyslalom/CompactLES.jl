@@ -378,7 +378,7 @@ function main(opt)
         s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=(wall2, per, per), cfl=0.2, subcycle=true,
                    regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                   tile=8, backend=backend)
+                   tile=8, interface_conservative=false, backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> x < 0.5 ?
             Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -394,7 +394,7 @@ function main(opt)
         s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
                    transport=ConstantTransport(mu0=1e-2), subcycle=true,
                    refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
-                   backend=backend; kw...)
+                   interface_conservative=false, backend=backend; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.3 + 0.1 * sin(x) * cos(y) * cos(z),
@@ -405,8 +405,7 @@ function main(opt)
     end
     # The coarse-fine flux correction (src/reflux.jl) runs on host storage
     # only, and a shock crossing the tiled Sod's faces takes it, so these
-    # comparisons run without it on both sides.
-    CL.REFLUX[] = false
+    # comparisons build without it on both sides.
     for (label, build) in (("two viscous slabs", two_slabs),
                            ("tiled subcycled regridding Sod", tiled_sod),
                            ("tiled 3-D box, 12 tiles", tiled_box),
@@ -425,7 +424,6 @@ function main(opt)
                 sc.wall_total / sc.step, sd.wall_total / sd.step,
                 (sc.wall_total / sc.step) / (sd.wall_total / sd.step))
     end
-    CL.REFLUX[] = true
 
     # --- Float32 TGV short history + step timing at n^3 -------------------
     for Tp in (Float64, Float32)

@@ -404,6 +404,7 @@ The configuration record of `solver`, identical on every rank. Groups:
   relaxation, the artificial-property parameters, `polar_truncation` when it
   is on, and on a refined solver
   `interface_rhs`, `interface_flux`, `interface_divergence`,
+  `interface_conservative` when it is off,
   `level_interpolation_order`, `level_restriction` and `subcycle`, and
   `max_levels` when more than one refined level regrids.
 - `transport`, `boundaries` (each face of the root patch) and `sources`.
@@ -445,6 +446,9 @@ function configuration_record(solver::Solver)
         _record!(rec, g, "interface_rhs", schemes.interface_rhs)
         _record!(rec, g, "interface_flux", getfield(solver, :interface_flux))
         _record!(rec, g, "interface_divergence", schemes.interface_divergence)
+        # Entered only when off, as `polar_truncation` is only when on.
+        schemes.interface_conservative ||
+            _record!(rec, g, "interface_conservative", false)
         _record!(rec, g, "level_interpolation_order",
                  schemes.level_interpolation_order)
         _record!(rec, g, "level_restriction", schemes.level_restriction)

@@ -210,19 +210,20 @@ Numerics(merge(Presets.converging(), Presets.refined_shock()); n_global=(256,1,1
 
 ### Patch and level interfaces: `PatchInterfaces`
 
-`PatchInterfaces(; flux=:ghost, rhs=:extended, divergence=nothing)` applies
-only where two patches or two refinement levels meet, not at an interface
-between materials.
+`PatchInterfaces(; flux=:ghost, rhs=:extended, divergence=nothing,
+conservative=true)` applies only where two patches or two refinement levels
+meet, not at an interface between materials.
 
 | Field | Meaning | Default |
 |---|---|---|
 | `flux` | `:ghost` differentiates the inviscid and molecular fluxes across an interface using ghost values from the neighbouring patch. `:closure` uses one-sided boundary rows at each patch end; it is required on a stretched grid, a cylindrical grid with θ resolved and a spherical grid, with `rhs = :onesided`, and for a user-defined EOS on a viscous refined level | `:ghost` |
 | `rhs` | How the gradient and divergence rows are closed at an interface: `:extended` or `:onesided` | `:extended` |
 | `divergence` | Scheme whose boundary rows give the flux divergence at interface ends; experimental, Float64 only | `nothing` |
+| `conservative` | Whether the coarse-fine faces of a refined level take the flux correction that makes their two sides agree; it runs on host storage, without the positivity limiter and without implicit conduction | `true` |
 
 `patch_interfaces = :closure` means `PatchInterfaces(flux=:closure)`. Error
 messages and checkpoint records name the fields `interface_flux`,
-`interface_rhs`, and `interface_divergence`.
+`interface_rhs`, `interface_divergence` and `interface_conservative`.
 
 ### Where it runs: `Execution`
 

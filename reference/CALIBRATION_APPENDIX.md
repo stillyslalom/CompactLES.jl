@@ -3163,7 +3163,7 @@ tiles of 8                     6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e
 tiles of 16                    6737   15.7918  51.0%    0.2028  +9.2e-4   +9.2e-4   +1.96e-3
 tiles of 8, subcycled          2277   15.8828  49.4%    0.2024  +1.56e-3  +1.56e-3  +2.33e-3
 regridded tiles of 8           6836   15.9152  49.5%    0.2023  +1.73e-3
-tiles of 8, REFLUX off         6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e-3  +2.55e-3
+tiles of 8, uncorrected        6837   15.8915  49.6%    0.2024  +1.73e-3  +1.73e-3  +2.55e-3
 tiles of 8, sensor clamped     6827   15.8429  49.9%    0.2026  +1.05e-3  +1.05e-3  +1.84e-3
 tiles of 8, :ghost             6634   15.6554  50.8%    0.2033  +1.9e-5   +1.8e-5   +5.7e-4
 box, limited                   9217   15.6672  50.8%    0.2032  −5.2e-7   −1.9e-6   +6.3e-4
@@ -3188,7 +3188,7 @@ tiles of 16                          0.188, 0.375, 0.56
 ```
 
 Up to t = 0.16 the drift stays within 3e-5. The coarse-fine face at r = 0.313 is not involved:
-the shock does not reach it, and with `REFLUX` off every printed digit of the final state is
+the shock does not reach it, and with the correction off every printed digit of the final state is
 unchanged. Subcycling and regridding change the drift by a tenth or less, and clamping the
 sensor at the faces (`SENSOR_INTERFACE_GHOSTS` off) lowers it by two fifths. Under
 `interface_flux = :ghost`, where the flux through the face is differentiated from ghost values
@@ -7327,7 +7327,7 @@ order ([bench/archive/reflux.jl](#bencharchiverefluxjl-the-conservative-coarse-f
 
 `julia --project=. -t 4 bench/archive/reflux.jl`, serial, Float64, C6 and the default
 filter; the cases are described in the script's header. The uncorrected rows
-set `REFLUX[] = false`.
+ran with the correction off (`conservative = false`).
 
 **Sod.** Across a shock that crosses both faces of the box, the correction
 reduces the composite mass and energy change by about three to four orders
@@ -7399,7 +7399,7 @@ with variants of the gate; the Sod and Noh columns summarize the tables above.
 | gate | mask | moving shock | Sod mass, largest | Noh composite less inflow |
 |---|---|---|---|---|
 | uniform fine grid | | 2.91e-4 | | |
-| none (`REFLUX[] = false`) | off | 1.08e-2 | 9.1e-5 | −1.18e-3 |
+| none (`conservative = false`) | off | 1.08e-2 | 9.1e-5 | −1.18e-3 |
 | none | on | 3.38e-4 | 7.5e-4 | |
 | parent nodes either side of the face | off | 1.92e-2 | 6.7e-8 | −3.65e-7 |
 | the same | on | 3.56e-3 | 8.9e-7 | |
@@ -9135,7 +9135,7 @@ pressure term in the area form:
 | plane, m = 134 | 3.9989 | 22.7% | 0.2008 | −2e-12 | 1.5e-4 | 10487 |
 | plane, m = 67 | 3.9507 | 22.3% | 0.2036 | −1.14e-3 | 2.0 | 9739 |
 
-The table's rows are uncorrected (`REFLUX[] = false`). The subcycled tile's
+The table's rows are uncorrected (`conservative = false`). The subcycled tile's
 axis node reads a deficit 1.7 points above the global step's. Once the shock
 leaves the tile, near t = 0.5, the uncorrected composite loses mass at the
 crossing and the post-shock plateau inside the tile falls. On the axis it
@@ -9763,7 +9763,7 @@ within a fifth of the fine grid's. How the correction does it is under
 
 | moving shock, beyond 0.02 | moving | moving-plainD |
 |---|---|---|
-| correction off (`REFLUX[] = false`) | 3.38e-4, 1.16 times the fine grid's | 1.08e-2 |
+| correction off (`conservative = false`) | 3.38e-4, 1.16 times the fine grid's | 1.08e-2 |
 | default gate, testing the uncovered nodes alone | 3.05e-4, 1.05 times | |
 
 The plain bubble run's mass change lies in the steps that changed the layout,

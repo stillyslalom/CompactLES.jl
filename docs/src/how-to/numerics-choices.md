@@ -114,7 +114,9 @@ and is not supported as a wall configuration.
 ## Patch and level interfaces
 
 [`PatchInterfaces`](@ref), passed as `Numerics(patch_interfaces = ...)`,
-holds the settings of this section: `flux`, `rhs` and `divergence`. They
+holds the settings of this section: `flux`, `rhs` and `divergence`, and
+`conservative`, the flux correction at the coarse-fine faces of a refined
+level, which is on by default. They
 apply where two patches or two refinement levels meet, not at a material
 interface between two fluids.
 
