@@ -1191,17 +1191,12 @@ end
 # run on a workstation, whole.
 _lattice_budget(np::Int) = max(1 << 20, 256 * np)
 
-# Test and bench toggle: off, every level keeps the configured lattice, so
-# a decomposed run tiles its levels as a serial one does and the two can be
-# compared to round-off.
-const SUBDIVIDE_LATTICE = Ref(true)
-
 # The chain of level ℓ's lattices under the solver's placement rules, over
 # its parent's node space of `N` nodes (the lattice coincident with the
 # root's), for a level of `np` ranks.
 function _level_chain(solver, spec::RegridSpec, N::NTuple{3,Int},
                       active::NTuple{3,Bool}, np::Int)
-    SUBDIVIDE_LATTICE[] || return [spec.tile]
+    spec.subdivide || return [spec.tile]
     faces = _placement_faces(solver, spec)
     least = max(MIN_TILE_EDGE, _limiter_least_extent(solver) - 1)
     return _edge_chain(spec.tile, active, N, faces, _unbuffered_faces(solver, faces),
@@ -1419,7 +1414,7 @@ const LATTICE_SPREAD = 0.01
 # tiled run on host storage, the subdivision on and no fixed coefficients.
 # Setup constants and toggles, the same on every rank.
 _lattice_measured(solver, spec::RegridSpec) =
-    SUBDIVIDE_LATTICE[] && FIXED_LATTICE_COSTS[] === nothing && _tiled(spec.tile) &&
+    spec.subdivide && FIXED_LATTICE_COSTS[] === nothing && _tiled(spec.tile) &&
     spec.backend isa CPUBackend && MPI.Comm_size(getfield(solver, :comm)) > 1
 
 # The steps level ℓ takes per root step.

@@ -434,7 +434,8 @@ function main()
           AMR(initial = :sensor, tile = tile_edges, max_levels = nlev,
               subcycle = opt.subcycle,
               regrid_interval = opt.regrid > 0 ? opt.regrid : nothing,
-              rebalance = opt.rebalance) : nothing
+              rebalance = opt.rebalance,
+              subdivide_lattice = opt.lattice == "model") : nothing
     num = Numerics(n_global = n_global, amr = amr)
     if root
         say("rmicost: %s, %d-D, nres %d (Δx root %.3f mm), n_global %s, np %d, " *
@@ -449,7 +450,6 @@ function main()
     # The same script runs against trees without the lattice cost model.
     isdefined(CompactLES, :LATTICE_TRACE) && (CompactLES.LATTICE_TRACE[] = opt.trace)
     opt.lattice in ("model", "configured") || error("lattice must be model or configured")
-    opt.lattice == "configured" && (CompactLES.SUBDIVIDE_LATTICE[] = false)
     isdefined(CompactLES, :NODE_SIZE) && (CompactLES.NODE_SIZE[] = opt.nodesize)
     Base.cumulative_compile_timing(true)
     MPI.Barrier(comm)

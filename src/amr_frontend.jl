@@ -131,6 +131,10 @@ copies `base` with the given keywords replaced.
   checks. The layout, and the solution to within the truncation error,
   then depend on the rank count and can differ between two runs of one
   configuration.
+- `subdivide_lattice` (default `true`): `false` keeps every level on the
+  configured `tile` lattice, so a decomposed run tiles its levels as a
+  serial one does and the two agree to round-off, and a restarted run
+  repeats the layout of the run that wrote its checkpoint.
 - `level_boundaries` (default `true`): shapes and tags may place a level on
   a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or
   `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the `AxisBC` of an r-z
@@ -170,6 +174,7 @@ Base.@kwdef struct AMR
     rebalance_persist::Int = 2
     max_levels::Union{Nothing,Int} = nothing
     level_boundaries::Bool = true
+    subdivide_lattice::Bool = true
 end
 
 AMR(base::AMR; kw...) = _with(base, kw)
@@ -218,7 +223,8 @@ function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
             tile_lifetime=amr.tile_lifetime, tile=amr.tile,
             rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist,
             max_levels=amr.max_levels,
-            level_boundaries=amr.level_boundaries)
+            level_boundaries=amr.level_boundaries,
+            subdivide_lattice=amr.subdivide_lattice)
 end
 
 _amr_callable(initial) = !(initial isa Symbol || initial isa BlockRegion ||

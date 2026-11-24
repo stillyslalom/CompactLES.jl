@@ -4325,6 +4325,12 @@ under `:inject`) and across a periodic seam; any other face keeps the
 nesting margin, as every face does with it off (`_placement_faces`,
 `_placement_period`).
 
+`subdivide` (the `subdivide_lattice` keyword, on by default) lets a level of
+a decomposed run take a finer lattice than the configured `tile`
+(`_level_chain`); off, every level keeps the configured lattice, so a
+decomposed run tiles its levels as a serial one does and the two can be
+compared to round-off.
+
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean
 per-rank busy time over the last interval (0 leaves ownership stored as it
@@ -4374,6 +4380,7 @@ mutable struct RegridSpec{T}
     costs::LatticeCosts              # the lattice cost model and its timers
     whole_sensors::Bool              # a check is computing the coefficients its
                                      # sensor criterion tags from
+    subdivide::Bool                  # a level may take a finer lattice than `tile`
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -4385,7 +4392,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
                   Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts(),
-                  false)
+                  false, true)
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]

@@ -24,8 +24,8 @@ using HDF5
 # depends on the machine's load. The hierarchy testsets below read a tile's
 # dataset by its configured size and compare a restarted run bit for bit with
 # the run that wrote the file, so the suite keeps every level on its
-# configured lattice, as test/mpi_tests.jl does. One rank never subdivides.
-CL.SUBDIVIDE_LATTICE[] = false
+# configured lattice (`subdivide_lattice = false`), as test/mpi_tests.jl
+# does. One rank never subdivides.
 
 @testset "HDF5 extension: shared-file checkpoint" begin
     comm = MPI.COMM_WORLD
@@ -401,6 +401,7 @@ end
     # 201 root nodes keep 25 per rank at np = 8; a tile of 8 is 25 fine nodes.
     mk() = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
                   bcs=(wall, per3h[2], per3h[3]), cfl=0.2, subcycle=true,
+                  subdivide_lattice=false,
                   regrid_interval=5, tile=8, dims=(np, 1, 1),
                   refine=BlockRegion((85, 0, 0), (31, 1, 1)))
     dir = rank == 0 ? mktempdir() : ""
@@ -473,7 +474,7 @@ end
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
     num = Numerics(n_global=(121, 1, 1), cfl=0.3,
                    amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
-                           tag_buffer=2, subcycle=true))
+                           subdivide_lattice=false, tag_buffer=2, subcycle=true))
     dir = rank == 0 ? mktempdir() : ""
     dir = MPI.bcast(dir, comm; root=0)
     s, states = setup(prob, num)
@@ -525,6 +526,7 @@ end
     mk(refine, sub) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
                              bcs=per3h, art=ArtificialProperties(enabled=false),
                              filter_interval=0, subcycle=true, tile=8,
+                             subdivide_lattice=false,
                              regrid_interval=5, tile_lifetime=100,
                              refine=refine, comm=sub)
     function wave_error(solver, states)
@@ -590,6 +592,7 @@ end
                    bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per), comm=comm,
                    art=ArtificialProperties(enabled=false), filter_interval=0,
                    cfl=0.5, refine=BlockRegion((40, 0, 0), (9, 1, 1)),
+                   subdivide_lattice=false,
                    regrid_interval=3, tag_threshold=Inf, tag_predicate=near,
                    tag_buffer=2, tile=8, level_boundaries=true)
         q = allocate_state(s)

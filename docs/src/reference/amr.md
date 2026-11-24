@@ -108,6 +108,7 @@ first regrid check would refine. A vector of shapes stays fixed.
 | `tile_lifetime` | `1` | Minimum number of regrid checks before a tile may be removed |
 | `tile` | `0` | Zero makes one refined box; an edge of at least three parent nodes, or a tuple of one per dimension, x first, gives the lattice tile edges |
 | `level_boundaries` | `true` | Shapes and tags place a level on a wall or NSCBC face and across a periodic seam, and on a symmetry plane or the r-z axis; at `false` every level keeps the margin at every face |
+| `subdivide_lattice` | `true` | A regridded level of a decomposed run may take a finer lattice than `tile`; at `false` every level keeps the configured lattice, so the layout does not depend on the rank count |
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |

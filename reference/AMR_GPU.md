@@ -1421,9 +1421,9 @@ point-to-point message per overlapping pair of whole tiles
 (`_carry_tiles!`); a re-chopped tile inherits the latest creation check of
 the old tiles it overlaps. `RegridSpec.edges` holds each level's lattice and
 the checkpoint carries it. On one rank the chain is the configured lattice
-alone, so a serial run never subdivides, and `SUBDIVIDE_LATTICE` turns the
-subdivision off so that the MPI suite compares a decomposed run with the
-serial one.
+alone, so a serial run never subdivides, and `subdivide_lattice = false`
+turns the subdivision off, which is how the MPI suite compares a decomposed
+run with the serial one.
 
 After placement the level's most loaded rank is compared with a fresh
 partition by fine volume (`_balanced_owners`): whole tiles by largest-first

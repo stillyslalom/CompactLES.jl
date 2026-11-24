@@ -93,9 +93,9 @@ const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 # A regridded level with fewer tiles than ranks takes a finer lattice, so a
 # decomposed run tiles its levels differently from the serial run the
-# phases compare it with. The suite keeps every level on its configured
-# lattice; the "lattice subdivision" phase turns the subdivision on.
-CL.SUBDIVIDE_LATTICE[] = false
+# phases compare it with. The regridding solvers of the suite keep every
+# level on its configured lattice (`subdivide_lattice = false`); the
+# "lattice subdivision" and "lattice over nodes" phases leave it on.
 
 "Max interior error of a scalar field against an analytic function (this rank)."
 function ferr(solver, f, fn)
@@ -1752,6 +1752,7 @@ function test_hierarchy_checkpoint()
                                  Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     mk() = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                   bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                  subdivide_lattice=false,
                   regrid_interval=5, tag_buffer=2, tile=8,
                   refine=BlockRegion((176, 0, 0), (16, 1, 1)))
     solver = mk()
@@ -1792,6 +1793,7 @@ function test_hierarchy_checkpoint()
     # A different initial region is rebuilt to the recorded one too.
     moved = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                   subdivide_lattice=false,
                    regrid_interval=5, tag_buffer=2, tile=8,
                    refine=BlockRegion((200, 0, 0), (24, 1, 1)))
     mstates = allocate_state(moved)
@@ -1917,6 +1919,7 @@ function test_hierarchy_phase_change()
                               bcs=(xbc, per3[2], per3[3]), ic=sod)
     amr_num = Numerics(n_global=(400, 1, 1), cfl=0.2,
                        amr=AMR(initial=BlockRegion((176, 0, 0), (16, 1, 1)), tile=8,
+                               subdivide_lattice=false,
                                regrid_interval=5, tag_buffer=2, subcycle=true))
     open_end = (SlipWallBC(), NSCBCOutflowBC(pinf=0.1))
     s, states = setup(shock_tube(wall2), amr_num)
@@ -1966,7 +1969,7 @@ function test_unrefined_start()
                    bcs=((inflow, SlipWallBC()), per3[2], per3[3]), ic=rest)
     num = Numerics(n_global=(121, 1, 1), cfl=0.3,
                    amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
-                           tag_buffer=2, subcycle=true))
+                           subdivide_lattice=false, tag_buffer=2, subcycle=true))
     empty_everywhere(s, states) =
         gmax(!(isempty(level_regions(s, 1)) && length(states) == 1 &&
                !s.levels[2].level_comm.owned &&
@@ -2058,7 +2061,7 @@ function test_deep_regrid()
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=(wall2, per3[2], per3[3]), ic=ic)
     amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
-              max_levels=3)
+              subdivide_lattice=false, max_levels=3)
     num(c) = Numerics(n_global=(81, 1, 1), cfl=0.2, execution=Execution(comm=c), amr=amr)
     solver, states = setup(prob, num(comm))
     ref, rstates = setup(prob, num(MPI.COMM_SELF))
@@ -2127,7 +2130,7 @@ function test_deep_regrid_subsets()
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=(wall2, per3[2], per3[3]), ic=sod)
     amr = AMR(initial=:sensor, tile=4, tag_buffer=1, regrid_interval=3,
-              subcycle=true, max_levels=3)
+              subdivide_lattice=false, subcycle=true, max_levels=3)
     num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, filter=compact_filter(0.45),
                       execution=Execution(comm=c), amr=amr)
     solver, states = setup(prob, num(comm))
@@ -2181,8 +2184,8 @@ function subdivision_carry()
         gi, gj = i + p.decomp.offset[1], j + p.decomp.offset[2]
         18 <= gi <= 32 && 18 <= gj <= 32
     end
-    CL.SUBDIVIDE_LATTICE[] = false
     solver = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                    subdivide_lattice=false,
                     tile=16, regrid_interval=1, tag_buffer=0, tag_threshold=Inf,
                     tag_predicate=inside, refine=BlockRegion((16, 16, 0), (17, 17, 1)))
     states = allocate_state(solver)
@@ -2207,7 +2210,7 @@ function subdivision_carry()
     rank == owner || (A = zeros(Float64, dims[1:4]...))
     MPI.Bcast!(A, comm; root=owner)
     pad_old = Tuple(dims[5:7])
-    CL.SUBDIVIDE_LATTICE[] = true
+    getfield(solver, :regrid).subdivide = true
     CL.regrid!(solver, states, CL.Workspace(states), nothing)
     lev = solver.levels[2]
     spec = getfield(solver, :regrid)
@@ -2347,7 +2350,6 @@ function test_lattice_subdivision()
         subdivision_carry()
         subdivision_deep()
     finally
-        CL.SUBDIVIDE_LATTICE[] = false
         CL.FIXED_LATTICE_COSTS[] = nothing
     end
 end
@@ -2378,7 +2380,6 @@ function test_lattice_nodes()
         CL.NODE_SIZE[] = group
         check("lattice over nodes: the grouped map",
               CL._node_map(comm) == [r ÷ group for r in 0:(np - 1)] ? 0.0 : 1.0, 0.5)
-        CL.SUBDIVIDE_LATTICE[] = true
         CL.FIXED_LATTICE_COSTS[] = (1.0, 0.0, 0.0, 0.0, 0.0, 2000.0)
         inside(p, I) = begin
             i, j, _ = CL.interior_index(p, I)
@@ -2419,7 +2420,6 @@ function test_lattice_nodes()
         subdivision_measured("lattice over nodes, measured")
     finally
         CL.NODE_SIZE[] = 0
-        CL.SUBDIVIDE_LATTICE[] = false
         CL.FIXED_LATTICE_COSTS[] = nothing
     end
 end
@@ -2464,6 +2464,7 @@ function test_placed_levels()
                    bcs=(walls, per3[2], per3[3]), comm=comm_here,
                    art=ArtificialProperties(enabled=false), filter_interval=1,
                    cfl=0.5, refine=BlockRegion((64, 0, 0), (17, 1, 1)),
+                   subdivide_lattice=false,
                    regrid_interval=3, tag_threshold=Inf, tag_predicate=window,
                    tag_buffer=2, tile=tile, level_boundaries=true)
         local q = allocate_state(s)
@@ -2531,6 +2532,7 @@ function test_seam_levels()
         local s = Solver(; n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
                    comm=comm_here, art=ArtificialProperties(enabled=false),
                    filter_interval=1, cfl=0.5, refine=BlockRegion((84, 0, 0), (25, 1, 1)),
+                   subdivide_lattice=false,
                    regrid_interval=regrid ? 3 : 0, tag_threshold=Inf,
                    tag_predicate=regrid ? window : nothing, tag_buffer=2, tile=tile,
                    level_boundaries=regrid, kw...)
@@ -3244,6 +3246,7 @@ function test_staged_exchange()
         wall2 = (SlipWallBC(), SlipWallBC())
         s = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                   subdivide_lattice=false,
                    regrid_interval=5, tag_buffer=2, tile=8,
                    refine=BlockRegion((176, 0, 0), (16, 1, 1)), backend=backend)
         states = allocate_state(s)
@@ -3441,6 +3444,7 @@ function test_refined_decomposed()
                     bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
                     filt=compact_filter(0.45),
                     refine=BlockRegion((160, 0, 0), (60, 1, 1)),
+                    subdivide_lattice=false,
                     subcycle=true, regrid_interval=20, tag_buffer=16)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> x < 0.45 ?
@@ -3733,6 +3737,7 @@ function test_tiled_level()
         wall2 = (SlipWallBC(), SlipWallBC())
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                        subdivide_lattice=false,
                         regrid_interval=5, tag_buffer=2, tile=8,
                         # see the regridded Sod case
                         filter_cfl=0.0, filt=compact_filter(0.45),
@@ -3809,6 +3814,7 @@ function test_tiled_level()
         wall2 = (SlipWallBC(), SlipWallBC())
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                        subdivide_lattice=false,
                         regrid_interval=5, tag_buffer=2, tile=8,
                         # see the regridded Sod case
                         filter_cfl=0.0, filt=compact_filter(0.45),
@@ -3988,6 +3994,7 @@ function test_level_subset()
                     bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
                     filt=compact_filter(0.45),   # see the regridded Sod case
                     refine=BlockRegion((180, 0, 0), (8, 1, 1)),
+                    subdivide_lattice=false,
                     subcycle=true, regrid_interval=20, tag_buffer=2)
     lc0 = solver.levels[2].level_comm
     owners0 = MPI.Allreduce(Int(lc0.owned), +, comm)
@@ -4070,6 +4077,7 @@ function test_covered_masks()
     # The same after regrids have moved the tiles of a one-dimensional run.
     per = (PeriodicBC(), PeriodicBC())
     solver = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    subdivide_lattice=false,
                     bcs=(wall, per, per), cfl=0.2, subcycle=true, regrid_interval=5,
                     refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8)
     states = allocate_state(solver)
@@ -5027,6 +5035,7 @@ function test_fold_regrid()
                          art=ArtificialProperties(enabled=false), filter_interval=1,
                          cfl=0.5, refine=levels > 2 ? nothing :
                                          BlockRegion((24, 0, 0), (17, 1, 1)),
+                         subdivide_lattice=false,
                          regrid_interval=3, tag_threshold=Inf, tag_predicate=window,
                          tag_buffer=2, tile=tile, level_boundaries=true,
                          max_levels=levels, kw...)
