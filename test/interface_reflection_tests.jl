@@ -104,15 +104,8 @@ end
     end
     same_level = mk(N; patch_grid=(2, 1, 1))
     refined = mk(N; refine=BlockRegion((32, 0, 0), (32, 1, 1)))
-    ghost_same, ghost_fine, clamp_same, clamp_fine = try
-        gs, gf = face_error(same_level), face_error(refined)
-        CL.SENSOR_INTERFACE_GHOSTS[] = false
-        gs, gf, face_error(same_level), face_error(refined)
-    finally
-        CL.SENSOR_INTERFACE_GHOSTS[] = true
-    end
+    ghost_same, ghost_fine = face_error(same_level), face_error(refined)
     @info "interface ghosts: δ⁴ sensor against a uniform grid" ghost_same ghost_fine
-    @info "interface ghosts: the same faces on the clamp" clamp_same clamp_fine
     # A same-level ghost is a copy of the neighbor's interior node, so the two
     # sensors agree bitwise; measured 0.
     @test ghost_same < 1e-14
@@ -120,8 +113,4 @@ end
     # and the undivided δ⁴ carries that error undiminished. Measured 2.9e-6
     # against a sensor of 1e-5 to 2.4e-5 on these nodes.
     @test ghost_fine < 1e-5
-    # The clamp is a zeroth-order extension: its error is first order in h and
-    # swamps the quantity. Measured 0.18 and 3.7e-2.
-    @test clamp_same > 10 * max(ghost_same, 1e-14)
-    @test clamp_fine > 10 * ghost_fine
 end

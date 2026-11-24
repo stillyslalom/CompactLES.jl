@@ -583,20 +583,12 @@ function _conservative_interface_rows(scheme::CompactScheme{T}) where {T}
             for (lhs, rhs, first) in rows]
 end
 
-# Test and benchmark toggle: `true`, the default, closes the state filter with
-# the conservative rows above at a node two same-level patches or two tiles
-# share, and a limited filter pass then holds that node (`_filter_ends` in
-# positivity.jl); `false` takes the identity row of `interface_closures` there,
-# the reference the rows are measured against. A coarse-fine end keeps the
-# identity row either way. Read where the filter plans and the limiter are
-# built (the constructor, a regrid, a restart, the start of `run!`), so a run
-# sets it before construction and leaves it set.
-const CONSERVATIVE_INTERFACE_FILTER = Ref(true)
-
-# The rows of the state filter at a patch or level interface end.
-_filter_interface_rows(filt) = CONSERVATIVE_INTERFACE_FILTER[] ?
-                               _conservative_interface_rows(filt) :
-                               interface_closures(filt)
+# The rows of the state filter at a node two same-level patches or two tiles
+# share: the conservative rows above, and a limited filter pass then holds
+# that node (`_filter_ends` in positivity.jl). The identity row of
+# `interface_closures` there is the reference the rows were measured against.
+# A coarse-fine end keeps the identity row.
+_filter_interface_rows(filt) = _conservative_interface_rows(filt)
 
 """
     interface_divergence_closures(scheme) -> closure rows

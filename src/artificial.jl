@@ -420,8 +420,7 @@ the interior and then halo-exchanged has no such ghosts and must leave `ghosts`
 at its default: the strain magnitude and the dilatation are the two, and both
 keep the clamp at an interface, except on a tiled level whose artificial
 properties are computed over the whole level, which fills their ghost layers
-first (`_level_artificial!`). `SENSOR_INTERFACE_GHOSTS` turns the interface
-reads off for a comparison on one build.
+first (`_level_artificial!`).
 
 A closed edge that is none of the three keeps the clamp, a
 zeroth-order extension whose error differs in order with the field: for an even
@@ -457,16 +456,6 @@ sensor.
 # leaves the face on the clamp.
 @noinline _face_mirror(@nospecialize(bc)) = sensor_mirror(bc) === true
 
-"""
-Test and benchmark toggle: `true`, the default, lets a `ghosts = true` call of
-[`delta4_sum!`](@ref) read the exchanged or imposed ghost layers at an
-[`InterfaceBC`](@ref) face. `false` clamps there instead, the policy of every
-closed edge that reflects nothing, so that one build measures both. Under
-`detector = :d8`, `false` closes the face with the scheme's own rows instead
-of the ghost-reading rows ([`ring_sum!`](@ref)).
-"""
-const SENSOR_INTERFACE_GHOSTS = Ref(true)
-
 function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                      parity::NTuple{3,Int}=(1, 1, 1),
                      wall_parity::NTuple{3,Int}=(1, 1, 1),
@@ -478,9 +467,9 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     accumulate || fill!(out, 0)
     invh = solver.inv_h
     bcs = solver.bcs
-    # Read once per call. An interface face then differs from a rank boundary
-    # in the two clamp bounds alone, so no per-point body sees this at all.
-    iface = ghosts && SENSOR_INTERFACE_GHOSTS[]
+    # An interface face differs from a rank boundary in the two clamp bounds
+    # alone, so no per-point body sees `ghosts` at all.
+    iface = ghosts
     for d in 1:3
         decomp.active[d] || continue
         h_d = solver.h[d]
@@ -712,7 +701,7 @@ those hold live inputs at two of the call sites (the internal energy for
 
 `ghosts` states that `f` has valid interface ghosts, as it does for
 [`delta4_sum!`](@ref). On a refined patch it selects the interface rows that
-read them; without it, or with `SENSOR_INTERFACE_GHOSTS` off, an interface
+read them; without it an interface
 end keeps the scheme's own closure rows. A single-patch solver has no
 interface end and ignores it; `:d8` is rejected in a same-level patched run.
 """
@@ -730,10 +719,9 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     # its size, as recorded on `compute_artificial!`.
     ring_buf = solver.ring_buf
     hh, invh = solver.h, solver.inv_h
-    iface = ghosts && SENSOR_INTERFACE_GHOSTS[]
     for d in 1:3
         decomp.active[d] || continue
-        ring_along!(ring_buf, f, solver, d, parity[d], wall_parity[d], iface)
+        ring_along!(ring_buf, f, solver, d, parity[d], wall_parity[d], ghosts)
         pointwise!(_ring_accum_point!, out, nx, ny, nz,
                    out, ring_buf, hh[d], invh[d], wpow, maxred, o1, o2, o3)
     end

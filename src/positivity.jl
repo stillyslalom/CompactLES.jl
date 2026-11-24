@@ -50,8 +50,7 @@
 # conserve and the node takes a correction, which the limiter holds: the node
 # takes its end face and the face beside it in one part, by one θ that the
 # exchange of a same-level interface makes the same on both patches
-# (`_filter_ends`; `CONSERVATIVE_INTERFACE_FILTER` off restores the identity
-# row there).
+# (`_filter_ends`).
 #
 # Both are corrections at the faces they limit: a run in which no face is
 # limited is the unlimited run bit for bit. On a Cartesian line the node terms
@@ -934,8 +933,7 @@ function PositivityLimiter(solver; separate::Bool=false)
     # The filter's conservative rows close the faces the patch shares with a
     # patch of its own level, and a filter pass holds the end node there
     # (`_filter_ends`).
-    conservative = ntuple(d -> CONSERVATIVE_INTERFACE_FILTER[] ? interface[d] :
-                               (false, false), 3)
+    conservative = interface
     # The patches of a rank share the workspace by extent, and a stage takes
     # every patch's θ before any patch's correction (`_limit_level_stage!`),
     # so a patch with a same-level interface, and a tile of a radial grid,

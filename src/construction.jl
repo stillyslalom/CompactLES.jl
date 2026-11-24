@@ -1667,7 +1667,6 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
     # which the tile's ranks split it has a reduced interface stage taking
     # one set of rows for every line, so its shared faces join the key.
     function split_shared(ti)
-        CONSERVATIVE_INTERFACE_FILTER[] || return _NO_BOUNDARY
         folded = bcs === nothing ? _NO_BOUNDARY : _level_fold_faces(boundaries[ti], bcs)
         ext = _fine_region(tregions[ti], active_g, folded).extent
         dims = _amr_dims(ext, ntuple(d -> ext[d] > 1, 3), MPI.Comm_size(comm))
@@ -1841,8 +1840,7 @@ _shared_faces(faces::NTuple{3,NTuple{2,Int}}) = map(f -> (f[1] != 0, f[2] != 0),
 function _survivor_plans(p::Patch, faces::NTuple{3,NTuple{2,Int}}, fbcs,
                          boundary::NTuple{3,NTuple{2,Bool}}, bcs, root_folds, spec,
                          smoother::Symbol, ring::Bool)
-    (CONSERVATIVE_INTERFACE_FILTER[] && _shared_faces(p.faces) != _shared_faces(faces)) ||
-        return nothing
+    _shared_faces(p.faces) != _shared_faces(faces) || return nothing
     return _fine_plans(p.decomp, p.h, spec.deriv, spec.filt, spec.smoo, spec.interface_rhs,
                        spec.backend; interface_divergence=spec.interface_divergence, ring,
                        boundary, wall_faces=_sensor_wall_faces(fbcs),
