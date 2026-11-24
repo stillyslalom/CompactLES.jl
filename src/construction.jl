@@ -1148,9 +1148,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  n_species, n_cons,
                                                  _grad_Q_columns(art, n_species, n_cons),
                                                  id0, ℓ, tile; interface_divergence,
-                                                 ghost_viscous=
-                                                     _ghost_viscous(interface_flux,
-                                                                    transport),
                                                  gradient_ring=
                                                      _gradient_ring_built(interface_flux,
                                                                           transport, art),
@@ -1309,7 +1306,6 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
-                           ghost_viscous::Bool=false,
                            gradient_ring::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
@@ -1346,9 +1342,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # with such an end takes a ghost-flux array.
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
                                similar(empty3, T, 0, 0, 0, 0),
-                               ghost_viscous || GHOST_FLUX_REMAINDER[] ?
-                                   _interface_dims(active_g, boundary) :
-                                   (false, false, false))
+                               _interface_dims(active_g, boundary))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
                            fbcs, plans, empty3,
                            _patch_arrays(g, n_species, n_sensed), ws,
@@ -1645,7 +1639,6 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               grad_Q_columns::Int, id0::Int, level::Int,
                               tile::NTuple{3,Int};
                               interface_divergence=nothing,
-                              ghost_viscous::Bool=false,
                               gradient_ring::Bool=false,
                               ring::Bool=false,
                               boundaries=fill(_NO_BOUNDARY, length(tregions)),
@@ -1660,7 +1653,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, grad_Q_columns, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             ghost_viscous, gradient_ring, ring,
+                                             gradient_ring, ring,
                                              boundary=boundaries[ti], bcs,
                                              root_folds, n_sensed, slot=k))
         end
@@ -1691,7 +1684,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         grad_Q_columns, level; interface_divergence,
-                                        ghost_viscous, gradient_ring, ring,
+                                        gradient_ring, ring,
                                         boundary=key[2], bcs,
                                         smoother, root_folds, n_sensed,
                                         shared_tiles=[_shared_faces(faces[held[k]])
@@ -1712,7 +1705,6 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
                            grad_Q_columns::Int, level::Int;
                            interface_divergence=nothing,
-                           ghost_viscous::Bool=false,
                            gradient_ring::Bool=false,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
@@ -1747,8 +1739,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                     ntiles * stride, n_cons),
                            ntiles, stride),
         StackedArray(empty4, ntiles, stride),
-        ghost_viscous || GHOST_FLUX_REMAINDER[] ? _interface_dims(active_g, boundary) :
-                                                  (false, false, false))
+        _interface_dims(active_g, boundary))
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (the batched phases read
     # only their kind: the members share the boundary faces, every other

@@ -8061,14 +8061,13 @@ contact, subcycled, run in the test's four calls) the two paths flag nearly the 
 
 **The remainder through the gradient rows.** Differenced through the gradient rows, the
 remainder raises the interface's order with the artificial properties on from about three
-to six. With the artificial properties on and
-`GHOST_FLUX_REMAINDER` off, the remainder F − f of the ghost-differenced flux (the molecular
-and artificial fluxes and the wall rewrite) takes the divergence plans' one-sided rows at an
-interface end, a second line solve. `GHOST_FLUX_REMAINDER` instead carries it in `ghost_flux`
+to six. In the plain form the remainder F − f of the ghost-differenced flux (the
+molecular and artificial fluxes and the wall rewrite) takes the divergence plans' one-sided
+rows at an interface end, a second line solve. The second column's form carries it in `ghost_flux`
 on dimensions whose interface ends are same-level, the level's records filling the ghost
-layers, and differences the whole flux through the gradient plans in one solve;
-`GHOST_REMAINDER_EXTRAPOLATE` extends it to coarse-fine ends, whose ghost layers take a
-degree-5 Lagrange extrapolation of the interior remainder. Both are the default, the
+layers, and differences the whole flux through the gradient plans in one solve; the third
+column's extends that to coarse-fine ends, whose ghost layers take a degree-5 Lagrange
+extrapolation of the interior remainder. The solver takes the third form, the
 extrapolation applied per tile, so a stacked device level takes it too. The table is on exact
 data with prescribed smooth μ\*, β\*, κ\* (`compute_rhs!` with `coefficients_current`), in
 the interface window on the section's three grids:
@@ -8080,12 +8079,12 @@ the interface window on the section's three grids:
 | two levels, inviscid | (2.76, 2.97) | the same as plain | (5.99, 5.93), 1.28e-10 at N = 192 |
 | two levels, μ = 2e-2 | (2.79, 2.97) | the same as plain | (5.96, 5.99) |
 
-On shocks the two toggles lower the error at the shell slightly and leave the rest of the
-solution as it was. The comparison is both toggles against neither on the `crossing` rows of
+On shocks the ghost-differenced remainder lowers the error at the shell slightly and leave the rest of the
+solution as it was. The comparison is the third column's form against the plain one on the `crossing` rows of
 the transcript above, np = 1, at t = 0.2. On the untiled nests the shell error falls by 2 to
 12%. The fine and root errors there move by under 0.3%, and no row has an inadmissible step.
 
-| `crossing` row | quantity | neither toggle | both toggles |
+| `crossing` row | quantity | plain | ghost-differenced |
 |---|---|---|---|
 | base | shell | 9.50e-3 | 8.42e-3 |
 | base | fine | 7.571e-2 | 7.571e-2 |

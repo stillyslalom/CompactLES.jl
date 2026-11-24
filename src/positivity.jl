@@ -687,7 +687,7 @@ const LIMITED_GHOST_INTERFACES = Ref(false)
 # with its ghost values included (`_remainder_ghosted`). Elsewhere a part of the
 # flux takes the divergence's one-sided rows, whose face form differs, and the
 # constructor closes the interfaces with the closure rows.
-_limiter_ghost(art) = _ghost_remainder(:ghost, art) && GHOST_REMAINDER_EXTRAPOLATE[]
+_limiter_ghost(art) = _ghost_remainder(:ghost, art)
 
 # A closed line of N nodes whose ends close with `lo` and `hi` (`nothing` for
 # the scheme's own rows, `:open` at an open end): the face form exists, its

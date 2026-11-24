@@ -368,7 +368,6 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                1, 1, spec.tile;
                                                interface_divergence=
                                                    spec.interface_divergence,
-                                               ghost_viscous=_ghost_viscous(solver),
                                                gradient_ring=_gradient_ring_built(solver),
                                                ring=_ring_detector(solver),
                                                boundaries, bcs=root.bcs,

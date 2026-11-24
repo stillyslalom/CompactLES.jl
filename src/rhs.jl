@@ -25,35 +25,24 @@ _ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
 # differences the whole flux through the gradient plans in one solve; the
 # level's records fill its ghost layers at a same-level end, and the
 # remainder F − f beyond the inviscid flux f is extrapolated at a coarse-fine
-# end. Test/bench toggle, read at construction (the `ghost_flux` arrays and the
-# gradient ring, `_gradient_ring_built`), at every right-hand side and at every shell
-# imposition (`_reads_gradient_ring`), so it is set before a solver is built
-# and left alone during its run; `false` differences the remainder through
-# the divergence plans' one-sided rows instead, a second solve, at an
-# interface order near 3 against 6 here.
-const GHOST_FLUX_REMAINDER = Ref(true)
-
-# With `GHOST_FLUX_REMAINDER` on, the dimensions with a coarse-fine end too,
-# the remainder's ghost layers there extrapolated from the interior by a
-# polynomial of degree `GHOST_REMAINDER_DEGREE[]` along the line (lower on a
-# rank holding fewer nodes). Test/bench toggle, read where the first is;
-# `false` leaves those dimensions to the second solve.
-const GHOST_REMAINDER_EXTRAPOLATE = Ref(true)
-const GHOST_REMAINDER_DEGREE = Ref(5)
+# end. Differencing the remainder through the divergence plans' one-sided
+# rows instead, a second solve, gave an interface order near 3 against 6
+# here. The dimensions with a coarse-fine end are included, the remainder's
+# ghost layers there extrapolated from the interior by a polynomial of degree
+# `GHOST_REMAINDER_DEGREE` along the line (lower on a rank holding fewer
+# nodes).
+const GHOST_REMAINDER_DEGREE = 5
 
 _ghost_remainder(interface_flux::Symbol, art) =
-    GHOST_FLUX_REMAINDER[] && interface_flux === :ghost && art.enabled
+    interface_flux === :ghost && art.enabled
 _ghost_remainder(solver) = _ghost_remainder(solver.interface_flux, solver.art)
 
 # Whether a refined patch is built with the shell's gradient ring: under the
-# molecular ghost fluxes, unless the remainder is ghost-differenced on every
-# interface dimension, coarse-fine ones included, which leaves no face to read
-# the ring (`_ring_dim`). The toggles are read here at construction; a solver
-# built with both on raises at its first right-hand side if either is
-# switched off afterwards (`_coarse_fine_fluxes_at!`).
+# molecular ghost fluxes, unless the remainder is ghost-differenced, which
+# covers every interface dimension, coarse-fine ones included, and leaves no
+# face to read the ring (`_ring_dim`).
 _gradient_ring_built(interface_flux::Symbol, transport, art) =
-    _ghost_viscous(interface_flux, transport) &&
-    !(_ghost_remainder(interface_flux, art) && GHOST_REMAINDER_EXTRAPOLATE[])
+    _ghost_viscous(interface_flux, transport) && !_ghost_remainder(interface_flux, art)
 _gradient_ring_built(solver) =
     _gradient_ring_built(solver.interface_flux, solver.transport, solver.art)
 
@@ -1287,7 +1276,7 @@ end
 # rather than the remainder leaves the pointwise inviscid flux to the ghost
 # layers of the coarse-fine faces and of the boundary ends, where it is read;
 # the interior value differs from f + (F − f) by the rounding of that sum.
-# With the artificial properties off (or `GHOST_FLUX_REMAINDER` off),
+# With the artificial properties off,
 # `ghost_flux` holds the molecular flux alone, its coarse-fine ghost values
 # evaluated from the shell's gradient ring, and a remainder left beside it
 # (the wall corrections) keeps the one-sided rows of `div_plans` in a second
@@ -1663,16 +1652,12 @@ function _molecular_ghost_flux!(solver::SolverLike, Q)
 end
 
 # Whether dimension `d` takes its whole flux through the gradient plans, the
-# remainder F − f carried in `ghost_flux` (`GHOST_FLUX_REMAINDER`): an
-# interface dimension, one with a coarse-fine end only under
-# `GHOST_REMAINDER_EXTRAPOLATE`.
+# remainder F − f carried in `ghost_flux` (`_ghost_remainder`): an interface
+# dimension, with a same-level or a coarse-fine end.
 function _remainder_ghosted(solver::SolverLike, d::Int)
     _ghost_remainder(solver) || return false
     solver.decomp.active[d] && _interface_dim(solver, d) || return false
-    size(solver.ghost_flux[d], 4) > 0 || return false
-    GHOST_REMAINDER_EXTRAPOLATE[] && return true
-    bc_lo, bc_hi = solver.bcs[d]
-    return !parent_fed(bc_lo) && !parent_fed(bc_hi)
+    return size(solver.ghost_flux[d], 4) > 0
 end
 
 # The flux's ghost layers at each coarse-fine face of `d` this rank holds: the
@@ -1688,7 +1673,7 @@ function _extrapolate_coarse_fine!(solver::SolverLike, d::Int, Q)
     pad = decomp.n_halo_d
     nl = decomp.n_local
     G = solver.ghost_flux[d]
-    deg = min(GHOST_REMAINDER_DEGREE[], nl[d] - 1)
+    deg = min(GHOST_REMAINDER_DEGREE, nl[d] - 1)
     o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     for side in 1:2
         parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) || continue
@@ -1892,7 +1877,7 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     # a line solve every rank of the patch takes.
     less_p = _pressure_gradient(solver, d, c)
     less_p && _ext_pressure_subtract!(dQ, c, solver, d)
-    # The whole flux waits for phase two (`GHOST_FLUX_REMAINDER`).
+    # The whole flux waits for phase two (`_remainder_ghosted`).
     _remainder_ghosted(solver, d) && return dQ
     if viscous
         _flux_remainder(solver, d) || return dQ
@@ -2147,8 +2132,7 @@ end
 
 @noinline _unbuilt_ring_error() =
     error("a coarse-fine face reads the gradient ring, which the solver was built " *
-          "without (`_gradient_ring_built`): GHOST_FLUX_REMAINDER or " *
-          "GHOST_REMAINDER_EXTRAPOLATE was switched off after construction")
+          "without (`_gradient_ring_built`)")
 
 _tile_ghost_flux_solves!(solver, pi::Int, states, dQs, n_cons::Int) =
     _ghost_flux_solves_at!(solver, _cold(getfield(solver, :patches)[pi]), states, dQs,
