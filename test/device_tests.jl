@@ -873,7 +873,7 @@ end
                              control=StepControl(validity=:permissive),
                              execution=Execution(storage=backend,
                                                  patch_grid=(patches, 1, 1)),
-                             patch_interfaces=flux, amr=amr,
+                             patch_interfaces=kept(flux), amr=amr,
                              positivity_limiter=true))
     end
     blast(backend) = setup(
@@ -918,28 +918,21 @@ end
                  filter=StateFilter(compact_filter(); cfl=0.35),
                  control=StepControl(validity=:permissive),
                  execution=Execution(storage=backend, patch_grid=(2, 1, 1)),
-                 patch_interfaces=flux, positivity_limiter=true))
-    # A :ghost case's build, which keeps the limited interfaces at :ghost
-    # (`LIMITED_GHOST_INTERFACES`, off by default).
-    kept(build) = backend -> begin
-        CL.LIMITED_GHOST_INTERFACES[] = true
-        try
-            build(backend)
-        finally
-            CL.LIMITED_GHOST_INTERFACES[] = false
-        end
-    end
+                 patch_interfaces=kept(flux), positivity_limiter=true))
+    # A limited run's interface settings, which keep :ghost where `flux` is
+    # :ghost (`limited_ghost`, off by default).
+    kept(flux) = PatchInterfaces(flux=flux, limited_ghost=true)
     cases = (("one patch", b -> shock(b), 40), ("planar blast", blast, 8),
              ("spherical line", sedov, 60), ("r-z corner", corner, 12),
              ("two patches", patched, 30),
              ("refined box", b -> shock(b; amr=AMR(initial=box)), 30),
              ("refined box, subcycled",
               b -> shock(b; amr=AMR(initial=box, subcycle=true)), 20),
-             ("two patches, :ghost", kept(b -> patched(b; flux=:ghost)), 30),
+             ("two patches, :ghost", b -> patched(b; flux=:ghost), 30),
              ("refined box, :ghost",
-              kept(b -> shock(b; amr=AMR(initial=box), flux=:ghost)), 30),
+              b -> shock(b; amr=AMR(initial=box), flux=:ghost), 30),
              ("refined box, subcycled, :ghost",
-              kept(b -> shock(b; amr=AMR(initial=box, subcycle=true), flux=:ghost)), 20))
+              b -> shock(b; amr=AMR(initial=box, subcycle=true), flux=:ghost), 20))
     for (name, build, nmax) in cases
         s1, q1 = build(CPUBackend())
         run!(s1, q1; tfinal=1.0, nmax=nmax)
@@ -980,15 +973,12 @@ end
                    ic=(r, θ, z) -> r < 0.15 ? Prim(rho=16.0, u=(0.0, 0.0, 0.0), p=16 / 3) :
                                               Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=1e-4))
     filled(backend) = begin
-        CL.LIMITED_GHOST_INTERFACES[] = true
-        s, Q = try
-            setup(prob, Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=true),
-                                 execution=Execution(storage=backend),
-                                 patch_interfaces=:ghost, positivity_limiter=true,
-                                 amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)))))
-        finally
-            CL.LIMITED_GHOST_INTERFACES[] = false
-        end
+        ghost = PatchInterfaces(flux=:ghost, limited_ghost=true)
+        s, Q = setup(prob, Numerics(n_global=(96, 1, 1),
+                                    art=ArtificialProperties(enabled=true),
+                                    execution=Execution(storage=backend),
+                                    patch_interfaces=ghost, positivity_limiter=true,
+                                    amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)))))
         CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
         return s, Q
     end

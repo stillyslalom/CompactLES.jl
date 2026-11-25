@@ -301,8 +301,8 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   rows and the A19 corner box leave no inadmissible point, at 1.04 to 1.86
   times the unlimited step. Under the limiter setup closes the patch and
   level interfaces with the closure rows, with a warning. The default
-  `interface_flux = :ghost` is carried behind the test toggle
-  `LIMITED_GHOST_INTERFACES` (commit `2d5178f`): with the artificial
+  `interface_flux = :ghost` is carried behind
+  `PatchInterfaces(limited_ghost = true)` (commit `2d5178f`): with the artificial
   properties on, the gradient plans difference the whole flux of an
   interface dimension, so a line is open at an interface, weight h up to it
   and h/2 at the end node, its face values anchored by the derivative's face

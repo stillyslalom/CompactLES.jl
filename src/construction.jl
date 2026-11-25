@@ -76,8 +76,8 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 `implicit`, `n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
 `filter_cfl` and `filter_weighting` from [`StateFilter`](@ref) (its `scheme`,
 `interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs`,
-`interface_divergence` and `interface_conservative` from
-[`PatchInterfaces`](@ref); and `dims`, `comm`,
+`interface_divergence`, `interface_conservative` and
+`interface_limited_ghost` from [`PatchInterfaces`](@ref); and `dims`, `comm`,
 `backend`, `precision` and `patch_grid` from [`Execution`](@ref). Without
 `precision`, the element type is the one shared by the components passed
 explicitly (`eos`, `transport`, `art`,
@@ -316,6 +316,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 interface_divergence::Union{Nothing,AbstractCompactScheme},
                 interface_flux::Symbol=:ghost,
                 interface_conservative::Bool=true,
+                interface_limited_ghost::Bool=false,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
                 level_interpolation_order::Union{Nothing,Int}=nothing,
@@ -355,9 +356,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # The limiter's face form holds on a line whose divergence closes at an
         # interface with the closure rows, or with the gradient plans' rows
         # where those take the whole flux (`_limiter_ghost`), which the
-        # limiter takes only under `LIMITED_GHOST_INTERFACES`; otherwise the
+        # limiter takes only under `interface_limited_ghost`; otherwise the
         # interfaces take the closure rows before any plan is built.
-        ghost_kept = LIMITED_GHOST_INTERFACES[]
+        ghost_kept = interface_limited_ghost
         if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1) &&
            (!ghost_kept || !_limiter_ghost(art))
             MPI.Comm_rank(comm) == 0 &&

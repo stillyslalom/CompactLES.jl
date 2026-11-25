@@ -142,19 +142,9 @@ function test_positivity_limiter()
     check("r-z, one rank: the limiter acted (expect > 0)",
           cpref.stage_limited > 0 ? 0.0 : 1.0, 0.5)
 
-    # A solver built by `build`, with the patch and level interfaces of a
-    # limited run kept at `:ghost` when `flux` is `:ghost`
-    # (`LIMITED_GHOST_INTERFACES`, off by default).
-    function kept(build, flux)
-        flux === :ghost || return build()
-        CL.LIMITED_GHOST_INTERFACES[] = true
-        try
-            return build()
-        finally
-            CL.LIMITED_GHOST_INTERFACES[] = false
-        end
-    end
-
+    # A limited run keeps `:ghost` at its patch and level interfaces only
+    # under `interface_limited_ghost`, off by default, which the builds below
+    # pass.
     # Two same-level patches split along x, each on its own share of the
     # ranks and decomposed within it at np > 2, against both patches on one
     # rank, under either interface flux: a patch's lines end at the interface
@@ -164,13 +154,12 @@ function test_positivity_limiter()
         section("positivity limiter: same-level patches across ranks against one " *
                 "rank, :$flux")
         function patched(comm_here)
-            s = kept(flux) do
-                Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
+            s = Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.4,
                        control=StepControl(validity=:permissive), positivity_limiter=true,
-                       patch_grid=(2, 1, 1), interface_flux=flux, comm=comm_here)
-            end
+                       patch_grid=(2, 1, 1), interface_flux=flux,
+                       interface_limited_ghost=true, comm=comm_here)
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -260,13 +249,12 @@ function test_positivity_limiter()
     # A pressure jump beside the interface, whose shock limits the faces about
     # the shared node from one side first, so that the exchange acts.
     function patched2(backend, flux)
-        s = kept(flux) do
-            Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
                    art=ArtificialProperties(enabled=true), cfl=0.3, filter_cfl=0.35,
                    control=StepControl(validity=:permissive), positivity_limiter=true,
-                   patch_grid=(2, 1, 1), interface_flux=flux, backend=backend)
-        end
+                   patch_grid=(2, 1, 1), interface_flux=flux,
+                   interface_limited_ghost=true, backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                             p=1000 * (1 - tanh_blend(x, 0.45, 2 / 95)) +
@@ -298,15 +286,14 @@ function test_positivity_limiter()
         section("positivity limiter: refined tiles across ranks against one rank" *
                 (sub ? ", subcycled" : "") * ", :$flux")
         function refined(comm_here)
-            s = kept(flux) do
-                Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+            s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
                             per3[3]), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.4,
                        control=StepControl(validity=:permissive), positivity_limiter=true,
                        refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
-                       subcycle=sub, interface_flux=flux, comm=comm_here)
-            end
+                       subcycle=sub, interface_flux=flux,
+                       interface_limited_ghost=true, comm=comm_here)
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -364,16 +351,14 @@ function test_positivity_limiter()
         section("positivity limiter: r-z tiles across ranks against one rank" *
                 (sub ? ", subcycled" : "") * ", :$flux")
         function rztiled(comm_here)
-            s = kept(flux) do
-                Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
+            s = Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
                        metric=CylindricalMetric(),
                        bcs=((AxisBC(), SlipWallBC()), per3[2],
                             (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.3,
                        control=StepControl(validity=:permissive), positivity_limiter=true,
                        refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8, subcycle=sub,
-                       interface_flux=flux, comm=comm_here)
-            end
+                       interface_flux=flux, interface_limited_ghost=true, comm=comm_here)
             Q = allocate_state(s)
             initialize!(s, Q, corner)
             run!(s, Q; tfinal=1.0, nmax=20)

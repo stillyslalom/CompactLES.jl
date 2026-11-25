@@ -122,6 +122,10 @@ same-level patches and refined levels the interfaces close with the closure
 rows: under the default `patch_interfaces = :ghost` setup switches them to
 `:closure` and warns, since the switch can lower the order of accuracy at an
 interface.
+`PatchInterfaces(limited_ghost = true)` keeps `:ghost` there with the
+artificial properties on. On a tiled level the solution of such a run depends
+on the rank count, since a round-off perturbation grows to a visible
+difference within a few hundred steps.
 A closed line needs enough nodes for the face form and the filter's face
 relation: 25 under the default derivative, 31 under [`lele_d1_8`](@ref) and
 41 under [`lele_d1_10`](@ref). A line ending at a same-level interface or a

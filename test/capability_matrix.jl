@@ -120,6 +120,11 @@ include("capability_cases.jl")
                     AMR(initial=[box2, Box((0.4, 0.4, 0), (0.6, 0.6, 1))]))
             @test C.advances(C.problem(bcs=(C.wall, C.wall, C.per)), refined((48, 48, 1), amr))
         end
+        # The static tiles with the interfaces kept at :ghost.
+        ghost = PatchInterfaces(limited_ghost=true)
+        @test C.advances(C.problem(bcs=(C.wall, C.wall, C.per)),
+                         Numerics(refined((48, 48, 1), AMR(initial=box2, tile=8));
+                                  patch_interfaces=ghost))
         # The tiles cover three lattice cells of edge 8 along r and z.
         for (prob, n, region, cells) in
             ((C.problem(bcs=C.axis, domain=C.cyl_domain, metric=CylindricalMetric(),

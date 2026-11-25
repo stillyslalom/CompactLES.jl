@@ -2937,7 +2937,7 @@ two patches                     3.567          6.544         1.85
 ```
 
 By default setup closes a limited run's interfaces with the closure rows. Under
-`LIMITED_GHOST_INTERFACES` (`flux=ghost` sets it) it keeps `patch_interfaces = :ghost`, the
+`PatchInterfaces(limited_ghost = true)` (`flux=ghost` sets it) it keeps `patch_interfaces = :ghost`, the
 gradient plans difference the whole flux of an interface dimension from ghost values, and the
 limiter takes the line as open there: weight h up to the end node and h/2 at it, the end face
 at the node, and the face values anchored by the derivative's interior face relation measured at

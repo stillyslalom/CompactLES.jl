@@ -148,7 +148,8 @@ Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
   level without the positivity limiter keep `:ghost`: under the closure rows
   the level gains mass each time a shock crosses a face two tiles share. With
   the limiter on, setup closes every patch and level interface with the
-  closure rows;
+  closure rows unless `limited_ghost = true` keeps `:ghost`, under which the
+  solution on a tiled level depends on the rank count;
 - Float32 runs, whose interface error reaches the precision floor under
   either choice, so the ghost fluxes add cost without lowering the error;
 - configurations the ghost fluxes do not support, which setup rejects with

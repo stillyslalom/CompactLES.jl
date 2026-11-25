@@ -812,7 +812,7 @@ _state_filter(x) =
 
 """
     PatchInterfaces(; flux = :ghost, rhs = :extended, divergence = nothing,
-                    conservative = true)
+                    conservative = true, limited_ghost = false)
     PatchInterfaces(base::PatchInterfaces; keywords...)
 
 How the flux divergence closes at a patch or level interface: a plane shared
@@ -823,7 +823,8 @@ second form copies `base` with the given fields replaced;
 `Numerics(patch_interfaces = :closure)` is shorthand for
 `PatchInterfaces(flux = :closure)`. The solver keywords, checkpoint records
 and error messages name the fields `interface_flux`, `interface_rhs`,
-`interface_divergence` and `interface_conservative`.
+`interface_divergence`, `interface_conservative` and
+`interface_limited_ghost`.
 
 - `flux`: `:ghost` (default) differentiates the inviscid and molecular fluxes
   through the interface from ghost values with the interior stencil;
@@ -835,7 +836,7 @@ and error messages name the fields `interface_flux`, `interface_rhs`,
   molecular transport and the artificial properties off, each of which setup
   rejects under `:ghost` with an `ArgumentError`. Under
   `Numerics(positivity_limiter = true)` setup takes `:closure` in place of
-  `:ghost` and warns. See
+  `:ghost` and warns, unless `limited_ghost` is set. See
   [Choose numerics](@ref).
 - `rhs`: `:extended` (default) evaluates the gradient and divergence rows at
   an interface end from exchanged ghost data; `:onesided` closes them with
@@ -854,18 +855,28 @@ and error messages name the fields `interface_flux`, `interface_rhs`,
   positivity limiter and without implicit conduction, and a configuration
   outside that scope goes uncorrected under either value. It has no effect
   on a plane shared by two same-level patches.
+- `limited_ghost`: `false` (default). `true` keeps `flux = :ghost` at the
+  patch and level interfaces of a run under
+  `Numerics(positivity_limiter = true)`, where the limiter then takes the
+  lines as open; it requires the artificial properties on, and without them
+  setup takes `:closure` and warns as before. The solution of such a run on
+  a tiled level depends on the rank count: a round-off perturbation grows to
+  a visible difference within a few hundred steps, where under the closure
+  rows it stays at round-off. It has no effect without the limiter or under
+  `flux = :closure`.
 """
 struct PatchInterfaces
     flux::Symbol
     rhs::Symbol
     divergence::Union{Nothing,AbstractCompactScheme}
     conservative::Bool
+    limited_ghost::Bool
 end
 
 PatchInterfaces(; flux::Symbol=:ghost, rhs::Symbol=:extended,
                 divergence::Union{Nothing,AbstractCompactScheme}=nothing,
-                conservative::Bool=true) =
-    PatchInterfaces(flux, rhs, divergence, conservative)
+                conservative::Bool=true, limited_ghost::Bool=false) =
+    PatchInterfaces(flux, rhs, divergence, conservative, limited_ghost)
 PatchInterfaces(base::PatchInterfaces; kw...) = _with(base, kw)
 
 _patch_interfaces(interfaces::PatchInterfaces) = interfaces
@@ -1263,6 +1274,7 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                interface_divergence=num.patch_interfaces.divergence,
                interface_flux=num.patch_interfaces.flux,
                interface_conservative=num.patch_interfaces.conservative,
+               interface_limited_ghost=num.patch_interfaces.limited_ghost,
                precision=num.execution.precision, kw...)
     Q = allocate_state(solver)
     if seed_only

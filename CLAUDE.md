@@ -514,6 +514,8 @@ Names are spelled out in full. Current vocabulary:
   each junction it takes part in, parent or child, with the per-line
   `stage`, `du` and `reg` registers), `interface_conservative`
   (`PatchInterfaces.conservative`, the request for the coupling),
+  `interface_limited_ghost` (`PatchInterfaces.limited_ghost`: a limited
+  run keeps `:ghost` at its interfaces),
   `_reflux_open!` / `_reflux_close!` (the hooks in the two divergence
   funnels), `_reflux_fold!`, `_reflux_filter!`, `_reflux_begin_step!`,
   `_reflux_apply!`, `_junction_omega` (the weights of Ω, the conserved

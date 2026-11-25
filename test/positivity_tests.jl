@@ -6,7 +6,7 @@
 # the fold's face value, a run it never acts in, a blast it keeps admissible
 # while conserving, and the Noh implosions under strict validity; on
 # same-level patches and on refined levels, under either interface flux
-# (`:ghost` under `LIMITED_GHOST_INTERFACES`), a run it never acts in and a
+# (`:ghost` under `limited_ghost`), a run it never acts in and a
 # strong shock it keeps admissible (the planar Noh too, on four patches and
 # in Float32 on one, whose cold gas takes the floor of the bound on ρe), there
 # with the shell's admissible fallback on subcycled tiles, and on tiles at the
@@ -77,27 +77,18 @@ function pos_fold_face(lim, f, div, σ, halo)
     return anchor[1]
 end
 
-# `f()`, with the patch and level interfaces of a limited run kept at `:ghost`
-# when `flux` is `:ghost` (`LIMITED_GHOST_INTERFACES`, off by default).
-function pos_flux(f, flux)
-    flux === :ghost || return f()
-    saved = CL.LIMITED_GHOST_INTERFACES[]
-    CL.LIMITED_GHOST_INTERFACES[] = true
-    try
-        return f()
-    finally
-        CL.LIMITED_GHOST_INTERFACES[] = saved
-    end
-end
+# The interface settings of a limited run that keeps `:ghost` at its patch and
+# level interfaces when `flux` is `:ghost` (`limited_ghost`, off by default).
+kept(flux) = PatchInterfaces(flux=flux, limited_ghost=true)
 
 # The interface settings of a bitwise comparison between a limited run and an
 # unlimited one: the conservative coarse-fine coupling is not taken under the
 # limiter, so the unlimited run is built without it.
-uncorrected(flux) = PatchInterfaces(flux=flux, conservative=false)
+uncorrected(flux) = PatchInterfaces(kept(flux); conservative=false)
 
 # The interface flux and whether the level subcycles, for the strong shocks
 # on refined levels: the closure rows at the global step and subcycled, the
-# ghost flux subcycled. `LIMITED_GHOST_INTERFACES` is off by default, and the
+# ghost flux subcycled. `limited_ghost` is off by default, and the
 # ghost flux at the global step is held by the bitwise testsets, which run
 # every combination, and by the regridded Noh tiles.
 const GHOST_FLUX_CASES = ((:closure, false), (:closure, true), (:ghost, true))
@@ -428,12 +419,10 @@ end
                                                                 (y - 0.5)^2) / 0.01)))
         for flux in (:closure, :ghost)
             runs = map((false, true)) do on
-                s, Q = pos_flux(flux) do
-                    setup(prob, Numerics(n_global=(96, 40, 1), positivity_limiter=on,
-                                         art=ArtificialProperties(enabled=true),
-                                         execution=Execution(patch_grid=(2, 1, 1)),
-                                         patch_interfaces=flux))
-                end
+                s, Q = setup(prob, Numerics(n_global=(96, 40, 1), positivity_limiter=on,
+                                            art=ArtificialProperties(enabled=true),
+                                            execution=Execution(patch_grid=(2, 1, 1)),
+                                            patch_interfaces=kept(flux)))
                 run!(s, Q; tfinal=1.0, nmax=40)
                 (s, Q)
             end
@@ -461,12 +450,10 @@ end
         exact(x) = 0.5 * (1.0 + 0.2sin(2π * x))
         dt = 1e-3
         errors = map((:closure, :ghost)) do flux
-            s, Q = pos_flux(flux) do
-                setup(prob, Numerics(n_global=(64, 1, 1),
-                                     art=ArtificialProperties(enabled=true),
-                                     execution=Execution(patch_grid=(2, 1, 1)),
-                                     patch_interfaces=flux, positivity_limiter=true))
-            end
+            s, Q = setup(prob, Numerics(n_global=(64, 1, 1),
+                                        art=ArtificialProperties(enabled=true),
+                                        execution=Execution(patch_grid=(2, 1, 1)),
+                                        patch_interfaces=kept(flux), positivity_limiter=true))
             CL.sync_patches!(s, Q)
             CL._positivity_setup!(s, Q)
             lims = CL._follow_patches!(s, getfield(s, :positivity))
@@ -522,15 +509,13 @@ end
                               0.01 * (tanh_blend(x, 0.1, 2h) - tanh_blend(x, 0.9, 2h)) +
                               100 * tanh_blend(x, 0.9, 2h)))
         run_wc(patches, on, flux=:closure) = begin
-            s, Q = pos_flux(flux) do
-                setup(prob, Numerics(n_global=(N, 1, 1), cfl=0.3,
-                                     art=ArtificialProperties(enabled=true),
-                                     filter=StateFilter(compact_filter(); cfl=0.35),
-                                     control=StepControl(validity=:permissive),
-                                     execution=Execution(patch_grid=(patches, 1, 1)),
-                                     patch_interfaces=flux,
-                                     positivity_limiter=on))
-            end
+            s, Q = setup(prob, Numerics(n_global=(N, 1, 1), cfl=0.3,
+                                        art=ArtificialProperties(enabled=true),
+                                        filter=StateFilter(compact_filter(); cfl=0.35),
+                                        control=StepControl(validity=:permissive),
+                                        execution=Execution(patch_grid=(patches, 1, 1)),
+                                        patch_interfaces=kept(flux),
+                                        positivity_limiter=on))
             bad = pos_bad_points(s, Q; tfinal=WC_T)
             (s, bad, pos_line(s, Q)...)
         end
@@ -597,7 +582,7 @@ end
 
     @testset "the interface flux setup takes under the limiter" begin
         # By default setup closes the patch and level interfaces of a limited
-        # run with the closure rows. Under the toggle it keeps :ghost with the
+        # run with the closure rows. Under `limited_ghost` it keeps :ghost with the
         # artificial properties on, on static and regridded tiles of a radial
         # grid as well; without them a part of the flux takes the divergence's
         # one-sided rows at the interface, and setup closes it with the closure
@@ -621,17 +606,15 @@ end
         noh = noh_problem(2; N=96, t0=0.0)
         s, _ = @test_logs closed min_level=warn setup(noh, rnum(0))
         @test s.interface_flux === :closure
-        pos_flux(:ghost) do
-            s, _ = @test_logs min_level=warn setup(prob, num(true))
+        ghost(numerics) = Numerics(numerics; patch_interfaces=kept(:ghost))
+        s, _ = @test_logs min_level=warn setup(prob, ghost(num(true)))
+        @test s.interface_flux === :ghost
+        s, _ = @test_logs art_off min_level=warn setup(prob, ghost(num(false)))
+        @test s.interface_flux === :closure
+        for regrid_interval in (0, 10)
+            s, _ = @test_logs min_level=warn setup(noh, ghost(rnum(regrid_interval)))
             @test s.interface_flux === :ghost
-            s, _ = @test_logs art_off min_level=warn setup(prob, num(false))
-            @test s.interface_flux === :closure
-            for regrid_interval in (0, 10)
-                s, _ = @test_logs min_level=warn setup(noh, rnum(regrid_interval))
-                @test s.interface_flux === :ghost
-            end
         end
-        @test !CL.LIMITED_GHOST_INTERFACES[]
     end
 
     @testset "a limited blast conserves across patch interfaces" begin
@@ -689,12 +672,10 @@ end
         # limiter, so the unlimited run goes without it too.
         for flux in (:closure, :ghost), sub in (false, true)
             runs = map((false, true)) do on
-                s, Q = pos_flux(flux) do
-                    setup(prob, pos_level((48, 48, 1),
-                                          AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
-                                              tile=8, subcycle=sub), on;
-                                          patch_interfaces=uncorrected(flux)))
-                end
+                s, Q = setup(prob, pos_level((48, 48, 1),
+                                             AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
+                                                 tile=8, subcycle=sub), on;
+                                             patch_interfaces=uncorrected(flux)))
                 run!(s, Q; tfinal=1.0, nmax=6)
                 (s, Q)
             end
@@ -724,12 +705,10 @@ end
                               100 * tanh_blend(x, 0.9, 2h)))
         for (flux, sub) in GHOST_FLUX_CASES
             bads = map((false, true)) do on
-                s, Q = pos_flux(flux) do
-                    setup(prob, pos_level((N, 1, 1),
-                                          AMR(initial=BlockRegion((110, 0, 0), (60, 1, 1)),
-                                              subcycle=sub), on; cfl=0.3,
-                                          patch_interfaces=flux))
-                end
+                s, Q = setup(prob, pos_level((N, 1, 1),
+                                             AMR(initial=BlockRegion((110, 0, 0), (60, 1, 1)),
+                                                 subcycle=sub), on; cfl=0.3,
+                                             patch_interfaces=kept(flux)))
                 bad = pos_bad_points(s, Q; tfinal=WC_T)
                 @test completed(s, WC_T)
                 on && @test CL.positivity_counts(s).stage_limited > 0
@@ -747,14 +726,13 @@ end
         # without the fallback), and those nodes take the multilinear
         # interpolant of the parent's endpoint states instead.
         for flux in (:closure, :ghost)
-            s = pos_flux(flux) do
-                Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+            s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
                             per3[3]), eos=POS_GAS, art=ArtificialProperties(enabled=true),
                        cfl=0.4, control=StepControl(validity=:permissive),
                        positivity_limiter=true, interface_flux=flux,
-                       refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8, subcycle=true)
-            end
+                       interface_limited_ghost=true, tile=8, subcycle=true,
+                       refine=BlockRegion((12, 12, 0), (24, 24, 1)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -771,12 +749,11 @@ end
         # rows alone (`GHOST_FLUX_CASES`).
         N = Dict(NOH_N)[2]
         for flux in (:closure,)
-            s, Q = pos_flux(flux) do
-                setup(noh_problem(2; N, t0=0.0),
-                      Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
-                               cfl=NOH_CFL, patch_interfaces=flux, positivity_limiter=true,
-                               amr=AMR(initial=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)))))
-            end
+            s, Q = setup(noh_problem(2; N, t0=0.0),
+                         Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
+                                  cfl=NOH_CFL, patch_interfaces=kept(flux),
+                                  positivity_limiter=true,
+                                  amr=AMR(initial=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)))))
             run!(s, Q; tfinal=NOH_T)
             @test completed(s, NOH_T)
             report = state_report(s, Q)
@@ -793,13 +770,11 @@ end
                               p=1 + 1e-2 * exp(-20 * (r^2 + (z - 0.2)^2)))
         for flux in (:closure, :ghost), sub in (false, true)
             runs = map((false, true)) do on
-                s, Q = pos_flux(flux) do
-                    pos_rz(; N=40, ic=pulse, art=ArtificialProperties(enabled=true),
-                           filter=StateFilter(compact_filter(); cfl=0.35),
-                           patch_interfaces=uncorrected(flux), positivity_limiter=on,
-                           amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
-                                   subcycle=sub))
-                end
+                s, Q = pos_rz(; N=40, ic=pulse, art=ArtificialProperties(enabled=true),
+                              filter=StateFilter(compact_filter(); cfl=0.35),
+                              patch_interfaces=uncorrected(flux), positivity_limiter=on,
+                              amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
+                                      subcycle=sub))
                 run!(s, Q; tfinal=1.0, nmax=6)
                 (s, Q)
             end
@@ -826,12 +801,10 @@ end
                                         Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
         corner = BlockRegion((0, 0, 0), (25, 1, 25))
         for (flux, sub) in GHOST_FLUX_CASES
-            s, Q = pos_flux(flux) do
-                setup(prob, Numerics(n_global=(32, 1, 32), patch_interfaces=flux,
-                                     amr=AMR(initial=corner, tile=8, subcycle=sub),
-                                     control=StepControl(validity=:permissive),
-                                     positivity_limiter=true))
-            end
+            s, Q = setup(prob, Numerics(n_global=(32, 1, 32), patch_interfaces=kept(flux),
+                                        amr=AMR(initial=corner, tile=8, subcycle=sub),
+                                        control=StepControl(validity=:permissive),
+                                        positivity_limiter=true))
             bad = pos_bad_points(s, Q; tfinal=0.165)
             @test completed(s, 0.165)
             @test CL.positivity_counts(s).stage_limited > 0
@@ -844,14 +817,12 @@ end
         # first 25 root nodes, whose shared faces the shock crosses on its way
         # out, in the configurations of `GHOST_FLUX_CASES`.
         for (flux, sub) in GHOST_FLUX_CASES
-            s, Q = pos_flux(flux) do
-                setup(noh_problem(2; N=96, t0=0.0),
-                      Numerics(n_global=(96, 1, 1), cfl=NOH_CFL,
-                               art=ArtificialProperties(enabled=true),
-                               patch_interfaces=flux, positivity_limiter=true,
-                               amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
-                                       tile=8, subcycle=sub)))
-            end
+            s, Q = setup(noh_problem(2; N=96, t0=0.0),
+                         Numerics(n_global=(96, 1, 1), cfl=NOH_CFL,
+                                  art=ArtificialProperties(enabled=true),
+                                  patch_interfaces=kept(flux), positivity_limiter=true,
+                                  amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
+                                          tile=8, subcycle=sub)))
             run!(s, Q; tfinal=NOH_T)
             @test completed(s, NOH_T)
             @test CL.positivity_counts(s).stage_limited > 0
@@ -876,13 +847,11 @@ end
                                        Prim(rho=16.0, u=(0.0, 0.0, 0.0), p=16 / 3) :
                                        Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=NOH_P0))
         filled(on, flux) = begin
-            s, Q = pos_flux(flux) do
-                setup(prob, Numerics(n_global=(96, 1, 1),
-                                     art=ArtificialProperties(enabled=true),
-                                     patch_interfaces=flux, positivity_limiter=on,
-                                     amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
-                                             tile=8, level_interpolation_order=8)))
-            end
+            s, Q = setup(prob, Numerics(n_global=(96, 1, 1),
+                                        art=ArtificialProperties(enabled=true),
+                                        patch_interfaces=kept(flux), positivity_limiter=on,
+                                        amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
+                                                tile=8, level_interpolation_order=8)))
             @test s.interface_flux === flux
             CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
             report = state_report(s, Q)
@@ -900,15 +869,13 @@ end
         # the root where the gas is cold and moving fast; without the fill's
         # admissible fallback the run leaves inadmissible points after its
         # regrids.
-        s, Q = pos_flux(:ghost) do
-            setup(noh_problem(2; N=160, t0=0.0),
-                  Numerics(n_global=(160, 1, 1), cfl=NOH_CFL,
-                           art=ArtificialProperties(enabled=true),
-                           patch_interfaces=:ghost, positivity_limiter=true,
-                           control=StepControl(validity=:permissive),
-                           amr=AMR(initial=BlockRegion((0, 0, 0), (49, 1, 1)), tile=8,
-                                   regrid_interval=10)))
-        end
+        s, Q = setup(noh_problem(2; N=160, t0=0.0),
+                     Numerics(n_global=(160, 1, 1), cfl=NOH_CFL,
+                              art=ArtificialProperties(enabled=true),
+                              patch_interfaces=kept(:ghost), positivity_limiter=true,
+                              control=StepControl(validity=:permissive),
+                              amr=AMR(initial=BlockRegion((0, 0, 0), (49, 1, 1)), tile=8,
+                                      regrid_interval=10)))
         @test s.interface_flux === :ghost
         bad = pos_bad_points(s, Q; tfinal=NOH_T, nmax=6000)
         @test completed(s, NOH_T)
@@ -930,7 +897,7 @@ end
                        ic=(r, θ, z) -> (d = tanh_blend(hypot(r, z), 0.7, 0.024);
                                         Prim(rho=1.0 + 3.0 * d, p=0.1 + 19.9 * d)))
         num(region; flux=:closure, kw...) =
-            Numerics(n_global=(32, 1, 32), patch_interfaces=flux,
+            Numerics(n_global=(32, 1, 32), patch_interfaces=kept(flux),
                      amr=AMR(; initial=region, tile=8, kw...),
                      control=StepControl(validity=:permissive), positivity_limiter=true)
         s, Q = setup(prob, num(BlockRegion((0, 0, 0), (25, 1, 25)); regrid_interval=10))
@@ -943,7 +910,7 @@ end
         @test_throws "positivity_limiter: a refined patch is too short" setup(prob, num(whole))
         @test_throws "positivity_limiter: a refined patch is too short" setup(
             prob, num(whole; regrid_interval=10))
-        s, _ = pos_flux(() -> setup(prob, num(whole; flux=:ghost)), :ghost)
+        s, _ = setup(prob, num(whole; flux=:ghost))
         @test length(level_regions(s, 1)) == 16
     end
 end

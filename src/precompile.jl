@@ -276,21 +276,11 @@ function _mpi_suite_workload(cpu)
     # refined tiles at the global step and subcycled, Cartesian and r-z, and
     # the shell's fallback on a subcycled box; under `PRECOMPILE_DEVICE` the
     # box and the patches on device storage as well. The patches and tiles run
-    # under either interface flux. A limited solver keeps `:ghost` only when
-    # `LIMITED_GHOST_INTERFACES` is set during its construction, as the phase
-    # sets it; without it the constructor takes `:closure` and warns, so a
-    # `:ghost` case would take the closure path a second time and the ghost
-    # path would be compiled at run time on every rank.
-    function kept(build, flux)
-        flux === :ghost || return build()
-        saved = LIMITED_GHOST_INTERFACES[]
-        LIMITED_GHOST_INTERFACES[] = true
-        try
-            return build()
-        finally
-            LIMITED_GHOST_INTERFACES[] = saved
-        end
-    end
+    # under either interface flux. A limited solver keeps `:ghost` only under
+    # `interface_limited_ghost`, as the phase passes it; without it the
+    # constructor takes `:closure` and warns, so a `:ghost` case would take
+    # the closure path a second time and the ghost path would be compiled at
+    # run time on every rank.
     gas = IdealSpecies("gas"; gamma=1.4, R=1.0)
     permissive = StepControl(validity=:permissive)
     blast = (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
@@ -324,33 +314,30 @@ function _mpi_suite_workload(cpu)
                    control=permissive, positivity_limiter=true,
                    comm=world, dims=whole), corner, 20)
     for flux in (:closure, :ghost)
-        limited(kept(flux) do
-                    Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
-                           bcs=(walls, per, per), eos=gas,
-                           art=ArtificialProperties(enabled=true), cfl=0.4,
-                           control=permissive, positivity_limiter=true,
-                           patch_grid=(2, 1, 1), interface_flux=flux, comm=world)
-                end, blast, 20)
+        limited(Solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(walls, per, per), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.4,
+                       control=permissive, positivity_limiter=true,
+                       patch_grid=(2, 1, 1), interface_flux=flux,
+                       interface_limited_ghost=true, comm=world), blast, 20)
     end
     for flux in (:closure, :ghost), sub in (false, true)
-        limited(kept(flux) do
-                    Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                           bcs=(walls, walls, per), eos=gas,
-                           art=ArtificialProperties(enabled=true), cfl=0.4,
-                           control=permissive, positivity_limiter=true,
-                           refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
-                           subcycle=sub, interface_flux=flux, comm=world)
-                end, blast, 10)
-        limited(kept(flux) do
-                    Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
-                           metric=CylindricalMetric(),
-                           bcs=((AxisBC(), SlipWallBC()), per,
-                                (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
-                           art=ArtificialProperties(enabled=true), cfl=0.3,
-                           control=permissive, positivity_limiter=true,
-                           refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
-                           subcycle=sub, interface_flux=flux, comm=world)
-                end, corner, 10)
+        limited(Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(walls, walls, per), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.4,
+                       control=permissive, positivity_limiter=true,
+                       refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
+                       subcycle=sub, interface_flux=flux,
+                       interface_limited_ghost=true, comm=world), blast, 10)
+        limited(Solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per,
+                            (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
+                       art=ArtificialProperties(enabled=true), cfl=0.3,
+                       control=permissive, positivity_limiter=true,
+                       refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
+                       subcycle=sub, interface_flux=flux,
+                       interface_limited_ghost=true, comm=world), corner, 10)
     end
     s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=(walls, walls, per), eos=gas, transport=ConstantTransport(mu0=0.0),
@@ -377,13 +364,12 @@ function _mpi_suite_workload(cpu)
             initialize!(s, Q, blast)
             run!(s, Q; tfinal=1.0, nmax=10)
             for flux in (:closure, :ghost)
-                s = kept(flux) do
-                    Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                            bcs=(walls, per, per), eos=gas,
                            art=ArtificialProperties(enabled=true), cfl=0.3,
                            filter_cfl=0.35, control=permissive, positivity_limiter=true,
-                           patch_grid=(2, 1, 1), interface_flux=flux, backend=backend)
-                end
+                           patch_grid=(2, 1, 1), interface_flux=flux,
+                           interface_limited_ghost=true, backend=backend)
                 Q = allocate_state(s)
                 initialize!(s, Q, (x, y, z) ->
                     Prim(rho=1.0, u=(0.0, 0.0, 0.0),

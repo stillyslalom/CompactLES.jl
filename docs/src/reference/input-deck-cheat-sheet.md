@@ -211,7 +211,7 @@ Numerics(merge(Presets.converging(), Presets.refined_shock()); n_global=(256,1,1
 ### Patch and level interfaces: `PatchInterfaces`
 
 `PatchInterfaces(; flux=:ghost, rhs=:extended, divergence=nothing,
-conservative=true)` applies only where two patches or two refinement levels
+conservative=true, limited_ghost=false)` applies only where two patches or two refinement levels
 meet, not at an interface between materials.
 
 | Field | Meaning | Default |
@@ -220,10 +220,12 @@ meet, not at an interface between materials.
 | `rhs` | How the gradient and divergence rows are closed at an interface: `:extended` or `:onesided` | `:extended` |
 | `divergence` | Scheme whose boundary rows give the flux divergence at interface ends; experimental, Float64 only | `nothing` |
 | `conservative` | Whether the coarse-fine faces of a refined level take the flux correction that makes their two sides agree; it runs on host storage, without the positivity limiter and without implicit conduction | `true` |
+| `limited_ghost` | Keep `flux = :ghost` at the interfaces of a run under `positivity_limiter = true`, which otherwise takes `:closure` with a warning; on a tiled level the solution of such a run depends on the rank count | `false` |
 
 `patch_interfaces = :closure` means `PatchInterfaces(flux=:closure)`. Error
 messages and checkpoint records name the fields `interface_flux`,
-`interface_rhs`, `interface_divergence` and `interface_conservative`.
+`interface_rhs`, `interface_divergence`, `interface_conservative` and
+`interface_limited_ghost`.
 
 ### Where it runs: `Execution`
 

@@ -171,13 +171,13 @@
 # node's state, by one θ on both patches (`_exchange_interface_theta!`).
 #
 # The constructor closes the interfaces of a limited solver with these rows
-# in place of `:ghost`, with a warning, unless `LIMITED_GHOST_INTERFACES` is
-# set: on a tiled level a round-off perturbation of a limited `:ghost` run
-# grows to a visible difference within a few hundred steps, so its solution
-# depends on the rank count; under the closure rows the perturbation stays at
-# round-off.
+# in place of `:ghost`, with a warning, unless `interface_limited_ghost`
+# (`PatchInterfaces(limited_ghost = true)`) is set: on a tiled level a
+# round-off perturbation of a limited `:ghost` run grows to a visible
+# difference within a few hundred steps, so its solution depends on the rank
+# count; under the closure rows the perturbation stays at round-off.
 #
-# Under `:ghost` with that toggle set and the artificial properties on, the
+# Under `:ghost` with that setting and the artificial properties on, the
 # gradient plans difference the whole flux of an interface dimension, ghost
 # values included (`_remainder_ghosted`), and their rows at the interface read
 # the ghosts. The
@@ -668,20 +668,8 @@ _limiter_end_rows(deriv, interface_flux::Symbol, interface_rhs::Symbol,
     interface_flux === :ghost ? :open :
     _limiter_interface_rows(deriv, interface_rhs, interface_divergence)
 
-"""
-Test and benchmark toggle: `true` keeps `interface_flux = :ghost` at the patch
-and level interfaces of a limited solver where `_limiter_ghost` admits it, and
-the limiter takes those lines open at the interface. `false`, the default,
-closes the interfaces of every limited solver with the closure rows, with a
-warning. On a tiled level a round-off perturbation of a limited `:ghost` run
-grows to a visible difference within a few hundred steps, so its solution
-depends on the rank count; under the closure rows the perturbation stays at
-round-off. Read at construction.
-"""
-const LIMITED_GHOST_INTERFACES = Ref(false)
-
 # Whether a limited solver may keep `interface_flux = :ghost` at its
-# interfaces, under `LIMITED_GHOST_INTERFACES`: where the gradient plans
+# interfaces, under `interface_limited_ghost`: where the gradient plans
 # difference the whole flux of every interface dimension, the remainder F − f
 # with its ghost values included (`_remainder_ghosted`). Elsewhere a part of the
 # flux takes the divergence's one-sided rows, whose face form differs, and the
