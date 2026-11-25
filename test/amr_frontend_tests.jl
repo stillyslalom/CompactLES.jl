@@ -197,7 +197,7 @@ end
         @test covers(regions, 41) && covers(regions, 56) && covers(regions, 70)
         tile == 0 && @test length(regions) == 1
         spec = getfield(solver, :regrid)
-        @test spec.checks == 0 && all(==(0), values(spec.created))
+        @test spec.checks == 0 && all(==(0), values(spec.created[1]))
         for (p, Q) in zip(getfield(solver, :patches), states)
             ps = CompactLES.PatchSolver(solver, p)
             @test Q[padded_index(ps, 1, 1, 1), 1] ≈

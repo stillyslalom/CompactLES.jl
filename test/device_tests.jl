@@ -450,7 +450,7 @@ end
         @test level_regions(s1, 1) == level_regions(s2, 1)
         @test length(level_regions(s1, 1)) > 1
         # Under the default tags the level holds a tile a regrid created.
-        isempty(kw) && @test any(>(0), values(getfield(s1, :regrid).created))
+        isempty(kw) && @test any(>(0), values(getfield(s1, :regrid).created[1]))
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
         # The device level's tiles take stacked storage: one stack (every

@@ -501,7 +501,7 @@ function _widen_given_start!(solver, states, prob, num, amr::AMR)
     validate_state!(solver, states; control=num.control,
                     stage="the AMR initial state")
     spec.checks = 0
-    for record in (spec.created, spec.deep_created...), region in keys(record)
+    for record in spec.created, region in keys(record)
         record[region] = 0
     end
     MPI.Comm_rank(getfield(solver, :comm)) == 0 &&
@@ -636,7 +636,7 @@ function _setup_amr(prob, num, amr::AMR)
     # Bootstrap is layout construction, not a completed regrid check. Start
     # the user's hysteresis clock at zero for every actual initial tile.
     spec.checks = 0
-    for record in (spec.created, spec.deep_created...), region in keys(record)
+    for record in spec.created, region in keys(record)
         record[region] = 0
     end
     amr.regrid_interval == 0 && setfield!(solver, :regrid, nothing)

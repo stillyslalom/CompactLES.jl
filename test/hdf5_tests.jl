@@ -414,7 +414,7 @@ end
     run!(s, states; tfinal=1.0, nmax=23)
     spec = getfield(s, :regrid)
     regs = level_regions(s, 1)
-    created = copy(spec.created)
+    created = deepcopy(spec.created)
     owners = copy(s.levels[2].owners)
     checks = spec.checks
     save_checkpoint_hdf5(s, states, stem)

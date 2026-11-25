@@ -69,12 +69,13 @@ LatticeCosts() = LatticeCosts(false, UInt64[], UInt64[], UInt64[], 0, 0.0, 0.0, 
     RegridSpec
 
 Configuration and rebuild inputs for tagging-driven regridding
-(the `src/regrid_*.jl` files): the regrid cadence in coarse steps, the tag criteria, the
-buffer of coarse cells added around tagged cells, the nesting margin, and
-everything a fine-patch rebuild needs that the `Solver` does not itself
-retain: the schemes, including the `interface_divergence` source, the
-halo width, the interface treatment, the level interpolation order, the
-level restriction and the backend.
+(the `src/amr/regrid_*.jl` files): the regrid cadence in coarse steps, the
+tag criteria, the buffer of coarse cells added around tagged cells, the
+nesting margin, and what a fine-patch rebuild needs that the `Solver` does
+not itself retain: the halo width, the smoother scheme and the backend. The
+derivative and filter schemes, the interface treatment, the level
+interpolation order and the level restriction are read from the solver's
+`SchemeSettings`.
 `last_step` records the step of the most recent regrid check so a run
 resumed on the same solver keeps the cadence. Constructed by the
 [`Solver`](@ref) constructor's `regrid_interval` keyword; consumed by
@@ -99,7 +100,7 @@ whatever the tags say. `checks` counts the regrid checks so far and
 `created` records, per current tile region, the check at which the tile was
 created (0 at setup): the tag history, derived from the reduced tag flags
 so that every rank holds the same record, and state that survives a regrid.
-`created` is level 1's record and `deep_created[ℓ - 1]` that of level ℓ ≥ 2.
+`created[ℓ]` is the record of refined level ℓ.
 
 `boundaries` (the `level_boundaries` keyword, on by default) lets the tag
 clamp and the lattice clip place a level on a domain face whose condition a
@@ -130,9 +131,6 @@ mutable struct RegridSpec{T}
     buffer::Int
     margin::Int
     n_halo::Int
-    interface_rhs::Symbol
-    deriv::Union{CompactScheme{T},BandedCompactScheme{T}}
-    filt::Union{CompactScheme{T},BandedCompactScheme{T}}
     smoo::Union{CompactScheme{T},BandedCompactScheme{T}}
     backend::AbstractBackend
     tile::NTuple{3,Int}              # lattice edge per dimension; 0 = one box
@@ -152,31 +150,17 @@ mutable struct RegridSpec{T}
     untag_ratio::T                   # hold above threshold / untag_ratio
     lifetime::Int                    # minimum tile age in regrid checks
     checks::Int                      # regrid checks so far
-    created::Dict{BlockRegion,Int}   # per current tile: the check it was
-                                     # created at (0 at setup)
-    interface_divergence::Union{Nothing,CompactScheme{T},BandedCompactScheme{T}}
-    interpolation_order::Int         # Lagrange order of a rebuilt transfer
-    restriction::Symbol              # level_restriction of a rebuilt transfer
-    deep_created::Vector{Dict{BlockRegion,Int}} # `created` of levels 2, 3, ...
+    # Per refined level and current tile: the check the tile was created at
+    # (0 at setup).
+    created::Vector{Dict{BlockRegion,Int}}
     boundaries::Bool                 # tags may place a level on a domain face
     edges::Vector{NTuple{3,Int}}     # per refined level, its lattice's edges
     costs::LatticeCosts              # the lattice cost model and its timers
     subdivide::Bool                  # a level may take a finer lattice than `tile`
 end
 
-RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
-              deriv, filt, smoo, backend, tile, last_step,
-              rebalance=0.0, persist=1) where {T} =
-    RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
-                  deriv, filt, smoo, backend, _tile_edges(tile), last_step,
-                  rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
-                  zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
-                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
-                  Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts(),
-                  true)
-
-# The creation record of refined level `ℓ` (`created` for level 1).
-_created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]
+# The creation record of refined level `ℓ`.
+_created(spec::RegridSpec, ℓ::Int) = spec.created[ℓ]
 
 # The lattice edges refined level `ℓ` is tiled on: the configured `tile`
 # until the regrid subdivides it (`_choose_lattice`).

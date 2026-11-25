@@ -176,7 +176,7 @@ end
         run!(s, states; tfinal=1.0, nmax=23)
         spec = getfield(s, :regrid)
         regs = level_regions(s, 1)
-        created = copy(spec.created)
+        created = deepcopy(spec.created)
         checks, last_step, t_save = spec.checks, spec.last_step, s.t
         @test regs != level_regions(mk(tile=tile), 1)   # the layout has moved
         save_checkpoint(s, states, stem)

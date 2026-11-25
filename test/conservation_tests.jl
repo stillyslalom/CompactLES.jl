@@ -312,11 +312,12 @@ end
         @test length(k1) > length(k0)
         @test any(r -> haskey(k1, r) && k1[r] != k0[r], keys(k0))
         spec = getfield(s, :regrid)
+        schemes = getfield(s, :schemes)
         rows(plan) = (plan.lo_closed, plan.hi_closed, plan.clo, plan.chi)
         same = map(s.levels[2].patches) do i
             p = s.patches[i]
-            fresh = CL._fine_plans(p.decomp, p.h, spec.deriv, spec.filt, spec.smoo,
-                                   spec.interface_rhs, spec.backend;
+            fresh = CL._fine_plans(p.decomp, p.h, schemes.deriv, schemes.filt, spec.smoo,
+                                   schemes.interface_rhs, spec.backend;
                                    shared=CL._shared_faces(p.faces))
             rows(p.filter_plans[1]) == rows(fresh.filter[1])
         end

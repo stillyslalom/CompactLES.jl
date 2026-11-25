@@ -278,10 +278,10 @@ function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
             (!isempty(counts) && length(created) == counts[1]) ||
             error("hierarchy record: $(length(created)) creation checks for " *
                   "$(sum(counts; init=0)) tiles")
-        empty!(spec.created)
+        empty!(_created(spec, 1))
         at = 0
         for ℓ in eachindex(rec.levels)
-            ℓ == 1 || ℓ - 1 <= length(spec.deep_created) || break
+            ℓ <= length(spec.created) || break
             record = _created(spec, ℓ)
             empty!(record)
             for r in rec.levels[ℓ].regions
@@ -306,6 +306,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                          regions::Vector{BlockRegion},
                          stored_owners::Union{Nothing,Vector{UnitRange{Int}}}) where {T}
     spec = getfield(solver, :regrid)
+    schemes = getfield(solver, :schemes)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[2]
@@ -359,15 +360,15 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     # device backend as stacked storage (construction.jl).
     new_patches, stacks = _build_level_patches(T, regions, held, faces, active,
                                                root.h, spec.n_halo, group.comm,
-                                               spec.deriv, spec.filt, spec.smoo,
+                                               schemes.deriv, schemes.filt, spec.smoo,
                                                solver.art.smoother,
-                                               spec.interface_rhs, spec.backend,
+                                               schemes.interface_rhs, spec.backend,
                                                ws_pool, solver.equations.n_species,
                                                n_cons,
                                                _grad_Q_columns(solver),
                                                1, 1, spec.tile;
                                                interface_divergence=
-                                                   spec.interface_divergence,
+                                                   schemes.interface_divergence,
                                                gradient_ring=_gradient_ring_built(solver),
                                                ghost_fluxes=_ghost_fluxes_built(solver),
                                                ring=_ring_detector(solver),
@@ -375,14 +376,14 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                root_folds=root.folds,
                                                n_sensed=_sensed_field_count(solver,
                                                                             spec.tile))
-    restriction = spec.restriction
+    restriction = schemes.level_restriction
     fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1], local_of[ti], restriction,
         n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
-        interpolation_order=spec.interpolation_order,
-        gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
+        interpolation_order=schemes.level_interpolation_order,
+        gradient_deriv=_gradient_ring_built(solver) ? schemes.deriv : nothing,
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],

@@ -298,6 +298,7 @@ end
 function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                         workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
+    schemes = getfield(solver, :schemes)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[2]
@@ -343,14 +344,15 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     wanted != old_regions || busy !== nothing || return false
     old_set, wanted_set = Set(old_regions), Set(wanted)
     old_bins = _RegionIndex(old_regions, period)
+    created = _created(spec, 1)
     inherited = Dict(r => _inherited_check(r, view(old_regions, _candidates(old_bins, r)),
-                                           spec.created, spec.checks, active, period)
+                                           created, spec.checks, active, period)
                      for r in wanted if rechopped && !(r in old_set))
     for r in old_regions
-        r in wanted_set || delete!(spec.created, r)
+        r in wanted_set || delete!(created, r)
     end
     for r in wanted
-        haskey(spec.created, r) || (spec.created[r] = get(inherited, r, spec.checks))
+        haskey(created, r) || (created[r] = get(inherited, r, spec.checks))
     end
     old_lc = lev.level_comm
     # Old and new tile of a region: the transfers are held by every rank of
@@ -464,15 +466,15 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     stacks = TileStack[]
     if stacked
         built, stacks = _build_level_patches(T, wanted, held, faces, active, root.h,
-                                             spec.n_halo, group.comm, spec.deriv,
-                                             spec.filt, spec.smoo,
-                                             solver.art.smoother, spec.interface_rhs,
+                                             spec.n_halo, group.comm, schemes.deriv,
+                                             schemes.filt, spec.smoo,
+                                             solver.art.smoother, schemes.interface_rhs,
                                              spec.backend, ws_pool,
                                              solver.equations.n_species, n_cons,
                                              _grad_Q_columns(solver),
                                              1, 1, spec.tile;
                                              interface_divergence=
-                                                 spec.interface_divergence,
+                                                 schemes.interface_divergence,
                                              gradient_ring=_gradient_ring_built(solver),
                                              ghost_fluxes=_ghost_fluxes_built(solver),
                                              ring=_ring_detector(solver),
@@ -508,20 +510,20 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                 oi = old_local[old_of[tr]]
                 p = _repatch(patches[oi], idx, faces[ti], bcs, group.comm,
                              _survivor_plans(patches[oi], faces[ti], bcs, boundaries[ti],
-                                             root.bcs, root.folds, spec,
+                                             root.bcs, root.folds, spec, schemes,
                                              solver.art.smoother, _ring_detector(solver)))
                 push!(new_states, states[oi])
                 push!(new_dQ, workspace.dQ[oi])
                 push!(new_du, workspace.du[oi])
             else
                 p = _build_fine_patch(T, tr, active, root.h, spec.n_halo,
-                                      group.comm, spec.deriv, spec.filt,
+                                      group.comm, schemes.deriv, schemes.filt,
                                       spec.smoo, solver.art.smoother,
-                                      spec.interface_rhs, spec.backend, ws_pool,
+                                      schemes.interface_rhs, spec.backend, ws_pool,
                                       solver.equations.n_species, n_cons,
                                       _grad_Q_columns(solver),
                                       idx, 1, faces[ti];
-                                      interface_divergence=spec.interface_divergence,
+                                      interface_divergence=schemes.interface_divergence,
                                       gradient_ring=_gradient_ring_built(solver),
                                       ghost_fluxes=_ghost_fluxes_built(solver),
                                       ring=_ring_detector(solver),
@@ -541,10 +543,10 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1], local_of[ti],
-        spec.restriction, n_cons, getfield(solver, :subcycle), fine_decomp(ti),
+        schemes.level_restriction, n_cons, getfield(solver, :subcycle), fine_decomp(ti),
         root_lc.comm, length(owners[ti]), faces[ti];
-        interpolation_order=spec.interpolation_order,
-        gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
+        interpolation_order=schemes.level_interpolation_order,
+        gradient_deriv=_gradient_ring_built(solver) ? schemes.deriv : nothing,
         parent_h=root.h, boundary=boundaries[ti], folded=folds[ti], period)
         for (ti, tr) in enumerate(wanted)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
@@ -964,6 +966,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                       workspace::Union{Nothing,Workspace}, ℓ::Int,
                       decision::LevelDecision, resplit::Bool, init::Bool) where {T}
     spec = getfield(solver, :regrid)
+    schemes = getfield(solver, :schemes)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     comm = getfield(solver, :comm)
@@ -1043,7 +1046,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                         _survivor_plans(patches[oi], faces[ti], fbcs,
                                                         boundaries[ti], rbcs,
                                                         patches[1].folds, spec,
-                                                        solver.art.smoother,
+                                                        schemes, solver.art.smoother,
                                                         _ring_detector(solver))))
             push!(new_states, states[oi])
             if workspace !== nothing
@@ -1052,12 +1055,12 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
             end
         else
             p = _build_fine_patch(T, wanted[ti], active, ph, spec.n_halo, group.comm,
-                                  spec.deriv, spec.filt, spec.smoo,
-                                  solver.art.smoother, spec.interface_rhs,
+                                  schemes.deriv, schemes.filt, spec.smoo,
+                                  solver.art.smoother, schemes.interface_rhs,
                                   spec.backend, ws_pool, solver.equations.n_species,
                                   n_cons, _grad_Q_columns(solver), idx, ℓ,
                                   faces[ti];
-                                  interface_divergence=spec.interface_divergence,
+                                  interface_divergence=schemes.interface_divergence,
                                   gradient_ring=_gradient_ring_built(solver),
                                   ghost_fluxes=_ghost_fluxes_built(solver),
                                   ring=_ring_detector(solver),
@@ -1090,10 +1093,10 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                period)
             push!(transfers, build_level_transfer(
                 T, tr, active, spec.n_halo, pregions[pids], plocal[pids], local_of[ti],
-                spec.restriction, n_cons, getfield(solver, :subcycle), fdecomp(ti),
+                schemes.level_restriction, n_cons, getfield(solver, :subcycle), fdecomp(ti),
                 parent_lc.comm, length(owners[ti]), faces[ti];
-                interpolation_order=spec.interpolation_order,
-                gradient_deriv=_gradient_ring_built(solver) ? spec.deriv : nothing,
+                interpolation_order=schemes.level_interpolation_order,
+                gradient_deriv=_gradient_ring_built(solver) ? schemes.deriv : nothing,
                 parent_h=ph, boundary=boundaries[ti], folded=folds[ti], period))
         end
         pdecomps = Union{Nothing,Decomp{T}}[pdecomp(li) for li in plocal]

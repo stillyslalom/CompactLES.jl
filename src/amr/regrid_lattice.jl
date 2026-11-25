@@ -171,7 +171,7 @@ function _level_chain(solver, spec::RegridSpec, N::NTuple{3,Int},
     faces = _placement_faces(solver, spec)
     least = max(MIN_TILE_EDGE, _limiter_least_extent(solver) - 1)
     return _edge_chain(spec.tile, active, N, faces, _unbuffered_faces(solver, faces),
-                       spec.margin, spec.interpolation_order, least, np,
+                       spec.margin, solver.schemes.level_interpolation_order, least, np,
                        _lattice_budget(np))
 end
 
@@ -296,7 +296,7 @@ function _lattice_wanted(flags, K::NTuple{3,Int}, edges::NTuple{3,Int},
                          spec::RegridSpec, old_regions::Vector{BlockRegion},
                          current::Bool, period::NTuple{3,Int})
     wanted = BlockRegion[]
-    old = _OldTiles(old_regions, spec.created, spec, current, active, period)
+    old = _OldTiles(old_regions, _created(spec, 1), spec, current, active, period)
     near = falses(K)
     for o in old_regions, σ in _images(period)
         r = _shifted(o, σ)

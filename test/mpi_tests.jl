@@ -2096,8 +2096,8 @@ function test_deep_regrid()
     run!(r, rs; tfinal=0.15, nmax=10000)
     check("deep regrid: restart rebuilds and tracks both levels",
           gmax(layout(r) != layout(solver) ||
-               getfield(r, :regrid).deep_created !=
-               getfield(solver, :regrid).deep_created), 0.5)
+               getfield(r, :regrid).created !=
+               getfield(solver, :regrid).created), 0.5)
     d = length(rs) == length(states) && r.step == solver.step ? 0.0 : Inf
     if isfinite(d)
         for i in eachindex(states)
@@ -3758,7 +3758,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: time reached matches serial",
               abs(gmax(solver.t) - 0.006478053648320283), 1e-13)
         spec = getfield(solver, :regrid)
-        record = sort([(r.offset[1], c) for (r, c) in spec.created])
+        record = sort([(r.offset[1], c) for (r, c) in spec.created[1]])
         flat = Int[spec.checks; length(record);
                    [v for pair in record for v in pair]]
         # Identical on every rank, length included, when the elementwise

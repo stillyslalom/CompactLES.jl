@@ -1244,8 +1244,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # only).
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
-                           margin, n_halo, interface_rhs,
-                           deriv, filt, smoo, backend, tile, 0,
+                           margin, n_halo, smoo, backend, tile, 0,
                            Float64(rebalance), rebalance_persist, 0, 1.0,
                            0.0, 0.0, 0.0,
                            T(tag_sensor_threshold), T(tag_gradient_threshold),
@@ -1253,11 +1252,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                            zeros(Int8, ntuple(d -> decomp.n_local[d] +
                                                    2 * decomp.n_halo_d[d], 3)),
                            T(untag_ratio), tile_lifetime, 0,
-                           Dict(r => 0 for r in level_tiles[1]),
-                           interface_divergence,
-                           level_interpolation_order, level_restriction,
                            [Dict(r => 0 for r in regions)
-                            for regions in level_tiles[2:end]], level_boundaries,
+                            for regions in level_tiles], level_boundaries,
                            NTuple{3,Int}[], LatticeCosts(), subdivide_lattice)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
@@ -1854,10 +1850,11 @@ _shared_faces(faces::NTuple{3,NTuple{2,Int}}) = map(f -> (f[1] != 0, f[2] != 0),
 # plans stand. A tile is whole on one rank, so the rebuild is rank-local.
 function _survivor_plans(p::Patch, faces::NTuple{3,NTuple{2,Int}}, fbcs,
                          boundary::NTuple{3,NTuple{2,Bool}}, bcs, root_folds, spec,
-                         smoother::Symbol, ring::Bool)
+                         schemes::SchemeSettings, smoother::Symbol, ring::Bool)
     _shared_faces(p.faces) != _shared_faces(faces) || return nothing
-    return _fine_plans(p.decomp, p.h, spec.deriv, spec.filt, spec.smoo, spec.interface_rhs,
-                       spec.backend; interface_divergence=spec.interface_divergence, ring,
+    return _fine_plans(p.decomp, p.h, schemes.deriv, schemes.filt, spec.smoo,
+                       schemes.interface_rhs, spec.backend;
+                       interface_divergence=schemes.interface_divergence, ring,
                        boundary, wall_faces=_sensor_wall_faces(fbcs),
                        gaussian=smoother === :gaussian,
                        folded=_level_fold_faces(boundary, bcs), root_folds,

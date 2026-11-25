@@ -448,6 +448,7 @@ the identical region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
+    schemes = getfield(solver, :schemes)
     wrap = _placement_period(solver, spec, 0)
     bounds = _tag_bounds(solver, Qc, wrap)
     bounds === nothing && return nothing
@@ -495,7 +496,7 @@ function tagged_region(solver::Solver, Qc)
         while true
             reach[d][1] && lo <= margin && (lo = 1)
             reach[d][2] && hi > n_global[d] - margin && (hi = n_global[d])
-            need = max(least, _placement_extent(spec.interpolation_order,
+            need = max(least, _placement_extent(schemes.level_interpolation_order,
                                                 bare[d][1] && lo == 1,
                                                 bare[d][2] && hi == n_global[d]))
             (hi - lo + 1 >= need || hi - lo + 1 >= b - a + 1) && break
@@ -595,7 +596,8 @@ function _placed_reach(solver, spec::RegridSpec, N::NTuple{3,Int},
                        active::NTuple{3,Bool})
     faces = _placement_faces(solver, spec)
     return _lattice_reach(faces, N, active, spec.tile, spec.margin,
-                          spec.interpolation_order, _unbuffered_faces(solver, faces))
+                          solver.schemes.level_interpolation_order,
+                          _unbuffered_faces(solver, faces))
 end
 
 # The warning of a tagged node in the margin band of a face no level reaches,
@@ -818,7 +820,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     # The box is a tile of one: it is not rebuilt before its lifetime.
     # `checks` and `created` are derived from reduced data on every rank, so
     # this return, ahead of the collective sweep, is uniform.
-    spec.checks - get(spec.created, lt.region, 0) >= spec.lifetime || return false
+    spec.checks - get(_created(spec, 1), lt.region, 0) >= spec.lifetime || return false
     newregion = tagged_region(solver, states[1])
     newregion === nothing && return false
     newregion == lt.region && return false
@@ -831,10 +833,11 @@ end
 function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
                     workspace::Workspace, newregion::BlockRegion) where {T}
     spec = getfield(solver, :regrid)
+    schemes = getfield(solver, :schemes)
     levels = getfield(solver, :levels)
     lt = levels[2].transfers[1]
-    delete!(spec.created, lt.region)
-    spec.created[newregion] = spec.checks
+    delete!(_created(spec, 1), lt.region)
+    _created(spec, 1)[newregion] = spec.checks
     patches = getfield(solver, :patches)
     old_lc = levels[2].level_comm
     root_lc = levels[1].level_comm
@@ -880,12 +883,12 @@ function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
     newfine = held ?
         _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
                           spec.n_halo, group.comm,
-                          spec.deriv, spec.filt, spec.smoo,
-                          solver.art.smoother, spec.interface_rhs,
+                          schemes.deriv, schemes.filt, spec.smoo,
+                          solver.art.smoother, schemes.interface_rhs,
                           spec.backend, ws_pool,
                           solver.equations.n_species, n_cons,
                           _grad_Q_columns(solver), fi, 1;
-                          interface_divergence=spec.interface_divergence,
+                          interface_divergence=schemes.interface_divergence,
                           gradient_ring=_gradient_ring_built(solver),
                           ghost_fluxes=_ghost_fluxes_built(solver),
                           ring=_ring_detector(solver),
@@ -897,9 +900,9 @@ function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  getfield(solver, :subcycle),
                                  newfine === nothing ? nothing : newfine.decomp,
                                  root_lc.comm, length(owners[1]);
-                                 interpolation_order=spec.interpolation_order,
+                                 interpolation_order=schemes.level_interpolation_order,
                                  gradient_deriv=_gradient_ring_built(solver) ?
-                                                spec.deriv : nothing,
+                                                schemes.deriv : nothing,
                                  parent_h=getfield(solver, :h), boundary=bnd, folded,
                                  period)
     coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],

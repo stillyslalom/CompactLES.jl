@@ -693,11 +693,11 @@ end
                 if t !== nothing]
     old = [t for (i, t) in enumerate(tiles(a0)) if i % 3 != 0]
     spec.checks, spec.lifetime = 5, 3
-    empty!(spec.created)
-    foreach(((i, r),) -> spec.created[r] = isodd(i) ? 4 : 0, enumerate(old))
+    empty!(spec.created[1])
+    foreach(((i, r),) -> spec.created[1][r] = isodd(i) ? 4 : 0, enumerate(old))
     function wanted_pairwise(flags, K, a, current)
         out = BlockRegion[]
-        young(r) = spec.checks - get(spec.created, r, 0) < spec.lifetime
+        young(r) = spec.checks - get(spec.created[1], r, 0) < spec.lifetime
         for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
             t = CL._lattice_tile((k1, k2, k3), act, a, lo, hi)
             t === nothing && continue
@@ -1181,7 +1181,7 @@ end
     @test all(r -> r.offset[1] % 8 == 0 && r.extent[1] == 9, regs)
     @test all(i -> regs[i+1].offset[1] > regs[i].offset[1], 1:length(regs)-1)
     @test regs[1].offset[1] < shock_node <= regs[end].offset[1] + 9
-    @test Set(keys(getfield(sa, :regrid).created)) == Set(regs)
+    @test Set(keys(getfield(sa, :regrid).created[1])) == Set(regs)
     @test all(all(isfinite, parent(Q)) for Q in states)
     for (psq, Q) in CL.eachpatch(sa, states)
         n = psq.decomp.n_local[1]
@@ -2127,19 +2127,19 @@ end
         states = allocate_state(sa)
         ws = CL.Workspace(states)
         spec = getfield(sa, :regrid)
-        @test spec.checks == 0 && all(==(0), values(spec.created))
-        @test Set(keys(spec.created)) == Set(level_regions(sa, 1))
+        @test spec.checks == 0 && all(==(0), values(spec.created[1]))
+        @test Set(keys(spec.created[1])) == Set(level_regions(sa, 1))
         r1 = check!(sa, states, ws, a_hi)
         @test has(r1, anchor) && has(r1, feature)
         @test spec.checks == 1
-        @test all(r -> spec.created[r] == (has([r], feature) ? 1 : 0), r1)
-        @test Set(keys(spec.created)) == Set(r1)
+        @test all(r -> spec.created[1][r] == (has([r], feature) ? 1 : 0), r1)
+        @test Set(keys(spec.created[1])) == Set(r1)
         # The hold band keeps the feature's tile; below it the tile goes.
         r2 = check!(sa, states, ws, a_mid)
         @test r2 == r1
         r3 = check!(sa, states, ws, a_lo)
         @test has(r3, anchor) && !has(r3, feature)
-        @test Set(keys(spec.created)) == Set(r3)
+        @test Set(keys(spec.created[1])) == Set(r3)
         # Fading back into the hold band creates nothing.
         r4 = check!(sa, states, ws, a_mid)
         @test r4 == r3
@@ -2171,7 +2171,7 @@ end
         @test has(r3, feature) && !all(r -> r in r3, initial) && has(r3, anchor)
         r4 = check!(sa, states, ws, a_lo)
         @test !has(r4, feature) && has(r4, anchor)
-        @test spec.checks == 4 && Set(keys(spec.created)) == Set(r4)
+        @test spec.checks == 4 && Set(keys(spec.created[1])) == Set(r4)
     end
     # The box (tile = 0): spans both features, holds through the band,
     # then shrinks to the anchor; with a lifetime of 2 it cannot move at
@@ -2183,12 +2183,12 @@ end
         spec = getfield(sa, :regrid)
         r1 = check!(sa, states, ws, a_hi)
         @test has(r1, anchor) && has(r1, feature) && length(r1) == 1
-        @test spec.created == Dict(r1[1] => 1)
+        @test spec.created[1] == Dict(r1[1] => 1)
         r2 = check!(sa, states, ws, a_mid)
         @test r2 == r1
         r3 = check!(sa, states, ws, a_lo)
         @test has(r3, anchor) && !has(r3, feature)
-        @test spec.created == Dict(r3[1] => 3)
+        @test spec.created[1] == Dict(r3[1] => 3)
         sb = mk(tile_lifetime=2)
         states = allocate_state(sb)
         ws = CL.Workspace(states)
@@ -2652,7 +2652,7 @@ end
     getfield(s, :regrid).checks += 1
     @test CL.regrid!(s, states, workspace, nothing)
     @test empty_level(s, states) && length(workspace.dQ) == 1
-    @test isempty(getfield(s, :regrid).created)
+    @test isempty(getfield(s, :regrid).created[1])
     run!(s, states; tfinal=1.0, nmax=s.step + 10)
     @test !isempty(level_regions(s, 1))
     @test all(all(isfinite, parent(Q)) for Q in states)
@@ -2715,7 +2715,7 @@ end
     s = mk(max_levels=3, tile=8, regrid_interval=4, subcycle=true)
     @test nlevels(s) == 3 && npatches(s) == 1
     @test all(isempty(level_regions(s, ℓ)) for ℓ in 1:2)
-    @test length(getfield(s, :regrid).deep_created) == 1
+    @test length(getfield(s, :regrid).created) == 2
     s = mk(refine=r1, max_levels=3, tile=8, regrid_interval=4)
     @test length(level_regions(s, 1)) == 6 && isempty(level_regions(s, 2))
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
@@ -2805,7 +2805,7 @@ end
     @test rs_solver.t == s.t && rs_solver.step == s.step
     @test all(ℓ -> level_regions(rs_solver, ℓ) == level_regions(s, ℓ), 1:2)
     spec, rspec = getfield(s, :regrid), getfield(rs_solver, :regrid)
-    @test rspec.created == spec.created && rspec.deep_created == spec.deep_created
+    @test rspec.created == spec.created
     same(i) = (inner = CL.interior(s.patches[i].decomp);
                parent(rs[i])[inner, :] == parent(states[i])[inner, :])
     @test length(rs) == length(states) && all(same, eachindex(states))
