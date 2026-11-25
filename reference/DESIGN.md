@@ -108,6 +108,7 @@ validation cases are discussed, and never a viscosity.
 | `src/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
 | `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
 | `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
+| `src/reflux_types.jl`     | `RefluxCapture`, a patch's side of a coarse–fine junction |
 | `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
 | `src/levels_types.jl`     | Nested level refinement: the design, level and tile ownership, the transfer records |
 | `src/levels_coupling.jl`  | The patch–parent coupling, the `Level` hierarchy, the tile lattice, levels on a boundary or a periodic seam |
