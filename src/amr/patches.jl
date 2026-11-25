@@ -827,12 +827,17 @@ Access adapter binding one [`Patch`](@ref) to its solver configuration.
 Property reads forward patch-owned names to the patch and everything else to
 the solver, so every routine written against the solver's property surface
 (`s.rho`, `s.decomp`, `s.equations`, ...) runs unchanged per patch. The
-multi-patch drivers in timestep_rk.jl construct these; a single-patch `Solver`
-plays the role itself through its own property forwarding.
+multi-patch drivers in timestep_rk.jl construct these per patch, and the
+entry points of a single-patch `Solver` construct one with `sole_patch`.
+
+Mutable, with constant fields, for the reason `Patch` is: the boundary hooks
+and the `_cold` barriers are dynamic calls, which box their arguments, and an
+immutable adapter is boxed anew at each of them where a mutable one is
+allocated once where it is built.
 """
-struct PatchSolver{T,S,P<:Patch{T}}
-    solver::S
-    patch::P
+mutable struct PatchSolver{T,S,P<:Patch{T}}
+    const solver::S
+    const patch::P
     PatchSolver(solver, patch::Patch{T}) where {T} =
         new{T,typeof(solver),typeof(patch)}(solver, patch)
 end

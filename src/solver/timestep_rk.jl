@@ -1486,7 +1486,7 @@ function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
                                  scope::Symbol;
                                  species_band::Real=solver.control.species_band)
     species = zeros(solver.equations.n_species)
-    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope,
+    tally = _local_positivity_repair!(sole_patch(solver), Q, rho_floor, e_floor, scope,
                                       species_band, species)
     return _reduce_floor_tally(solver, tally, species)
 end

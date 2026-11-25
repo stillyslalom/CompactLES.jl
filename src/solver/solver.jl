@@ -221,24 +221,6 @@ end
 # a single-patch run shares it with a refined run whose solver and root patch
 # have the same types. A more specific `Solver` method of the same function,
 # such as a state-vector form, takes precedence over the forward.
-const _FWD = Set{String}()
-@noinline function _fwd_note(f::Symbol)
-    for fr in stacktrace()[3:min(end, 6)]
-        file = string(fr.file)
-        occursin("solver.jl", file) && fr.func in (:macro_expansion, f) && continue
-        push!(_FWD, string(f, " <- ", fr.func, " @ ", file, ":", fr.line))
-        open(joinpath(ENV["FWD_DIR"], "fwd_$(getpid()).txt"), "a") do io
-            println(io, f, " <- ", fr.func, " @ ", file, ":", fr.line)
-        end
-        break
-    end
-    return nothing
-end
-macro sole_patch_forward_noted(names...)
-    defs = [:($(esc(f))(s::Solver, args...; kwargs...) =
-                  (_fwd_note($(QuoteNode(f))); $(esc(f))(sole_patch(s), args...; kwargs...))) for f in names]
-    return Expr(:block, defs...)
-end
 macro sole_patch_forward(names...)
     defs = [:(@inline $(esc(f))(s::Solver, args...; kwargs...) =
                   $(esc(f))(sole_patch(s), args...; kwargs...)) for f in names]
@@ -257,8 +239,6 @@ end
     _edge_factor, _bulk_gradients!, _species_gradients!, _prepare_fields!,
     _check_output, _output_global, _output_piece_extent, _output_ranges,
     _local_state_report, _initialize!, _initialize_interior!)
-
-@sole_patch_forward_noted(_arm_child_mask!, _child_mask!, _child_mask_along!, _child_mask_dim, _child_mask_patch, _child_mask_record, _child_masked, _child_masked_solve!, _close_seams, _coarse_fine_ghost_fluxes!, _conserved_fraction, _domain_coordinate, _edge_factor_at, _edge_factors, _extrapolate_coarse_fine!, _filter_volume!, _flux_remainder, _flux_sign, _ghost_face, _ghost_flux_dims, _ghost_flux_solves!, _ghost_geometry, _ghost_inv_r, _has_child, _host_gradients, _host_mass_fractions, _interface_dim, _interior, _interior_vector, _junction_integral, _limiter_exempt, _line_box, _local_conserved_budget, _local_domain_volume, _local_max_rate, _local_max_rate_loop, _local_positivity_mins, _local_positivity_repair!, _masked_filter, _mole_fraction_array, _molecular_ghost_flux!, _ops_parts, _output_seams, _output_whole_extent, _patch_part, _patch_slice, _reads_ghost_flux, _reads_gradient_ring, _reflux_captures, _reflux_defer!, _reflux_deferred, _release_child_mask!, _remainder_ghosted, _ring_dim, _root_part, _save_vtr, _save_vts, _scalar_from, _schlieren, _sensor_mask_patch, _sharpening_fluxes!, _snapshot_blocks, _snapshot_runs, _vorticity_arrays, _vtk_ghost_points, _weighted_filter, _write_parallel_container, allocate_state, callback_geometry)  # TEMP
 
 # The same for the line operators, which take the solver third.
 for op in (:deriv_along!, :div_along!, :deriv_scaled_along!, :filt_along!,
