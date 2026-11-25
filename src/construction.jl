@@ -361,6 +361,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         ghost_kept = interface_limited_ghost
         if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1) &&
            (!ghost_kept || !_limiter_ghost(art))
+            # The warning prints on one rank, and this is the constructor's
+            # first MPI call.
+            MPI.Initialized() || MPI.Init(threadlevel=:funneled)
             MPI.Comm_rank(comm) == 0 &&
                 @warn "positivity_limiter: " *
                       (ghost_kept ? "with the artificial properties off " : "") *
