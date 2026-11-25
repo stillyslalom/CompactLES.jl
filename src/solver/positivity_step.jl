@@ -125,6 +125,8 @@ function _set_limiter_bounds!(lims, solver, minima)
     active = isfinite(red[1]) && isfinite(red[2])
     for lim in lims
         T = eltype(lim.eps_rho)
+        # A lease an exception left held in an earlier `run!` ends here.
+        release_buffers!(lim)
         lim.active = active
         if active
             lim.eps_rho = T(LIMITER_FRACTION * red[1])
@@ -376,11 +378,13 @@ end
 
 function _limit_stage!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt)
     lim.active || return nothing
+    borrow_stage_buffers(lim)
     for d in 1:3
         solver.decomp.active[d] || continue
         _stage_theta!(lim, solver, Q, dQ, du, stage, dt, d) &&
             _stage_correct!(lim, solver, Q, dQ, stage, dt, d)
     end
+    release_buffers!(lim)
     return nothing
 end
 
@@ -402,11 +406,15 @@ function _limit_level_stage!(lims::Vector{PositivityLimiter}, solver, lev, state
         for i in lev.patches
             ps = PatchSolver(solver, patches[i])
             lim = lims[i]
+            # A patch that waits for the exchange holds its face values and θ
+            # itself, so the lease ends with its θ pass.
+            borrow_stage_buffers(lim)
             due[i] = _stage_theta!(lim, ps, states[i], dQs[i], dus[i], stage, dt, d)
             if due[i] && !any(any, lim.interface)
                 _stage_correct!(lim, ps, states[i], dQs[i], stage, dt, d)
                 due[i] = false
             end
+            release_buffers!(lim)
         end
         _exchange_interface_theta!(solver, lims, d, due, lev.plane_pairs[d],
                                    lev.level_comm.comm)
@@ -1461,6 +1469,7 @@ function _limited_level_filter!(lims::Vector{PositivityLimiter}, solver, lev, st
             ps = PatchSolver(solver, patches[i])
             lim = lims[i]
             w = filter_weight(ps, d)
+            borrow_filter_buffers(lim)
             due[i] = _limited_filter_theta!(lim, ps, states[i], d, w,
                                             _masked_filter(ps, states[i], false))
             # A patch without such an end shares its face values and θ with
@@ -1469,6 +1478,7 @@ function _limited_level_filter!(lims::Vector{PositivityLimiter}, solver, lev, st
                 _limited_filter_correct!(lim, ps, states[i], d, w)
                 due[i] = false
             end
+            release_buffers!(lim)
         end
         _exchange_interface_theta!(solver, lims, d, due, lev.plane_pairs[d],
                                    lev.level_comm.comm, 4)
@@ -1515,12 +1525,14 @@ end
 # filter limiter.
 function _limited_filter_pass!(lim::PositivityLimiter, solver, Q)
     masked = _masked_filter(solver, Q, false)
+    borrow_filter_buffers(lim)
     for d in 1:3
         solver.decomp.active[d] || continue
         w = filter_weight(solver, d)
         _limited_filter_theta!(lim, solver, Q, d, w, masked) &&
             _limited_filter_correct!(lim, solver, Q, d, w)
     end
+    release_buffers!(lim)
     return Q
 end
 

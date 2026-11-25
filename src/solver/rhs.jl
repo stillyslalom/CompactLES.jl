@@ -481,8 +481,9 @@ function _arm_child_mask!(ps::PatchSolver)
     # A patch held whole by one rank reduces over itself, so the reduction is
     # left out there: it is the identity, and MPI, initialized `:funneled`,
     # may not be called from the task a tile is evaluated in (`_foreach_tile`).
-    prod(ps.decomp.dims) == 1 || (bits = MPI.Allreduce(bits, MPI.BOR, ps.patch.comm))
-    ps.patch.child_masked = ntuple(d -> isodd(bits >> (d - 1)), 3)
+    armed = prod(ps.decomp.dims) == 1 ? bits :
+            MPI.Allreduce(bits, MPI.BOR, ps.patch.comm)
+    ps.patch.child_masked = (isodd(armed), isodd(armed >> 1), isodd(armed >> 2))
     return ps
 end
 
@@ -2666,6 +2667,7 @@ returns only the forwarding method of a function with keywords.
 function compute_rhs!(solver::PatchSolver, Q, dQ, primitives_current::Bool=false,
                       coefficients_current::Bool=false)
     decomp = solver.decomp
+    _check_scratch_free(solver)
     _reflux_zero!(solver)
     _gradient_step!(solver, Q, primitives_current, coefficients_current)
     _validate_transport_state!(solver, Q; current=true)

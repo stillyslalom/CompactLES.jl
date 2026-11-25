@@ -2286,7 +2286,7 @@ end
     @test solver.equations.component_names ==
           ["rho_a", "rho_b", "rho_u1", "rho_u2", "rho_u3", "rho_E"]
     @test fieldtype(typeof(solver), :eos) === typeof(solver.eos)
-    @test fieldtype(typeof(solver), :metric) === typeof(solver.metric)
+    @test fieldtype(fieldtype(typeof(solver), :grid), :metric) === typeof(solver.metric)
     # `folds` is per-patch state; the concreteness contract moved with it.
     @test fieldtype(eltype(fieldtype(typeof(solver), :patches)), :folds) ===
           typeof(solver.folds)
@@ -4257,8 +4257,10 @@ end
     solver = mkslv(n_global=(12, 1, 1), eos=mix)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1e5, T_ion=1000.0))
-    CL.primitives!(solver, Q)
-    @test (@allocated CL.primitives!(solver, Q)) == 0
+    # The patch routine itself: the `Solver` method builds the adapter first.
+    ps = CL.sole_patch(solver)
+    CL.primitives!(ps, Q)
+    @test (@allocated CL.primitives!(ps, Q)) == 0
     @test solver.T_ion[padded_index(solver, 3, 1, 1)] ≈ 1000.0 rtol = 1e-10
 end
 

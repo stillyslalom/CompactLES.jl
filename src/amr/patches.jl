@@ -196,6 +196,11 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     # The patch whose derivative mask `child_mask` holds for reuse, and its
     # masked lines (`ChildMaskRecord`, rhs.jl).
     child_mask_record::ChildMaskRecord
+    # Who holds the flux rows and `tmp_b` as scratch past an evaluation:
+    # `:free`, or the positivity limiter's stage or filter pass
+    # (`borrow_stage_buffers`, positivity_setup.jl). A right-hand side on a
+    # patch of this workspace checks it on entry.
+    scratch_lease::Base.RefValue{Symbol}
 end
 
 # The mark of a workspace no pass has written yet.
@@ -211,13 +216,15 @@ _own_gradients(ws::RHSWorkspace, g::F) where {F} =
     RHSWorkspace([g() for _ in 1:3, _ in 1:3], ws.grad_T_ion, ws.grad_Y,
                  ws.strain_mag, ws.sensor, ws.sensor_sp, ws.tmp_a, ws.tmp_b,
                  ws.ring_buf, ws.flux, ws.grad_Q, ws.child_mask, ws.child_solve,
-                 Ref(SCRATCH_UNFILLED), ws.sensors_filled_by, ws.child_mask_record)
+                 Ref(SCRATCH_UNFILLED), ws.sensors_filled_by, ws.child_mask_record,
+                 ws.scratch_lease)
 
 RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
              tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve) =
     RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
                  tmp_b, ring_buf, flux, grad_Q, child_mask, child_solve,
-                 Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED), ChildMaskRecord())
+                 Ref(SCRATCH_UNFILLED), Ref(SCRATCH_UNFILLED), ChildMaskRecord(),
+                 Ref(:free))
 
 """
     RHSWorkspace(backend, decomp, n_species, n_cons, ring, grad_Q_columns, child = false)
@@ -360,7 +367,7 @@ end
 """
     PatchPlans
 
-The compact operator plans of one [`Patch`](@ref), per dimension: the
+The compact operator plans of one `Patch`, per dimension: the
 derivative plans, the divergence plans (the derivative plans unless an
 interface end forces one-sided closures), the filter plans, the sensor
 smoother's and the `:d8` detector's. Each keeps a type parameter of its own;
@@ -378,7 +385,7 @@ end
 """
     PatchAMR
 
-The state a [`Patch`](@ref) holds for refinement and for its interfaces: the
+The state a `Patch` holds for refinement and for its interfaces: the
 covered masks, the level transfer's device scratch, the ghost fluxes, a
 tile's sensed fields and the coarse-fine junction captures. Every patch
 carries one, with zero-extent members where a configuration has no use for
@@ -491,8 +498,8 @@ for each kind of tile after a rank's first, and 3.3 to 4.2 s for the first;
 with one type the first tile compiles only the level phases a tile holder
 runs, about 2 s, and later tiles nothing.
 
-The operator plans are grouped in a [`PatchPlans`](@ref) and the refinement
-state in a [`PatchAMR`](@ref), and the patch serves their names as its own
+The operator plans are grouped in a `PatchPlans` and the refinement
+state in a `PatchAMR`, and the patch serves their names as its own
 properties, so `patch.deriv_plans` and `patch.covered` read as fields.
 
 The struct is mutable, although no field is reassigned after construction,
@@ -908,6 +915,19 @@ end
 # Record the patch of `solver` as the last writer of its workspace's
 # `grad_u` (`_mark_gradients!`) or `strain_mag` and `sensor`
 # (`_mark_sensors!`). One reference store per pass.
+# The lease of the patch's workspace scratch, and the check a right-hand side
+# makes of it on entry.
+@inline _scratch_lease(solver) =
+    getfield(_patch_of(solver), :rhs_workspace).scratch_lease
+@inline function _check_scratch_free(solver)
+    lease = _scratch_lease(solver)
+    lease[] === :free || _scratch_held_error(lease[])
+    return nothing
+end
+@noinline _scratch_held_error(held::Symbol) =
+    error("compute_rhs!: the right-hand-side scratch of this patch's extent is " *
+          "held by `$held`, a limiter pass that was not released")
+
 @inline function _mark_gradients!(solver)
     p = _patch_of(solver)
     getfield(p, :rhs_workspace).gradients_filled_by[] = p.covered
