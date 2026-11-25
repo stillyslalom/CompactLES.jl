@@ -56,7 +56,9 @@ Further rulings made during execution:
 | 2C | Deferred to Phase 6. |
 | Checkpoint 1 | Reviewed; the Phase 2 end gate passed at `891a7ee`. |
 | 3 | Done: the four large files split, `RefluxCapture` and the regrid records moved ahead of their users, `src/` grouped into `core`, `physics`, `amr`, `solver` and `io`. The phase gate passed at `31e4b8b`. |
-| 4 to 9 | Not started. |
+| 4 | Done: `RegridSpec` reads the schemes from the solver, the root's slab records live in its `Level`, the flat `Solver(; ...)` constructor is removed and `_Solver` runs as named phases over a `SolverBuild` record. The flat keyword vocabulary survives only in `test/flat_solver.jl`, an adapter for the suites, and the test configurations precompile under the `precompile_tests` preference. The phase gate passed at `517267c`. |
+| Checkpoint 2 | Awaiting review. |
+| 5 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
 parallel HDF5 against a system MPI, and the Makie suite has not been run.
