@@ -4,6 +4,7 @@
 # The slip-wall case carries a tangential velocity in its initial data, so
 # that the tangential momentum fluxes its contract zeros are nonzero to
 # begin with.
+using CompactLES: flat_solver
 using CompactLES: compute_rhs!, apply_bcs!, padded_index
 
 function test_no_slip_wall_flux()
@@ -18,7 +19,7 @@ function test_no_slip_wall_flux()
         eos = IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
                             IdealSpecies{T}("b", T(0.7), T(1.3))])
         function build_wall(comm_here, dims_here)
-            sol = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
+            sol = flat_solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
                        bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
                        transport=ConstantTransport{T}(mu0=T(0.01)),
                        art=ArtificialProperties{T}(enabled=true, species_flux=channel),
@@ -82,7 +83,7 @@ function test_slip_wall_flux()
         eos = IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
                             IdealSpecies{T}("b", T(0.7), T(1.3))])
         function build_slip(comm_here, dims_here)
-            sol = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
+            sol = flat_solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
                        bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
                        transport=ConstantTransport{T}(mu0=T(0.01)),
                        art=ArtificialProperties{T}(enabled=true, species_flux=channel),

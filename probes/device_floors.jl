@@ -62,6 +62,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 import CompactLES: Decomp, device_plan
 using Printf
@@ -281,12 +282,12 @@ function tgv_build(T, deriv, n, ka_backend)
     γ = T(1.4)
     c0 = T(10)
     p0 = c0^2 / γ
-    s = Solver(n_global=(n, n, n), L_domain=(T(2π), T(2π), T(2π)),
-               bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
-               transport=ConstantTransport{T}(mu0=T(1 / 1600)),
-               art=ArtificialProperties{T}(enabled=false),
-               deriv=deriv, filt=compact_filter(T(0.45), T),
-               cfl=T(0.6), backend=DeviceBackend(ka_backend))
+    s = flat_solver(n_global=(n, n, n), L_domain=(T(2π), T(2π), T(2π)),
+                    bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
+                    transport=ConstantTransport{T}(mu0=T(1 / 1600)),
+                    art=ArtificialProperties{T}(enabled=false),
+                    deriv=deriv, filt=compact_filter(T(0.45), T),
+                    cfl=T(0.6), backend=DeviceBackend(ka_backend))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(
         u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), zero(T)),

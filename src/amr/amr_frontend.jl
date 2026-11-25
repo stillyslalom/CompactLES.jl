@@ -208,26 +208,59 @@ function _amr_physical_tag(predicate::F) where {F}
     end
 end
 
-function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
-    interval = bootstrap ? max(1, amr.regrid_interval) : amr.regrid_interval
-    predicate = _amr_callable(amr.initial) ?
-                _amr_physical_tag(_amr_predicate(amr.initial)) : nothing
-    return (; refine, level_restriction=amr.level_restriction,
-            level_interpolation_order=amr.level_interpolation_order,
-            subcycle=amr.subcycle, regrid_interval=interval,
-            tag_threshold=_amr_tag_threshold(amr), tag_buffer=amr.tag_buffer,
-            tag_sensor_threshold=amr.tag_sensor_threshold,
-            tag_gradient_threshold=amr.tag_gradient_threshold,
-            tag_vorticity_threshold=amr.tag_vorticity_threshold,
-            tag_predicate=predicate, untag_ratio=amr.untag_ratio,
-            tile_lifetime=amr.tile_lifetime, tile=amr.tile,
-            rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist,
-            max_levels=amr.max_levels,
-            level_boundaries=amr.level_boundaries,
-            subdivide_lattice=amr.subdivide_lattice)
+# The refinement inputs of the solver constructor (`_Solver`), resolved from an
+# `AMR` record: the regions of the levels it starts with in the parent's node
+# space (`nothing` for none), the regrid cadence with its run-dependent
+# default filled in, and the tag predicate over the parent patch. The
+# defaults are those of a run without refinement.
+Base.@kwdef struct LevelSetup
+    refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
+    level_restriction::Symbol = :inject
+    level_interpolation_order::Union{Nothing,Int} = nothing
+    subcycle::Bool = false
+    regrid_interval::Int = 0
+    tag_threshold::Float64 = DEFAULT_TAG_THRESHOLD
+    tag_buffer::Int = 4
+    tag_sensor_threshold::Float64 = 0.0
+    tag_gradient_threshold::Float64 = 0.0
+    tag_vorticity_threshold::Float64 = 0.0
+    tag_predicate::Any = nothing
+    untag_ratio::Float64 = 2.0
+    tile_lifetime::Int = 1
+    tile::Union{Int,Tuple{Vararg{Int}}} = 0
+    rebalance::Float64 = 0.0
+    rebalance_persist::Int = 2
+    max_levels::Union{Nothing,Int} = nothing
+    level_boundaries::Bool = true
+    subdivide_lattice::Bool = true
 end
 
-_amr_callable(initial) = !(initial isa Symbol || initial isa BlockRegion ||
+# `tag_predicate`, where given, is a `(patch, I) -> Bool` closure over the
+# parent patch and replaces the one derived from a callable `initial`.
+function LevelSetup(amr::AMR; refine=amr.initial, bootstrap::Bool=false,
+                    tag_predicate=nothing)
+    interval = bootstrap ? max(1, amr.regrid_interval) : amr.regrid_interval
+    predicate = tag_predicate !== nothing ? tag_predicate :
+                _amr_callable(amr.initial) ?
+                _amr_physical_tag(_amr_predicate(amr.initial)) : nothing
+    return LevelSetup(; refine, level_restriction=amr.level_restriction,
+                      level_interpolation_order=amr.level_interpolation_order,
+                      subcycle=amr.subcycle, regrid_interval=interval,
+                      tag_threshold=_amr_tag_threshold(amr), tag_buffer=amr.tag_buffer,
+                      tag_sensor_threshold=amr.tag_sensor_threshold,
+                      tag_gradient_threshold=amr.tag_gradient_threshold,
+                      tag_vorticity_threshold=amr.tag_vorticity_threshold,
+                      tag_predicate=predicate, untag_ratio=amr.untag_ratio,
+                      tile_lifetime=amr.tile_lifetime, tile=amr.tile,
+                      rebalance=amr.rebalance,
+                      rebalance_persist=amr.rebalance_persist,
+                      max_levels=amr.max_levels,
+                      level_boundaries=amr.level_boundaries,
+                      subdivide_lattice=amr.subdivide_lattice)
+end
+
+_amr_callable(initial) = !(initial === nothing || initial isa Symbol ||
+                           initial isa BlockRegion ||
                            initial isa AbstractVector || initial isa Shape)
 
 # Whether the selection follows something that moves: the sensor, or a
@@ -569,7 +602,7 @@ function _setup_amr(prob, num, amr::AMR)
     if amr.initial isa BlockRegion || amr.initial isa Vector{BlockRegion}
         amr.initial isa Vector{BlockRegion} && isempty(amr.initial) &&
             throw(ArgumentError("AMR initial region vector cannot be empty"))
-        solver, states = _setup_with_amr_keywords(prob, num, _amr_keywords(amr))
+        solver, states = _setup_levels(prob, num, LevelSetup(amr))
         amr.regrid_interval > 0 || return solver, states
         # The constructor checks a static hierarchy under the limiter; the
         # tiles of a regridded one, from the regions given, are checked here.
@@ -578,9 +611,8 @@ function _setup_amr(prob, num, amr::AMR)
         return solver, states
     end
     seed = _amr_seed_region(num.n_global, num.n_halo)
-    solver, states = _setup_with_amr_keywords(
-        prob, num, _amr_keywords(amr; refine=seed, bootstrap=true);
-        seed_only=true)
+    solver, states = _setup_levels(
+        prob, num, LevelSetup(amr; refine=seed, bootstrap=true); seed_only=true)
     workspace = Workspace(states)
     _root_tag_coefficients!(solver, states, amr)
     candidate = tagged_region(solver, states[1])

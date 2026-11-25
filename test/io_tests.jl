@@ -12,6 +12,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Test
     const CL = CompactLES
@@ -25,8 +26,8 @@ const io_per = (PeriodicBC(), PeriodicBC())
 # two are periodic, which keeps the grid small enough to build several of
 # these.
 io_solver(lo, hi; kw...) =
-    Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-           bcs=((lo, hi), io_per, io_per), art=ArtificialProperties(enabled=false), kw...)
+    flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                bcs=((lo, hi), io_per, io_per), art=ArtificialProperties(enabled=false), kw...)
 
 io_state(solver) = begin
     Q = allocate_state(solver)
@@ -103,8 +104,8 @@ end
     # right-hand side left on the patch size the first step after the
     # restart, so a checkpoint without them would take a different one.
     wall = (SlipWallBC(), SlipWallBC())
-    mk(; kw...) = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(wall, io_per, io_per), cfl=0.4; kw...)
+    mk(; kw...) = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                              bcs=(wall, io_per, io_per), cfl=0.4; kw...)
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     dir = mktempdir()
@@ -162,9 +163,9 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     initial = BlockRegion((85, 0, 0), (31, 1, 1))
-    mk(; kw...) = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
-                         regrid_interval=5, refine=initial; kw...)
+    mk(; kw...) = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                              bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
+                              regrid_interval=5, refine=initial; kw...)
     same(a, b, decomp) = (inner = CL.interior(decomp);
                           parent(a)[inner, :] == parent(b)[inner, :])
     dir = mktempdir()
@@ -206,14 +207,14 @@ end
     # different lattice, and a static tiled level with no RegridSpec to
     # rebuild through.
     stem = joinpath(dir, "tiled")
-    plain = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(wall, io_per, io_per))
+    plain = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall, io_per, io_per))
     @test_throws "refinement mismatch" load_checkpoint!(plain, allocate_state(plain),
                                                         stem)
     other = mk(tile=4)
     @test_throws "tile mismatch" load_checkpoint!(other, allocate_state(other), stem)
-    static = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall, io_per, io_per), refine=initial, tile=8)
+    static = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, io_per, io_per), refine=initial, tile=8)
     @test_throws "cannot rebuild" load_checkpoint!(static, allocate_state(static),
                                                    stem; allow=(:numerics,))
 
@@ -223,8 +224,8 @@ end
     r1 = BlockRegion((40, 0, 0), (16, 1, 1))
     e1 = 3 * 16 - 2
     r2 = BlockRegion((3 * 40 + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
-    mk3(regions) = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                          refine=regions, art=ArtificialProperties(enabled=false))
+    mk3(regions) = flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                               refine=regions, art=ArtificialProperties(enabled=false))
     wave(x, y, z) = Prim(u=(0.5, 0, 0), p=1.0, rho=1 + 0.2sin(x))
     s3 = mk3([r1, r2])
     st3 = allocate_state(s3)
@@ -253,10 +254,10 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     bl = lele_d1_6(closures=:brady_livescu)
-    mk(; kw...) = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
-                         regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                         interface_divergence=bl; kw...)
+    mk(; kw...) = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                              bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
+                              regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                              interface_divergence=bl; kw...)
     function rows_ok(s)
         all(getfield(s, :patches)[2:end]) do p
             ref = CL.plan_direction(p.decomp, lele_d1_6(), 1, p.h[1];
@@ -295,10 +296,10 @@ end
     T = Float32
     dir = mktempdir()
     stem = joinpath(dir, "f32")
-    mk32() = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
-                    bcs=ntuple(_ -> io_per, 3), transport=ConstantTransport{T}(),
-                    art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
-                    filt=compact_filter(T(0.45), T))
+    mk32() = flat_solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
+                         bcs=ntuple(_ -> io_per, 3), transport=ConstantTransport{T}(),
+                         art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
+                         filt=compact_filter(T(0.45), T))
     s = mk32()
     Q = io_state(s)
     @test parent(Q) isa Array{T,4}
@@ -316,8 +317,8 @@ end
     # The payload is raw binary, so reading a Float32 block at Float64 does not
     # produce wrong numbers, it runs off the end of the file. The element type
     # is stored to make that a message instead.
-    s64 = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                 bcs=ntuple(_ -> io_per, 3), art=ArtificialProperties(enabled=false))
+    s64 = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                      bcs=ntuple(_ -> io_per, 3), art=ArtificialProperties(enabled=false))
     @test_throws "element type mismatch" load_checkpoint!(s64,
                                                           allocate_state(s64),
                                                           stem)
@@ -330,7 +331,7 @@ end
     # thermodynamic table, a different energy reference, and a different
     # numerical or boundary configuration over the same state layout.
     line = (SlipWallBC(), SlipWallBC())
-    mk(; kw...) = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
+    mk(; kw...) = flat_solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
                          bcs=(line, io_per, io_per), art=ArtificialProperties(enabled=false);
                          kw...)
     rec(s) = CL.configuration_record(s)
@@ -427,19 +428,19 @@ end
         end
         @test other.step == 3
     end
-    wall = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((NoSlipWallBC(Twall=1.0), SlipWallBC()), io_per, io_per),
-                  eos=pair(1.4, 1.6), art=ArtificialProperties(enabled=false))
+    wall = flat_solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((NoSlipWallBC(Twall=1.0), SlipWallBC()), io_per, io_per),
+                       eos=pair(1.4, 1.6), art=ArtificialProperties(enabled=false))
     @test_throws "boundaries" load_checkpoint!(wall, allocate_state(wall), stem)
     load_checkpoint!(wall, allocate_state(wall), stem; allow=(:boundaries,))
 
     # Azimuthal mode truncation is a numerics entry, present only when on, so
     # a record from before the entry existed matches a solver without it and
     # differs from one with it in the numerics group alone.
-    cyl(κ) = Solver(n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0),
-                    metric=CylindricalMetric(),
-                    bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
-                    art=ArtificialProperties(enabled=false), polar_truncation=κ)
+    cyl(κ) = flat_solver(n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0),
+                         metric=CylindricalMetric(),
+                         bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+                         art=ArtificialProperties(enabled=false), polar_truncation=κ)
     on, off = cyl(1.0), cyl(0.0)
     @test !("polar_truncation" in rec(off).paths)
     @test groups(on, off) == ["numerics"]
@@ -507,10 +508,10 @@ end
     # Four 37-node tiles of a 2-D level under a 48 x 48 root: five pieces
     # under one index, the root carrying the ghost array that blanks the
     # nodes the tiles cover entirely and the tiles carrying none.
-    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
-                    bcs=(io_per, io_per, io_per), tile=12,
-                    refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                    art=ArtificialProperties(enabled=false))
+    solver = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                         bcs=(io_per, io_per, io_per), tile=12,
+                         refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                         art=ArtificialProperties(enabled=false))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.4, 0.3, 0), p=1.0, rho=1 + 0.1 * sin(x) * sin(y)))
@@ -607,33 +608,34 @@ end
 
 @testset "domain accessors: conditions and bounds of the whole domain" begin
     walls = (SlipWallBC(), SlipWallBC())
-    s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
-               bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
+    s = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
+                    bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
     @test boundary_conditions(s) == (walls, io_per, io_per)
     @test domain_bounds(s) == ((-1.0, 0.5, 0.0), (0.0, 1.5, 1.0))
     @test CL.boundary_kinds(s) == ((:open, :open), (:periodic, :periodic),
                                    (:periodic, :periodic))
     # The folds: the spherical origin and poles are axes, their bounds the
     # faces half a spacing outside the first and last nodes.
-    sph = Solver(n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
-                 bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), io_per),
-                 art=ArtificialProperties(enabled=false))
+    sph = flat_solver(n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
+                      bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), io_per),
+                      art=ArtificialProperties(enabled=false))
     @test CL.boundary_kinds(sph) == ((:axis, :open), (:axis, :axis),
                                      (:periodic, :periodic))
     lo, hi = domain_bounds(sph)
     @test lo == (0.0, 0.0, 0.0) && hi[1] == 1.0 && hi[2] ≈ π && hi[3] ≈ 2π
     @test global_xcoord(sph, 2, 1) ≈ lo[2] + sph.h[2] / 2
     # A stretched dimension's bounds are the mapping's endpoints.
-    st = Solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, io_per, io_per),
-                stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
-                art=ArtificialProperties(enabled=false))
+    st = flat_solver(
+        n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, io_per, io_per),
+        stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
+        art=ArtificialProperties(enabled=false))
     @test domain_bounds(st)[1][1] ≈ 0.0 atol = 1e-15
     @test domain_bounds(st)[2][1] ≈ 1.0
     # A slab layout: the domain's conditions, not the interface markers on
     # the slabs' internal faces.
-    slabs = Solver(n_global=(32, 12, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(walls, io_per, io_per), patch_grid=(2, 1, 1),
-                   art=ArtificialProperties(enabled=false))
+    slabs = flat_solver(n_global=(32, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(walls, io_per, io_per), patch_grid=(2, 1, 1),
+                        art=ArtificialProperties(enabled=false))
     @test any(p -> p.bcs[1][2] isa CL.InterfaceBC, slabs.patches)
     @test boundary_conditions(slabs) == (walls, io_per, io_per)
     # Without per-species gas constants, none is recorded.
@@ -647,7 +649,7 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("light", 2.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.5, 1.1)])
     walls = (SlipWallBC(), SlipWallBC())
-    s = Solver(n_global=(24, 12, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
+    s = flat_solver(n_global=(24, 12, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.5, 0.0),
                eos=eos, bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(0.1, 0, 0), p=1.0, rho=2 + x))
@@ -698,8 +700,8 @@ end
     # with one).
     for (bc, folds) in (((SymmetryPlaneBC(), SymmetryPlaneBC()), 2),
                         ((SymmetryPlaneBC(), SlipWallBC()), 1))
-        m = Solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(bc, io_per, io_per), art=ArtificialProperties(enabled=false))
+        m = flat_solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(bc, io_per, io_per), art=ArtificialProperties(enabled=false))
         Qm = allocate_state(m)
         initialize!(m, Qm, (x, y, z) -> Prim(p=1.0, rho=1 + x))
         stem = joinpath(dir, "mirror$folds")
@@ -717,9 +719,10 @@ end
     end
 
     # A resolved angle: the structured piece and container, with the axis.
-    cyl = Solver(n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
-                 bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
-                 art=ArtificialProperties(enabled=false))
+    cyl = flat_solver(
+        n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+        bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+        art=ArtificialProperties(enabled=false))
     Qc = allocate_state(cyl)
     initialize!(cyl, Qc, (r, θ, z) -> Prim(p=1.0, rho=1 + r^2))
     save_vtk(cyl, Qc, joinpath(dir, "disk"); fields=(:rho,))
@@ -734,10 +737,10 @@ end
     # A refined run: the index and every piece, each piece with its level, the
     # root grid's node count and its own patch's count as written, which the
     # index, holding no one grid, leaves out.
-    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
-                 bcs=(io_per, io_per, io_per), tile=12,
-                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                 art=ArtificialProperties(enabled=false))
+    amr = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                      bcs=(io_per, io_per, io_per), tile=12,
+                      refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                      art=ArtificialProperties(enabled=false))
     states = allocate_state(amr)
     initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0, rho=1.0))
     save_vtk(amr, states, joinpath(dir, "amr"); fields=(:rho,), stride=2)
@@ -764,8 +767,8 @@ end
     # gathered value definitional: the snapshot must reproduce them at its
     # own coordinates, and the derived fields must equal the padded ones.
     rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
-    solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
-                    bcs=(io_per, io_per, io_per))
+    solver = flat_solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
+                         bcs=(io_per, io_per, io_per))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(sin(2π * y), 0, 0), p=1.0, rho=rho_fn(x, y, z)))
@@ -798,10 +801,10 @@ end
     # The patch-layout form: one snapshot per patch, the root first, each
     # tile at its level's spacing and offset, and the root's fully covered
     # nodes flagged as the VTK ghost array blanks them.
-    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
-                 bcs=(io_per, io_per, io_per), tile=12,
-                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                 art=ArtificialProperties(enabled=false))
+    amr = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                      bcs=(io_per, io_per, io_per), tile=12,
+                      refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                      art=ArtificialProperties(enabled=false))
     states = allocate_state(amr)
     wave(x, y) = 1 + 0.1 * sin(x) * sin(y)
     initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0, rho=wave(x, y)))
@@ -820,10 +823,10 @@ end
 
     # A curvilinear block keeps its metric coordinates, and the Cartesian
     # positions follow from them.
-    cyl = Solver(n_global=(16, 16, 1), L_domain=(1.0, 2π, 1.0),
-                 metric=CylindricalMetric(),
-                 bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
-                 art=ArtificialProperties(enabled=false))
+    cyl = flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 2π, 1.0),
+                      metric=CylindricalMetric(),
+                      bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+                      art=ArtificialProperties(enabled=false))
     Qc = allocate_state(cyl)
     initialize!(cyl, Qc, (r, θ, z) -> Prim(p=1.0, rho=1 + r^2))
     snapc = field_snapshot(cyl, Qc; fields=(:rho,))
@@ -838,8 +841,8 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("light", 2.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.5, 1.1)])
     walls = (SlipWallBC(), SlipWallBC())
-    s = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), eos=eos,
-               bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
+    s = flat_solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), eos=eos,
+                    bcs=(walls, io_per, io_per), art=ArtificialProperties(enabled=false))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3 + 0.1x, 0.7 - 0.1x), u=(sin(2π * y), 0, 0),
                                         p=1.0, rho=1 + 0.1x + 0.2y))
@@ -878,10 +881,10 @@ end
     # The patch-layout form: a window of root nodes takes every node of a
     # level inside it. Root nodes 10 to 20 are level-1 nodes 28 to 58, which
     # reach the first tile (nodes 37 to 73) and no other.
-    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
-                 bcs=(io_per, io_per, io_per), tile=12,
-                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                 art=ArtificialProperties(enabled=false))
+    amr = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                      bcs=(io_per, io_per, io_per), tile=12,
+                      refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                      art=ArtificialProperties(enabled=false))
     states = allocate_state(amr)
     initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0,
                                                rho=1 + 0.1 * sin(x) * sin(y)))
@@ -898,9 +901,9 @@ end
     # out the level's nodes between root node 48 and the seam, which splits the
     # tile into two runs and two snapshots; a coordinate window over the whole
     # period keeps it whole.
-    seam = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                  bcs=(io_per, io_per, io_per), refine=BlockRegion((44, 0, 0), (8, 1, 1)),
-                  art=ArtificialProperties(enabled=false))
+    seam = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(io_per, io_per, io_per), refine=BlockRegion((44, 0, 0), (8, 1, 1)),
+                       art=ArtificialProperties(enabled=false))
     seam_states = allocate_state(seam)
     initialize!(seam, seam_states, (x, y, z) -> Prim(p=1.0, rho=1 + 0.1 * sin(2π * x)))
     level1(snaps) = [p for p in snaps if p.level == 1]

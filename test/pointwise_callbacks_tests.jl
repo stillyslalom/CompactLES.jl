@@ -1,5 +1,6 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, CPUBackend, padded_index
 using Test
@@ -13,35 +14,35 @@ struct SpacingIC end
 
     # The helper uses the current patch's computational spacing and turns it
     # into a physical length with the same local metric factors as the RHS.
-    cart = Solver(n_global=(11, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                  bcs=(walls, per, per), art=ArtificialProperties(enabled=false))
+    cart = flat_solver(n_global=(11, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=(walls, per, per), art=ArtificialProperties(enabled=false))
     Ic = padded_index(cart, 6, 1, 1)
     @test CompactLES.point_spacing(cart, Ic) == 0.1
 
     st = sine_cluster(0.0, 1.0, 0.5, 0.4)
-    stretched = Solver(n_global=(11, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                       bcs=(walls, per, per), stretch=(st, nothing, nothing),
-                       art=ArtificialProperties(enabled=false))
+    stretched = flat_solver(n_global=(11, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                            bcs=(walls, per, per), stretch=(st, nothing, nothing),
+                            art=ArtificialProperties(enabled=false))
     Is = padded_index(stretched, 6, 1, 1)
     @test CompactLES.point_spacing(stretched, Is) ≈
           stretched.h[1] / stretched.inv_h[1][Is]
 
-    cyl = Solver(n_global=(11, 12, 1), L_domain=(1.0, 2π, 1.0),
-                 metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per, per),
-                 art=ArtificialProperties(enabled=false))
+    cyl = flat_solver(n_global=(11, 12, 1), L_domain=(1.0, 2π, 1.0),
+                      metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per, per),
+                      art=ArtificialProperties(enabled=false))
     Icy = padded_index(cyl, 1, 7, 1)
     expected = minimum(cyl.h[d] / cyl.inv_h[d][Icy] for d in 1:3
                        if cyl.decomp.active[d])
     @test CompactLES.point_spacing(cyl, Icy) ≈ expected
     @test cyl.h[2] / cyl.inv_h[2][Icy] < cyl.h[1] / cyl.inv_h[1][Icy]
 
-    collapsed = Solver(n_global=(1, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                       bcs=(per, per, per), art=ArtificialProperties(enabled=false))
+    collapsed = flat_solver(n_global=(1, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                            bcs=(per, per, per), art=ArtificialProperties(enabled=false))
     @test CompactLES.point_spacing(collapsed, padded_index(collapsed, 1, 1, 1)) == 0
 
-    amr = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                 bcs=(walls, per, per), refine=BlockRegion((16, 0, 0), (16, 1, 1)),
-                 art=ArtificialProperties(enabled=false))
+    amr = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                      bcs=(walls, per, per), refine=BlockRegion((16, 0, 0), (16, 1, 1)),
+                      art=ArtificialProperties(enabled=false))
     root = CompactLES.PatchSolver(amr, amr.patches[1])
     fine = CompactLES.PatchSolver(amr, amr.patches[2])
     @test CompactLES.point_spacing(fine, padded_index(fine, 5, 1, 1)) ≈
@@ -78,7 +79,7 @@ struct SpacingIC end
 
     dbc_short = DirichletBC((x, y, z, t) -> Prim(u=(x, 0, 0), p=1.0, rho=1.0))
     dbc_long = DirichletBC((x, y, z, t, h) -> Prim(u=(x, 0, 0), p=1.0, rho=1.0))
-    drive(bc; backend=CPUBackend()) = Solver(n_global=(11, 1, 1),
+    drive(bc; backend=CPUBackend()) = flat_solver(n_global=(11, 1, 1),
                                                L_domain=(1.0, 1.0, 1.0),
                                                bcs=((bc, SlipWallBC()), per, per),
                                                backend=backend,
@@ -113,9 +114,9 @@ struct SpacingIC end
     target_short = (x, y, z, t) -> Prim(u=(0.05, 0.0, 0.0), rho=1.0, T_ion=1.0)
     nscbc_solver(target) = begin
         inflow = NSCBCInflowBC(u=(0.05, 0.0, 0.0), T_ion=1.0, Y=[1.0], target=target)
-        Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-               bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per, per),
-               art=ArtificialProperties(enabled=false))
+        flat_solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                    bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per, per),
+                    art=ArtificialProperties(enabled=false))
     end
     nscbc, nscbc_short = nscbc_solver(target), nscbc_solver(target_short)
     Qn, Qnshort = allocate_state(nscbc), allocate_state(nscbc_short)

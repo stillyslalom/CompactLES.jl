@@ -2,6 +2,7 @@ module NeutralTransportIntegrationTests
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES, Test
 using CompactLES: compute_rhs!, padded_index, xcoord
 
@@ -29,9 +30,9 @@ function loschmidt_case(n; order=("H2", "D2"), reverse_profile=false)
                                       temperature_max=400.0)
     tr = CeaTransport(eos; diffusion=:mixture_averaged,
                       binary_diffusion=binary)
-    s = Solver(n_global=(n, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
-               eos=eos, transport=tr, cfl=0.35,
-               art=ArtificialProperties(enabled=false), filter_interval=0)
+    s = flat_solver(n_global=(n, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
+                    eos=eos, transport=tr, cfl=0.35,
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> begin
         y1 = YBAR + AMP*cospi(2x/L)
@@ -97,9 +98,9 @@ end
     function rhs_with(model)
         tr = CeaTransport(eos; diffusion=:mixture_averaged,
                           binary_diffusion=model)
-        sol = Solver(n_global=(32, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
-                     eos=eos, transport=tr, art=ArtificialProperties(enabled=false),
-                     filter_interval=0)
+        sol = flat_solver(n_global=(32, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
+                          eos=eos, transport=tr, art=ArtificialProperties(enabled=false),
+                          filter_interval=0)
         state = allocate_state(sol)
         initialize!(sol, state, (x, y, z) -> begin
             y1 = YBAR + AMP*cospi(2x/L)
@@ -119,9 +120,9 @@ end
                                           temperature_max=400.0)
         tr = CeaTransport(eos; diffusion=:mixture_averaged,
                           binary_diffusion=binary)
-        sol = Solver(n_global=(32, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
-                     eos=eos, transport=tr, art=ArtificialProperties(enabled=false),
-                     filter_interval=0)
+        sol = flat_solver(n_global=(32, 1, 1), L_domain=(L, 1.0, 1.0), bcs=PER,
+                          eos=eos, transport=tr, art=ArtificialProperties(enabled=false),
+                          filter_interval=0)
         state = allocate_state(sol)
         initialize!(sol, state, (x, y, z) -> begin
             y1 = YBAR + AMP*cospi(2x/L)

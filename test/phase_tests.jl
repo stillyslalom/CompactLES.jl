@@ -13,6 +13,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Test
     const CL = CompactLES
@@ -76,8 +77,8 @@ end
     @test_throws "n_global" setup(s, q; numerics=Numerics(num; n_global=(65, 1, 1)))
     @test_throws "refinement hierarchy" setup(s, q;
         numerics=Numerics(num; amr=AMR(initial=BlockRegion((24, 0, 0), (12, 1, 1)))))
-    low = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls)
-    @test_throws "Solver(; ...)" setup(low, allocate_state(low))
+    low = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls)
+    @test_throws "records no Problem" setup(low, allocate_state(low))
 end
 
 # The run state a phase carries, set by hand on a solver built for the next

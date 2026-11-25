@@ -1,11 +1,11 @@
 # Solver construction. Nothing here runs on the step path except through a
 # regrid or a restart, which rebuild refined patches with the builders below.
 #
-# `Solver(; ...)` proceeds in these phases, in this order:
+# `_build_solver` (problem.jl) proceeds in these phases, in this order:
 #
-# 1. Precision. The keyword method resolves the element type T from the
-#    components passed explicitly (`_resolve_precision`, precision.jl),
-#    converts them to T and fills in the defaults, then calls `_Solver`.
+# 1. Precision. It resolves the element type T from `Execution.precision` or
+#    the components of the `Problem` and `Numerics` (`_resolve_precision`,
+#    precision.jl) and calls `_Solver`, which converts them to T.
 # 2. Validation. `_validate_configuration` checks the keyword ranges, the
 #    transport and artificial-property settings and each boundary condition
 #    against the metric and EOS. The rest of the validation in `_Solver`
@@ -50,95 +50,6 @@ Base.@nospecializeinfer _sensor_wall_pair(@nospecialize(pair)) =
 # half-cell shift.
 _sensor_wall_rows(scheme, wall::Bool, σ::Int, use::Bool) =
     (use && wall) ? wall_closures(scheme, σ) : nothing
-
-"""
-    Solver(; n_global, L_domain, bcs, kwargs...)
-
-Backend constructor: allocate the distributed solver, plan every compact
-operator, and fill the geometry. [`setup`](@ref) is the normal entry point and
-calls this after splitting a [`Problem`](@ref) from a [`Numerics`](@ref);
-construct a `Solver` directly when there is no `Problem` to build from, as the
-test and benchmark suites do. It allocates no conserved state, so pair it with
-[`allocate_state`](@ref) and [`initialize!`](@ref).
-
-# Required keywords
-
-- `n_global`: global point count per direction. A count of one collapses that
-  direction, as described under [`Numerics`](@ref).
-- `L_domain`: three domain *extents*, one per direction. Note the difference from
-  `Problem.domain`, which gives endpoints; here `origin` carries the low corner.
-- `bcs`: three `(low, high)` pairs of [`BoundaryCondition`](@ref) objects.
-
-# Optional keywords
-
-`eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
-[`Problem`](@ref); `art`, `deriv`, `cfl`, `control`, `polar_truncation`,
-`implicit`, `n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
-`filter_cfl` and `filter_weighting` from [`StateFilter`](@ref) (its `scheme`,
-`interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs`,
-`interface_divergence`, `interface_conservative` and
-`interface_limited_ghost` from [`PatchInterfaces`](@ref); and `dims`, `comm`,
-`backend`, `precision` and `patch_grid` from [`Execution`](@ref). Without
-`precision`, the element type is the one shared by the components passed
-explicitly (`eos`, `transport`, `art`,
-`deriv`, `filt`, `interface_divergence`), or `Float64` when none is passed.
-Components left out are built at that type, and components of different
-types raise an `ArgumentError`. The two keywords with no
-`Problem`/`Numerics` counterpart are:
-
-- `origin`: low corner of the domain, one value per direction. Default
-  `(0.0, 0.0, 0.0)`. A folded direction requires its origin at zero. A stretched
-  direction ignores this entry: its computational coordinate runs over [0, 1] and
-  the [`Stretch`](@ref) mapping carries both endpoints.
-- `equations`: the [`EquationSet`](@ref) owning the conserved layout. The default
-  builds [`NavierStokes1T`](@ref) from `eos`; a supplied set must agree with
-  `eos` on the species count.
-
-# Geometry selected by the boundary conditions
-
-Collapsed dimensions and coordinate singularities are not keywords: setup
-recognizes them from `bcs` and validates the rest of the configuration against
-them.
-
-- Collapsed dimensions: set `n_global[d] = 1` with `(PeriodicBC(), PeriodicBC())`
-  for that dimension; e.g. axisymmetric cylindrical is `n_global = (Nr, 1, Nz)`.
-- Cylindrical axis: `bcs[1] = (AxisBC(), <outer bc>)` with
-  `metric = CylindricalMetric()`, `origin[1] = 0`, and dimension 1 unstretched.
-  θ may be collapsed (axisymmetric) or resolved over 2π with an even point
-  count. The grid is half-offset in r, so no node sits at r = 0.
-- Spherical origin and poles: [`OriginBC`](@ref) at the low end of r and
-  [`PoleBC`](@ref) at *both* ends of θ, with `metric = SphericalMetric()`. The
-  origin additionally requires a θ range symmetric about π/2, and the poles the
-  full range (0, π). Either may be combined with the other. φ may be collapsed
-  or resolved over 2π with an even point count, as θ may be at the axis.
-- Without these folds, setup rejects a grid with a node at r = 0 or, under
-  `SphericalMetric`, at θ = 0 or π. A collapsed dimension's node sits at the
-  low end of its range. Under `SphericalMetric` a collapsed θ must lie at π/2,
-  and a collapsed r under either curvilinear metric raises a warning; see
-  [`SphericalMetric`](@ref).
-"""
-function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
-                precision::Union{Nothing,Type}=nothing,
-                eos=nothing,
-                transport::Union{Nothing,AbstractTransport}=nothing,
-                art::Union{Nothing,ArtificialProperties}=nothing,
-                deriv::Union{Nothing,AbstractCompactScheme}=nothing,
-                filt::Union{Nothing,AbstractCompactScheme}=nothing,
-                interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
-                kwargs...)
-    eos === nothing || (eos = _as_eos(eos))
-    T = _resolve_precision(precision, (; eos, transport, art, deriv, filt,
-                                        interface_divergence))
-    cv(x, default) = x === nothing ? default : _to_precision(T, x)
-    return _Solver(T; n_global, L_domain, bcs,
-                   eos=cv(eos, _default_ideal_mixture(T)),
-                   transport=cv(transport, ConstantTransport{T}()),
-                   art=cv(art, ArtificialProperties{T}()),
-                   deriv=cv(deriv, lele_d1_6(T)),
-                   filt=cv(filt, compact_filter(0.47, T)),
-                   interface_divergence=cv(interface_divergence, nothing),
-                   kwargs...)
-end
 
 # The checks of phase 2 that derive nothing: keyword ranges, the transport
 # and artificial-property settings, and each boundary condition against the
@@ -293,51 +204,12 @@ function _warn_collapsed_radius(metric, n_global, comm)
     return nothing
 end
 
-function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
-                eos::EOS,
-                equations=nothing,
-                transport::AbstractTransport{T},
-                art::ArtificialProperties{T},
-                metric::Metric=CartesianMetric(),
-                stretch::NTuple{3,Union{Nothing,Stretch}}=(nothing, nothing, nothing),
-                sources=(),
-                origin=(0.0, 0.0, 0.0),
-                deriv::AbstractCompactScheme,
-                filt::AbstractCompactScheme,
-                cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.35,
-                filter_weighting::Symbol=:none,
-                polar_truncation::Real=0,
-                control::StepControl=StepControl(),
-                dims=nothing, n_halo::Int=4,
-                comm::MPI.Comm=MPI.COMM_WORLD,
-                patch_grid::NTuple{3,Int}=(1, 1, 1),
-                backend::AbstractBackend=CPUBackend(),
-                interface_rhs::Symbol=:extended,
-                interface_divergence::Union{Nothing,AbstractCompactScheme},
-                interface_flux::Symbol=:ghost,
-                interface_conservative::Bool=true,
-                interface_limited_ghost::Bool=false,
-                refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
-                level_restriction::Symbol=:inject,
-                level_interpolation_order::Union{Nothing,Int}=nothing,
-                subcycle::Bool=false,
-                regrid_interval::Int=0,
-                tag_threshold::Real=0.02,
-                tag_buffer::Int=4,
-                tag_sensor_threshold::Real=0,
-                tag_gradient_threshold::Real=0,
-                tag_vorticity_threshold::Real=0,
-                tag_predicate=nothing,
-                untag_ratio::Real=2,
-                tile_lifetime::Int=1,
-                tile=0,
-                rebalance::Real=0,
-                rebalance_persist::Int=2,
-                max_levels::Union{Nothing,Int}=nothing,
-                level_boundaries::Bool=true,
-                subdivide_lattice::Bool=true,
-                implicit::Union{Nothing,ImplicitConduction}=nothing,
-                positivity_limiter::Bool=false) where {T}
+# `prob` is a `Problem`, `num` a `Numerics` with its step control filled in and
+# `lv` a `LevelSetup` (amr_frontend.jl); the three are read into the locals the
+# body works with, the components that carry a scalar type converted to `T`.
+# `equations` is the `EquationSet` owning the conserved layout, built from the
+# EOS when not given.
+function _Solver(::Type{T}, prob, num, lv; equations=nothing) where {T}
     # One compiled body for every configuration of a precision. Specialized,
     # this body was compiled again for each combination of the types of its
     # arguments, the user's tuple of boundary conditions among them, at
@@ -345,7 +217,42 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # objects and calls the routines that build the grid-sized arrays, which
     # are compiled for the concrete types they are called with.
     @nospecialize
-    bcs = _face_conditions(bcs)
+    n_global = num.n_global::NTuple{3,Int}
+    origin = ntuple(d -> prob.domain[d][1], 3)
+    L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
+    eos = _to_precision(T, prob.eos)::EOS
+    transport = _to_precision(T, prob.transport)::AbstractTransport{T}
+    art = _to_precision(T, num.art)::ArtificialProperties{T}
+    metric = prob.metric
+    sources = prob.sources
+    stretch = num.stretch
+    deriv = _to_precision(T, num.deriv)::AbstractCompactScheme
+    filt = _to_precision(T, num.filter.scheme)::AbstractCompactScheme
+    cfl = num.cfl
+    filter_interval = num.filter.interval::Int
+    filter_cfl = num.filter.cfl
+    filter_weighting = num.filter.weighting::Symbol
+    polar_truncation = num.polar_truncation
+    control = num.control::StepControl
+    dims = num.execution.dims
+    n_halo = num.n_halo::Int
+    comm = num.execution.comm::MPI.Comm
+    patch_grid = num.execution.patch_grid::NTuple{3,Int}
+    backend = num.execution.backend::AbstractBackend
+    interface_rhs = num.patch_interfaces.rhs::Symbol
+    interface_divergence = num.patch_interfaces.divergence === nothing ? nothing :
+                           _to_precision(T, num.patch_interfaces.divergence)
+    interface_flux = num.patch_interfaces.flux::Symbol
+    interface_conservative = num.patch_interfaces.conservative::Bool
+    interface_limited_ghost = num.patch_interfaces.limited_ghost::Bool
+    implicit = num.implicit
+    positivity_limiter = num.positivity_limiter::Bool
+    (; refine, level_restriction, level_interpolation_order, subcycle, regrid_interval,
+     tag_threshold, tag_buffer, tag_sensor_threshold, tag_gradient_threshold,
+     tag_vorticity_threshold, tag_predicate, untag_ratio, tile_lifetime, tile,
+     rebalance, rebalance_persist, max_levels, level_boundaries,
+     subdivide_lattice) = lv
+    bcs = _face_conditions(prob.bcs)
     tile = _tile_edges(tile)
     tiled = _tiled(tile)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,

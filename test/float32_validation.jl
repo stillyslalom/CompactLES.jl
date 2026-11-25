@@ -3,6 +3,7 @@
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 
+using CompactLES: flat_solver
 using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
 
 _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enabled=art))
@@ -70,7 +71,8 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
         # A collapsed r omits the rest of the radial divergence's area term,
         # and setup warns.
         solver = cs.n_global[1] == 1 ?
-                 (@test_logs (:warn, r"r is collapsed") Solver(; kw...)) : Solver(; kw...)
+                 (@test_logs (:warn, r"r is collapsed") flat_solver(; kw...)) :
+                 flat_solver(; kw...)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) ->
             Prim(u=(0, 0, 0), p=1, rho=1))
@@ -103,16 +105,16 @@ function _f32_closed_derivative_error(N; spherical=false, T=Float32,
     per = (PeriodicBC(), PeriodicBC())
     numerics = (precision=T, art=ArtificialProperties(enabled=false), deriv=deriv)
     solver = if spherical
-        Solver(; n_global=(N, 12, 12),
-               L_domain=(one(T), T(π), T(2π)),
-               metric=SphericalMetric(),
-               bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-               eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
+        flat_solver(; n_global=(N, 12, 12),
+                    L_domain=(one(T), T(π), T(2π)),
+                    metric=SphericalMetric(),
+                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
     else
-        Solver(; n_global=(N, 12, 12),
-               L_domain=(one(T), one(T), one(T)),
-               bcs=((SlipWallBC(), SlipWallBC()), per, per),
-               eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
+        flat_solver(; n_global=(N, 12, 12),
+                    L_domain=(one(T), one(T), one(T)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per, per),
+                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
     end
     f = CL.field(solver.decomp)
     df = similar(f)
@@ -182,12 +184,12 @@ end
     N = 200
     hx = one(T) / T(N - 1)
     per = (PeriodicBC(), PeriodicBC())
-    solver = Solver(; n_global=(N, 1, 1),
-                    L_domain=(one(T), hx, hx),
-                    bcs=((SlipWallBC(), SlipWallBC()), per, per),
-                    eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
-                    cfl=T(0.4), filter_interval=1,
-                    _f32_numerics(art=true)...)
+    solver = flat_solver(; n_global=(N, 1, 1),
+                         L_domain=(one(T), hx, hx),
+                         bcs=((SlipWallBC(), SlipWallBC()), per, per),
+                         eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
+                         cfl=T(0.4), filter_interval=1,
+                         _f32_numerics(art=true)...)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> begin
         θ = tanh_blend(x, T(0.5), T(2) * hx)
@@ -229,14 +231,14 @@ end
 function _tgv_short_history(::Type{T}) where {T<:AbstractFloat}
     N = 16
     per = (PeriodicBC(), PeriodicBC())
-    solver = Solver(; n_global=(N, N, N),
-                    L_domain=(T(2π), T(2π), T(2π)),
-                    bcs=(per, per, per),
-                    eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
-                    transport=ConstantTransport{T}(mu0=one(T) / T(1600)),
-                    art=ArtificialProperties{T}(enabled=false),
-                    deriv=lele_d1_6(T),
-                    filt=compact_filter(T(0.45), T), cfl=T(0.6))
+    solver = flat_solver(; n_global=(N, N, N),
+                         L_domain=(T(2π), T(2π), T(2π)),
+                         bcs=(per, per, per),
+                         eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
+                         transport=ConstantTransport{T}(mu0=one(T) / T(1600)),
+                         art=ArtificialProperties{T}(enabled=false),
+                         deriv=lele_d1_6(T),
+                         filt=compact_filter(T(0.45), T), cfl=T(0.6))
     Q = allocate_state(solver)
     p0 = T(100) / T(1.4)
     initialize!(solver, Q, (x, y, z) ->
@@ -287,11 +289,11 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
     bcs = ((SlipWallBC(), SlipWallBC()), per, per)
-    small(; kw...) = Solver(; n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=bcs, kw...)
+    small(; kw...) = flat_solver(; n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                 bcs=bcs, kw...)
     function sod(; kw...)
-        s = Solver(; n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                   cfl=0.4, kw...)
+        s = flat_solver(; n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
+                        cfl=0.4, kw...)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                                                  Prim(u=(0, 0, 0), p=0.1, rho=0.125))

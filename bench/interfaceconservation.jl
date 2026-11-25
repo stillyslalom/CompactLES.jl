@@ -57,6 +57,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using Printf
 const CL = CompactLES
@@ -197,13 +198,13 @@ function build(mode, N, ny; subcycle=false, regrid=false)
     end
     source = mode === :uniform || args.idiv == "default" ? nothing :
              lele_d1_6(closures=Symbol(args.idiv))
-    return Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
-                  eos=eos, cfl=0.45, interface_divergence=source,
-                  transport=ConstantTransport(mu0=Float64(args.mu)),
-                  interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
-                  art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
-                  control=StepControl(validity=:permissive),
-                  filter_interval=args.filter_interval; kw...)
+    return flat_solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
+                       eos=eos, cfl=0.45, interface_divergence=source,
+                       transport=ConstantTransport(mu0=Float64(args.mu)),
+                       interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
+                       art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
+                       control=StepControl(validity=:permissive),
+                       filter_interval=args.filter_interval; kw...)
 end
 
 function evolve(mode, N, ny, tfinal, nmax, subcycle)

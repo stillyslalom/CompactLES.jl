@@ -12,6 +12,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, step!
 using Printf, InteractiveUtils
@@ -25,7 +26,7 @@ function build(; N=48, n_species=1, art=true, deriv=lele_d1_6(),
     eos = n_species == 1 ? IdealSpecies("gas"; R=1.0, gamma=1.4) :
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
+    solver = flat_solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
                transport=ConstantTransport(mu0=1e-3), deriv=deriv,
                art=ArtificialProperties(enabled=art, species_flux=species_flux))
     Q = allocate_state(solver)
@@ -80,9 +81,9 @@ alloc("compute_rhs! (2 species, bulk)", () -> compute_rhs!(sb, Qb, dQb); scale=n
 alloc("step!        (2 species, bulk)", () -> step!(sb, Qb, dQb, dub, 1e-4); scale=npt)
 
 println("\n=== allocation per call (cylindrical axis fold, 1-D radial) ===")
-sf = Solver(n_global=(128, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
-            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtificialProperties(enabled=true))
+sf = flat_solver(n_global=(128, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
+                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                 art=ArtificialProperties(enabled=true))
 Qf = allocate_state(sf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 dQf = zero(Qf); duf = zero(Qf)
@@ -166,7 +167,7 @@ function float64_in_point_bodies()
          (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + 0.1exp(-40(r - 0.4)^2), rho=1.0)),
     ]
     for (deck, ic) in runs
-        s = Solver(; precision=Float32, cfl=0.3, deck...)
+        s = flat_solver(; precision=Float32, cfl=0.3, deck...)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=2)

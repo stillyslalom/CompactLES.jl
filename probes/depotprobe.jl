@@ -40,6 +40,7 @@ using MPI
 MPI.Init(threadlevel=:funneled)
 const t_mpi = time()
 
+using CompactLES: flat_solver
 using CompactLES
 const t_load = time()
 
@@ -517,8 +518,8 @@ it; it does not include the compact solves' own exchanges.
 """
 function step_costs(g, nsteps)
     s, t_build, c_build, _, _ = timed() do
-        Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
-               art = ArtificialProperties(enabled = false))
+        flat_solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
+                    art = ArtificialProperties(enabled = false))
     end
     Q = allocate_state(s)
     _, t_init, c_init, _, _ = timed() do

@@ -4,6 +4,7 @@
 # Then the δ⁴ sensor's reading of the ghost data at those same faces.
 # Included by runtests.jl after the patch and level suites.
 
+using CompactLES: flat_solver
 using CompactLES: padded_index, xcoord
 
 @testset "interface budgets: coarse-fine acoustic reflection" begin
@@ -15,9 +16,9 @@ using CompactLES: padded_index, xcoord
     ic(x, y, z) = Prim(rho=(1 + pulse(x))^(1 / 1.4),
                        p=1 + pulse(x), u=(pulse(x) / c0, 0, 0))
     function reflected_characteristic(; refine=nothing, subcycle=false)
-        s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0),
-                   bcs=bcs, art=ArtificialProperties(enabled=false), filter_interval=0,
-                   refine=refine, subcycle=subcycle)
+        s = flat_solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0),
+                        bcs=bcs, art=ArtificialProperties(enabled=false), filter_interval=0,
+                        refine=refine, subcycle=subcycle)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=pi / c0)
@@ -65,9 +66,9 @@ end
     # the sensor reads the discretization alone.
     ic(x, y, z) = Prim(rho=1 + 0.3 * sinpi(2x) + 0.05 * sinpi(10x), p=1.0,
                        u=(0.0, 0.0, 0.0))
-    mk(n; kw...) = Solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                          bcs=perx, art=ArtificialProperties(enabled=false),
-                          filter_interval=0, kw...)
+    mk(n; kw...) = flat_solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                               bcs=perx, art=ArtificialProperties(enabled=false),
+                               filter_interval=0, kw...)
     # The references: one grid, no interface. The refined patch runs at h/3,
     # and the 3N grid carries its nodes at the same coordinates.
     function uniform(n)

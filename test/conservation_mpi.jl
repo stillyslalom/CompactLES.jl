@@ -1,5 +1,6 @@
 # Included by mpi_tests.jl after its MPI harness definitions.
 
+using CompactLES: flat_solver
 using CompactLES: npatches
 
 function test_composite_budgets()
@@ -13,8 +14,8 @@ function test_composite_budgets()
         common = (; n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
                   bcs=per3, eos=eos, art=ArtificialProperties(enabled=false),
                   filter_interval=0, comm=comm_here)
-        s = dims_here === nothing ? Solver(; common..., kw...) :
-                                    Solver(; common..., dims=dims_here, kw...)
+        s = dims_here === nothing ? flat_solver(; common..., kw...) :
+                                    flat_solver(; common..., dims=dims_here, kw...)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         return s, Q
@@ -72,12 +73,12 @@ function test_composite_budgets()
     # run.
     function rz(comm_here, dims_here)
         kw = dims_here === nothing ? (;) : (; dims=dims_here)
-        s = Solver(; n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),
-                   bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+        s = flat_solver(; n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
                         (PeriodicBC(), PeriodicBC())),
-                   metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
-                   refine=BlockRegion((16, 0, 16), (16, 1, 16)),
-                   transport=ConstantTransport(mu0=1e-3), comm=comm_here, kw...)
+                        metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+                        refine=BlockRegion((16, 0, 16), (16, 1, 16)),
+                        transport=ConstantTransport(mu0=1e-3), comm=comm_here, kw...)
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) -> begin
             g = exp(-40((r - 0.9)^2 + (z - 0.45)^2))

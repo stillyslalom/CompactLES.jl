@@ -6,6 +6,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
+using CompactLES: flat_solver
 using CompactLES
 using Test
 
@@ -203,9 +204,9 @@ end
     @test problem.eos.sp[1].R == species.R
     @test problem.eos.sp[1].gamma == species.gamma
 
-    solver = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                    bcs=API_BCS, eos=species, comm=MPI.COMM_SELF,
-                    dims=(1, 1, 1), art=ArtificialProperties(enabled=false))
+    solver = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                         bcs=API_BCS, eos=species, comm=MPI.COMM_SELF,
+                         dims=(1, 1, 1), art=ArtificialProperties(enabled=false))
     @test solver.eos isa IdealMixture
     @test nspecies(solver.eos) == 1
 end

@@ -1,5 +1,6 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: npatches, ConservedState, interior_index, xcoord
 using Test
@@ -31,9 +32,9 @@ const CL = CompactLES
                (refine=[BlockRegion((36, 0, 0), (32, 1, 1)),
                         BlockRegion((120, 0, 0), (8, 1, 1))], subcycle=true))
     for layout in layouts
-        solver = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
-                        filter_interval=0; layout...)
+        solver = flat_solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                             bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
+                             filter_interval=0; layout...)
         states = allocate_state(solver)
         initialize!(solver, states, ic)
         budget = CL._conserved_budget(solver, states)
@@ -61,9 +62,9 @@ const CL = CompactLES
         end
     end
 
-    periodic = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                      bcs=(per, per, per), eos=eos,
-                      art=ArtificialProperties(enabled=false), patch_grid=(2, 1, 1))
+    periodic = flat_solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(per, per, per), eos=eos,
+                           art=ArtificialProperties(enabled=false), patch_grid=(2, 1, 1))
     periodic_states = allocate_state(periodic)
     initialize!(periodic, periodic_states,
                 (x, y, z) -> Prim(Y=(0.3, 0.7), u=velocity, p=2.0,
@@ -81,11 +82,11 @@ const CL = CompactLES
     # Regridding changes both the patch list and the root cover mask.  A fresh
     # budget must follow the new layout while preserving this linear state.
     pred = (p, I) -> xcoord(p, 1, interior_index(p, I)[1]) > 0.72
-    moving = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
-                    filter_interval=0, subcycle=true, regrid_interval=1,
-                    tag_buffer=0, tag_predicate=pred,
-                    refine=BlockRegion((48, 0, 0), (32, 1, 1)))
+    moving = flat_solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
+                         filter_interval=0, subcycle=true, regrid_interval=1,
+                         tag_buffer=0, tag_predicate=pred,
+                         refine=BlockRegion((48, 0, 0), (32, 1, 1)))
     states = allocate_state(moving)
     initialize!(moving, states, ic)
     # The cells alone: the junctions' correction of the quadrature is not
@@ -109,8 +110,8 @@ const CL = CompactLES
     @test after.total_energy ≈
           expected.total_energy + wall * (1 / (1.4 - 1) + 0.5 * sum(abs2, velocity)) atol=2e-12
 
-    single = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false))
+    single = flat_solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false))
     Q = allocate_state(single)
     initialize!(single, Q, ic)
     @test CL._conserved_budget(single, Q).total_mass ≈ mass atol=1e-13
@@ -123,8 +124,8 @@ end
     pulse(x, y, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                           p=1 + 0.1exp(-100(x - 0.3)^2))
     function closed_box()
-        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(wall, per, per), cfl=0.5)
+        s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall, per, per), cfl=0.5)
         Q = allocate_state(s)
         initialize!(s, Q, pulse)
         return s, Q
@@ -163,7 +164,7 @@ end
     wave(x, y, z) = Prim(Y=(0.5 + 0.4sin(2π * x), 0.5 - 0.4sin(2π * x)),
                          u=(1.0, 0.0, 0.0), p=1.0, rho=1.0 + 0.2sin(2π * x))
     for subcycle in (false, true)
-        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+        s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=(per, per, per), eos=eos, subcycle=subcycle,
                    refine=BlockRegion((36, 0, 0), (24, 1, 1)), regrid_interval=6,
                    tag_buffer=0,
@@ -270,9 +271,9 @@ end
     # node at h/2 on either side) to round-off under the rows.
     function filtered_change()
         per = (PeriodicBC(), PeriodicBC())
-        s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(per, per, per), filter_cfl=0.0, tile=8,
-                   refine=BlockRegion((0, 0, 0), (48, 1, 1)))
+        s = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(per, per, per), filter_cfl=0.0, tile=8,
+                        refine=BlockRegion((0, 0, 0), (48, 1, 1)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(rho=1.0 + 0.5 * (abs(x - 0.5) < 0.168), p=1.0, u=(0.3, 0.0, 0.0)))
@@ -297,10 +298,10 @@ end
     # its region with its faces takes.
     let
         per = (PeriodicBC(), PeriodicBC())
-        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                   tile=8, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
-                   regrid_interval=1, tag_buffer=0,
-                   tag_predicate=(p, I) ->
+        s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
+                        tile=8, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
+                        regrid_interval=1, tag_buffer=0,
+                        tag_predicate=(p, I) ->
                        0.40 < xcoord(p, 1, interior_index(p, I)[1]) < 0.66)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.3, 0.0, 0.0)))

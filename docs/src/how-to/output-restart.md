@@ -162,9 +162,8 @@ regridding run needs, and every tile's state.
 save_checkpoint_hdf5(solver, states, "restart/amr")
 
 # Later, in a fresh process at any rank count: build the solver as before
-# (any initial `refine` region, the same `tile`), then load.
-solver = Solver(; refine = initial, tile = 8, regrid_interval = 5, kwargs...)
-states = allocate_state(solver)
+# (any `initial` regions, the same `tile`), then load.
+solver, states = setup(problem, numerics)
 load_checkpoint_hdf5!(solver, states, "restart/amr")
 run!(solver, states; tfinal = 2.0)
 ```

@@ -2,6 +2,7 @@
 # an include from runtests.jl and directly under the MPI launcher.
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using Test
 
@@ -43,10 +44,10 @@ function nested(; control=StepControl(), cfl=0.2, sources=())
     N = max(96, 24 * NP)
     r1 = BlockRegion((N ÷ 2 - 8, 0, 0), (16, 1, 1))
     r2 = BlockRegion((3 * r1.offset[1] + 11, 0, 0), (8, 1, 1))
-    solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=PER,
-                    dims=(NP, 1, 1), cfl=cfl, control=control,
-                    filter_interval=0, subcycle=true, refine=[r1, r2],
-                    sources=sources)
+    solver = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=PER,
+                         dims=(NP, 1, 1), cfl=cfl, control=control,
+                         filter_interval=0, subcycle=true, refine=[r1, r2],
+                         sources=sources)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.4, 0, 0), p=1.0, rho=1.0 + 0.1sin(x)))
@@ -130,10 +131,10 @@ end
     # Direct regrid! takes the same priming path as run!'s cadence hook.  This
     # is the moving Sod fixture's deterministic rebuild point from level_tests.
     wall = (SlipWallBC(), SlipWallBC())
-    sod = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                 bcs=(wall, PER[2], PER[3]), dims=(NP, 1, 1), cfl=0.2,
-                 subcycle=true, filter_cfl=0.0, regrid_interval=5,
-                 refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8)
+    sod = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                      bcs=(wall, PER[2], PER[3]), dims=(NP, 1, 1), cfl=0.2,
+                      subcycle=true, filter_cfl=0.0, regrid_interval=5,
+                      refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8)
     Qs = allocate_state(sod)
     initialize!(sod, Qs, (x, y, z) -> x < 0.5 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -215,11 +216,11 @@ end
     # `check_step` does.
     wall = (SlipWallBC(), SlipWallBC())
     function sod(control)
-        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(wall, PER[2], PER[3]), dims=(NP, 1, 1), cfl=0.2,
-                   subcycle=true, filter_cfl=0.0, regrid_interval=5,
-                   refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8,
-                   control=control)
+        s = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall, PER[2], PER[3]), dims=(NP, 1, 1), cfl=0.2,
+                        subcycle=true, filter_cfl=0.0, regrid_interval=5,
+                        refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8,
+                        control=control)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> x < 0.5 ?
             Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))

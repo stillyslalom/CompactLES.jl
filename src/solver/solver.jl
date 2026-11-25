@@ -36,6 +36,37 @@ end
 # not such a difference: they are stored abstractly on the `Patch`
 # (patches.jl), so a level-1 patch under an interface often shares its
 # parent's type outright.
+"""
+    Solver
+
+The distributed solver [`setup`](@ref) builds from a [`Problem`](@ref) and a
+[`Numerics`](@ref): the run configuration, the clock, and this rank's patches
+with their decompositions, compact operator plans and geometry. It holds no
+conserved state; `setup` returns the state beside it.
+
+# Geometry selected by the boundary conditions
+
+Collapsed dimensions and coordinate singularities are not keywords: setup
+recognizes them from the problem's `bcs` and validates the rest of the
+configuration against them.
+
+- Collapsed dimensions: set `n_global[d] = 1` with `(PeriodicBC(), PeriodicBC())`
+  for that dimension; e.g. axisymmetric cylindrical is `n_global = (Nr, 1, Nz)`.
+- Cylindrical axis: `bcs[1] = (AxisBC(), <outer bc>)` with
+  `metric = CylindricalMetric()`, the domain's first dimension starting at 0
+  and unstretched. θ may be collapsed (axisymmetric) or resolved over 2π with
+  an even point count. The grid is half-offset in r, so no node sits at r = 0.
+- Spherical origin and poles: [`OriginBC`](@ref) at the low end of r and
+  [`PoleBC`](@ref) at *both* ends of θ, with `metric = SphericalMetric()`. The
+  origin additionally requires a θ range symmetric about π/2, and the poles the
+  full range (0, π). Either may be combined with the other. φ may be collapsed
+  or resolved over 2π with an even point count, as θ may be at the axis.
+- Without these folds, setup rejects a grid with a node at r = 0 or, under
+  `SphericalMetric`, at θ = 0 or π. A collapsed dimension's node sits at the
+  low end of its range. Under `SphericalMetric` a collapsed θ must lie at π/2,
+  and a collapsed r under either curvilinear metric raises a warning; see
+  [`SphericalMetric`](@ref).
+"""
 mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metric,St,Src,P}
     equations::Eq
     eos::E
@@ -121,7 +152,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     positivity::Any
     # The `Problem` and `Numerics` that `setup` built this solver from, as
     # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by
-    # `Solver(; ...)`. Read only by the phase change, `setup(solver, Q; ...)`
+    # `_build_solver` directly. Read only by the phase change, `setup(solver, Q; ...)`
     # (phases.jl), which builds the next phase's solver from them.
     inputs::Any
     # Set when a phase change has freed this solver's device storage

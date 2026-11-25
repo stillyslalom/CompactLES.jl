@@ -25,6 +25,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Test
     const CL = CompactLES
@@ -38,9 +39,9 @@ const rl_per = (PeriodicBC(), PeriodicBC())
 function rl_tube(; N=64, cfl=0.15, backend=CPUBackend(), kw...)
     h = 1.0 / (N - 1)
     wall = (SlipWallBC(), SlipWallBC())
-    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
-                    bcs=(wall, rl_per, rl_per), cfl=cfl, backend=backend,
-                    filter_interval=1; kw...)
+    solver = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
+                         bcs=(wall, rl_per, rl_per), cfl=cfl, backend=backend,
+                         filter_interval=1; kw...)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
@@ -126,9 +127,9 @@ end
     steps = 5
     function build()
         h = 1.0 / 95
-        solver = Solver(n_global=(96, 1, 1), L_domain=(1.0, h, h),
-                        bcs=(rl_per, rl_per, rl_per), cfl=0.2,
-                        patch_grid=(2, 1, 1), filter_interval=1)
+        solver = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, h, h),
+                             bcs=(rl_per, rl_per, rl_per), cfl=0.2,
+                             patch_grid=(2, 1, 1), filter_interval=1)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(0.2, 0, 0), p=1.0 + 0.5exp(-200 * (x - 0.5)^2),
@@ -165,11 +166,11 @@ end
     # The δ⁴ criterion is parked, so the sensor criterion alone decides the
     # box and the tag reads exactly the fields an observational call rebuilds.
     function build(threshold)
-        solver = Solver(n_global=(120, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
-                        cfl=0.2, refine=CL.BlockRegion((50, 0, 0), (31, 1, 1)),
-                        regrid_interval=2, tag_threshold=1e6,
-                        tag_sensor_threshold=threshold, tag_buffer=2)
+        solver = flat_solver(n_global=(120, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                             bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
+                             cfl=0.2, refine=CL.BlockRegion((50, 0, 0), (31, 1, 1)),
+                             regrid_interval=2, tag_threshold=1e6,
+                             tag_sensor_threshold=threshold, tag_buffer=2)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
@@ -195,11 +196,11 @@ end
 end
 
 @testset "sensor tagging reads the state it is given" begin
-    solver = Solver(n_global=(120, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
-                    cfl=0.2, refine=CL.BlockRegion((50, 0, 0), (31, 1, 1)),
-                    regrid_interval=1000, tag_threshold=1e6,
-                    tag_sensor_threshold=1e-3, tag_buffer=2)
+    solver = flat_solver(n_global=(120, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
+                         cfl=0.2, refine=CL.BlockRegion((50, 0, 0), (31, 1, 1)),
+                         regrid_interval=1000, tag_threshold=1e6,
+                         tag_sensor_threshold=1e-3, tag_buffer=2)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
@@ -229,13 +230,13 @@ end
 # A uniform periodic box in either precision: the step is the acoustic one and
 # stays constant, so the count to any endpoint is known ahead of the run.
 function rl_box(::Type{T}; cfl=0.5, kw...) where {T}
-    solver = Solver(n_global=(24, 12, 12), L_domain=(one(T), one(T), one(T)),
-                    bcs=ntuple(_ -> rl_per, 3),
-                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                    transport=ConstantTransport{T}(),
-                    art=ArtificialProperties{T}(enabled=false),
-                    deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-                    cfl=T(cfl), filter_interval=0; kw...)
+    solver = flat_solver(n_global=(24, 12, 12), L_domain=(one(T), one(T), one(T)),
+                         bcs=ntuple(_ -> rl_per, 3),
+                         eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
+                         transport=ConstantTransport{T}(),
+                         art=ArtificialProperties{T}(enabled=false),
+                         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+                         cfl=T(cfl), filter_interval=0; kw...)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1, rho=1))
     return solver, Q
@@ -301,10 +302,10 @@ end
 end
 
 @testset "subcycled runs reach the endpoint" begin
-    solver = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
-                    cfl=0.3, subcycle=true,
-                    refine=CL.BlockRegion((40, 0, 0), (17, 1, 1)))
+    solver = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per),
+                         cfl=0.3, subcycle=true,
+                         refine=CL.BlockRegion((40, 0, 0), (17, 1, 1)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0, 0, 0), p=1.0 + 0.2exp(-200 * (x - 0.5)^2), rho=1.0))
@@ -344,9 +345,9 @@ end
 
 @testset "a rollback re-arms a trigger that fired after the savepoint" begin
     h = 1.0 / 23
-    solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, h, h),
-                    bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per), cfl=0.3,
-                    art=ArtificialProperties(enabled=false))
+    solver = flat_solver(n_global=(24, 1, 1), L_domain=(1.0, h, h),
+                         bcs=((SlipWallBC(), SlipWallBC()), rl_per, rl_per), cfl=0.3,
+                         art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0, 0, 0), p=1.0 + 0.1exp(-50(x - 0.5)^2), rho=1.0))

@@ -28,8 +28,7 @@ orthonormal basis, and total energy per volume.
 
 The object records the component indices and names used by I/O, source terms,
 boundary conditions, and coordinate folds. Users normally select it implicitly
-through [`setup`](@ref); construct it directly when inspecting a layout or
-using the low-level [`Solver`](@ref) constructor.
+through [`setup`](@ref); construct it directly when inspecting a layout.
 """
 struct NavierStokes1T <: EquationSet
     n_species::Int

@@ -15,6 +15,7 @@
 # (max/min), or an element copy — so the whole-step comparison here is
 # expected bitwise as well, and the printout says whether that held.
 
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: compute_rhs!, max_rate, CPUBackend
 using Printf
@@ -159,9 +160,9 @@ function main(opt)
 
     # --- smooth periodic (TGV-shaped IC, multispecies sensors active) -----
     compare_run("periodic smooth 32^3", nmax=10, tfinal=0.5) do backend
-        s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π),
-                   bcs=(per, per, per), transport=ConstantTransport(mu0=1 / 1600),
-                   backend=backend)
+        s = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π),
+                        bcs=(per, per, per), transport=ConstantTransport(mu0=1 / 1600),
+                        backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(
             u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
@@ -173,9 +174,9 @@ function main(opt)
     compare_run("closed multispecies tube", nmax=10, tfinal=0.02) do backend
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-        s = Solver(n_global=(32, 24, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
-                   bcs=((SlipWallBC(), SlipWallBC()), per, per),
-                   backend=backend)
+        s = flat_solver(n_global=(32, 24, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
+                        bcs=((SlipWallBC(), SlipWallBC()), per, per),
+                        backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -196,11 +197,11 @@ function main(opt)
 
     # --- NSCBC inflow/outflow with isothermal no-slip wall ----------------
     compare_run("NSCBC duct", nmax=10, tfinal=0.05) do backend
-        s = Solver(n_global=(48, 16, 1), L_domain=(2.0, 1.0, 1.0),
-                   bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0),
+        s = flat_solver(n_global=(48, 16, 1), L_domain=(2.0, 1.0, 1.0),
+                        bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0),
                          NSCBCOutflowBC(pinf=1.0)),
                         (NoSlipWallBC(Twall=1.0), SlipWallBC()), per),
-                   backend=backend, cfl=0.4, filter_cfl=0.6)
+                        backend=backend, cfl=0.4, filter_cfl=0.6)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.3, 0.0, 0.0)))
         return s, Q
@@ -208,9 +209,9 @@ function main(opt)
 
     # --- resolved-θ cylindrical axis fold ---------------------------------
     compare_run("cylindrical axis fold", nmax=8, tfinal=0.02) do backend
-        s = Solver(n_global=(20, 16, 12), L_domain=(1.0, 2π, 0.5),
-                   bcs=((AxisBC(), SlipWallBC()), per, per),
-                   metric=CylindricalMetric(), backend=backend)
+        s = flat_solver(n_global=(20, 16, 12), L_domain=(1.0, 2π, 0.5),
+                        bcs=((AxisBC(), SlipWallBC()), per, per),
+                        metric=CylindricalMetric(), backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) ->
             Prim(u=(0.05r * cos(θ), 0.2r, 0.05 * sin(2π * z / 0.5)),
@@ -220,11 +221,11 @@ function main(opt)
 
     # --- freestream/GCL: spherical origin + poles, one RHS ----------------
     function sph(backend)
-        s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
-                   bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-                   metric=SphericalMetric(), backend=backend,
-                   art=ArtificialProperties(enabled=false),
-                   transport=ConstantTransport(mu0=0.0))
+        s = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
+                        bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+                        metric=SphericalMetric(), backend=backend,
+                        art=ArtificialProperties(enabled=false),
+                        transport=ConstantTransport(mu0=0.0))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, φ) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
         return s, Q
@@ -251,9 +252,9 @@ function main(opt)
         δ = 2h
         bcs1 = (DirichletBC((x, y, z, t) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0)),
                 DirichletBC((x, y, z, t) -> Prim(rho=0.125, u=(0.0, 0.0, 0.0), p=0.1)))
-        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
-                   bcs=(bcs1, per, per), transport=ConstantTransport(mu0=0.0),
-                   cfl=0.4, backend=backend)
+        s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
+                        bcs=(bcs1, per, per), transport=ConstantTransport(mu0=0.0),
+                        cfl=0.4, backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = tanh_blend(x, 0.5, δ)
@@ -266,11 +267,11 @@ function main(opt)
     # --- Refined solver resident on device --------------------------------
     function refined_wave(backend; kw...)
         N = 96
-        s = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
-                   bcs=(per, per, per), art=ArtificialProperties(enabled=false),
-                   filter_interval=0,
-                   refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
-                   backend=backend; kw...)
+        s = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
+                        bcs=(per, per, per), art=ArtificialProperties(enabled=false),
+                        filter_interval=0,
+                        refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
+                        backend=backend; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -305,10 +306,10 @@ function main(opt)
     # launch's third index modulo the tile's extent.
     function plane_level(backend)
         N = 48
-        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), per, per), cfl=0.9,
-                   filter_interval=1, subcycle=true,
-                   refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)), backend=backend)
+        s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), per, per), cfl=0.9,
+                        filter_interval=1, subcycle=true,
+                        refine=BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1)), backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> begin
             rho = 1 + 0.05 * cos(pi * x)
@@ -319,11 +320,11 @@ function main(opt)
     end
     function rz_folds(backend)
         N = 24
-        s = Solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0),
-                   bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
-                   metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
-                   transport=ConstantTransport(mu0=1e-3),
-                   refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
+        s = flat_solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                        metric=CylindricalMetric(), filter_interval=1, cfl=0.5, subcycle=true,
+                        transport=ConstantTransport(mu0=1e-3),
+                        refine=BlockRegion((0, 0, 0), (13, 1, 5)), tile=4, backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (r, θ, z) -> begin
             rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
@@ -362,10 +363,10 @@ function main(opt)
         return "  stacks " * join([string(length(st.members)) for st in levs[2].stacks], "+")
     end
     function two_slabs(backend)
-        s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                   bcs=(per, per, per), art=ArtificialProperties(enabled=false),
-                   transport=ConstantTransport(mu0=2e-2), patch_grid=(2, 1, 1),
-                   backend=backend)
+        s = flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                        bcs=(per, per, per), art=ArtificialProperties(enabled=false),
+                        transport=ConstantTransport(mu0=2e-2), patch_grid=(2, 1, 1),
+                        backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
@@ -375,10 +376,10 @@ function main(opt)
     end
     function tiled_sod(backend)
         wall2 = (SlipWallBC(), SlipWallBC())
-        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(wall2, per, per), cfl=0.2, subcycle=true,
-                   regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                   tile=8, interface_conservative=false, backend=backend)
+        s = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                        regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                        tile=8, interface_conservative=false, backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> x < 0.5 ?
             Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -391,10 +392,10 @@ function main(opt)
     # step's alone.
     function tiled_box(backend; kw...)
         N = 30
-        s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
-                   transport=ConstantTransport(mu0=1e-2), subcycle=true,
-                   refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
-                   interface_conservative=false, backend=backend; kw...)
+        s = flat_solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
+                        transport=ConstantTransport(mu0=1e-2), subcycle=true,
+                        refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
+                        interface_conservative=false, backend=backend; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.3 + 0.1 * sin(x) * cos(y) * cos(z),
@@ -432,7 +433,7 @@ function main(opt)
             γ = Tp(1.4)
             c0 = Tp(10)
             p0 = c0^2 / γ
-            s = Solver(n_global=(n, n, n),
+            s = flat_solver(n_global=(n, n, n),
                        L_domain=(Tp(2π), Tp(2π), Tp(2π)),
                        bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(Tp), gamma=Tp(1.4)),
                        transport=ConstantTransport{Tp}(mu0=Tp(1 / 1600)),

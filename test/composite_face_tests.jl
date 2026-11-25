@@ -4,6 +4,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: sensor_mirror, isperiodic, compute_rhs!, apply_bcs!, xcoord
 using Test
@@ -27,13 +28,13 @@ const CL = CompactLES
     # Members are validated at setup on the face they sit on.
     bad = CompositeBC((wall, NSCBCInflowBC(u=(0.1, 0, 0), T_ion=1.0, Y=[0.5, 0.5])),
                       (x, y, z) -> 1)
-    @test_throws ErrorException Solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=(bad, (wall, wall), PeriodicBC()))
+    @test_throws ErrorException flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
+                                            bcs=(bad, (wall, wall), PeriodicBC()))
 
     # A selector value outside the member range is an error at first use.
     out_of_range = CompositeBC((wall, wall), (x, y, z) -> 3)
-    s = Solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
-               bcs=((out_of_range, wall), (wall, wall), PeriodicBC()))
+    s = flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=((out_of_range, wall), (wall, wall), PeriodicBC()))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0))
     @test_throws ErrorException apply_bcs!(s, Q)
@@ -53,10 +54,10 @@ end
     function run(side)
         top = NSCBCInflowBC(u=(0.0, -0.1, 0.0), T_ion=1.0, Y=[1.0, 0.0])
         bottom = NSCBCInflowBC(u=(0.0, 0.2, 0.0), T_ion=1.0, Y=[0.0, 1.0])
-        s = Solver(n_global=(17, 25, 1), L_domain=(1.0, 2.0, 1.0),
-                   bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
-                   transport=ConstantTransport(mu0=1e-3),
-                   art=ArtificialProperties(enabled=false))
+        s = flat_solver(n_global=(17, 25, 1), L_domain=(1.0, 2.0, 1.0),
+                        bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
+                        transport=ConstantTransport(mu0=1e-3),
+                        art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=10)
@@ -88,7 +89,7 @@ end
                                                         T_ion=1.0, rho=1.0))
     wall = NoSlipWallBC()
     face = CompositeBC((wall, orifice), (x, y, z) -> abs(x - xc) < w ? 2 : 1)
-    s = Solver(n_global=(n, n, 1), L_domain=(1.0, 1.0, 1.0),
+    s = flat_solver(n_global=(n, n, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((wall, wall), (face, wall), PeriodicBC()),
                transport=ConstantTransport(mu0=2e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(s)
@@ -142,7 +143,7 @@ end
     bottom = stream(U * sqrt(5.0), [0.0, 1.0])
     side = CompositeBC((SlipWallBC(), NSCBCOutflowBC(pinf=1.0, sigma=2.0)),
                        (x, y, z) -> abs(y - 1) < ws ? 2 : 1)
-    s = Solver(n_global=(17, 33, 1), L_domain=(1.0, 2.0, 1.0),
+    s = flat_solver(n_global=(17, 33, 1), L_domain=(1.0, 2.0, 1.0),
                bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
                transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(s)

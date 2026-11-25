@@ -91,10 +91,9 @@ function setup(prev::Solver, Q; bcs=nothing, sources=nothing, transport=nothing,
                numerics::Union{Nothing,Numerics}=nothing)
     inputs = getfield(prev, :inputs)
     inputs === nothing &&
-        throw(ArgumentError("setup(solver, Q): this solver was built by " *
-                            "Solver(; ...), which records no Problem and Numerics " *
-                            "for the next phase to start from; build the first " *
-                            "phase with setup(problem, numerics)"))
+        throw(ArgumentError("setup(solver, Q): this solver records no Problem " *
+                            "and Numerics for the next phase to start from; " *
+                            "build the first phase with setup(problem, numerics)"))
     prob0, num0 = inputs.problem, inputs.numerics
     prob = Problem(name=prob0.name, eos=prob0.eos,
                    transport=transport === nothing ? prob0.transport : transport,

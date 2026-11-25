@@ -1137,15 +1137,6 @@ struct Numerics
     n_halo::Int
 end
 
-# The solver's refinement keywords for a run without `amr`: no refined level.
-const _UNREFINED = (
-    refine=nothing, level_restriction=:inject, level_interpolation_order=nothing,
-    subcycle=false, regrid_interval=0, tag_threshold=0.02, tag_buffer=4,
-    tag_sensor_threshold=0.0, tag_gradient_threshold=0.0,
-    tag_vorticity_threshold=0.0, tag_predicate=nothing, untag_ratio=2.0,
-    tile_lifetime=1, tile=0, rebalance=0.0, rebalance_persist=2, max_levels=nothing,
-)
-
 Numerics(; kw...) = _numerics(; kw...)
 
 # A preset from `Presets` is a NamedTuple of keywords, overridden by those
@@ -1234,13 +1225,15 @@ function _setup(prob::Problem, num::Numerics)
                                 "refinement; remove amr or implicit"))
         return _setup_amr(prob, num, num.amr)
     end
-    return _setup_with_amr_keywords(prob, num, _UNREFINED)
+    return _setup_levels(prob, num, LevelSetup())
 end
 
-function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
-                                  seed_only::Bool=false)
+# The solver of `prob` under `num` with the refinement `lv` gives, without a
+# state: the domain and stretch checks, the element type, and the constructor
+# (`_Solver`, construction.jl). `num.control` is filled in by the caller.
+function _build_solver(prob::Problem, num::Numerics, lv::LevelSetup=LevelSetup();
+                       equations=nothing)
     @nospecialize prob
-    origin = ntuple(d -> prob.domain[d][1], 3)
     L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
     all(d -> all(isfinite, prob.domain[d]), 1:3) ||
         throw(ArgumentError("Problem domain endpoints must be finite, got " *
@@ -1257,25 +1250,17 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                   "x(0) = $(st.x(0.0)), x(1) = $(st.x(1.0)), " *
                   "domain = $(prob.domain[d])")
     end
-    solver = Solver(; n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
-               eos=prob.eos, transport=prob.transport, art=num.art,
-               metric=prob.metric, stretch=num.stretch, sources=prob.sources,
-               origin=origin,
-               deriv=num.deriv, filt=num.filter.scheme,
-               cfl=num.cfl, control=num.control,
-               filter_interval=num.filter.interval,
-               filter_cfl=num.filter.cfl,
-               filter_weighting=num.filter.weighting,
-               polar_truncation=num.polar_truncation, implicit=num.implicit,
-               positivity_limiter=num.positivity_limiter,
-               dims=num.execution.dims, n_halo=num.n_halo, comm=num.execution.comm,
-               patch_grid=num.execution.patch_grid, backend=num.execution.backend,
-               interface_rhs=num.patch_interfaces.rhs,
-               interface_divergence=num.patch_interfaces.divergence,
-               interface_flux=num.patch_interfaces.flux,
-               interface_conservative=num.patch_interfaces.conservative,
-               interface_limited_ghost=num.patch_interfaces.limited_ghost,
-               precision=num.execution.precision, kw...)
+    T = _resolve_precision(num.execution.precision,
+                           (; eos=prob.eos, transport=prob.transport, art=num.art,
+                            deriv=num.deriv, filt=num.filter.scheme,
+                            interface_divergence=num.patch_interfaces.divergence))
+    return _Solver(T, prob, num, lv; equations)
+end
+
+function _setup_levels(prob::Problem, num::Numerics, lv::LevelSetup;
+                       seed_only::Bool=false)
+    @nospecialize prob
+    solver = _build_solver(prob, num, lv)
     Q = allocate_state(solver)
     if seed_only
         # The temporary fine cover exists only to plan the initial tagging.

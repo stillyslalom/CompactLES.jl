@@ -6,6 +6,7 @@
 if !isdefined(@__MODULE__, :CL)
     using MPI
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Test
     const CL = CompactLES
@@ -67,11 +68,11 @@ struct UncorrectedWallBC <: CL.BoundaryCondition end
     eos = IdealMixture(IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)))
     transport = ConstantTransport{T}(mu0=T(0.01), Pr=T(0.8), Sc=T(0.7))
     function audit(bc)
-        sol = Solver(n_global=(33, 1, 1), L_domain=(one(T), one(T), one(T)),
-                     bcs=((bc, bc), _wf_per(), _wf_per()), eos=eos,
-                     transport=transport,
-                     art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
-                     filt=compact_filter(T(0.45), T))
+        sol = flat_solver(n_global=(33, 1, 1), L_domain=(one(T), one(T), one(T)),
+                          bcs=((bc, bc), _wf_per(), _wf_per()), eos=eos,
+                          transport=transport,
+                          art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
+                          filt=compact_filter(T(0.45), T))
         Q = allocate_state(sol)
         initialize!(sol, Q, (x, y, z) -> Prim(rho=one(T), p=one(T) + T(0.1)*x,
                                                u=(zero(T), zero(T), zero(T))))
@@ -113,11 +114,11 @@ end
         Tw = T(315)
         walls = (NoSlipWallBC(Twall=Tw), NoSlipWallBC(Twall=Tw))
         bcs = (walls, walls, walls)
-        s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
-                   bcs=bcs, eos=eos,
-                   transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
-                   art=ArtificialProperties{T}(enabled=true, species_flux=channel),
-                   deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+        s = flat_solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
+                        bcs=bcs, eos=eos,
+                        transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
+                        art=ArtificialProperties{T}(enabled=true, species_flux=channel),
+                        deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             q = (x, y, z)[d]
@@ -166,11 +167,11 @@ end
     for (T, d, channel, eosfn) in cases
         walls = (SlipWallBC(), SlipWallBC())
         # Every face is a slip wall, so their intersections are exercised too.
-        s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
-                   bcs=(walls, walls, walls), eos=eosfn(T),
-                   transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
-                   art=ArtificialProperties{T}(enabled=true, species_flux=channel),
-                   deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+        s = flat_solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
+                        bcs=(walls, walls, walls), eos=eosfn(T),
+                        transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
+                        art=ArtificialProperties{T}(enabled=true, species_flux=channel),
+                        deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             q = (x, y, z)[d]
@@ -216,10 +217,10 @@ end
     mu, tf = 0.005, 0.2
     prof(x) = (1 + 0.05cospi(x), 0.05sinpi(x), 0.05cospi(x))
     function line(N, bc, L, bcs)
-        s = Solver(n_global=(N, 1, 1), L_domain=(L, 1.0, 1.0), bcs=bcs,
-                   transport=ConstantTransport(mu0=mu, Pr=0.7),
-                   art=ArtificialProperties(enabled=false),
-                   deriv=lele_d1_6(), filter_interval=0, cfl=0.25)
+        s = flat_solver(n_global=(N, 1, 1), L_domain=(L, 1.0, 1.0), bcs=bcs,
+                        transport=ConstantTransport(mu0=mu, Pr=0.7),
+                        art=ArtificialProperties(enabled=false),
+                        deriv=lele_d1_6(), filter_interval=0, cfl=0.25)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             rho, u, v = prof(x)
@@ -256,7 +257,7 @@ end
     # The two contracts at the same wall node, from the same assembled flux.
     T = Float64
     bc = NoSlipWallBC(Twall=1.0)
-    s = Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
+    s = flat_solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((bc, NoSlipWallBC()), _wf_per(), _wf_per()),
                transport=ConstantTransport(mu0=0.01), art=ArtificialProperties(enabled=false))
     Q = allocate_state(s)
@@ -278,10 +279,10 @@ end
     eos = IdealMixture((IdealSpecies(T, "a"; R=one(T), gamma=T(1.4)),
                         IdealSpecies(T, "b"; R=one(T), gamma=T(1.4))))
     walls = (NoSlipWallBC(), NoSlipWallBC())
-    s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
-               bcs=(walls, _wf_per(), _wf_per()), eos=eos,
-               transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=Sc),
-               art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T))
+    s = flat_solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
+                    bcs=(walls, _wf_per(), _wf_per()), eos=eos,
+                    transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=Sc),
+                    art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> begin
         Y1 = T(0.5) + T(0.1)*cospi(T(2)*x)
@@ -350,11 +351,11 @@ end
     errors = Float64[]
     defects = Float64[]
     for n in (33, 65)
-        s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), eos=eos,
-                   bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()),
-                   sources=(WallConductionBalance(amp, diffusivity),),
-                   transport=ConstantTransport(mu0=mu, Pr=Pr),
-                   art=ArtificialProperties(enabled=false), filter_interval=0, cfl=0.2)
+        s = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), eos=eos,
+                        bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()),
+                        sources=(WallConductionBalance(amp, diffusivity),),
+                        transport=ConstantTransport(mu0=mu, Pr=Pr),
+                        art=ArtificialProperties(enabled=false), filter_interval=0, cfl=0.2)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=1+amp*cospi(2x)))
         ie = s.equations.i_energy
@@ -389,10 +390,10 @@ end
     mu, Sc = T(0.012), T(0.75)
     eos = IdealMixture((IdealSpecies(T, "a"; R=one(T), gamma=T(1.4)),
                         IdealSpecies(T, "b"; R=one(T), gamma=T(1.4))))
-    s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
-               bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()), eos=eos,
-               transport=ConstantTransport{T}(mu0=mu, Pr=T(0.8), Sc=Sc),
-               art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.2))
+    s = flat_solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
+                    bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()), eos=eos,
+                    transport=ConstantTransport{T}(mu0=mu, Pr=T(0.8), Sc=Sc),
+                    art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.2))
     Q = allocate_state(s)
     amp, tf = T(0.1), T(0.002)
     initialize!(s, Q, (x, y, z) -> begin
@@ -421,11 +422,11 @@ end
     T = Float64
     Tw, mu, Pr = one(T), T(0.01), T(0.8)
     eos = IdealMixture(IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)))
-    s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
-               bcs=((NoSlipWallBC(Twall=Tw), NoSlipWallBC(Twall=Tw)),
+    s = flat_solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
+                    bcs=((NoSlipWallBC(Twall=Tw), NoSlipWallBC(Twall=Tw)),
                     _wf_per(), _wf_per()), eos=eos,
-               transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=T(0.7)),
-               art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.1))
+                    transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=T(0.7)),
+                    art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) ->
         Prim(rho=one(T), T_ion=Tw + T(0.05)*sinpi(x)))
@@ -466,10 +467,10 @@ end
               StiffenedGas(gamma=1.4, p_inf=0.0, cv=2.5)))
     for (metric, extent, origin, eos) in cases, bc in (NoSlipWallBC(), SlipWallBC())
         walls = (bc, bc)
-        s = Solver(n_global=(12, 12, 12), L_domain=extent,
-                   bcs=(walls, _wf_per(), _wf_per()), metric=metric, origin=origin,
-                   eos=eos, transport=ConstantTransport(mu0=0.01),
-                   art=ArtificialProperties(enabled=false))
+        s = flat_solver(n_global=(12, 12, 12), L_domain=extent,
+                        bcs=(walls, _wf_per(), _wf_per()), metric=metric, origin=origin,
+                        eos=eos, transport=ConstantTransport(mu0=0.01),
+                        art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0 + 0.03x))
         apply_bcs!(s, Q)
@@ -483,10 +484,10 @@ end
 @testset "wall flux: threaded and KA-CPU pointwise equality" begin
     for backend in (CPUBackend(), DeviceBackend(KernelAbstractions.CPU())),
         wall in (NoSlipWallBC(Twall=1.1), SlipWallBC())
-        s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), backend=backend,
-                   bcs=((wall, wall), _wf_per(), _wf_per()),
-                   transport=ConstantTransport(mu0=0.01),
-                   art=ArtificialProperties(enabled=false))
+        s = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), backend=backend,
+                        bcs=((wall, wall), _wf_per(), _wf_per()),
+                        transport=ConstantTransport(mu0=0.01),
+                        art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=0.9 + 0.3x,
                                              u=(0.1, -0.2, 0.05)))
@@ -505,7 +506,7 @@ end
 end
 
 @testset "no-slip wall flux: filtering remains a separate operation" begin
-    s = Solver(n_global=(33, 1, 1), L_domain=(1.0, 1.0, 1.0),
+    s = flat_solver(n_global=(33, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()),
                eos=IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
                                  IdealSpecies("b"; R=1.0, gamma=1.4))),

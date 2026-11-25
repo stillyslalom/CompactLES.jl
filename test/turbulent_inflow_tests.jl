@@ -8,6 +8,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: apply_bcs!, padded_index, xcoord
 using Test
@@ -195,9 +196,9 @@ end
     per = (PeriodicBC(), PeriodicBC())
     turb = TurbulentInflow(mean; length_scale=0.1, intensity=0.1)
     function runwith(inlet)
-        s = Solver(n_global=(16, 12, 12), L_domain=(0.5, 0.4, 0.4),
-                   bcs=((inlet, NSCBCOutflowBC(pinf=1.0)), per, per), eos=eos,
-                   art=ArtificialProperties(enabled=false), cfl=0.4)
+        s = flat_solver(n_global=(16, 12, 12), L_domain=(0.5, 0.4, 0.4),
+                        bcs=((inlet, NSCBCOutflowBC(pinf=1.0)), per, per), eos=eos,
+                        art=ArtificialProperties(enabled=false), cfl=0.4)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> mean)
         run!(s, Q; tfinal=1e9, nmax=4)

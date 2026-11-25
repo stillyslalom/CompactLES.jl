@@ -14,6 +14,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: CPUBackend
 using Printf
@@ -85,9 +86,9 @@ function main()
     compare_run("multispecies tube, split x"; nmax=opt.steps) do backend
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-        s = Solver(n_global=(72, 16, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
-                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                   dims=dims1, backend=backend)
+        s = flat_solver(n_global=(72, 16, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
+                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                        dims=dims1, backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -98,9 +99,9 @@ function main()
     end
 
     compare_run("resolved-θ axis fold, split θ"; nmax=opt.steps) do backend
-        s = Solver(n_global=(20, 72, 12), L_domain=(1.0, 2π, 0.5),
-                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                   metric=CylindricalMetric(), dims=dims2, backend=backend)
+        s = flat_solver(n_global=(20, 72, 12), L_domain=(1.0, 2π, 0.5),
+                        bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                        metric=CylindricalMetric(), dims=dims2, backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) ->
             Prim(u=(0.05r * cos(θ), 0.2r, 0.05 * sin(2π * z / 0.5)),

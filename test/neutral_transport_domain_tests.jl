@@ -8,6 +8,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using Test
 
@@ -54,9 +55,9 @@ bad_prim() = Prim(Y=(0.2, 0.3, 0.5), rho=1.0, T_ion=340.0)
 
 function base_solver(; kwargs...)
     eos, transport = polynomial_transport()
-    return Solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                  eos=eos, transport=transport, dims=(NP, 1, 1),
-                  art=ArtificialProperties(enabled=false), filter_interval=0; kwargs...)
+    return flat_solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
+                       eos=eos, transport=transport, dims=(NP, 1, 1),
+                       art=ArtificialProperties(enabled=false), filter_interval=0; kwargs...)
 end
 
 function poison!(ps, Q)
@@ -130,9 +131,9 @@ end
 
 @testset "patch-disparate ownership rejects collectively" begin
     eos, transport = polynomial_transport()
-    solver = Solver(n_global=(144, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                    eos=eos, transport=transport, patch_grid=(2, 1, 1),
-                    art=ArtificialProperties(enabled=false), filter_interval=0)
+    solver = flat_solver(n_global=(144, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
+                         eos=eos, transport=transport, patch_grid=(2, 1, 1),
+                         art=ArtificialProperties(enabled=false), filter_interval=0)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     for (ps, Q) in CL.eachpatch(solver, states)
@@ -145,10 +146,10 @@ end
 
 @testset "subcycle fine-only owner rejects collectively" begin
     eos, transport = polynomial_transport()
-    solver = Solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                    eos=eos, transport=transport,
-                    refine=BlockRegion((32, 0, 0), (4, 1, 1)), subcycle=true,
-                    art=ArtificialProperties(enabled=false), filter_interval=0)
+    solver = flat_solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
+                         eos=eos, transport=transport,
+                         refine=BlockRegion((32, 0, 0), (4, 1, 1)), subcycle=true,
+                         art=ArtificialProperties(enabled=false), filter_interval=0)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     poisoned = false

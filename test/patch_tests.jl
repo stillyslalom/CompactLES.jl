@@ -7,6 +7,7 @@
 # Guards follow the convergence-suite convention: measured values are baked in
 # with headroom, and a moved digit means the interface treatment changed.
 
+using CompactLES: flat_solver
 using CompactLES: compute_rhs!, npatches, padded_index, xcoord
 
 @testset "patch layout arithmetic" begin
@@ -38,10 +39,10 @@ function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:exte
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     ic(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
-    solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtificialProperties(enabled=false), filter_interval=0,
-                    patch_grid=patch_grid, interface_rhs=interface_rhs,
-                    deriv=deriv, n_halo=n_halo)
+    solver = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                         art=ArtificialProperties(enabled=false), filter_interval=0,
+                         patch_grid=patch_grid, interface_rhs=interface_rhs,
+                         deriv=deriv, n_halo=n_halo)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=tfinal)
@@ -90,11 +91,11 @@ function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extende
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     ic(x, y, z) = Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
                        rho=1.0 + 0.2 * sin(x))
-    solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtificialProperties(enabled=false), filter_interval=0,
-                    transport=ConstantTransport(mu0=2e-2), patch_grid=patch_grid,
-                    deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs,
-                    interface_flux=:closure)
+    solver = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                         art=ArtificialProperties(enabled=false), filter_interval=0,
+                         transport=ConstantTransport(mu0=2e-2), patch_grid=patch_grid,
+                         deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs,
+                         interface_flux=:closure)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=0.5)
@@ -140,9 +141,9 @@ end
     pulse(x) = amp * exp(-40.0 * (x - π / 2)^2)
     ic(x, y, z) = Prim(u=(pulse(x) / sqrt(1.4), 0, 0), p=1.0 + pulse(x),
                        rho=(1.0 + pulse(x))^(1 / 1.4))
-    solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtificialProperties(enabled=false), filter_interval=0,
-                    patch_grid=(2, 1, 1))
+    solver = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                         art=ArtificialProperties(enabled=false), filter_interval=0,
+                         patch_grid=(2, 1, 1))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
     # c ≈ √1.4; run the pulse from π/2 to ≈ 3π/2, well past the interface.
@@ -165,9 +166,9 @@ end
     # C10: 3.8e-7 at 192. The closure rows read 4.1e-3 (7.5e-2 at 96, 7.7e-5
     # at 384), the larger mismatch between the interior rows and the
     # divergence's C6 closure cascade.
-    solver10 = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                      art=ArtificialProperties(enabled=false), filter_interval=0,
-                      patch_grid=(2, 1, 1), deriv=lele_d1_10())
+    solver10 = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                           art=ArtificialProperties(enabled=false), filter_interval=0,
+                           patch_grid=(2, 1, 1), deriv=lele_d1_10())
     states10 = allocate_state(solver10)
     initialize!(solver10, states10, ic)
     run!(solver10, states10; tfinal=π / sqrt(1.4))
@@ -187,9 +188,9 @@ end
     ic(x, y, z) = Prim(u=(0.3 + 0.1 * sin(x), 0, 0), p=1.0 + 0.05 * cos(x),
                        rho=1.0 + 0.2 * sin(x))
     drift = map(((1, 1, 1), (2, 1, 1))) do pg
-        solver = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                        art=ArtificialProperties(enabled=false), filter_interval=1,
-                        patch_grid=pg)
+        solver = flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                             art=ArtificialProperties(enabled=false), filter_interval=1,
+                             patch_grid=pg)
         Q = allocate_state(solver)
         initialize!(solver, Q, ic)
         states = Q isa Vector ? Q : [Q]
@@ -207,21 +208,21 @@ end
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     # C10's interface rows read four ghost layers, the default halo; a
     # narrower one is refused with the width to construct with.
-    @test_throws "n_halo ≥ 4" Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                     bcs=per3, patch_grid=(2, 1, 1),
-                                     deriv=lele_d1_10(), n_halo=3)
-    @test npatches(Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                          patch_grid=(2, 1, 1), deriv=lele_d1_10())) == 2
-    @test npatches(Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                          patch_grid=(2, 1, 1), deriv=lele_d1_10(),
-                          interface_rhs=:onesided, interface_flux=:closure)) == 2
-    @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, patch_grid=(2, 1, 1),
-                                       art=ArtificialProperties(detector=:d8))
-    @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                       metric=CylindricalMetric(),
-                                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                                       patch_grid=(2, 1, 1))
+    @test_throws "n_halo ≥ 4" flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                          bcs=per3, patch_grid=(2, 1, 1),
+                                          deriv=lele_d1_10(), n_halo=3)
+    @test npatches(flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                               patch_grid=(2, 1, 1), deriv=lele_d1_10())) == 2
+    @test npatches(flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                               patch_grid=(2, 1, 1), deriv=lele_d1_10(),
+                               interface_rhs=:onesided, interface_flux=:closure)) == 2
+    @test_throws ErrorException flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                            bcs=per3, patch_grid=(2, 1, 1),
+                                            art=ArtificialProperties(detector=:d8))
+    @test_throws ErrorException flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                            metric=CylindricalMetric(),
+                                            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                                            patch_grid=(2, 1, 1))
 end
 
 @testset "two patches: the species :d8 detector reads the interface ghosts" begin
@@ -239,13 +240,13 @@ end
                 tanh(x / 0.2) + 1) / 2
     ic(x, y, z) = (θ = clamp(front(x), 0.0, 1.0);
                    Prim(rho=1.0, u=(0.3, 0, 0), p=1.0, Y=(1 - θ, θ)))
-    mk(pg, det) = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                         eos=eos, art=ArtificialProperties(detector=det),
-                         filter_interval=0, patch_grid=pg)
+    mk(pg, det) = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                              eos=eos, art=ArtificialProperties(detector=det),
+                              filter_interval=0, patch_grid=pg)
     @test mk((2, 1, 1), :species_d8).patches[1].ring_plans !== nothing
     @test mk((2, 1, 1), :delta4).patches[1].ring_plans === nothing
-    @test Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                 patch_grid=(2, 1, 1)).patches[1].ring_plans === nothing
+    @test flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                      patch_grid=(2, 1, 1)).patches[1].ring_plans === nothing
     function face_error(det)
         single = mk((1, 1, 1), det)
         Q = allocate_state(single)
@@ -294,9 +295,9 @@ _div_rows_match(plan, decomp, deriv, h, lo, hi) =
 
 function _patched_rhs(; kw...)
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    s = Solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-               art=ArtificialProperties(enabled=false), filter_interval=0,
-               transport=ConstantTransport(mu0=1e-2), patch_grid=(2, 1, 1); kw...)
+    s = flat_solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
+                    transport=ConstantTransport(mu0=1e-2), patch_grid=(2, 1, 1); kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.5 + 0.1 * sin(2x), 0, 0),
                                         p=1.0 + 0.05 * cos(x), rho=1.0 + 0.2 * sin(x)))
@@ -317,9 +318,9 @@ end
     # the interface at its high end takes the source's, under either
     # gradient treatment.
     for rhs in (:extended, :onesided)
-        s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls,
-                   patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl,
-                   interface_flux=:closure)
+        s = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls,
+                        patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl,
+                        interface_flux=:closure)
         p1 = getfield(s, :patches)[1]
         @test _div_rows_match(p1.div_plans[1], p1.decomp, c6, p1.h[1],
                               nothing, bl.closures)
@@ -340,7 +341,7 @@ end
     @test _patched_rhs(interface_divergence=bl) == _patched_rhs()
     # Refused at setup: another interior, another element type, a filter, a
     # run without an interface, and more rows than a regridded patch holds.
-    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
+    mk(; kw...) = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
     @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
                                             interface_divergence=lele_d1_8())
     @test_throws "floating-point types" mk(patch_grid=(2, 1, 1), deriv=lele_d1_6(),
@@ -378,8 +379,8 @@ function _polynomial_rhs_error(; kw...)
                 -((dE(x) + dp(x)) * u(x) + (E(x) + p(x)) * du))
     per = (PeriodicBC(), PeriodicBC())
     ext = (ExtrapolationBC(), ExtrapolationBC())
-    s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(ext, per, per),
-               art=ArtificialProperties(enabled=false), filter_interval=0; kw...)
+    s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(ext, per, per),
+                    art=ArtificialProperties(enabled=false), filter_interval=0; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=ρ(x), u=(u(x), 0, 0), p=p(x)))
     dQ = [zero(q) for q in Q]
@@ -416,7 +417,7 @@ end
     @test _patched_rhs() == _patched_rhs(interface_flux=:ghost)
     @test _patched_rhs(interface_flux=:closure) != _patched_rhs()
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
+    mk(; kw...) = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
     @test_throws "must be :closure or :ghost" mk(patch_grid=(2, 1, 1),
                                                  interface_flux=:extended)
     # Without an interface the setting selects nothing, and the solver
@@ -445,9 +446,9 @@ function _viscous_interface_error(N; kw...)
                        p=1 + 0.1cos(x - 0.2), Y=(0.6 + 0.2sin(x), 0.4 - 0.2sin(x)))
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.5, 1.3)])
-    mk(; k...) = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, eos=eos,
-                        art=ArtificialProperties(enabled=false), filter_interval=0,
-                        transport=ConstantTransport(mu0=2e-2); k...)
+    mk(; k...) = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, eos=eos,
+                             art=ArtificialProperties(enabled=false), filter_interval=0,
+                             transport=ConstantTransport(mu0=2e-2); k...)
     s = mk(; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, ic)
@@ -495,8 +496,8 @@ end
     # path with molecular transport or the artificial properties, whose
     # remainder they carry, along each interface dimension.
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                         patch_grid=(2, 1, 1); kw...)
+    mk(; kw...) = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                              patch_grid=(2, 1, 1); kw...)
     extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
     off = ArtificialProperties(enabled=false)
     @test all(==(0), extents(mk(interface_flux=:ghost, art=off)))
@@ -510,9 +511,9 @@ end
     # molecular transport and the artificial properties off, and not under the
     # artificial properties, whose extrapolated remainder carries the molecular
     # flux on those ghost layers.
-    ring(; kw...) = getfield(Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                    bcs=per3, transport=ConstantTransport(mu0=1e-2),
-                                    refine=BlockRegion((20, 0, 0), (9, 1, 1)); kw...),
+    ring(; kw...) = getfield(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                         bcs=per3, transport=ConstantTransport(mu0=1e-2),
+                                         refine=BlockRegion((20, 0, 0), (9, 1, 1)); kw...),
                              :levels)[2].transfers[1].gradients
     @test ring(art=off) isa CL.ShellGradients
     @test ring() === nothing

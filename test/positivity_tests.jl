@@ -25,6 +25,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Test
     using Printf
@@ -107,8 +108,8 @@ end
         bcs = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
                (NoSlipWallBC(), NoSlipWallBC()))
         for deriv in (lele_d1_6(), lele_d1_8(), lele_d1_6(closures=:brady_livescu))
-            s = Solver(n_global=(56, 16, 52), L_domain=(1.0, 0.3, 1.1), bcs=bcs,
-                       deriv=deriv, eos=POS_GAS, positivity_limiter=true)
+            s = flat_solver(n_global=(56, 16, 52), L_domain=(1.0, 0.3, 1.1), bcs=bcs,
+                            deriv=deriv, eos=POS_GAS, positivity_limiter=true)
             lim = getfield(s, :positivity)
             dec = s.decomp
             o = dec.n_halo_d
@@ -133,9 +134,9 @@ end
         end
         # The wall node's weight under the default closure rows, which sets
         # the first-order bound there.
-        W1 = getfield(Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                             eos=POS_GAS, positivity_limiter=true),
+        W1 = getfield(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                                  eos=POS_GAS, positivity_limiter=true),
                       :positivity).weights[1]
         @test W1[5] * 47 ≈ 0.2149 atol = 1e-4
     end
@@ -726,13 +727,13 @@ end
         # without the fallback), and those nodes take the multilinear
         # interpolant of the parent's endpoint states instead.
         for flux in (:closure, :ghost)
-            s = Solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                       bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+            s = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
+                            bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
                             per3[3]), eos=POS_GAS, art=ArtificialProperties(enabled=true),
-                       cfl=0.4, control=StepControl(validity=:permissive),
-                       positivity_limiter=true, interface_flux=flux,
-                       interface_limited_ghost=true, tile=8, subcycle=true,
-                       refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+                            cfl=0.4, control=StepControl(validity=:permissive),
+                            positivity_limiter=true, interface_flux=flux,
+                            interface_limited_ghost=true, tile=8, subcycle=true,
+                            refine=BlockRegion((12, 12, 0), (24, 24, 1)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +

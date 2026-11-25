@@ -62,6 +62,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES, Printf
 using CompactLES: padded_index, xcoord
 const CL = CompactLES
@@ -493,10 +494,10 @@ function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing
                          subcycle=false, opts...)
     amp = 1e-3; c0 = sqrt(GAMMA)
     pulse(x) = amp * exp(-40 * (x - pi / 2)^2)
-    s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
-               art=ArtificialProperties(enabled=false), filter_interval=0,
-               patch_grid=patch_grid, refine=refine, subcycle=subcycle;
-               merge((interface_divergence=source, IFLUX...), opts)...)
+    s = flat_solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
+                    patch_grid=patch_grid, refine=refine, subcycle=subcycle;
+                    merge((interface_divergence=source, IFLUX...), opts)...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=(1 + pulse(x))^(1 / GAMMA),
                                         p=1 + pulse(x), u=(pulse(x) / c0, 0, 0)))

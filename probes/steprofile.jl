@@ -24,6 +24,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using Profile, Printf
 
@@ -33,9 +34,9 @@ const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 opt = CL.script_args(ARGS, (grid = 32, steps = 3, mincount = 50, art = false,
                             delay = 0.002); positional = (:grid,))
 
-solver = Solver(n_global = (opt.grid, opt.grid, opt.grid),
-                L_domain = (2π, 2π, 2π), bcs = per3,
-                art = ArtificialProperties(enabled = opt.art))
+solver = flat_solver(n_global = (opt.grid, opt.grid, opt.grid),
+                     L_domain = (2π, 2π, 2π), bcs = per3,
+                     art = ArtificialProperties(enabled = opt.art))
 Q = allocate_state(solver)
 initialize!(solver, Q, (x, y, z) -> Prim(u = (0.1sin(x), 0, 0), p = 1.0,
                                          rho = 1.0))

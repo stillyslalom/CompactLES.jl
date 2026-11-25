@@ -13,6 +13,7 @@
 #
 # Include after CompactLES and Printf; `references.jl` supplies noh_exact.
 
+using CompactLES: flat_solver
 using CompactLES: padded_index, xcoord
 
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -881,13 +882,13 @@ function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
     n = mirror ? 2(N - 1) : N
     L = mirror ? T(2) : one(T)
     bcs = mirror ? per : (SlipWallBC(), SlipWallBC())
-    solver = Solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
-                    bcs=(bcs, per, per),
-                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
-                    transport=ConstantTransport{T}(mu0=zero(T)),
-                    art=ArtificialProperties{T}(enabled=art), deriv=deriv, filt=filt,
-                    cfl=T(cfl), filter_interval=filter_interval,
-                    filter_cfl=filter_cfl, control=control)
+    solver = flat_solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
+                         bcs=(bcs, per, per),
+                         eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
+                         transport=ConstantTransport{T}(mu0=zero(T)),
+                         art=ArtificialProperties{T}(enabled=art), deriv=deriv, filt=filt,
+                         cfl=T(cfl), filter_interval=filter_interval,
+                         filter_cfl=filter_cfl, control=control)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         x <= 1 ? pulse_prim(T, x, amp, 1) : pulse_prim(T, 2 - x, amp, -1))

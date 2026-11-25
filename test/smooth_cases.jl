@@ -30,6 +30,7 @@
 #
 # Include after CompactLES.
 
+using CompactLES: flat_solver
 using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
 
 const SMOOTH_W = 4
@@ -203,11 +204,11 @@ function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
                         filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(),
                         precision=Float64, art=ArtificialProperties(enabled=false),
                         kwargs...)
-    solver = Solver(n_global=n_global, L_domain=(L, 1.0, 1.0), bcs=bcs,
-                    deriv=deriv, filt=filt, filter_interval=filter_interval,
-                    filter_cfl=filter_cfl, cfl=cfl, precision=precision,
-                    transport=ConstantTransport{Float64}(mu0=mu, Pr=Pr), sources=sources,
-                    art=art; kwargs...)
+    solver = flat_solver(n_global=n_global, L_domain=(L, 1.0, 1.0), bcs=bcs,
+                         deriv=deriv, filt=filt, filter_interval=filter_interval,
+                         filter_cfl=filter_cfl, cfl=cfl, precision=precision,
+                         transport=ConstantTransport{Float64}(mu0=mu, Pr=Pr), sources=sources,
+                         art=art; kwargs...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
         rho, u, v, p = prof(x)
@@ -474,11 +475,11 @@ function corner_level_case(N; refined=true, opts...)
     n = refined ? N : 3N - 1
     level = refined ? (refine=BlockRegion((0, 0, 0), (m, 1, m)),) : (;)
     o = merge(SMOOTH_DEFAULTS, (cfl=0.9, filter_interval=1), level, values(opts))
-    solver = Solver(; n_global=(n, 1, n), L_domain=(1.0, 1.0, 1.0),
-                    bcs=((AxisBC(), SlipWallBC()), per3[2],
+    solver = flat_solver(; n_global=(n, 1, n), L_domain=(1.0, 1.0, 1.0),
+                         bcs=((AxisBC(), SlipWallBC()), per3[2],
                          (SymmetryPlaneBC(), SlipWallBC())),
-                    metric=CylindricalMetric(), art=ArtificialProperties(enabled=false),
-                    o...)
+                         metric=CylindricalMetric(), art=ArtificialProperties(enabled=false),
+                         o...)
     states = allocate_state(solver)
     initialize!(solver, states, (r, θ, z) -> begin
         rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
@@ -745,7 +746,7 @@ result rather than assuming either convention.
 function closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W, folded=false,
                                   parity=1)
     bc = folded ? SymmetryPlaneBC() : SlipWallBC()
-    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+    solver = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=((bc, bc), per3[2], per3[3]),
                     deriv=deriv, art=ArtificialProperties(enabled=false), filter_interval=0)
     a = CompactLES.field(solver.decomp); da = similar(a)
@@ -927,9 +928,9 @@ square refined level, exact at every time.
 function entropy2d_case(N; k1=2, k2=1, phase=0.37, subcycle=false, opts...)
     o = merge(SMOOTH_DEFAULTS, opts)
     prof = entropy2d_profile(k1, k2, phase)
-    solver = Solver(; n_global=(N, N, 1), L_domain=(2pi, 2pi, 1.0), bcs=per3,
-                    art=ArtificialProperties(enabled=false), refine=refine_region2d(N),
-                    subcycle=subcycle, o...)
+    solver = flat_solver(; n_global=(N, N, 1), L_domain=(2pi, 2pi, 1.0), bcs=per3,
+                         art=ArtificialProperties(enabled=false), refine=refine_region2d(N),
+                         subcycle=subcycle, o...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
         rho, u, v, p = prof(x, y)

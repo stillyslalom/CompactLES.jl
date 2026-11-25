@@ -5,6 +5,7 @@
 # each, plus counts the derivative solves it issues.
 using MPI
 MPI.Init(threadlevel=:funneled)
+using CompactLES: flat_solver
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!
 using Printf
@@ -132,8 +133,9 @@ opt = CompactLES.script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
                          species_flux = ART_DEFAULTS.species_flux))
 
 # tgv-like: 3-D periodic, single species, art off
-s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
-            transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=false))
+s1 = flat_solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
+                 transport=ConstantTransport(mu0=1e-3),
+                 art=ArtificialProperties(enabled=false))
 Q1 = allocate_state(s1)
 initialize!(s1, Q1, (x, y, z) -> Prim(u=(sin(x) * cos(y), -cos(x) * sin(y), 0.0),
                                       p=1 + 0.05cos(2z), rho=1.0))
@@ -142,9 +144,9 @@ budget("tgv 64^3, 1 species, art off", s1, Q1)
 # tube-like: 2-D, two species, art on
 eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                     IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
-            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtificialProperties(enabled=true, smoother=opt.smoother,
+s2 = flat_solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
+                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                 art=ArtificialProperties(enabled=true, smoother=opt.smoother,
                                      detector=opt.detector, mu_sensor=opt.mu_sensor,
                                      beta_sensor=opt.beta_sensor, reduction=opt.reduction,
                                      species_flux=Symbol(opt.species_flux)))

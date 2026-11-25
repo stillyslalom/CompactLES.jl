@@ -148,6 +148,7 @@ include("timing.jl")
 @phase "package load" begin
     using MPI
     MPI.Init(threadlevel=:funneled)
+    using CompactLES: flat_solver
     using CompactLES
     using Printf, Test
 end
@@ -263,80 +264,80 @@ end
 
 println("\n=== interior order (periodic) ===")
 study("C6 periodic derivative", (16, 32, 64),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=6.0, tol=1.2, recorded=6.01)
 
 study("C8 periodic derivative", (16, 32, 64),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
+                       deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=8.0, tol=1.5, recorded=8.00)
 
 study("C10 periodic derivative", (16, 24, 32),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
+                       deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=10.0, tol=2.5, recorded=10.04)
 
 println("\n=== closed-domain order (boundary closures active) ===")
 study("C6 with wall closures", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
 
 study("C6 wall closures, :cascade3", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_6(closures=:cascade3),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_6(closures=:cascade3),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.17)
 
 study("C6 wall closures, :cascade4", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_6(closures=:cascade4),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_6(closures=:cascade4),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=4.0, tol=0.8, recorded=4.02)
 
 study("C6 wall closures, :brady_livescu", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_6(closures=:brady_livescu),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_6(closures=:brady_livescu),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=6.0, tol=1.0, recorded=5.88)
 
 study("C8 with wall closures", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
 
 study("C8 wall closures, :brady_livescu", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_8(closures=:brady_livescu),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_8(closures=:brady_livescu),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=8.0, tol=1.2, recorded=7.91)
 
 study("C10 with wall closures", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
@@ -348,19 +349,19 @@ study("C10 with wall closures", (24, 48, 96),
 # restore the interior order. Resolutions are lower because the
 # eighth-order pass reaches round-off by N = 48 on this field.
 study("C8 filter pass, :cascade", (12, 16, 24, 32),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  filt=compact_filter(0.45; closures=:cascade),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       filt=compact_filter(0.45; closures=:cascade),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
       expect=2.0, tol=0.6, recorded=1.88, op=:filter)
 
 study("C8 filter pass, :onesided", (12, 16, 24, 32),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  filt=compact_filter(0.45; closures=:onesided),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       filt=compact_filter(0.45; closures=:onesided),
+                       art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
       expect=8.0, tol=1.5, recorded=8.07, op=:filter)
@@ -374,9 +375,9 @@ study("C8 filter pass, :onesided", (12, 16, 24, 32),
 # quickly on a field this smooth.
 const SYM = (SymmetryPlaneBC(), SymmetryPlaneBC())
 sym_solver(N, deriv) =
-    Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
-           bcs=(SYM, per3[2], per3[3]), deriv=deriv,
-           filt=compact_filter(0.45), art=ArtificialProperties(enabled=false))
+    flat_solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                bcs=(SYM, per3[2], per3[3]), deriv=deriv,
+                filt=compact_filter(0.45), art=ArtificialProperties(enabled=false))
 sym_even(x, y, z) = exp(cospi(x))
 sym_deven(x, y, z) = -pi * sinpi(x) * exp(cospi(x))
 sym_odd(x, y, z) = sinpi(x) * exp(cospi(x))
@@ -411,38 +412,38 @@ study("C8 filter pass, symmetry planes", (16, 24, 32, 48),
 
 println("\n=== coordinate-singularity folds ===")
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
-      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                  metric=CylindricalMetric(),
-                  bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> r * exp(-4r^2),
       (fn=(r, θ, z) -> (1 - 8r^2) * exp(-4r^2), parity=-1);
       expect=3.7, tol=0.8, recorded=3.76)
 
 study("cylindrical axis, even field (scalar)", (32, 64, 128),
-      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                  metric=CylindricalMetric(),
-                  bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> exp(-4r^2),
       (fn=(r, θ, z) -> -8r * exp(-4r^2), parity=1);
       expect=3.0, tol=0.8, recorded=2.99)
 
 study("resolved-θ axis, x-like field", (32, 64, 128),
-      N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
-                  metric=CylindricalMetric(),
-                  bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtificialProperties(enabled=false)),
+      N -> flat_solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> r * cos(θ) * exp(-4r^2),
       (fn=(r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2), parity=1);
       expect=3.7, tol=0.8, recorded=3.76)
 
 study("spherical origin, radial Gaussian", (24, 48, 96),
-      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
-                  metric=SphericalMetric(),
-                  bcs=((OriginBC(), SlipWallBC()),
+      N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
+                       metric=SphericalMetric(),
+                       bcs=((OriginBC(), SlipWallBC()),
                        (PoleBC(), PoleBC()), per3[3]),
-                  art=ArtificialProperties(enabled=false)),
+                       art=ArtificialProperties(enabled=false)),
       (r, θ, φ) -> exp(-4r^2),
       (fn=(r, θ, φ) -> -8r * exp(-4r^2), parity=1);
       expect=3.0, tol=0.8, recorded=2.97)
@@ -773,50 +774,50 @@ end
 const STAGGERED_METRIC_CASES = (
     (name="staggered L, stretched line", Ns=(17, 33, 65), expect=6.0, tol=0.5,
      recorded=6.06, dim=1,
-     build=N -> Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                       stretch=(cluster, nothing, nothing),
-                       art=ArtificialProperties(enabled=false)),
+     build=N -> flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                            stretch=(cluster, nothing, nothing),
+                            art=ArtificialProperties(enabled=false)),
      T=(x, y, z) -> cospi(2x) + 0.2cospi(3x), κ=(x, y, z) -> 1 + 0.5cospi(x),
      L=(x, y, z) -> -0.5pi * sinpi(x) * (-2pi * sinpi(2x) - 0.6pi * sinpi(3x)) +
                     (1 + 0.5cospi(x)) * (-4pi^2 * cospi(2x) - 1.8pi^2 * cospi(3x)),
      window=(x, y, z) -> true),
     (name="staggered L, cylindrical axis", Ns=(32, 64, 128), expect=6.0, tol=0.5,
      recorded=5.96, dim=1,
-     build=N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                       metric=CylindricalMetric(),
-                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                       art=ArtificialProperties(enabled=false)),
+     build=N -> flat_solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                            metric=CylindricalMetric(),
+                            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                            art=ArtificialProperties(enabled=false)),
      T=(r, θ, z) -> gauss(r), κ=(r, θ, z) -> 1 + 0.5r^2,
      L=(r, θ, z) -> radial_L(r, 1, 0.0, 0.0, 0.0, 0.0),
      window=(r, θ, z) -> r < 0.5),
     (name="staggered L, resolved-θ axis", Ns=(32, 64, 128), expect=5.0, tol=0.5,
      recorded=5.07, dim=1,
-     build=N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
-                       metric=CylindricalMetric(),
-                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                       art=ArtificialProperties(enabled=false)),
+     build=N -> flat_solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
+                            metric=CylindricalMetric(),
+                            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                            art=ArtificialProperties(enabled=false)),
      T=(r, θ, z) -> gauss(r) * (1 + r * cos(θ)),
      κ=(r, θ, z) -> 1 + 0.5r^2 + 0.2r * sin(θ),
      L=(r, θ, z) -> radial_L(r, 1, 1.0, cos(θ), 0.2, sin(θ)),
      window=(r, θ, z) -> r < 0.5),
     (name="staggered L, spherical origin", Ns=(24, 48, 96), expect=4.0, tol=0.5,
      recorded=4.03, dim=1,
-     build=N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
-                       metric=SphericalMetric(),
-                       bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-                       art=ArtificialProperties(enabled=false)),
+     build=N -> flat_solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
+                            metric=SphericalMetric(),
+                            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+                            art=ArtificialProperties(enabled=false)),
      T=(r, θ, φ) -> gauss(r) * (1 + 0.5r * cos(θ)),
      κ=(r, θ, φ) -> 1 + 0.5r^2 + 0.2r * sin(θ) * cos(φ),
      L=(r, θ, φ) -> radial_L(r, 2, 0.5, cos(θ), 0.2, sin(θ) * cos(φ)),
      window=(r, θ, φ) -> r < 0.5),
     (name="staggered L, spherical poles", Ns=(16, 32, 64), expect=5.0, tol=0.5,
      recorded=5.33, dim=2,
-     build=N -> Solver(n_global=(12, N, 12), L_domain=(1.0, π, 2π),
-                       metric=SphericalMetric(), origin=(0.5, 0.0, 0.0),
-                       bcs=((SlipWallBC(), SlipWallBC()), (PoleBC(), PoleBC()),
+     build=N -> flat_solver(n_global=(12, N, 12), L_domain=(1.0, π, 2π),
+                            metric=SphericalMetric(), origin=(0.5, 0.0, 0.0),
+                            bcs=((SlipWallBC(), SlipWallBC()), (PoleBC(), PoleBC()),
                             per3[3]),
-                       art=ArtificialProperties(enabled=false)),
+                            art=ArtificialProperties(enabled=false)),
      T=(r, θ, φ) -> cos(θ) + 0.3sin(θ) * cos(φ),
      κ=(r, θ, φ) -> 1 + 0.3cos(θ)^2,
      # (1/(r² sinθ)) ∂_θ(sinθ κ ∂_θ T)
@@ -828,10 +829,10 @@ const STAGGERED_METRIC_CASES = (
      window=(r, θ, φ) -> true),
     (name="staggered L, curved wall", Ns=(17, 33, 65), expect=1.0, tol=0.5,
      recorded=1.00, dim=1,
-     build=N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                       metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
-                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                       art=ArtificialProperties(enabled=false)),
+     build=N -> flat_solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                            metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+                            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                            art=ArtificialProperties(enabled=false)),
      T=(r, θ, z) -> cospi(r - 0.5), κ=(r, θ, z) -> 1.0,
      L=(r, θ, z) -> -pi^2 * cospi(r - 0.5) - pi * sinpi(r - 0.5) / r,
      window=(r, θ, z) -> true),
