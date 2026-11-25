@@ -35,6 +35,14 @@ Further rulings made during execution:
   step drivers are merged; the observer parameter then goes onto the one
   merged driver. The ledger keeps its per-stage attribution and its
   boundary-flux closure: the hooks are not coarsened to phase boundaries.
+- **`test/flat_solver.jl`, a proposed exception to D3 awaiting the
+  maintainer's confirmation.** The suites' flat keyword adapter stays, in
+  `test/` only: the tests, the test image and the benchmark scripts include
+  it, and `src/`, `examples/` and `docs/` do not. With it stays the `extent`
+  keyword of `_Solver`, which hands the constructor a domain extent apart
+  from the endpoints.
+- **CLAUDE.md's vocabulary.** No internal name is added to its Naming
+  section before Phase 9, which removes the section.
 - **Gate cadence.** The full gate runs once per phase, at its boundary.
   Between boundaries a commit takes the checks its change needs: the affected
   test files, a smoke test, and the reference, docrefs and scriptrefs checks
@@ -57,8 +65,9 @@ Further rulings made during execution:
 | Checkpoint 1 | Reviewed; the Phase 2 end gate passed at `891a7ee`. |
 | 3 | Done: the four large files split, `RefluxCapture` and the regrid records moved ahead of their users, `src/` grouped into `core`, `physics`, `amr`, `solver` and `io`. The phase gate passed at `31e4b8b`. |
 | 4 | Done: `RegridSpec` reads the schemes from the solver, the root's slab records live in its `Level`, the flat `Solver(; ...)` constructor is removed and `_Solver` runs as named phases over a `SolverBuild` record. The flat keyword vocabulary survives only in `test/flat_solver.jl`, an adapter for the suites, and the test configurations precompile under the `precompile_tests` preference. The phase gate passed at `517267c`. |
-| Checkpoint 2 | Awaiting review. |
+| Checkpoint 2 | Reviewed together with Phase 5; the review's corrections are Phase 5B. |
 | 5 | Done: the compute path takes a `PatchSolver` alone, built by `sole_patch` at the entry points, and `SolverLike` is removed. `Patch` holds `PatchPlans` and `PatchAMR`; `Solver` holds `GridGeometry`, `ClockState` and `WallAccounting`; the limiter holds four groups and leases the workspace scratch it borrows. The phase gate passed at `f2b754f`. Departures from the text: `PatchAMR` is always present, so a configuration keeps one patch type; `positivity` is `Union{Nothing,LimiterState}`, with the single-patch `PatchLimiters` left to Phase 6; the forwarding `getproperty` methods remain. The precompile cost did not fall, and no workload entry or `_cold` barrier was removed. |
+| 5B | The review's four corrections. `SolverBuild` is replaced by the immutable records `BuildInputs`, `GeometrySetup`, `LayoutSetup` and `RootSetup`, and the validation phase is split. `Patch` and `PositivityLimiter` carry no property forwarding: their groups are read explicitly, a `PatchSolver` refuses a grouped name, and the single-patch `Solver` alone keeps flat names. The test suites' precompile workload is the package `test/TestPrecompile`, and nothing under `src/` refers to `test/`. |
 | 6 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
