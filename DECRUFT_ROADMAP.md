@@ -39,10 +39,11 @@ Further rulings made during execution:
   Between boundaries a commit takes the checks its change needs: the affected
   test files, a smoke test, and the reference, docrefs and scriptrefs checks
   when their inputs change.
-- **Left in place, pending a ruling.** `THREAD_MIN_WORK` stays in
-  `threading.jl` as a session tunable, `FIXED_LATTICE_COSTS` beside the cost
-  model in `regrid.jl` until Phase 3 moves `LatticeCosts`, `WALL_SIGNAL` in
-  `callbacks.jl` and `BLOCK_TRANSFER` in the HDF5 extension.
+- **Left in place, by ruling.** `THREAD_MIN_WORK` stays in
+  `core/threading.jl` as a session tunable, `FIXED_LATTICE_COSTS` beside the
+  lattice choice in `amr/regrid_lattice.jl`, `WALL_SIGNAL` in
+  `solver/callbacks.jl` and `BLOCK_TRANSFER` in the HDF5 extension. The
+  direct assignments to a knob that remain in the tests also stay.
 
 ### Status
 
@@ -53,8 +54,9 @@ Further rulings made during execution:
 | 2A | Done: settled toggles deleted, three promoted, the rest gathered in `src/instrumentation.jl` with `with_knob`. About thirty direct assignments to a knob remain in the tests where the surrounding code was irregular. |
 | 2B | Done: `RegridSpec.whole_sensors` replaced by a trailing `mask_child` argument. |
 | 2C | Deferred to Phase 6. |
-| Checkpoint 1 | The Phase 2 end gate passed at `891a7ee`; awaiting the maintainer's review. |
-| 3 to 9 | Not started. |
+| Checkpoint 1 | Reviewed; the Phase 2 end gate passed at `891a7ee`. |
+| 3 | Done: the four large files split, `RefluxCapture` and the regrid records moved ahead of their users, `src/` grouped into `core`, `physics`, `amr`, `solver` and `io`. The phase gate passed at `31e4b8b`. |
+| 4 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
 parallel HDF5 against a system MPI, and the Makie suite has not been run.
