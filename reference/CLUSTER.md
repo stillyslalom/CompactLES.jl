@@ -67,8 +67,9 @@ verify with `clusterprobe.jl`, whose `MPI binary` line reports `system` vs a
 
 Selecting the system binary also switches off the package's precompile
 workload (`src/precompile.jl`), which initializes MPI as a singleton inside
-the precompile process to build its solvers. Under the bundled binaries that
-cuts the per-rank compile of a test run by about three quarters; under a
+the precompile process to build its solvers. Under the bundled binaries and
+the `precompile_tests` preference that cuts the per-rank compile of a test
+run by about three quarters; under a
 scheduler's process manager a singleton init on a login node may fail or
 hang, and installing the package must not depend on it. Whether the workload
 can run on a given cluster is untested; the check is a plain `julia

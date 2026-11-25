@@ -59,10 +59,10 @@ jobs:
       - uses: julia-actions/cache@v3
         with:
           cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
-      # The device testsets and the Float32 testsets run here, so the
-      # workload's device and Float32 blocks earn their precompile cost in
-      # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
-      # src/precompile.jl. Neither this step nor buildpkg precompiles: an
+      # The suite's own configurations, the device testsets and the Float32
+      # testsets run here, so the workload's test, device and Float32 blocks
+      # earn their precompile cost in this job; see PRECOMPILE_TESTS,
+      # PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in src/precompile.jl. Neither this step nor buildpkg precompiles: an
       # image Pkg.instantiate built here would predate the preferences and be
       # rebuilt by the first `using` (measured 330 s of every job), and the
       # serial suite builds its own at -O1 with bounds checks in any case.
@@ -76,7 +76,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true, "precompile_float32" => true;
+              "precompile_tests" => true, "precompile_device" => true,
+              "precompile_float32" => true;
               force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # At -O1: the serial suite is compile-bound, and -O1 reuses the -O2
@@ -132,7 +133,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true, "precompile_float32" => true;
+              "precompile_tests" => true, "precompile_device" => true,
+              "precompile_float32" => true;
               force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # Whether the restored depot holds a loadable image of this source, with
@@ -208,8 +210,8 @@ jobs:
           using Preferences
           Preferences.set_preferences!(
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_device" => true, "precompile_float32" => true,
-              "precompile_mpi_suite" => true;
+              "precompile_tests" => true, "precompile_device" => true,
+              "precompile_float32" => true, "precompile_mpi_suite" => true;
               force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # As in the numerics job, for comparison with it.
@@ -237,7 +239,8 @@ jobs:
       # callback consistency, staged device exchange, sync) 100–250x slower.
       # The full suite at np = 8 was 29 minutes of the job.
       #
-      # The package's precompile workload (src/precompile.jl) removes most
+      # The test suites' precompile workload (test/precompile_workload.jl,
+      # under the preferences set above) removes most
       # of the compile from every rank; what remains is step-bound runtime,
       # and with two physical cores even np = 4 pays for it (a full np = 4
       # leg measured 416 s against 58 s at np = 2, with 43 s of compile).

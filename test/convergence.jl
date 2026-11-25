@@ -148,7 +148,7 @@ include("timing.jl")
 @phase "package load" begin
     using MPI
     MPI.Init(threadlevel=:funneled)
-    using CompactLES: flat_solver
+    @isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
     using CompactLES
     using Printf, Test
 end

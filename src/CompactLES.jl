@@ -89,7 +89,6 @@ include("solver/ledger.jl")
 include("io/viz.jl")
 include("solver/problem.jl")
 include("solver/phases.jl")
-include("solver/flat_solver.jl")
 include("solver/presets.jl")
 include("physics/thermo_states.jl")
 include("solver/regions.jl")
@@ -196,9 +195,10 @@ __init__() = (__init_threading__(); __init_blas__())
 # bloats the image for configurations a run never builds.
 #
 # The workload compiles call trees keyed on the `Solver` type. It runs the
-# configurations built by the test suites, producing a curated subset instead
-# of a combinatorial one. Its cost, measured effect, and system-MPI exclusion
-# are documented in precompile.jl.
+# configurations a user's script commonly builds, and under preferences
+# those of the test suites, producing a curated subset instead of a
+# combinatorial one. Its parts and its system-MPI exclusion are documented in
+# precompile.jl.
 let A3 = Array{Float64,3}, D = Decomp{Float64}
     for P in (DirPlan{Float64}, BandPlan{Float64})
         precompile(apply_along!, (A3, P, A3, D))

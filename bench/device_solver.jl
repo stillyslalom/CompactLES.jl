@@ -15,7 +15,7 @@
 # (max/min), or an element copy — so the whole-step comparison here is
 # expected bitwise as well, and the printout says whether that held.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, max_rate, CPUBackend
 using Printf

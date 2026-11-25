@@ -4,7 +4,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES
 using CompactLES: sensor_mirror, isperiodic, compute_rhs!, apply_bcs!, xcoord
 using Test

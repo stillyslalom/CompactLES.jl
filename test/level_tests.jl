@@ -13,7 +13,7 @@
 # created: at np = 1 every decomposition borrows `COMM_WORLD` or `COMM_SELF`
 # and owns none, so this suite sees only the second case. The MPI suite checks
 # the first on the regridded Sod case.
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: npatches, ConservedState, interior_index, padded_index, xcoord
 
 released_communicators(decomp) =

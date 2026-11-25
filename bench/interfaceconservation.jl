@@ -57,7 +57,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
 using CompactLES
 using Printf
 const CL = CompactLES

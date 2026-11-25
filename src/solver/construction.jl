@@ -208,8 +208,10 @@ end
 # `lv` a `LevelSetup` (amr_frontend.jl); the three are read into the locals the
 # body works with, the components that carry a scalar type converted to `T`.
 # `equations` is the `EquationSet` owning the conserved layout, built from the
-# EOS when not given.
-function _Solver(::Type{T}, prob, num, lv; equations=nothing) where {T}
+# EOS when not given. `extent` gives the domain's three extents where the
+# caller holds them apart from the endpoints (test/flat_solver.jl).
+function _Solver(::Type{T}, prob, num, lv; equations=nothing,
+                 extent=nothing) where {T}
     # One compiled body for every configuration of a precision. Specialized,
     # this body was compiled again for each combination of the types of its
     # arguments, the user's tuple of boundary conditions among them, at
@@ -219,7 +221,8 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing) where {T}
     @nospecialize
     n_global = num.n_global::NTuple{3,Int}
     origin = ntuple(d -> prob.domain[d][1], 3)
-    L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
+    L_domain = extent === nothing ?
+               ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3) : extent
     eos = _to_precision(T, prob.eos)::EOS
     transport = _to_precision(T, prob.transport)::AbstractTransport{T}
     art = _to_precision(T, num.art)::ArtificialProperties{T}

@@ -5,7 +5,7 @@
 # here is one that the rest of the suite passed while the seam was wrong.
 # Included from runtests.jl, which supplies `CL`, `per3`, `fillf!` and `ferr`.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, xcoord
 
 @testset "resolved axis: velocity components of a smooth Cartesian field" begin

@@ -62,7 +62,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
 using CompactLES
 import CompactLES: Decomp, device_plan
 using Printf

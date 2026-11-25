@@ -13,7 +13,7 @@
 #
 # Include after CompactLES and Printf; `references.jl` supplies noh_exact.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: padded_index, xcoord
 
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)

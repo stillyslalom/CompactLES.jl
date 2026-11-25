@@ -1,6 +1,6 @@
 # Included by mpi_tests.jl after its MPI harness definitions.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: npatches
 
 function test_composite_budgets()

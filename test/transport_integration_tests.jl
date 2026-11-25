@@ -2,7 +2,7 @@ module TransportIntegrationTests
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES, Test
 using CompactLES: compute_rhs!, apply_bcs!, sync_patches!, padded_index, xcoord
 const CL = CompactLES

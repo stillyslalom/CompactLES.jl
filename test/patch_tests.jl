@@ -7,7 +7,7 @@
 # Guards follow the convergence-suite convention: measured values are baked in
 # with headroom, and a moved digit means the interface treatment changed.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, npatches, padded_index, xcoord
 
 @testset "patch layout arithmetic" begin

@@ -4,7 +4,7 @@
 # Then the δ⁴ sensor's reading of the ghost data at those same faces.
 # Included by runtests.jl after the patch and level suites.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: padded_index, xcoord
 
 @testset "interface budgets: coarse-fine acoustic reflection" begin

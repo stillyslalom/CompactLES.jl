@@ -4,7 +4,7 @@
 # The slip-wall case carries a tangential velocity in its initial data, so
 # that the tangential momentum fluxes its contract zeros are nonzero to
 # begin with.
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, padded_index
 
 function test_no_slip_wall_flux()

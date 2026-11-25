@@ -3,7 +3,7 @@
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
 
 _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enabled=art))

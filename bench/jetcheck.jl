@@ -8,7 +8,7 @@
 # and MPI internals do not drown the signal.
 using MPI
 MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, filter_state!, step!
 # JET is not a dependency of this package. It resolves from the default

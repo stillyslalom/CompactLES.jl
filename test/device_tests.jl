@@ -12,7 +12,7 @@
 # (geometry upload, initialize!, Dirichlet planes) and the GPUArrays
 # reductions are measured on the GPU itself by bench/device_solver.jl.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, max_rate, ConservedState, CPUBackend
 
 @testset "device-resident patch: construction" begin

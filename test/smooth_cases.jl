@@ -30,7 +30,7 @@
 #
 # Include after CompactLES.
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
 
 const SMOOTH_W = 4

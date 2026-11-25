@@ -1,6 +1,6 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, CPUBackend, padded_index
 using Test

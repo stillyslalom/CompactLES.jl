@@ -40,7 +40,7 @@ using MPI
 MPI.Init(threadlevel=:funneled)
 const t_mpi = time()
 
-using CompactLES: flat_solver
+@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
 using CompactLES
 const t_load = time()
 

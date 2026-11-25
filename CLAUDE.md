@@ -71,22 +71,25 @@ implementation. `reference/CLUSTER.md` also holds the launch-line rules
 a core), the sizing tools, and the measured scaling.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
-before anything runs. Precompiling the package takes about a minute and a
-half, most of it the workload in `src/precompile.jl`, which runs the test
-suites' solver configurations at np = 1 under a singleton `MPI.Init` so that
-a test rank compiles a quarter of what it otherwise would; it is skipped
-under a system MPI. Three of its blocks sit behind preferences that are off
-by default. The device block sits behind `precompile_device`, since only
-`test/device_tests.jl` and the MPI suite's device phases execute that path,
-and the Float32 block behind `precompile_float32`, since every process that
-loads the image reads that block and only the suites' Float32 testsets and
-phases use it. Turn both on before running the serial or MPI suite locally,
-as CI does, or those suites compile the trees themselves
-(`PRECOMPILE_DEVICE` and `PRECOMPILE_FLOAT32` in that file have the call).
-The third, behind `precompile_mpi_suite`, holds the solver configurations
-of the compile-bound phases of the eight-rank MPI selection, and CI's
-eight-rank job sets it; it adds about 70 s to the image build and 75 MiB to
-the image. Julia 1.11+ keys the cache on content, so `touch`
+before anything runs. Most of the package's precompile time is the workload
+in `src/precompile.jl`, which runs under a singleton `MPI.Init` at np = 1 and
+is skipped under a system MPI. By default it builds what a user's script
+builds, through `setup(Problem, Numerics)`: a primary part for the common
+configurations and a secondary part of about the same compile time for less
+common ones that are expensive to compile at run time. Keep that balance
+when adding a block, and add none for a test. The test suites'
+configurations are a separate workload, `test/precompile_workload.jl`,
+written with `flat_solver` (`test/flat_solver.jl`) and run only under
+preferences that are off by default: `precompile_tests` for the serial and
+MPI suites' configurations, `precompile_device` for the device path, which
+only `test/device_tests.jl` and the MPI suite's device phases execute, and
+`precompile_mpi_suite` for the compile-bound phases of the eight-rank MPI
+selection, which CI's eight-rank job sets. `precompile_float32` adds a
+single-precision box and refined line. Turn on `precompile_tests`,
+`precompile_device` and `precompile_float32` before running the serial or
+MPI suite locally, as CI does, or those suites compile the trees themselves
+on every rank (the constants in `src/precompile.jl` have the call).
+Julia 1.11+ keys the cache on content, so `touch`
 does not rebuild it; force one with
 `Base.compilecache(Base.identify_package("CompactLES"))`, though a changed
 preference rebuilds on its own. `bench/tgv_energy.jl` is the intended first production workload
