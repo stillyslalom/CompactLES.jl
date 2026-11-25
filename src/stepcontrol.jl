@@ -1,6 +1,6 @@
 # Timestep control policy: floors, prediction, and recovery.
 #
-# Separated from timestep.jl only because `Solver` carries a `StepControl` field
+# Separated from timestep_rk.jl only because `Solver` carries a `StepControl` field
 # and therefore has to see the type first. The logic that needs a Solver,
 # `predicted_dt` and `run!`, stays with the integrator.
 
@@ -30,7 +30,7 @@
 # about 150 steps. The damage was done on the first step: the trace is a run
 # whose first step was sized before any artificial coefficient existed, and
 # with `run!` evaluating the right-hand side once before that step (the
-# priming in timestep.jl) the same configuration completes at cfl 0.9.
+# priming in runloop.jl) the same configuration completes at cfl 0.9.
 #
 # The four mechanisms address different parts of this sequence:
 #

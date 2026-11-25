@@ -213,7 +213,7 @@ a patch at the same level (`neighbor` is the abutting patch id), or, with
 the same-level coupling runs through the interface ghost exchange, the
 interface closure rows, and the shared-plane averaging (patches.jl), and a
 parent-fed face's ghost layers and boundary plane are overwritten from the
-prolonged coarse state after every RK stage (levels.jl); both close the line
+prolonged coarse state after every RK stage (levels_transfer.jl); both close the line
 solves with the same extended-data rows. The δ⁴ sensor detector reads those
 ghost layers as well, for the fields recovered over the padded extent
 (`delta4_sum!`). `Solver` substitutes this onto such faces itself; it is not a

@@ -476,7 +476,7 @@ function _apply_validity!(solver::Solver, Q, control::StepControl,
     report = _state_report(solver, Q, band)
     rank = MPI.Comm_rank(solver.comm)
     if control.validity === :repair && !state_valid(report) && floors[1] > 0
-        # Off by default (`validity = :strict`), so behind `_cold` (timestep.jl).
+        # Off by default (`validity = :strict`), so behind `_cold` (timestep_rk.jl).
         _validity_repair!(_cold(solver), Q, floors, control, stage, warn, rank)
         report = _state_report(solver, Q, band)
     end

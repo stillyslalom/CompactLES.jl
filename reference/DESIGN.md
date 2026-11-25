@@ -109,7 +109,10 @@ validation cases are discussed, and never a viscosity.
 | `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
 | `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
-| `src/levels.jl`           | Nested level refinement: patch–parent coupling schedules, level transfer chains, the level hierarchy |
+| `src/levels_types.jl`     | Nested level refinement: the design, level and tile ownership, the transfer records |
+| `src/levels_coupling.jl`  | The patch–parent coupling, the `Level` hierarchy, the tile lattice, levels on a boundary or a periodic seam |
+| `src/levels_transfer.jl`  | Prolongation, shell imposition, restriction, the Hermite box of a subcycled run |
+| `src/regrid_types.jl`     | `LatticeCosts` and `RegridSpec` |
 | `src/solver.jl`           | `Solver` container, property forwarding, index maps, state readers, `allocate_state` |
 | `src/construction.jl`     | `Solver` construction: validation, plans, root patch, refined levels and tiles |
 | `src/rhs.jl`              | Flux assembly, the conservative NS RHS |
@@ -117,8 +120,11 @@ validation cases are discussed, and never a viscosity.
 | `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
 | `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
 | `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` / `BeforeWallLimit` triggers and their effects |
-| `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
-| `src/regrid.jl`           | Tagging and regridding |
+| `src/timestep_rk.jl`      | RK45, the per-level phases, subcycling, CFL timestep, per-step filtering |
+| `src/runloop.jl`          | The `run!` loop, the priming of its first step, rollback, `mpi_main` |
+| `src/regrid_tagging.jl`   | The tag criteria and the box regrid |
+| `src/regrid_lattice.jl`   | The tile lattice of a regrid and its cost model |
+| `src/regrid_swap.jl`      | Tile carry and migration, the tiled regrid, the regrid of a deeper hierarchy |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
 | `src/ledger.jl`           | The budget ledger: composite conserved integrals attributed to the mechanism that changed them |
 | `src/reflux.jl`           | The conservative coarse–fine coupling: junction face fluxes, the conserved quadrature's correction, the gated correction |
@@ -487,7 +493,7 @@ communication.
 
 ## Time integration
 
-`timestep.jl` implements the five-stage fourth-order low-storage
+`timestep_rk.jl` implements the five-stage fourth-order low-storage
 Carpenter–Kennedy RK45. `step!` runs the five stages, each of which enforces
 boundary conditions, evaluates the RHS, and applies the low-storage update
 

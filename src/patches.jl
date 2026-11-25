@@ -59,7 +59,7 @@
 # a patched run with any fold, a coordinate fold or a symmetry plane (a
 # patched run takes `SlipWallBC` at the plane's face). A tiled refined level
 # has full 3-D adjacency, its same-level records applied in dimension order
-# so that edges and corners are reached (`Level` in levels.jl).
+# so that edges and corners are reached (`Level` in levels_coupling.jl).
 
 # --- Ownership and freshness --------------------------------------------------
 #
@@ -72,7 +72,7 @@
 #   rho u v w p T_ion c cp_mix Y   `primitives!` (through `refresh_primitives!`,
 #       `max_rate`, `compute_rhs!`). Valid for the Q they were computed from and
 #       stale after any write to Q; in a callback they hold the input of the
-#       last RK stage. `prepared` (timestep.jl) asserts them current, and
+#       last RK stage. `prepared` (timestep_rk.jl) asserts them current, and
 #       `run!` passes it only after its own `max_rate` with no write to Q since.
 #   mu_art beta_art kappa_art D_art   `compute_artificial!`. Read by the next
 #       `max_rate`, so they outlive the step; a regrid check with the sensor
@@ -523,7 +523,7 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # Zero-extent on a patch of a solver with one level.
     overwritten::A
     # The device scratch of this patch's level transfer (`LevelScratch`,
-    # levels.jl): the Hermite boxes and the interpolation chain's stages on
+    # levels_coupling.jl): the Hermite boxes and the interpolation chain's stages on
     # the backend, so a device-resident refined patch's shell is built
     # without host arithmetic. Empty on the host backend, whose chain runs
     # on the transfer's own host stages, and on a patch that is nobody's
@@ -881,7 +881,7 @@ Access adapter binding one [`Patch`](@ref) to its solver configuration.
 Property reads forward patch-owned names to the patch and everything else to
 the solver, so every routine written against the solver's property surface
 (`s.rho`, `s.decomp`, `s.equations`, ...) runs unchanged per patch. The
-multi-patch drivers in timestep.jl construct these; a single-patch `Solver`
+multi-patch drivers in timestep_rk.jl construct these; a single-patch `Solver`
 plays the role itself through its own property forwarding.
 """
 struct PatchSolver{T,S,P<:Patch{T}}
@@ -1333,7 +1333,7 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
         myint = ntuple(d -> dp.offset[d]+1:dp.offset[d]+dp.n_local[d], 3)
         # Transverse ranges: the block interior, or the block padded by the
         # halo along dimensions whose ghosts an earlier phase has already
-        # filled (the dimension-phased sync of a tiled level, levels.jl),
+        # filled (the dimension-phased sync of a tiled level, levels_coupling.jl),
         # which is how a record reaches the edge and corner ghosts.
         widen(r, d) = padded_transverse[d] ? ((first(r) - pad[d]):(last(r) + pad[d])) : r
         myrng = ntuple(d -> widen(myint[d], d), 3)
@@ -1466,7 +1466,7 @@ exchange_patch_ghosts!(solver, states) =
 # `comm` must be the communicator the records were built over, because each
 # record's `partner` is a rank number in that communicator: `solver.comm` for
 # the root's records, the owning level's communicator for a refined level's
-# (levels.jl). It is a parameter rather than a read of `solver.comm` so that
+# (levels_types.jl). It is a parameter rather than a read of `solver.comm` so that
 # a refined level's exchange stays among its subset's ranks.
 function _exchange_ghosts!(solver, states, comm::MPI.Comm, sends, recvs)
     (isempty(recvs) && isempty(sends)) && return states

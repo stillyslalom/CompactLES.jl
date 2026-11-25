@@ -44,7 +44,7 @@ One solver runs on four axes of configuration, combinable except where
   a two-level hierarchy or tiles entering and leaving the set on every
   level of a tiled one up to `max_levels` ("Regridding several levels"), on
   the Cartesian metric and on the axisymmetric (θ-collapsed) cylindrical one
-  (`src/levels.jl`, `src/regrid.jl`).
+  (the `src/levels_*.jl` and `src/regrid_*.jl` files).
 - **Distribution**: each level is owned by its own rank subset, a prefix
   of its parent's, and within it each tile of a tiled level is held whole
   by one rank, the tiles dealt out along a Morton curve, while a box level's
@@ -413,7 +413,7 @@ scheme, while under injection no margin shows a loop.
 
 ## Refinement
 
-`src/levels.jl`, `src/regrid.jl`. The hierarchy is a chain of levels, root
+The `src/levels_*.jl` and `src/regrid_*.jl` files. The hierarchy is a chain of levels, root
 first in `solver.levels`, each level a set of patches covering regions of
 its parent at ratio 3. The levels are node-centered: m parent nodes span
 3m − 2 fine nodes.
@@ -488,7 +488,7 @@ every sensor
 ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
 
 **Distribution of the coupling.** Data moves point to point and work
-divides over a tile's own ranks (`LevelCoupling`, `src/levels.jl`). A
+divides over a tile's own ranks (`LevelCoupling`, `src/levels_coupling.jl`). A
 tile's buffered box goes from the parent ranks holding its nodes to the
 tile's owners, each receiving the components it interpolates, and the
 coincident samples of `:inject` restriction go from the tile's owners to
@@ -973,7 +973,7 @@ box, which is the implosion argument for tiles
 `regrid_interval = K` retags the parent level every K steps at the head of
 the step loop. The tag is a union of criteria, each a per-point body over
 the parent level's state run through `pointwise!` on the host
-(`_tag_sweep!`, `src/regrid.jl`), writing into a host scratch on the
+(`_tag_sweep!`, `src/regrid_tagging.jl`), writing into a host scratch on the
 `RegridSpec`:
 
 - the relative undivided fourth difference of the mixture density,
@@ -1076,7 +1076,7 @@ step count, and the tiled regrid reproduces the Sod gate
 `max_levels` fixes the depth of a tiled, regridded hierarchy, the root
 included; the constructor builds every level, those `refine` does not give
 with no tiles, so the solver type and the level vector never change
-(`_regrid_hierarchy!`, `src/regrid.jl`). Each check first restricts the whole
+(`_regrid_hierarchy!`, `src/regrid_swap.jl`). Each check first restricts the whole
 hierarchy, finest first, which is the last restriction of every tile about
 to leave, taken while every old communicator is live. The levels are then
 regridded top-down: level ℓ is tagged on level ℓ − 1 after that level has
@@ -1773,7 +1773,7 @@ batches its launches across the tiles through stacked storage.
 padded extent share one allocation per field, the tiles' padded blocks
 laid along the third array dimension at a fixed stride, the padded extent
 of one tile (`StackedArray`, `src/pointwise.jl`; `TileStack` on the
-`Level`, `src/levels.jl`; the construction in `src/construction.jl`). A spanning
+`Level`, `src/levels_coupling.jl`; the construction in `src/construction.jl`). A spanning
 `Patch` holds the stacked arrays, the first tile's decomposition and
 communicator, a stacked `RHSWorkspace`, and batched device plans; each
 tile's `Patch` holds plain views of the same arrays, workspace included,

@@ -21,7 +21,7 @@
 #    (`check_block_extents`), the fold specs, the operator plans, the RHS
 #    workspace pool and the root `Patch`.
 # 5. Hierarchy. For each refined level: the tile owners and the level and
-#    tile communicators (levels.jl), the patches this rank holds
+#    tile communicators (levels_types.jl), the patches this rank holds
 #    (`_build_level_patches`, through `_build_fine_patch` on the host and
 #    `_build_tile_stack` for a stacked device level), the level transfers
 #    (`build_level_transfer`), the level exchange records, and the
@@ -510,7 +510,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                       "the scheme minimum; use fewer patches or more points")
         end
     end
-    # --- Static refinement (levels.jl) -----------------------------------
+    # --- Static refinement (levels_*.jl) ---------------------------------
     # `refines[ℓ]` is level ℓ's region in level ℓ−1's node space.
     refines = refine === nothing ? BlockRegion[] :
               refine isa BlockRegion ? [refine] : refine
@@ -1067,7 +1067,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         positivity_limiter && (solver.positivity = PositivityLimiter(solver))
         return solver
     end
-    # --- Refined patches and their couplings (levels.jl) ------------------
+    # --- Refined patches and their couplings (levels_*.jl) ----------------
     # Level ℓ covers `refines[ℓ]` of level ℓ − 1: one patch over the region
     # exactly with `tile = 0`, the lattice tiles meeting it otherwise.
     fines = Patch{T}[]

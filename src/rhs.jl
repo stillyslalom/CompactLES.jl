@@ -2262,7 +2262,7 @@ _cold_ghost_flux_divergence!(dq, c::Int, Fdc, root, patch, q, d::Int) =
 
 # The right-hand side array as it crosses into `_cold_ghost_flux_divergence!`
 # and is rewrapped there: the array under a `ConservedState`, or the positivity
-# limiter's stage array whole (positivity.jl), whose subtractions take its
+# limiter's stage array whole (positivity_step.jl), whose subtractions take its
 # registers.
 @inline _ghost_rhs_arg(dQ) = parent(dQ)
 _rhs_state(dq) = ConservedState(dq)

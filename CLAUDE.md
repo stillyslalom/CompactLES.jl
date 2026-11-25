@@ -253,7 +253,7 @@ a combination of them does not recompile the right-hand-side tree, and the
 docstring there has the measurement. Two are `_cold` barriers
 (`_cold_bulk_gradients!`, `_cold_ghost_flux_divergence!`), which keep paths a
 configuration never takes out of every solver type's compile; the note on
-`_cold` in timestep.jl has the rule. One is `_launch_fluxes!` on `Val` of the
+`_cold` in timestep_rk.jl has the rule. One is `_launch_fluxes!` on `Val` of the
 species count, taken once per whole-array flux assembly so that the per-point
 species sums unroll without the species count entering the solver type. The
 script drops a report whose stack passes through a callee JET inferred at an

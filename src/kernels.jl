@@ -585,7 +585,7 @@ end
 
 # The rows of the state filter at a node two same-level patches or two tiles
 # share: the conservative rows above, and a limited filter pass then holds
-# that node (`_filter_ends` in positivity.jl). The identity row of
+# that node (`_filter_ends` in positivity_step.jl). The identity row of
 # `interface_closures` there is the reference the rows were measured against.
 # A coarse-fine end keeps the identity row.
 _filter_interface_rows(filt) = _conservative_interface_rows(filt)

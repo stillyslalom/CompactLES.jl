@@ -21,7 +21,7 @@ gates below inherit.
 
 ## The problem, quantified
 
-`max_rate` (timestep.jl) charges the acoustic rate in an angular dimension at
+`max_rate` (timestep_rk.jl) charges the acoustic rate in an angular dimension at
 `(|u| + c) / (r·Δθ)`. On a half-offset polar grid the first node sits at
 r₁ = Δr/2. There the azimuthal spacing is tighter than the radial one by a
 factor of roughly N_θ/π, about 20× at N_θ = 64. The diffusive rate scales

@@ -7,7 +7,7 @@
 # Guards are measured values with headroom, per the convergence-suite
 # convention. The interpolation/injection coupling and the reasons the
 # invertible filter pair is not the default are documented at the top of
-# src/levels.jl.
+# src/levels_types.jl.
 
 # A dropped decomposition's communicators are freed at the drop, or were never
 # created: at np = 1 every decomposition borrows `COMM_WORLD` or `COMM_SELF`
@@ -113,7 +113,7 @@ const SUBCYCLE_CFL = 0.125
     @test all(>(3.0), ordersc)
     @test errsc[2] < 3e-8
     # The deconvolution/filter coupling measures order 1.3-1.7 (see the
-    # src/levels.jl header); pin that it stays selectable and stable.
+    # src/levels_types.jl header); pin that it stays selectable and stable.
     ef = _level_wave_error(96; mode=:filter)
     @test 1e-5 < ef < 1e-4
     # C10 at the ghost path's order-10 interpolation: measured 2.7e-13 /

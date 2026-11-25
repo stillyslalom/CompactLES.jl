@@ -663,7 +663,7 @@ const OTHER = length(PHASES)
 # source: the one `_level_rhs!` call there with both flags false. A stack
 # whose innermost `_advance_level!` frame stands on it is that evaluation.
 function endpoint_lines()
-    file = joinpath(dirname(pathof(CompactLES)), "timestep.jl")
+    file = joinpath(dirname(pathof(CompactLES)), "timestep_rk.jl")
     isfile(file) || return Int[]
     lines = readlines(file)
     start = findfirst(l -> occursin("function _advance_level!(", l), lines)
@@ -787,7 +787,7 @@ function print_profile(spec, config, prof, wall, steps, points)
     @printf("  (%d samples in the callback and the repeated restriction left out)\n",
             prof.excluded)
     prof.endpoint_found ||
-        println("  (endpoint line not found in the loaded timestep.jl; the endpoint " *
+        println("  (endpoint line not found in the loaded timestep_rk.jl; the endpoint " *
                 "RHS is counted under RHS)")
     prof.total == 0 && return
     @printf("  %-24s %7s %9s   %7s %7s %7s %7s %7s %7s\n", "phase", "share", "ms/step",
@@ -836,7 +836,7 @@ function print_profile(spec, config, prof, wall, steps, points)
     isempty(prof.rhs_lines) && return
     @printf("  right-hand-side samples by line of _advance_level! (endpoint at %s):\n",
             join(prof.endpoint, ", "))
-    file = joinpath(dirname(pathof(CompactLES)), "timestep.jl")
+    file = joinpath(dirname(pathof(CompactLES)), "timestep_rk.jl")
     source = isfile(file) ? readlines(file) : String[]
     for (line, c) in first(sort(collect(prof.rhs_lines), by=x -> -x[2]), 6)
         text = 1 <= line <= length(source) ? strip(source[line]) : ""

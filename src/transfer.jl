@@ -203,7 +203,7 @@ decompositions rank by rank.
 The transfer dimension must not be decomposed: distributing the subsampling
 and interpolation would require per-rank 3:1 alignment. The level machinery
 sidesteps this by running its transfer chains replicated on single-rank
-communicators (levels.jl); a rank-partitioned transfer would have to own
+communicators (levels_types.jl); a rank-partitioned transfer would have to own
 that alignment. Transverse dimensions may be decomposed freely, and the
 compact solves themselves remain collective over them.
 
@@ -429,7 +429,7 @@ exact only when its input is samples of the *filtered* field, i.e. data a
 [`restrict!`](@ref) produced. Applied to raw point samples it "sharpens" a
 field that was never smoothed, an O(h²) error from the filter deficit, which
 is how the live level-ghost fill measured at order ≈ 1.7 before this split
-(see levels.jl). On point samples this interpolation is O(h^interp_order) instead.
+(see levels_types.jl). On point samples this interpolation is O(h^interp_order) instead.
 """
 function interpolate!(fine_field, plan::TransferPlan, coarse_field)
     any(plan.folds) && _folded_interpolation_error(plan.dim)

@@ -71,7 +71,7 @@ initialize!(sb, Qb, (x, y, z) -> Prim(Y=(0.5 + 0.4tanh(4sin(x)), 0.5 - 0.4tanh(4
 # a static call, with `Core.throw_methoderror` in the fallback branch, so the
 # call into such a callee is not itself a dispatch. Where the solver
 # dispatches on purpose into a specialized callee (through the plan-operator
-# handle of `compute_artificial!` or a `_cold` barrier of timestep.jl), the
+# handle of `compute_artificial!` or a `_cold` barrier of timestep_rk.jl), the
 # callee is probed at concrete types below.
 _runs(vf) = JET.is_compileable_mi(vf.linfo)
 

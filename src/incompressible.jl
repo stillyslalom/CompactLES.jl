@@ -45,7 +45,7 @@
 # Time. The right-hand side is projected rather than the state: P is linear
 # and constant, so du/dt = P N(u) is an ordinary differential equation on
 # the divergence-free fields, and the five-stage low-storage Runge–Kutta
-# scheme of timestep.jl keeps its fourth order. Each stage costs one pressure
+# scheme of timestep_rk.jl keeps its fourth order. Each stage costs one pressure
 # solve, warm-started from the previous stage's φ, which is the kinematic
 # pressure at the stage time. The solve also removes the state's divergence
 # over one step (`_project!`), so its residuals do not accumulate.
@@ -373,7 +373,7 @@ function _rhs!(s::IncompressibleSolver{T}, t, dt) where {T}
     return s.R
 end
 
-# One step of the five-stage low-storage Runge–Kutta scheme of timestep.jl,
+# One step of the five-stage low-storage Runge–Kutta scheme of timestep_rk.jl,
 # with the right-hand side of every stage projected. Collective.
 function step!(s::IncompressibleSolver{T}, dt::Real) where {T}
     dt = T(dt)

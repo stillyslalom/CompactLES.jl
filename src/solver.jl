@@ -70,9 +70,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     plane_pairs::Vector{PlaneRecord{T}}
     levels::Vector{Level{T}}                # the refinement hierarchy, root
                                             # first; one entry without refinement
-                                            # (levels.jl)
-    subcycle::Bool                          # Berger–Oliger subcycling; timestep.jl
-    regrid::Union{Nothing,RegridSpec{T}}    # tagging + regridding; regrid.jl
+                                            # (levels_coupling.jl)
+    subcycle::Bool                          # Berger–Oliger subcycling; timestep_rk.jl
+    regrid::Union{Nothing,RegridSpec{T}}    # tagging + regridding; regrid_*.jl
     t::T
     tstage::T
     step::Int
@@ -117,7 +117,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # The implicit half of the additive Runge–Kutta integrator (imex.jl), or
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
-    # The positivity limiter (positivity.jl), a `PatchLimiters` holding one per
+    # The positivity limiter (positivity_setup.jl), a `PatchLimiters` holding one per
     # patch of a patched or refined solver, or `nothing` without it. Read by
     # `run!` alone, which steps a limited solver through `_limited_run_step!`
     # behind a function barrier, so the field is untyped, as `inputs` is.

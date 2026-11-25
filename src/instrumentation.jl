@@ -4,7 +4,7 @@
 # them takes the defaults, and the suites restore each after use, through
 # `with_knob` where the setting brackets a block. `THREAD_MIN_WORK` stays in
 # threading.jl, since it is a tunable of the session read from the
-# environment, and `FIXED_LATTICE_COSTS` beside the cost model in regrid.jl.
+# environment, and `FIXED_LATTICE_COSTS` beside the cost model in regrid_lattice.jl.
 
 """
     with_knob(f, knob => value, ...)
@@ -123,7 +123,7 @@ const RESTRICTION_COUNT = Ref(0)
 # The switches of the masks a parent level applies where a child covers it.
 # Each defaults to the production setting; the derivations and measurements
 # are beside the code that reads them, in rhs.jl (the derivative, species
-# gradient and sensor masks) and timestep.jl (the filter residual mask).
+# gradient and sensor masks) and timestep_rk.jl (the filter residual mask).
 
 const MASK_CHILD_DERIVATIVE = Ref(true)
 const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
