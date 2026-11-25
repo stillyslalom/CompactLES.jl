@@ -517,8 +517,9 @@ end
 
 # The root's artificial coefficients from the initial state, for the sensor
 # criterion of a tag sweep at setup: the opening of one right-hand side of
-# the root, through its artificial-property step, with every sensor kept, as a regrid check computes them (`_tag_coefficients!`),
-# the nodes under the level given or seeded included.
+# the root, through its artificial-property step, with every sensor kept, as
+# a regrid check computes them (`_tag_coefficients!`), the nodes under the
+# level given or seeded included.
 function _root_tag_coefficients!(solver, states, workspace, amr::AMR)
     (amr.tag_sensor_threshold > 0 && solver.art.enabled) || return nothing
     root = PatchSolver(solver, first(getfield(solver, :patches)))
