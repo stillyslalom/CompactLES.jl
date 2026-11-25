@@ -15,6 +15,7 @@ using Test
 module NeutralTransportDomainTests
 
 using ..MPI
+import ..flat_solver
 using ..CompactLES
 using ..CompactLES: compute_rhs!, max_rate, step!, padded_index
 using ..Test

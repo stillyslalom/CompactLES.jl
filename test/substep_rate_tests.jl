@@ -8,6 +8,7 @@ using Test
 
 module SubstepRateTests
 using ..MPI, ..CompactLES, ..Test
+import ..flat_solver
 using ..CompactLES: max_rate, step!
 
 const CL = CompactLES

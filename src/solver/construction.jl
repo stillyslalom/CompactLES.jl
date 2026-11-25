@@ -1,33 +1,40 @@
 # Solver construction. Nothing here runs on the step path except through a
 # regrid or a restart, which rebuild refined patches with the builders below.
 #
-# `_build_solver` (problem.jl) proceeds in these phases, in this order:
+# `_build_solver` (problem.jl) resolves the element type T from
+# `Execution.precision` or the components of the `Problem` and `Numerics`
+# (`_resolve_precision`, precision.jl) and calls `_Solver`, which runs these
+# phases in this order, each handing the next what it derived in a
+# `SolverBuild`:
 #
-# 1. Precision. It resolves the element type T from `Execution.precision` or
-#    the components of the `Problem` and `Numerics` (`_resolve_precision`,
-#    precision.jl) and calls `_Solver`, which converts them to T.
-# 2. Validation. `_validate_configuration` checks the keyword ranges, the
-#    transport and artificial-property settings and each boundary condition
-#    against the metric and EOS. The rest of the validation in `_Solver`
-#    (coordinate folds, symmetry planes, patch layout, refinement nesting,
-#    interface rows, device residency) is interleaved with the quantities it
-#    derives: the periodicity, the spacing `h`, the half-cell `coord_shift`,
-#    the patch slabs and their faces, and the refined regions.
-# 3. Same-level patches. A `patch_grid` of more than one patch leaves
-#    `_Solver` here for `_build_patched_solver`, which builds one
-#    decomposition, plan set and array set per patch and the interface
-#    exchange records.
-# 4. Root patch. The `Decomp`, the replicated extent check
-#    (`check_block_extents`), the fold specs, the operator plans, the RHS
-#    workspace pool and the root `Patch`.
-# 5. Hierarchy. For each refined level: the tile owners and the level and
-#    tile communicators (levels_types.jl), the patches this rank holds
+# 1. Inputs (`_read_inputs!`). The records are read into the names the
+#    phases work with, the components that carry a scalar type converted to T.
+# 2. Validation (`_validate_geometry_and_folds!`). `_validate_configuration`
+#    checks the keyword ranges, the transport and artificial-property
+#    settings and each boundary condition against the metric and EOS. The
+#    rest (coordinate folds, symmetry planes, patch layout, refinement
+#    nesting, interface rows, device residency) is interleaved with the
+#    quantities it derives: the periodicity, the spacing `h`, the half-cell
+#    `coord_shift`, the patch slabs and their faces, and the refined regions.
+# 3. Same-level patches (`_build_patch_grid`). A `patch_grid` of more than
+#    one patch leaves `_Solver` here for `_build_patched_solver`, which
+#    builds one decomposition, plan set and array set per patch and the
+#    interface exchange records.
+# 4. Root patch (`_build_root_plans_and_patch!`). The `Decomp`, the
+#    replicated extent check (`check_block_extents`), the fold specs, the
+#    operator plans, the RHS workspace pool and the root `Patch`. Without
+#    refinement `_single_patch_solver` assembles the solver from it.
+# 5. Hierarchy (`_build_refined_hierarchy!`, `_build_regrid_spec!`). For
+#    each refined level: the tile owners and the level and tile
+#    communicators (levels_types.jl), the patches this rank holds
 #    (`_build_level_patches`, through `_build_fine_patch` on the host and
 #    `_build_tile_stack` for a stacked device level), the level transfers
 #    (`build_level_transfer`), the level exchange records, and the
 #    `RegridSpec` when regridding is on.
-# 6. Assembly. The concretely typed `Solver`, the geometry of every patch
-#    (`init_geometry!`) and each parent patch's covered mask.
+# 6. Assembly (`_refined_solver`). The concretely typed `Solver`, the
+#    geometry of every patch (`init_geometry!`) and each parent patch's
+#    covered mask. `_attach_positivity_and_implicit!` adds the limiter and
+#    the implicit stage to a solver of any of the three layouts.
 #
 # Device residency is not a phase of its own: every array and plan is
 # allocated through the backend (`field`, `backend_plan`) as it is built.
@@ -204,6 +211,102 @@ function _warn_collapsed_radius(metric, n_global, comm)
     return nothing
 end
 
+# What the phases of the constructor hand one another: every quantity one of
+# them derives and a later one reads. The fields are untyped, and a phase reads
+# and writes them by name, so that the phases compile once for every
+# configuration of a precision, as the single body they were cut from did. A
+# field is unset until its phase has run.
+mutable struct SolverBuild
+    n_global
+    origin
+    L_domain
+    eos
+    transport
+    art
+    metric
+    sources
+    stretch
+    deriv
+    filt
+    cfl
+    filter_interval
+    filter_cfl
+    filter_weighting
+    polar_truncation
+    control
+    dims
+    n_halo
+    comm
+    patch_grid
+    backend
+    interface_rhs
+    interface_divergence
+    interface_flux
+    interface_conservative
+    interface_limited_ghost
+    implicit
+    positivity_limiter
+    refine
+    level_restriction
+    level_interpolation_order
+    subcycle
+    regrid_interval
+    tag_threshold
+    tag_buffer
+    tag_sensor_threshold
+    tag_gradient_threshold
+    tag_vorticity_threshold
+    tag_predicate
+    untag_ratio
+    tile_lifetime
+    tile
+    rebalance
+    rebalance_persist
+    max_levels
+    level_boundaries
+    subdivide_lattice
+    bcs
+    tiled
+    equations
+    axis
+    orig1
+    poles
+    symplane
+    periodic
+    Lt
+    active_g
+    fold_lo_dim
+    fold_hi_dim
+    h
+    coord_shift
+    npatch
+    regions
+    refines
+    nlev
+    schemes
+    faces_all
+    smoo
+    ring
+    ring_det
+    wall_face
+    swrow
+    rwrow
+    n_species
+    n_cons
+    decomp
+    truncation
+    folds
+    orig
+    ws_pool
+    patch
+    levels
+    level_tiles
+    patches
+    margin
+    regrid
+    SolverBuild() = new()
+end
+
 # `prob` is a `Problem`, `num` a `Numerics` with its step control filled in and
 # `lv` a `LevelSetup` (amr_frontend.jl); the three are read into the locals the
 # body works with, the components that carry a scalar type converted to `T`.
@@ -218,6 +321,22 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     # 12k LLVM instructions a time. It runs once per solver, assembles
     # objects and calls the routines that build the grid-sized arrays, which
     # are compiled for the concrete types they are called with.
+    @nospecialize
+    build = SolverBuild()
+    _read_inputs!(T, build, prob, num, lv, equations, extent)
+    _validate_geometry_and_folds!(T, build)
+    build.npatch > 1 && return _build_patch_grid(T, build)
+    _build_root_plans_and_patch!(T, build)
+    build.nlev == 1 && return _single_patch_solver(T, build)
+    _build_refined_hierarchy!(T, build)
+    _build_regrid_spec!(T, build)
+    return _refined_solver(T, build)
+end
+
+# The `Problem`, the `Numerics` and the `LevelSetup` read into the names the
+# phases work with, the components that carry a scalar type converted to `T`.
+function _read_inputs!(::Type{T}, build::SolverBuild, prob, num, lv, equations,
+                       extent) where {T}
     @nospecialize
     n_global = num.n_global::NTuple{3,Int}
     origin = ntuple(d -> prob.domain[d][1], 3)
@@ -258,6 +377,74 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     bcs = _face_conditions(prob.bcs)
     tile = _tile_edges(tile)
     tiled = _tiled(tile)
+    build.n_global = n_global
+    build.origin = origin
+    build.L_domain = L_domain
+    build.eos = eos
+    build.transport = transport
+    build.art = art
+    build.metric = metric
+    build.sources = sources
+    build.stretch = stretch
+    build.deriv = deriv
+    build.filt = filt
+    build.cfl = cfl
+    build.filter_interval = filter_interval
+    build.filter_cfl = filter_cfl
+    build.filter_weighting = filter_weighting
+    build.polar_truncation = polar_truncation
+    build.control = control
+    build.dims = dims
+    build.n_halo = n_halo
+    build.comm = comm
+    build.patch_grid = patch_grid
+    build.backend = backend
+    build.interface_rhs = interface_rhs
+    build.interface_divergence = interface_divergence
+    build.interface_flux = interface_flux
+    build.interface_conservative = interface_conservative
+    build.interface_limited_ghost = interface_limited_ghost
+    build.implicit = implicit
+    build.positivity_limiter = positivity_limiter
+    build.refine = refine
+    build.level_restriction = level_restriction
+    build.level_interpolation_order = level_interpolation_order
+    build.subcycle = subcycle
+    build.regrid_interval = regrid_interval
+    build.tag_threshold = tag_threshold
+    build.tag_buffer = tag_buffer
+    build.tag_sensor_threshold = tag_sensor_threshold
+    build.tag_gradient_threshold = tag_gradient_threshold
+    build.tag_vorticity_threshold = tag_vorticity_threshold
+    build.tag_predicate = tag_predicate
+    build.untag_ratio = untag_ratio
+    build.tile_lifetime = tile_lifetime
+    build.tile = tile
+    build.rebalance = rebalance
+    build.rebalance_persist = rebalance_persist
+    build.max_levels = max_levels
+    build.level_boundaries = level_boundaries
+    build.subdivide_lattice = subdivide_lattice
+    build.bcs = bcs
+    build.tiled = tiled
+    build.equations = equations
+    return build
+end
+
+# Phase 2: the configuration checks, interleaved with the quantities they
+# derive: the folds and symmetry planes, the periodicity, the spacing `h`, the
+# half-cell `coord_shift`, the patch slabs and their faces, the refined
+# regions, the interface treatment, the sensor schemes and the equation set.
+function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, origin, L_domain, eos, transport, art, metric, stretch, deriv, filt, cfl,
+     filter_interval, filter_cfl, filter_weighting, polar_truncation, dims, n_halo, comm,
+     patch_grid, backend, interface_rhs, interface_divergence, interface_flux,
+     interface_conservative, interface_limited_ghost, implicit, positivity_limiter, refine,
+     level_restriction, level_interpolation_order, subcycle, regrid_interval,
+     tag_threshold, tag_buffer, tag_sensor_threshold, tag_gradient_threshold,
+     tag_vorticity_threshold, tag_predicate, untag_ratio, tile_lifetime, tile, rebalance,
+     rebalance_persist, max_levels, bcs, tiled, equations) = build
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
     if positivity_limiter
@@ -763,23 +950,65 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
               "EOS has $(nspecies(eos))")
     n_species = equations.n_species
     n_cons = equations.n_cons
-    if npatch > 1
-        solver = _build_patched_solver(T, n_global, periodic, regions, faces_all,
-                                       patch_grid, bcs, eos, equations, transport,
-                                       art, metric, stretch, sources, origin, Lt,
-                                       coord_shift, h, deriv, filt, smoo, cfl,
-                                       filter_interval, filter_cfl, filter_weighting,
-                                       control, n_halo, comm, backend, interface_rhs,
-                                       n_cons, n_species; interface_divergence,
-                                       interface_flux, schemes)
-        # One limiter per patch this rank holds, in the order of its patches.
-        if positivity_limiter
-            held = getfield(solver, :patches)
-            solver.positivity = PatchLimiters(Any[PositivityLimiter(PatchSolver(solver, p))
-                                                  for p in held], Any[p for p in held])
-        end
-        return solver
-    end
+    build.interface_flux = interface_flux
+    build.transport = transport
+    build.axis = axis
+    build.orig1 = orig1
+    build.poles = poles
+    build.symplane = symplane
+    build.periodic = periodic
+    build.Lt = Lt
+    build.active_g = active_g
+    build.fold_lo_dim = fold_lo_dim
+    build.fold_hi_dim = fold_hi_dim
+    build.h = h
+    build.coord_shift = coord_shift
+    build.npatch = npatch
+    build.regions = regions
+    build.refines = refines
+    build.nlev = nlev
+    build.level_interpolation_order = level_interpolation_order
+    build.schemes = schemes
+    build.faces_all = faces_all
+    build.smoo = smoo
+    build.ring = ring
+    build.ring_det = ring_det
+    build.wall_face = wall_face
+    build.swrow = swrow
+    build.rwrow = rwrow
+    build.equations = equations
+    build.n_species = n_species
+    build.n_cons = n_cons
+    return build
+end
+
+# Phase 3: the solver of a same-level `patch_grid`, with its limiters.
+function _build_patch_grid(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, origin, eos, transport, art, metric, sources, stretch, deriv, filt, cfl,
+     filter_interval, filter_cfl, filter_weighting, control, n_halo, comm, patch_grid,
+     backend, interface_rhs, interface_divergence, interface_flux, positivity_limiter, bcs,
+     equations, periodic, Lt, h, coord_shift, npatch, regions, schemes, faces_all, smoo,
+     n_species, n_cons) = build
+    solver = _build_patched_solver(T, n_global, periodic, regions, faces_all,
+                                   patch_grid, bcs, eos, equations, transport,
+                                   art, metric, stretch, sources, origin, Lt,
+                                   coord_shift, h, deriv, filt, smoo, cfl,
+                                   filter_interval, filter_cfl, filter_weighting,
+                                   control, n_halo, comm, backend, interface_rhs,
+                                   n_cons, n_species; interface_divergence,
+                                   interface_flux, schemes)
+    return _attach_positivity_and_implicit!(T, solver, build)
+end
+
+# Phase 4: the root's decomposition, the replicated extent check, the fold
+# specs, the operator plans, the RHS workspace pool and the root `Patch`.
+function _build_root_plans_and_patch!(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, origin, art, stretch, deriv, filt, polar_truncation, dims, n_halo, comm,
+     backend, tile, bcs, equations, axis, orig1, poles, symplane, periodic, fold_lo_dim,
+     fold_hi_dim, h, coord_shift, regions, nlev, smoo, ring, ring_det, wall_face, swrow,
+     rwrow, n_species, n_cons) = build
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     truncation = mode_truncation(T, polar_truncation, decomp,
                                  T(origin[1]) + coord_shift[1], h[1], n_global[2],
@@ -956,26 +1185,86 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
                   nlev > 1 ? f() : empty_field(backend, T),
                   _empty_level_scratch(empty_field(backend, T)),
                   ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
-    if nlev == 1
-        patches = [patch]
-        solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
-                        typeof(stretch),typeof(sources),typeof(patch)}(
-                      equations, eos, transport, art, metric, stretch, sources,
-                      Lt, orig, coord_shift, h,
-                      T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
-                      n_global, patches, regions, decomp.comm,
-                      [Level{T}(0, root_level_comm(comm), [1],
-                                LevelTransfer{T}[])], false, nothing,
-                      zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, truncation, nothing, nothing, nothing,
-                  false)
-        init_geometry!(solver)
+    build.decomp = decomp
+    build.truncation = truncation
+    build.folds = folds
+    build.orig = orig
+    build.ws_pool = ws_pool
+    build.patch = patch
+    return build
+end
+
+# The implicit stage and the positivity limiter of an assembled solver, by
+# its layout: same-level patches, the root alone, or a refined hierarchy.
+function _attach_positivity_and_implicit!(::Type{T}, solver,
+                                          build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, metric, deriv, filt, n_halo, interface_rhs, interface_divergence,
+     interface_flux, implicit, positivity_limiter, bcs, tiled, npatch, nlev) = build
+    if npatch > 1
+        # One limiter per patch this rank holds, in the order of its patches.
+        if positivity_limiter
+            held = getfield(solver, :patches)
+            solver.positivity = PatchLimiters(Any[PositivityLimiter(PatchSolver(solver, p))
+                                                  for p in held], Any[p for p in held])
+        end
+    elseif nlev == 1
         # The conduction stage reads the metric, so it is built last.
         implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
         positivity_limiter && (solver.positivity = PositivityLimiter(solver))
-        return solver
+    else
+        # The patches' limiters are built as `run!` starts, and again for the
+        # patches a regrid replaces (`_follow_patches!`).
+        positivity_limiter &&
+            (solver.positivity =
+                 PatchLimiters(Any[], Any[],
+                               _limiter_least_box(deriv, filt, interface_flux,
+                                                  interface_rhs, interface_divergence,
+                                                  n_halo, T),
+                               tiled && _limiter_radial_line(bcs, metric, n_global)))
+        # A static hierarchy is checked here; a regridded one where setup builds
+        # it from the caller's regions (`_setup_amr`), since the bootstrap of a
+        # tagged start passes through here with a seed that its first regrid
+        # replaces.
+        positivity_limiter && getfield(solver, :regrid) === nothing &&
+            _check_limiter_tiles(solver)
     end
+    return solver
+end
+
+# Phase 6 without refinement: the solver of the root patch alone, with its
+# implicit stage and limiter.
+function _single_patch_solver(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, eos, transport, art, metric, sources, stretch, cfl, filter_interval,
+     filter_cfl, filter_weighting, control, comm, interface_flux, implicit,
+     positivity_limiter, equations, Lt, h, coord_shift, regions, nlev, schemes, decomp,
+     truncation, orig, patch) = build
+    patches = [patch]
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
+                    typeof(stretch),typeof(sources),typeof(patch)}(
+                  equations, eos, transport, art, metric, stretch, sources,
+                  Lt, orig, coord_shift, h,
+                  T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
+                  n_global, patches, regions, decomp.comm,
+                  [Level{T}(0, root_level_comm(comm), [1],
+                            LevelTransfer{T}[])], false, nothing,
+                  zero(T), zero(T), 0, zero(T), zero(T),
+              ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+              interface_flux, schemes, truncation, nothing, nothing, nothing,
+              false)
+    init_geometry!(solver)
+    return _attach_positivity_and_implicit!(T, solver, build)
+end
+
+# Phase 5: each refined level's tile owners, communicators, patches,
+# transfers and exchange records, and the patch vector.
+function _build_refined_hierarchy!(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, transport, art, deriv, filt, n_halo, comm, backend, interface_rhs,
+     interface_divergence, interface_flux, refine, level_restriction,
+     level_interpolation_order, subcycle, tile, max_levels, bcs, tiled, periodic, active_g,
+     h, refines, nlev, smoo, ring, n_species, n_cons, decomp, folds, ws_pool, patch) = build
     # --- Refined patches and their couplings (levels_*.jl) ----------------
     # Level ℓ covers `refines[ℓ]` of level ℓ − 1: one patch over the region
     # exactly with `tile = 0`, the lattice tiles meeting it otherwise.
@@ -1148,6 +1437,20 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     # CPU backend and 1.7 s on the device backend each.
     patches = Patch[patch]
     append!(patches, fines)
+    build.levels = levels
+    build.level_tiles = level_tiles
+    build.patches = patches
+    build.margin = margin
+    return build
+end
+
+# The `RegridSpec` of a regridding run, `nothing` otherwise.
+function _build_regrid_spec!(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_halo, backend, regrid_interval, tag_threshold, tag_buffer, tag_sensor_threshold,
+     tag_gradient_threshold, tag_vorticity_threshold, tag_predicate, untag_ratio,
+     tile_lifetime, tile, rebalance, rebalance_persist, level_boundaries,
+     subdivide_lattice, regions, smoo, decomp, level_tiles, margin) = build
     # The tag sweep's scratch spans the root's padded block, whose extent
     # is fixed for the life of the solver (a regrid moves the refined level
     # only).
@@ -1164,6 +1467,19 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
                            [Dict(r => 0 for r in regions)
                             for regions in level_tiles], level_boundaries,
                            NTuple{3,Int}[], LatticeCosts(), subdivide_lattice)
+    build.regrid = regrid
+    return build
+end
+
+# Phase 6 with refinement: the solver, the geometry of every patch, the
+# limiters and each parent patch's covered mask.
+function _refined_solver(::Type{T}, build::SolverBuild) where {T}
+    @nospecialize
+    (; n_global, eos, transport, art, metric, sources, stretch, deriv, filt, cfl,
+     filter_interval, filter_cfl, filter_weighting, control, n_halo, interface_rhs,
+     interface_divergence, interface_flux, positivity_limiter, subcycle, bcs, tiled,
+     equations, periodic, Lt, h, coord_shift, regions, schemes, decomp, orig, patch,
+     levels, patches, regrid) = build
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
@@ -1178,20 +1494,7 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
-    # The patches' limiters are built as `run!` starts, and again for the
-    # patches a regrid replaces (`_follow_patches!`).
-    positivity_limiter &&
-        (solver.positivity = PatchLimiters(Any[], Any[],
-                                           _limiter_least_box(deriv, filt, interface_flux,
-                                                              interface_rhs,
-                                                              interface_divergence, n_halo,
-                                                              T),
-                                           tiled && _limiter_radial_line(bcs, metric,
-                                                                         n_global)))
-    # A static hierarchy is checked here; a regridded one where setup builds it
-    # from the caller's regions (`_setup_amr`), since the bootstrap of a tagged
-    # start passes through here with a seed that its first regrid replaces.
-    positivity_limiter && regrid === nothing && _check_limiter_tiles(solver)
+    _attach_positivity_and_implicit!(T, solver, build)
     # Each held patch's covered mask from the regions of the level below,
     # which every rank of the patch's level holds (`_fill_covered!`).
     for ℓ in 1:length(levels)-1
@@ -1203,6 +1506,7 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     end
     return solver
 end
+
 
 # Refined patch construction over the region `refine` (in the parent level's
 # node space; `h` is the parent level's spacing), shared between the `Solver`
