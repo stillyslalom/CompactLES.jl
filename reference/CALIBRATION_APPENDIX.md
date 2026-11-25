@@ -581,7 +581,7 @@ rows ([the filter's wall rows](#the-filters-wall-rows)).
 right-hand side, and its own symmetric and antisymmetric boundary closures. `artificial.jl`
 uses the undivided fourth difference δ⁴, following [Cook
 (2007)](https://doi.org/10.1063/1.2728937) literally. `ArtificialProperties.detector` selects between
-them: `:delta4` is δ⁴ and `:d8` is [`compact_d8`](../src/kernels_banded.jl), the reference
+them: `:delta4` is δ⁴ and `:d8` is [`compact_d8`](../src/core/kernels_banded.jl), the reference
 operator transcribed. The default, `:species_d8`, applies `:d8` to the mass and mole
 fractions and δ⁴ to every other sensed field, so on a single-species case it is `:delta4`
 exactly. The interior rows of the two are

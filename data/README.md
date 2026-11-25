@@ -5,7 +5,7 @@ is verbatim under its upstream name.
 
 ## NASA CEA thermodynamic and transport databases
 
-Read by [`read_nasa9`](../src/nasa9_data.jl) to build a `Nasa9Mixture`. Only the
+Read by [`read_nasa9`](../src/physics/nasa9_data.jl) to build a `Nasa9Mixture`. Only the
 two tables are used by the solver; the license files are here because
 redistribution requires them.
 
