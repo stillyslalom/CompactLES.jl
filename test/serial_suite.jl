@@ -55,6 +55,17 @@ include("references.jl")
 # throughout below, is defined there.
 include("cases.jl")
 
+@testset "with_knob restores the switches it sets" begin
+    # The value of the block comes back, and each switch returns to what it
+    # held, on a normal exit and on a throw.
+    @test CL.with_knob(() -> (CL.FORCE_KA[], CL.TILE_SLOTS[]),
+                       CL.FORCE_KA => true, CL.TILE_SLOTS => 3) == (true, 3)
+    @test (CL.FORCE_KA[], CL.TILE_SLOTS[]) == (false, 0)
+    @test_throws ErrorException CL.with_knob(() -> error("thrown"), CL.NODE_SIZE => 4)
+    @test CL.NODE_SIZE[] == 0
+    @test CL.with_knob(() -> 7) == 7
+end
+
 @testset "Problem preserves endpoint conversion" begin
     prob = Problem(domain=((0, 1), (0, pi), (0, 2pi)), bcs=per3,
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0))
@@ -224,11 +235,8 @@ end
     # Compile every converted pointwise body through KernelAbstractions in
     # Float32 as well as through the ordinary threaded CPU route.
     dQ_ka = zero(Q)
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         compute_rhs!(solver, Q, dQ_ka)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test parent(dQ_ka) == parent(dQ)
 
@@ -5671,12 +5679,9 @@ end
     s1, Q1 = tube_pair()
     run!(s1, Q1; tfinal=0.02, nmax=50)
     local s2, Q2
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         s2, Q2 = tube_pair()
         run!(s2, Q2; tfinal=0.02, nmax=50)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test s1.step == s2.step
     @test parent(Q1) == parent(Q2)
@@ -5703,12 +5708,9 @@ end
         s1b, Q1b = channel_tube_pair(channel)
         run!(s1b, Q1b; tfinal=0.02, nmax=50)
         local s2b, Q2b
-        CL.FORCE_KA[] = true
-        try
+        CL.with_knob(CL.FORCE_KA => true) do
             s2b, Q2b = channel_tube_pair(channel)
             run!(s2b, Q2b; tfinal=0.02, nmax=50)
-        finally
-            CL.FORCE_KA[] = false
         end
         @test s1b.step == s2b.step
         @test parent(Q1b) == parent(Q2b)
@@ -5730,12 +5732,9 @@ end
     s3, Q3 = axis_pair()
     run!(s3, Q3; tfinal=0.02, nmax=20)
     local s4, Q4
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         s4, Q4 = axis_pair()
         run!(s4, Q4; tfinal=0.02, nmax=20)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test s3.step == s4.step
     @test parent(Q3) == parent(Q4)

@@ -79,6 +79,7 @@ validation cases are discussed, and never a viscosity.
 | File | Responsibility |
 |------|----------------|
 | `src/CompactLES.jl`       | Module: include order and exports |
+| `src/instrumentation.jl`  | the process-global test, benchmark and profiling switches and counters, and `with_knob`, which sets them for the length of a block |
 | `src/threading.jl`        | `@threaded`: the per-region work threshold, and the task backend it was measured against |
 | `src/decomposition.jl`    | 3-D MPI Cartesian decomposition, sub-communicators, halo buffers |
 | `src/pointwise.jl`        | `pointwise!`: the shared launcher of every per-point body, over `@threaded` or KernelAbstractions |

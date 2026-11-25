@@ -121,13 +121,10 @@ end
     # domain scan is a pointwise kernel, so the host loop alone does not cover
     # its launchable body.
     solver, Q = rank_local_case()
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         collective_domain_failure() do
             max_rate(solver, Q)
         end
-    finally
-        CL.FORCE_KA[] = false
     end
 end
 

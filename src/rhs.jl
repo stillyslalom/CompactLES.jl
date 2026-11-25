@@ -327,11 +327,13 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 # corrects the junction fluxes where the parent's uncovered nodes hold an
 # unresolved feature, and with it the masked crossings conserve mass to 1e-5.
 
-# `true`, the default, gives every parent patch the masked derivatives;
-# `false` gives every patch the plain ones.
-const MASK_CHILD_DERIVATIVE = Ref(true)
+# The three switches of this mask are in instrumentation.jl.
+# `MASK_CHILD_DERIVATIVE`: `true`, the default, gives every parent patch the
+# masked derivatives; `false` gives every patch the plain ones.
+#
 
-# `true`, the default, masks the gradients the species channel differences
+# `MASK_CHILD_SPECIES_GRADIENTS`: `true`, the default, masks the gradients
+# the species channel differences
 # (the mass fractions, the conserved components of a shared-D_b channel, the
 # sharpening flux's volume fractions) as the velocity and temperature
 # gradients are masked; `false` leaves them plain, and the species flux's
@@ -353,9 +355,9 @@ const MASK_CHILD_DERIVATIVE = Ref(true)
 # on the parent's uncovered nodes by tens of percent within thirty steps
 # (test/level_tests.jl), which fails a capsule's shell under a refined band
 # before its drive acts.
-const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
 
-# `true`, the default, drops the sensors of a parent patch's artificial
+# `MASK_CHILD_SENSORS`: `true`, the default, drops the sensors of a parent
+# patch's artificial
 # coefficients at the nodes a child's restriction overwrites, before they are
 # smoothed; `false` smooths them whole. Those nodes carry the restricted fine
 # solution, in which a feature the child resolves is a jump narrower than the
@@ -371,7 +373,6 @@ const MASK_CHILD_SPECIES_GRADIENTS = Ref(true)
 # the converging shock at the r-z axis of bench/amrwin.jl fails at the focus,
 # as it does with no mask. The measurements are under bench/amrwin.jl in
 # reference/CALIBRATION_APPENDIX.md.
-const MASK_CHILD_SENSORS = Ref(true)
 
 # Whether this patch's sensors take that mask: it holds overwritten nodes'
 # storage (a solver of more than one level), a child level holds a patch, and
@@ -2763,4 +2764,3 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false,
     # that bench/audit.jl reads.
     return _release_child_mask!(solver, dQ)
 end
-

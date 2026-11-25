@@ -66,13 +66,6 @@ allocate_state(backend::DeviceBackend, decomp::Decomp{T}, n_cons::Int) where {T}
 empty_field(backend::DeviceBackend, ::Type{T}) where {T} =
     KernelAbstractions.zeros(backend.ka, T, 0, 0, 0)
 
-# Reduced-interface transfer accounting: the per-apply device/host
-# copies of the interface values and correction factors, tallied apart from
-# the halo staging so the two shares are readable separately. Active only
-# under `TRACK_DEVICE_TRANSFERS` (halo.jl), like the halo counters.
-const REDUCED_TRANSFER_BYTES = Ref(0)
-const REDUCED_TRANSFER_TIME = Ref(0.0)
-
 @inline function _reduced_copy!(dest, src)
     if TRACK_DEVICE_TRANSFERS[]
         t0 = time_ns()

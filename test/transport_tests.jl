@@ -458,11 +458,8 @@ end
     end
     sh, Qh = build(CPUBackend())
     sd, Qd = build(DeviceBackend(KernelAbstractions.CPU()))
-    CL.FORCE_KA[] = true
-    dt_device = try
+    dt_device = CL.with_knob(CL.FORCE_KA => true) do
         compute_dt(sd, Qd)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test dt_device == compute_dt(sh, Qh)
 end

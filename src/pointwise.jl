@@ -166,30 +166,6 @@ _tile_ranges(ntiles::Int, stride::Int) =
     [((t - 1) * stride + 1):(t * stride) for t in 1:ntiles]
 _tile_ranges(s::StackedArray) = _tile_ranges(s.ntiles, s.stride)
 
-"""
-Test and benchmark toggle: `true` routes every [`pointwise!`](@ref) launch
-through the KernelAbstractions path even on `Array` storage, where
-`get_backend` supplies the KA CPU backend. The default `false` keeps `Array`
-storage on the `@threaded` path, which is the configuration every guard was
-measured under. The device testsets flip this around the runs they compare
-against the `CPUBackend` bitwise; nothing else should.
-"""
-const FORCE_KA = Ref(false)
-
-"""
-Launch synchronization policy: `false` (the default) defers. Kernels queue
-on the backend's one in-order stream and the host synchronizes only at its
-interaction points (the reduced-solve staging fence, the synchronous
-device↔host copies of the halo/ring staging and the reductions); this
-removes the per-launch round trip measured at 28–32% of a device step.
-`true` restores the conservative mode, a host synchronize after every
-pointwise launch and between every line-solve subkernel, and is the
-correctness fallback: flip it when
-bisecting a device discrepancy, so ordering bugs separate from arithmetic
-ones.
-"""
-const DEVICE_SYNC = Ref(false)
-
 @inline _maybe_sync(backend) = (DEVICE_SYNC[] && synchronize(backend); nothing)
 
 # Integer quotient and remainder for the device bodies. `div` and `rem` of two

@@ -4057,10 +4057,6 @@ function _write_covered_patch!(coarse_Q, src4, win, off, parent_patch::Patch)
     return coarse_Q
 end
 
-# Test hook: the number of `restrict_level!` calls in this process, from
-# which a test reads the restrictions a run takes per step.
-const RESTRICTION_COUNT = Ref(0)
-
 """
     restrict_level!(solver, states)
 

@@ -352,9 +352,7 @@ function _mpi_suite_workload(cpu)
     # toggles, and on the host without them, as the phase runs them.
     for device in (PRECOMPILE_DEVICE ? (false, true) : (false,))
         backend = device ? DeviceBackend(cpu) : CPUBackend()
-        FORCE_KA[] = device
-        FORCE_DEVICE_EXCHANGE[] = device
-        try
+        with_knob(FORCE_KA => device, FORCE_DEVICE_EXCHANGE => device) do
             s = Solver(n_global=(36, 36, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=(walls, per, per), eos=gas,
                        art=ArtificialProperties(enabled=true), cfl=0.4,
@@ -376,9 +374,6 @@ function _mpi_suite_workload(cpu)
                          p=1000 * (1 - tanh_blend(x, 0.45, 2 / 95)) + 0.01))
                 run!(s, Q; tfinal=1.0, nmax=10)
             end
-        finally
-            FORCE_KA[] = false
-            FORCE_DEVICE_EXCHANGE[] = false
         end
     end
     return nothing
@@ -600,9 +595,7 @@ if MPIPreferences.binary != "system"
         # toggles, which is why they are set here rather than left at default.
         # Behind `PRECOMPILE_DEVICE`, and so off unless a checkout asks for it.
         if PRECOMPILE_DEVICE
-            FORCE_KA[] = true
-            FORCE_DEVICE_EXCHANGE[] = true
-            try
+            with_knob(FORCE_KA => true, FORCE_DEVICE_EXCHANGE => true) do
                 s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
                            bcs=(walls, per, per), cfl=0.2, subcycle=true,
                            regrid_interval=5, tile=8,
@@ -619,9 +612,6 @@ if MPIPreferences.binary != "system"
                 initialize!(s, Q, (x, y, z) ->
                     Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
                 run!(s, Q; tfinal=0.02, nmax=2)
-            finally
-                FORCE_KA[] = false
-                FORCE_DEVICE_EXCHANGE[] = false
             end
         end
         PRECOMPILE_MPI_SUITE && _mpi_suite_workload(cpu)

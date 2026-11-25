@@ -24,12 +24,9 @@ argon_kappa(T) = 1e-4 * exp(0.60968928log(T) - 70.892249/T +
                    art=ArtificialProperties(enabled=false), filter_interval=0)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=300 + 30000x))
-        CL.FORCE_KA[] = ka
-        try
+        CL.with_knob(CL.FORCE_KA => ka) do
             apply_bcs!(s, Q)
             compute_rhs!(s, Q, zero(Q))
-        finally
-            CL.FORCE_KA[] = false
         end
         for (i, temp) in ((1, 300), (32, 600))
             I = padded_index(s, i, 1, 1)
@@ -60,12 +57,9 @@ end
             Prim(rho=1.0, T_ion=300 + 100r,
                  u=spherical ? (0.0, 0.0, a*r^2) : (0.0, a*r^2, 0.0)))
         dQ = zero(Q)
-        CL.FORCE_KA[] = ka
-        try
+        CL.with_knob(CL.FORCE_KA => ka) do
             CL.compute_primitives_and_gradients!(s, Q)
             CL.add_metric_sources!(s, dQ, Q, metric)
-        finally
-            CL.FORCE_KA[] = false
         end
         for i in (8, 16, 24)
             I = padded_index(s, i, 1, 1)

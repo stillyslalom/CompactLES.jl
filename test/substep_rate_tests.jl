@@ -80,13 +80,10 @@ end
 
     # The kernel max-rate path takes the same collective guard route.
     solver, Q = nested(control=tiny)
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         collective_substep_failure() do
             step!(solver, Q, Workspace(Q), 1e-4)
         end
-    finally
-        CL.FORCE_KA[] = false
     end
 
     # With no retry available, the partially attempted hierarchy never
@@ -172,11 +169,8 @@ end
     # A per-run policy overrides the solver's stored one, including the
     # documented opt-out.
     solver, Q = nested(control=tiny)
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         run!(solver, Q; tfinal=1e-4, nmax=1, control=StepControl(substep_cfl=0))
-    finally
-        CL.FORCE_KA[] = false
     end
     @test solver.step == 1
 end

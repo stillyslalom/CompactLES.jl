@@ -78,13 +78,8 @@ end
     end
     for kw in ((;), (interface_flux=:ghost,))
         s1, q1 = slabs(CPUBackend(); kw...)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             slabs(DeviceBackend(cpu_ka); kw...)
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step
         @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
@@ -102,11 +97,8 @@ end
         s1, Q1 = build(CPUBackend())
         run!(s1, Q1; tfinal=tfinal, nmax=nmax)
         s2, Q2 = build(DeviceBackend(cpu_ka))
-        CL.FORCE_KA[] = true
-        try
+        CL.with_knob(CL.FORCE_KA => true) do
             run!(s2, Q2; tfinal=tfinal, nmax=nmax)
-        finally
-            CL.FORCE_KA[] = false
         end
         return s1.step == s2.step && parent(Q1) == parent(Q2)
     end
@@ -242,11 +234,8 @@ end
         compute_rhs!(s1, Q1, dQ1)
         s2, Q2 = rest(DeviceBackend(cpu_ka), config)
         dQ2 = zero(Q2)
-        CL.FORCE_KA[] = true
-        try
+        CL.with_knob(CL.FORCE_KA => true) do
             compute_rhs!(s2, Q2, dQ2)
-        finally
-            CL.FORCE_KA[] = false
         end
         @test parent(dQ1) == parent(dQ2)
         @test maximum(abs, parent(dQ1)) < 1e-12
@@ -258,11 +247,8 @@ end
     # The launch-path rate measurement agrees with the fused serial loop
     # bitwise: same candidates, exact max/min.
     r1 = max_rate(s1, Q1)
-    CL.FORCE_KA[] = true
-    r2 = try
+    r2 = CL.with_knob(CL.FORCE_KA => true) do
         max_rate(s2, Q2)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test r1 == r2
 end
@@ -298,13 +284,8 @@ end
                (subcycle=true, regrid_interval=20, tag_buffer=8,
                 level_interpolation_order=8))
         s1, q1 = wave(CPUBackend(); kw...)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             wave(DeviceBackend(cpu_ka); kw...)
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step
         @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
@@ -345,13 +326,8 @@ end
     for (nmax, kw) in ((40, (;)), (20, (subcycle=true,)),
                        (20, (subcycle=true, transport=ConstantTransport(mu0=1e-4))))
         s1, q1 = blast(CPUBackend(); nmax, kw...)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             blast(DeviceBackend(cpu_ka); nmax, kw...)
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step == nmax
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
@@ -409,13 +385,8 @@ end
     end
     for build in (plane, corner)
         s1, q1 = build(CPUBackend())
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             build(DeviceBackend(cpu_ka))
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
@@ -472,13 +443,8 @@ end
         # stacked device level uncorrected (src/reflux.jl), so `tiled` builds
         # both runs without it.
         s1, q1, initial = tiled(CPUBackend(); kw...)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2, _ = try
+        s2, q2, _ = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             tiled(DeviceBackend(cpu_ka); kw...)
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step
         @test level_regions(s1, 1) == level_regions(s2, 1)
@@ -560,13 +526,8 @@ end
         return s, states
     end
     s1, q1 = box3d(CPUBackend())
-    CL.FORCE_KA[] = true
-    CL.FORCE_DEVICE_EXCHANGE[] = true
-    s2, q2 = try
+    s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
         box3d(DeviceBackend(cpu_ka))
-    finally
-        CL.FORCE_KA[] = false
-        CL.FORCE_DEVICE_EXCHANGE[] = false
     end
     lev = getfield(s2, :levels)[2]
     @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
@@ -607,13 +568,8 @@ end
     end
     # `slab2d` builds without the host-only conservative coupling, as above.
     s1, q1 = slab2d(CPUBackend())
-    CL.FORCE_KA[] = true
-    CL.FORCE_DEVICE_EXCHANGE[] = true
-    s2, q2 = try
+    s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
         slab2d(DeviceBackend(cpu_ka))
-    finally
-        CL.FORCE_KA[] = false
-        CL.FORCE_DEVICE_EXCHANGE[] = false
     end
     lev = getfield(s2, :levels)[2]
     @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
@@ -642,19 +598,11 @@ end
         return parent(Q)
     end
     @test CL.DEVICE_SYNC[] == false
-    CL.FORCE_KA[] = true
-    a = try
+    a = CL.with_knob(CL.FORCE_KA => true) do
         short(DeviceBackend(cpu_ka))
-    finally
-        CL.FORCE_KA[] = false
     end
-    CL.FORCE_KA[] = true
-    CL.DEVICE_SYNC[] = true
-    b = try
+    b = CL.with_knob(CL.FORCE_KA => true, CL.DEVICE_SYNC => true) do
         short(DeviceBackend(cpu_ka))
-    finally
-        CL.FORCE_KA[] = false
-        CL.DEVICE_SYNC[] = false
     end
     @test a == b
 end
@@ -681,11 +629,8 @@ end
     s2, Q2 = build(DeviceBackend(cpu_ka))
     @test s2.deriv_plans[1] isa DevicePlan{T}
     @test s2.eos isa IdealMixture{T} && s2.art isa ArtificialProperties{T}
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         run!(s2, Q2; tfinal=T(0.05), nmax=5)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test s1.step == s2.step
     @test all(isfinite, parent(Q2))
@@ -823,15 +768,10 @@ end
     function compare(build; nmax)
         s1, q1 = build(CPUBackend())
         run!(s1, q1; tfinal=1.0, nmax=nmax)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             s, q = build(DeviceBackend(cpu_ka))
             run!(s, q; tfinal=1.0, nmax=nmax)
             s, q
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         a = q1 isa AbstractVector ? q1 : [q1]
         b = q2 isa AbstractVector ? q2 : [q2]
@@ -936,15 +876,10 @@ end
     for (name, build, nmax) in cases
         s1, q1 = build(CPUBackend())
         run!(s1, q1; tfinal=1.0, nmax=nmax)
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s2, q2 = try
+        s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             s, q = build(DeviceBackend(cpu_ka))
             run!(s, q; tfinal=1.0, nmax=nmax)
             s, q
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         a = q1 isa AbstractVector ? q1 : [q1]
         b = q2 isa AbstractVector ? q2 : [q2]
@@ -983,13 +918,8 @@ end
         return s, Q
     end
     s1, q1 = filled(CPUBackend())
-    CL.FORCE_KA[] = true
-    CL.FORCE_DEVICE_EXCHANGE[] = true
-    s2, q2 = try
+    s2, q2 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
         filled(DeviceBackend(cpu_ka))
-    finally
-        CL.FORCE_KA[] = false
-        CL.FORCE_DEVICE_EXCHANGE[] = false
     end
     report = state_report(s1, q1)
     @test s1.interface_flux === s2.interface_flux === :ghost
@@ -1030,13 +960,10 @@ end
     host = field_snapshot(s1, q1; fields=(:X,))
     host_tiles = field_snapshot(t1, r1; fields=(:X,))
     save_vtk(s1, q1, joinpath(dir, "host"); fields=(:X,))
-    CL.FORCE_KA[] = true
-    dev, dev_tiles, padded = try
+    dev, dev_tiles, padded = CL.with_knob(CL.FORCE_KA => true) do
         save_vtk(s2, q2, joinpath(dir, "dev"); fields=(:X,))
         (field_snapshot(s2, q2; fields=(:X,)), field_snapshot(t2, r2; fields=(:X,)),
          field_array(s2, q2, :X; species=2))
-    finally
-        CL.FORCE_KA[] = false
     end
     @test dev[:X] isa Array && dev[:X] == host[:X]
     @test maximum(abs, sum(host[:X]; dims=4) .- 1) < 1e-14

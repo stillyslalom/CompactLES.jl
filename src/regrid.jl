@@ -1357,11 +1357,6 @@ end
 const FIXED_LATTICE_COSTS =
     Ref{Union{Nothing,NTuple{5,Float64},NTuple{6,Float64}}}(nothing)
 
-# Test and bench toggle: a positive count groups the ranks into nodes of that
-# many consecutive ranks in place of the nodes MPI reports (`_node_map`), so
-# a run on one machine takes the paths of a run across nodes.
-const NODE_SIZE = Ref(0)
-
 """
     _node_map(comm) -> Vector{Int}
 
@@ -1672,10 +1667,6 @@ function _persistent_lattice!(costs::LatticeCosts, ℓ::Int, chain::Vector{NTupl
     costs.favored[ℓ] = (chain[cheapest], count)
     return current
 end
-
-# Bench toggle: rank 0 prints each lattice choice, the model and the
-# predicted seconds per root step of every lattice.
-const LATTICE_TRACE = Ref(false)
 
 @noinline function _trace_lattice(solver, spec, ℓ, chain, wanted_sets, level, rest,
                                   current, pick)
@@ -2157,13 +2148,6 @@ _block_table(decomp::Union{Nothing,Decomp}, comm::MPI.Comm) =
 # which nothing else is in flight during a regrid, and one tile's messages
 # complete before the next tile's are posted, so one tag serves every tile.
 const _MIGRATE_TAG = 1500
-
-# Test hook. With the flag on, `_regrid_tiles!` also carries each moved tile
-# through the replicated gather and `_carry_over!`, and adds to the result
-# the tiles it audited on this rank and the slots at which the migrated
-# state differs from that reference; the MPI suite holds the count at zero.
-const MIGRATION_AUDIT = Ref(false)
-const MIGRATION_AUDIT_RESULT = Ref((tiles=0, mismatches=0))
 
 # Padded local ranges of the patch-node ranges `r` on the block of `decomp`.
 _padded3(r::NTuple{3,UnitRange{Int}}, decomp::Decomp) =

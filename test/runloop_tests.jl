@@ -114,14 +114,9 @@ end
     quiet = (s, q) -> nothing
     watch = (s, q) -> (field_array(s, q, :kappa_art); dissipation_rate(s, q);
                        nothing)
-    CL.FORCE_KA[] = true
-    CL.FORCE_DEVICE_EXCHANGE[] = true
-    base, seen = try
+    base, seen = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
         (rl_history(build, quiet; steps=steps),
          rl_history(build, watch; steps=steps))
-    finally
-        CL.FORCE_KA[] = false
-        CL.FORCE_DEVICE_EXCHANGE[] = false
     end
     rl_identical(base, seen)
 end

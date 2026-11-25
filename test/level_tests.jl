@@ -791,9 +791,9 @@ end
     @test CL._most_held([0:0, 1:1, 0:0, 2:3]) == 2 && CL._most_held(UnitRange{Int}[]) == 0
     # One process is one node; the toggle groups consecutive ranks.
     @test CL._node_map(MPI.COMM_WORLD) == [0]
-    CL.NODE_SIZE[] = 2
-    @test CL._node_map(MPI.COMM_WORLD) == [0]
-    CL.NODE_SIZE[] = 0
+    CL.with_knob(CL.NODE_SIZE => 2) do
+        @test CL._node_map(MPI.COMM_WORLD) == [0]
+    end
 end
 
 @testset "tile migration: interior rule and the rank's own copy" begin
@@ -1313,11 +1313,8 @@ end
     smooth(r, θ, z) = Prim(rho=1 + 0.1 * cospi(r), u=(0.0, 0.0, 0.0), p=1.0)
     initialize!(s, states, smooth)
     plain = copy(parent(Q))
-    CL.MASK_CHILD_RESIDUAL[] = false
-    try
+    CL.with_knob(CL.MASK_CHILD_RESIDUAL => false) do
         filter_state!(ps, ConservedState(plain))
-    finally
-        CL.MASK_CHILD_RESIDUAL[] = true
     end
     filter_state!(ps, Q)
     @test parent(Q)[rows, :, :, :] == plain[rows, :, :, :]
@@ -1343,13 +1340,9 @@ end
     uncovered = ps.patch.covered[rows, 1 + o[2], 1 + o[3]] .== 0
     @test count(uncovered) > 20
     rates(masked) = begin
-        previous = CL.MASK_CHILD_DERIVATIVE[]
-        CL.MASK_CHILD_DERIVATIVE[] = masked
         dQ = ConservedState(zero(parent(Q)))
-        try
+        CL.with_knob(CL.MASK_CHILD_DERIVATIVE => masked) do
             CL.compute_rhs!(ps, Q, dQ)
-        finally
-            CL.MASK_CHILD_DERIVATIVE[] = previous
         end
         line(parent(dQ))
     end
@@ -1394,13 +1387,9 @@ end
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3]]
     gradients(derivative, species) = begin
-        saved = (CL.MASK_CHILD_DERIVATIVE[], CL.MASK_CHILD_SPECIES_GRADIENTS[])
-        CL.MASK_CHILD_DERIVATIVE[] = derivative
-        CL.MASK_CHILD_SPECIES_GRADIENTS[] = species
-        try
+        CL.with_knob(CL.MASK_CHILD_DERIVATIVE => derivative,
+                     CL.MASK_CHILD_SPECIES_GRADIENTS => species) do
             CL.compute_rhs!(ps, Q, ConservedState(zero(parent(Q))))
-        finally
-            CL.MASK_CHILD_DERIVATIVE[], CL.MASK_CHILD_SPECIES_GRADIENTS[] = saved
         end
         (Y=line(ps.grad_Y[1, 2]), rhoY=line(ps.grad_Q[1, 2]), T=line(ps.grad_T_ion[1]))
     end
@@ -1444,12 +1433,8 @@ end
     @test findall(>(0), grade) == 19:47
     @test findall(==(2), grade) == 22:44
     coefficients(masked) = begin
-        previous = CL.MASK_CHILD_SENSORS[]
-        CL.MASK_CHILD_SENSORS[] = masked
-        try
+        CL.with_knob(CL.MASK_CHILD_SENSORS => masked) do
             CL.compute_rhs!(ps, Q, ConservedState(zero(parent(Q))))
-        finally
-            CL.MASK_CHILD_SENSORS[] = previous
         end
         (kappa=line(ps.kappa_art), D=line(ps.D_art[1]))
     end
@@ -1492,9 +1477,7 @@ end
         Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.5, 0.0), p=1.0)
     end
     rates(masked) = begin
-        previous = CL.MASK_CHILD_SENSORS[]
-        CL.MASK_CHILD_SENSORS[] = masked
-        try
+        CL.with_knob(CL.MASK_CHILD_SENSORS => masked) do
             s = Solver(n_global=(64, 64, 1), L_domain=(1.0, 1.0, 1.0),
                        bcs=(per, per, per), eos=eos, cfl=0.5, subcycle=true,
                        art=ArtificialProperties(enabled=true),
@@ -1504,8 +1487,6 @@ end
             run!(s, states; tfinal=1e6, nmax=20)
             r = [CL._patch_rate!(s, p, states[i])[1] for (i, p) in enumerate(s.patches)]
             (root=r[1], level=r[2], t=s.t)
-        finally
-            CL.MASK_CHILD_SENSORS[] = previous
         end
     end
     masked, whole = rates(true), rates(false)
@@ -1536,9 +1517,7 @@ end
         Prim(Y=(ρl / (ρl + ρh), ρh / (ρl + ρh)), rho=ρl + ρh, u=(0.0, 0.0, 0.0), p=1.0)
     end
     gas(masked) = begin
-        previous = CL.MASK_CHILD_SPECIES_GRADIENTS[]
-        CL.MASK_CHILD_SPECIES_GRADIENTS[] = masked
-        try
+        CL.with_knob(CL.MASK_CHILD_SPECIES_GRADIENTS => masked) do
             s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
                        eos=eos, cfl=0.25, art=ArtificialProperties(enabled=true),
                        refine=BlockRegion((16, 0, 0), (33, 1, 1)))
@@ -1561,8 +1540,6 @@ end
             (low=minimum(ratio), high=maximum(ratio),
              excursion=maximum(max.(-heavy, heavy .- 1)),
              rate=CL._patch_rate!(s, root, Q)[1], nodes=length(nodes))
-        finally
-            CL.MASK_CHILD_SPECIES_GRADIENTS[] = previous
         end
     end
     @test CL.MASK_CHILD_SPECIES_GRADIENTS[]
@@ -1623,12 +1600,9 @@ end
     # extent is the layout of tiles evaluated one after another, which a
     # session of one thread takes; `TILE_SLOTS` holds it at any thread count.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    CL.TILE_SLOTS[] = 1
-    solver = try
+    solver = CL.with_knob(CL.TILE_SLOTS => 1) do
         Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
-    finally
-        CL.TILE_SLOTS[] = 0
     end
     padded(p) = ntuple(d -> p.decomp.n_local[d] + 2 * p.decomp.n_halo_d[d], 3)
     extents = unique(padded(p) for p in solver.patches)
@@ -1671,15 +1645,12 @@ end
     gradient_names = (:divergence, :qcriterion, :vorticity_magnitude)
     # The tiles share one workspace as a session of one thread lays them out
     # (`TILE_SLOTS`, see the testset above).
-    CL.TILE_SLOTS[] = 1
-    solver, plain = try
+    solver, plain = CL.with_knob(CL.TILE_SLOTS => 1) do
         Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6),
         Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
                art=ArtificialProperties(enabled=false))
-    finally
-        CL.TILE_SLOTS[] = 0
     end
     states = allocate_state(solver)
     initialize!(solver, states, initial)
@@ -1753,8 +1724,7 @@ end
         Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0),
              p=1.0 + 0.1exp(-4((x - π)^2 + (y - π)^2)))
     function evolve(slots, subcycle)
-        CL.TILE_SLOTS[] = slots
-        try
+        CL.with_knob(CL.TILE_SLOTS => slots) do
             s = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                        refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
                        subcycle=subcycle)
@@ -1766,9 +1736,7 @@ end
             # The interiors: a halo may hold values no pass reads.
             inner(p, x) = parent(x)[ntuple(d -> p.decomp.n_halo_d[d] .+
                                               (1:p.decomp.n_local[d]), 3)..., :]
-            return [inner(p, x) for (p, x) in zip(s.patches, q)], s, sets
-        finally
-            CL.TILE_SLOTS[] = 0
+            [inner(p, x) for (p, x) in zip(s.patches, q)], s, sets
         end
     end
     for subcycle in (false, true)

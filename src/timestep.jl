@@ -2581,9 +2581,9 @@ end
 # masked node takes the plain pass unchanged. The measurements are under
 # bench/archive/movinglevel.jl in reference/CALIBRATION_APPENDIX.md.
 
-# Test and bench toggle: `false` gives every patch the plain pass, the
+# `MASK_CHILD_RESIDUAL` (instrumentation.jl): `false` gives every patch the
+# plain pass, the
 # comparison in bench/archive/movinglevel.jl.
-const MASK_CHILD_RESIDUAL = Ref(true)
 
 # The resolution test of the mask: the undivided fourth difference of the
 # density along the line, relative to the density, above the threshold at the
@@ -2591,9 +2591,8 @@ const MASK_CHILD_RESIDUAL = Ref(true)
 # threshold is the default density tag's halved, the tag's hold level, on one
 # dimension; the reach takes in the tails of a feature, whose residual the
 # threshold alone left to spread. Both are measured, with the smooth level
-# rows of test/convergence.jl unchanged under them; test and bench toggles.
-const CHILD_MASK_THRESHOLD = Ref(0.01)
-const CHILD_MASK_REACH = Ref(2)
+# rows of test/convergence.jl unchanged under them. They are the toggles
+# `CHILD_MASK_THRESHOLD` and `CHILD_MASK_REACH` of instrumentation.jl.
 
 # Whether the pass on this patch takes the mask: the patch has a child level
 # holding a patch. The test reads the level hierarchy, which every rank of the

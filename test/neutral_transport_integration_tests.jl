@@ -165,11 +165,8 @@ end
     host = zero(Q)
     compute_rhs!(s, Q, host)
     ka = zero(Q)
-    CL.FORCE_KA[] = true
-    try
+    CL.with_knob(CL.FORCE_KA => true) do
         compute_rhs!(s, Q, ka)
-    finally
-        CL.FORCE_KA[] = false
     end
     @test parent(ka) ≈ parent(host) rtol=2e-14 atol=2e-7
 end

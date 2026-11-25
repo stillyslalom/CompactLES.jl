@@ -21,6 +21,7 @@ using MPI
 using LinearAlgebra
 using Printf
 
+include("instrumentation.jl")
 include("threading.jl")
 include("decomposition.jl")
 include("pointwise.jl")

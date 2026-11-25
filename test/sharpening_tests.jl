@@ -114,12 +114,9 @@ end
         s1, Q1 = sh_line(slab; N=64, u=0.5, art=sharp)
         run!(s1, Q1; nmax=20, tfinal=1.0)
         local s2, Q2
-        CL.FORCE_KA[] = true
-        try
+        CL.with_knob(CL.FORCE_KA => true) do
             s2, Q2 = sh_line(slab; N=64, u=0.5, art=sharp)
             run!(s2, Q2; nmax=20, tfinal=1.0)
-        finally
-            CL.FORCE_KA[] = false
         end
         @test s1.step == s2.step
         @test parent(Q1) == parent(Q2)

@@ -49,19 +49,6 @@ end
 
 # --- Device staging ---------------------------------------------------------
 
-"""
-Test toggle: `true` routes ordinary `Array` fields through every
-device-storage path: the halo and fold-pair exchange staging (pack buffers,
-offset copies, and all), the interface-record staging of a patch layout,
-the level transfer's device chain on the fine patch's `LevelScratch`, the
-regrid's block copies and the device tag sweep. On host storage each of
-those performs the identical element copies and the identical per-point
-arithmetic, so the suites flip this, with `FORCE_KA` for the kernel path,
-to pin the device paths bitwise on machines without a GPU. The default
-`false` keeps host fields on the direct forms.
-"""
-const FORCE_DEVICE_EXCHANGE = Ref(false)
-
 @inline _staged_exchange(f) = !_cpu_storage(f) || FORCE_DEVICE_EXCHANGE[]
 
 # The branch test of every device-storage path outside the halo exchange:
@@ -88,15 +75,6 @@ device_mpi_direct(backend) = false
 # retained storage only if a launch-level profile shows the pool hit at all.
 @inline _device_stage(f, need::Int) =
     (similar(f, eltype(f), need), similar(f, eltype(f), need))
-
-# Transfer accounting for the distributed-device measurements: bytes staged
-# through the device
-# buffers and the wall time of the synchronous copies, accumulated only while
-# a bench turns the toggle on (the timer synchronizes nothing extra, since the
-# copies are synchronous, but the clock calls are not free).
-const TRACK_DEVICE_TRANSFERS = Ref(false)
-const DEVICE_TRANSFER_BYTES = Ref(0)
-const DEVICE_TRANSFER_TIME = Ref(0.0)
 
 # Whole-array copies onto storage that may be a tile's view into a stacked
 # level array (pointwise.jl). A dense host-to-device `copyto!` covers the

@@ -3303,13 +3303,8 @@ function test_staged_exchange()
                            ("ghost-flux viscous level", ghost_level),
                            ("tiled level at the r-z folds", folded_level))
         s5, q5 = build(CPUBackend())
-        CL.FORCE_KA[] = true
-        CL.FORCE_DEVICE_EXCHANGE[] = true
-        s6, q6 = try
+        s6, q6 = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
             build(DeviceBackend(cpu))
-        finally
-            CL.FORCE_KA[] = false
-            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         d = 0.0
         for i in eachindex(q5)
