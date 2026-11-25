@@ -1,9 +1,8 @@
 # The test suites' precompile workload: the solver configurations the serial
 # and multi-rank suites build, on small grids at np = 1, each run through the
-# entry points the tests call. The package includes this file and runs it
-# while precompiling only where a checkout asks for it (`precompile_tests`,
-# `precompile_device`, `precompile_mpi_suite` in src/precompile.jl); a user's
-# image holds none of it.
+# entry points the tests call. The helper package test/TestPrecompile includes
+# this file and runs it while it precompiles, which holds the constants its
+# blocks are gated on; CompactLES's own image holds none of it.
 #
 # Compiled code is keyed on the `Solver` type, not on the decomposition. The
 # split-dimension paths (reduced-interface solves, off-rank folds, halo

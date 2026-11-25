@@ -55,6 +55,7 @@ include("timing.jl")
     using MPI
     MPI.Init(threadlevel=:funneled)
     @isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+    @isdefined(use_test_image) || include(joinpath(@__DIR__, "test_image.jl"))
     using CompactLES
     import CompactLES: Decomp, exchange_halos!, interior, field, DirPlan, BandPlan,
                        DevicePlan, device_plan, apply_along!, filter_field!,

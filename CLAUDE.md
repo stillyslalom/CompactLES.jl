@@ -77,18 +77,16 @@ is skipped under a system MPI. By default it builds what a user's script
 builds, through `setup(Problem, Numerics)`: a primary part for the common
 configurations and a secondary part of about the same compile time for less
 common ones that are expensive to compile at run time. Keep that balance
-when adding a block, and add none for a test. The test suites'
+when adding a block, and add none for a test; the `precompile_float32`
+preference adds a single-precision box and refined line. The test suites'
 configurations are a separate workload, `test/precompile_workload.jl`,
-written with `flat_solver` (`test/flat_solver.jl`) and run only under
-preferences that are off by default: `precompile_tests` for the serial and
-MPI suites' configurations, `precompile_device` for the device path, which
-only `test/device_tests.jl` and the MPI suite's device phases execute, and
-`precompile_mpi_suite` for the compile-bound phases of the eight-rank MPI
-selection, which CI's eight-rank job sets. `precompile_float32` adds a
-single-precision box and refined line. Turn on `precompile_tests`,
-`precompile_device` and `precompile_float32` before running the serial or
-MPI suite locally, as CI does, or those suites compile the trees themselves
-on every rank (the constants in `src/precompile.jl` have the call).
+written with `flat_solver` (`test/flat_solver.jl`). It belongs to a helper
+package, `test/TestPrecompile`, whose image holds those trees; nothing under
+`src/` refers to it. Run `julia --project=. test/test_image.jl` in one
+process before the serial or MPI suite locally, as CI does, or those suites
+compile the trees themselves on every rank. The header of that script has
+the options (`mpi_suite=true` is what CI's eight-rank job passes) and how to
+turn the image off, and the suites load it through the same file.
 Julia 1.11+ keys the cache on content, so `touch`
 does not rebuild it; force one with
 `Base.compilecache(Base.identify_package("CompactLES"))`, though a changed
@@ -398,15 +396,16 @@ Names are spelled out in full. Current vocabulary:
   single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
 - `PatchPlans` and `PatchAMR` (a `Patch`'s operator plans and its refinement
-  state, whose names the patch serves as its own properties, so
-  `patch.deriv_plans` and `patch.covered` read as fields), `GridGeometry` /
+  state, read as `patch.plans.deriv_plans` and `patch.amr.covered`; a
+  `PatchSolver` reads them the same way and the single-patch `Solver` alone
+  serves the names flat), `GridGeometry` /
   `ClockState` / `WallAccounting` (the `Solver` groups behind `solver.metric`,
   `solver.t` and `solver.wall_step`), `_root_spacing` (the root level's `h`,
   where `solver.h` is the patch's), `LimiterState` (the supertype of what
   `Solver.positivity` holds)
 - `LimiterWeights` / `LimiterLineBuffers` / `LimiterScratch` /
-  `LimiterCounters` (the `PositivityLimiter` groups, read as its own
-  properties), `borrow_stage_buffers` / `borrow_filter_buffers` /
+  `LimiterCounters` (the `PositivityLimiter` groups `weight_set`,
+  `line_buffers`, `scratch` and `counters`), `borrow_stage_buffers` / `borrow_filter_buffers` /
   `release_buffers!` (the lease a limiter pass holds on the workspace
   scratch, `RHSWorkspace.scratch_lease`, which `compute_rhs!` checks on
   entry through `_check_scratch_free`)

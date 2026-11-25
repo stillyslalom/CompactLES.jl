@@ -10,6 +10,7 @@ using Test
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+@isdefined(use_test_image) || include(joinpath(@__DIR__, "test_image.jl"))
 using CompactLES.Regions: Box
 
 include("capability_cases.jl")

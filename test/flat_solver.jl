@@ -7,8 +7,8 @@
 # not always return the extent on subtraction, and the grid spacing must not
 # depend on which form a test wrote.
 #
-# Included by whichever file needs it, the package's precompile workload among
-# them, so every name is qualified and nothing is imported.
+# Included by whichever file needs it, the test image's module among them, so
+# every name is qualified and nothing is imported.
 
 """
     flat_solver(; n_global, L_domain, bcs, kwargs...) -> Solver

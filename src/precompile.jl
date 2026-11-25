@@ -16,10 +16,10 @@
 # spherical origin, symmetry planes. Every configuration is built as a script
 # builds it, through `setup(Problem, Numerics)`.
 #
-# The test suites build many more `Solver` types than a user's run does, and
-# a multi-rank test run compiles each of them independently on every rank.
-# Their configurations are a separate workload, test/precompile_workload.jl,
-# which this file includes and runs only under the preferences below.
+# The test suites build many more `Solver` types than a user's run does.
+# Their configurations are a workload of a package of their own,
+# test/TestPrecompile, which the suites load; this file and the image it
+# builds hold none of them.
 #
 # A `Decomp` needs an initialized communicator, so the workload initializes
 # MPI as a singleton inside the precompile process. That is fine with the
@@ -39,50 +39,6 @@ using MPIPreferences: MPIPreferences
 using Preferences: @load_preference
 
 """
-Whether the workload covers the serial and multi-rank test suites' solver
-configurations (`_test_suite_workload` in `test/precompile_workload.jl`):
-every metric and fold through the right-hand side, the sensors and detectors,
-same-level patches, static, tiled, subcycled and regridded levels. Off by
-default, since a user's run builds few of these types and every package
-precompile takes longer with the block on.
-
-Turn it on where the suites run, which is what CI does:
-
-```julia
-using Preferences, CompactLES
-Preferences.set_preferences!(CompactLES, "precompile_tests" => true)
-```
-
-The preference is read at precompile time, so setting it rebuilds the package
-image.
-"""
-const PRECOMPILE_TESTS = @load_preference("precompile_tests", false)
-
-"""
-Whether the workload covers the KernelAbstractions device path, which it
-reaches on this machine by running a `DeviceBackend(KernelAbstractions.CPU())`
-solver under `FORCE_KA` and `FORCE_DEVICE_EXCHANGE`. Off by default:
-a run on ordinary host storage never enters that path, and a run on a real
-device needs its own backend's kernels rather than the CPU backend's, so what
-the block bakes in serves the suites that pin the two against each other and
-nobody else. Measured on the workstation, leaving it out takes the package
-precompile from 96 s to 78 s and the image from 141 MB to 121 MB.
-
-Turn it on where `test/device_tests.jl` or the MPI suite's device phases run,
-which is what CI does, since they otherwise compile that tree themselves and
-every rank of an MPI leg pays for it separately:
-
-```julia
-using Preferences, CompactLES
-Preferences.set_preferences!(CompactLES, "precompile_device" => true)
-```
-
-The preference is read at precompile time, so setting it rebuilds the package
-image; nothing needs to be forced by hand.
-"""
-const PRECOMPILE_DEVICE = @load_preference("precompile_device", false)
-
-"""
 Whether the workload covers single precision: a `Float32` solver on a periodic
 box and on a refined line, each advanced through `run!`. A second element type
 compiles a second copy of the tree beneath `step!`, and every process that
@@ -92,45 +48,17 @@ about 20 s to the package precompile, 50 MiB to the image and 0.1 s to every
 `using CompactLES`; without it, the first `Float32` run of a process compiles
 for about 13 s more, on every rank of an MPI run.
 
-Turn it on where `Float32` runs are the rule rather than the exception, and
-where the serial suite or the MPI suite runs, which is what CI does:
+Turn it on where `Float32` runs are the rule rather than the exception:
 
 ```julia
 using Preferences, CompactLES
 Preferences.set_preferences!(CompactLES, "precompile_float32" => true)
 ```
 
-Like `precompile_device`, the preference is read at precompile time, so
-setting it rebuilds the package image.
+The preference is read at precompile time, so setting it rebuilds the package
+image; nothing needs to be forced by hand.
 """
 const PRECOMPILE_FLOAT32 = @load_preference("precompile_float32", false)
-
-"""
-Whether the workload builds the solver configurations of the compile-bound
-phases of the multi-rank suite's eight-rank selection (`rank_shape=true` in
-`test/mpi_tests.jl`): the positivity limiter on each of its layouts, the
-symmetry planes, a refined level at a symmetry plane and on the r-z axis, the
-staggered diffusion operator and the implicit stage on their metrics, and the
-implicit-conduction pair. Every rank of that suite otherwise compiles each of
-them for itself, and on a runner with fewer cores than ranks the ranks share
-the cores while they compile. Off by default, since a user's run builds few of
-these types and every package precompile takes longer with the block on.
-
-Turn it on where the suite runs at many ranks, as CI's eight-rank job does:
-
-```julia
-using Preferences, CompactLES
-Preferences.set_preferences!(CompactLES, "precompile_mpi_suite" => true)
-```
-
-Like the other preferences, it is read at precompile time, so setting it
-rebuilds the package image. The block reproduces each phase's types, not its
-data: the precision, metric, equation of state, transport, folded faces,
-active dimensions, refinement and the keyword types of the `Solver` call. A
-phase whose configuration changes without a matching change here still runs,
-and compiles its tree on every rank.
-"""
-const PRECOMPILE_MPI_SUITE = @load_preference("precompile_mpi_suite", false)
 
 # ---- Primary: what most scripts build -------------------------------------
 
@@ -327,9 +255,6 @@ function _workload_float32()
     return nothing
 end
 
-const _TEST_WORKLOAD = PRECOMPILE_TESTS || PRECOMPILE_DEVICE || PRECOMPILE_MPI_SUITE
-_TEST_WORKLOAD && include(joinpath(@__DIR__, "..", "test", "precompile_workload.jl"))
-
 if MPIPreferences.binary != "system"
 @setup_workload begin
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -344,11 +269,6 @@ if MPIPreferences.binary != "system"
         _workload_axis()
         _workload_origin()
         PRECOMPILE_FLOAT32 && _workload_float32()
-        if _TEST_WORKLOAD
-            cpu = KernelAbstractions.CPU()
-            (PRECOMPILE_TESTS || PRECOMPILE_DEVICE) && _test_suite_workload(cpu)
-            PRECOMPILE_MPI_SUITE && _mpi_suite_workload(cpu)
-        end
     end
 end
 end

@@ -6,6 +6,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 @isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(use_test_image) || include(joinpath(@__DIR__, "test_image.jl"))
 using CompactLES
 using CompactLES: validate_bc, sensor_mirror, isperiodic, state_admissibility, EquationSet,
                   NavierStokes1T, rewind!, compute_rhs!, apply_bcs!, filter_state!,

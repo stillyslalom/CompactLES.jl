@@ -60,25 +60,13 @@ jobs:
         with:
           cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
       # The suite's own configurations, the device testsets and the Float32
-      # testsets run here, so the workload's test, device and Float32 blocks
-      # earn their precompile cost in this job; see PRECOMPILE_TESTS,
-      # PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in src/precompile.jl. Neither this step nor buildpkg precompiles: an
-      # image Pkg.instantiate built here would predate the preferences and be
-      # rebuilt by the first `using` (measured 330 s of every job), and the
-      # serial suite builds its own at -O1 with bounds checks in any case.
-      - name: Set the precompile preferences
-        shell: julia --project=. --color=yes {0}
-        env:
-          JULIA_PKG_PRECOMPILE_AUTO: "0"
+      # testsets run here, so the test image (test/TestPrecompile) earns its
+      # precompile cost in this job. The preferences file enables it; the
+      # suite's process builds it at its first load, at the suite's flags.
+      - name: Enable the test image
         run: |
-          using Pkg
-          Pkg.instantiate()
-          using Preferences
-          Preferences.set_preferences!(
-              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_tests" => true, "precompile_device" => true,
-              "precompile_float32" => true;
-              force=true)
+          printf '[TestPrecompile]\ndevice = true\nfloat32 = true\nmpi_suite = false\n' \
+              > test/TestPrecompile/LocalPreferences.toml
       - uses: julia-actions/julia-buildpkg@v1
       # At -O1: the serial suite is compile-bound, and -O1 reuses the -O2
       # image buildpkg made (see test/runtests.jl). julia-runtest has no
@@ -115,27 +103,15 @@ jobs:
       - uses: julia-actions/cache@v3
         with:
           cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
-      # The MPI suite's device phases and Float32 phases run here, so the
-      # workload's device and Float32 blocks earn their precompile cost in
-      # this job; see PRECOMPILE_DEVICE and PRECOMPILE_FLOAT32 in
-      # src/precompile.jl. Neither this step nor buildpkg precompiles: an
-      # image Pkg.instantiate built here would predate the preferences and be
-      # rebuilt by the first `using` (measured 330 s of every job). The first
-      # `using CompactLES`, in convergence.jl, builds the image every later
-      # process loads.
-      - name: Set the precompile preferences
+      # Neither this step nor buildpkg precompiles, so that the report below
+      # describes what the cache restored.
+      - name: Instantiate without precompiling
         shell: julia --project=. --color=yes {0}
         env:
           JULIA_PKG_PRECOMPILE_AUTO: "0"
         run: |
           using Pkg
           Pkg.instantiate()
-          using Preferences
-          Preferences.set_preferences!(
-              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_tests" => true, "precompile_device" => true,
-              "precompile_float32" => true;
-              force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # Whether the restored depot holds a loadable image of this source, with
       # the runner's CPU name and the loader's reason for each CompactLES
@@ -155,6 +131,12 @@ jobs:
       # bounds-checked on three Julia versions by julia-runtest, and an index
       # error in the distributed paths moves a convergence order or an
       # interface error away from machine zero, so it does not pass unseen.
+      # The MPI suite's device phases and Float32 phases run here, so the test
+      # image (test/TestPrecompile) takes its device and Float32 blocks. One
+      # process builds the package image and the test image every later
+      # process loads.
+      - name: Build the test image
+        run: julia --project=. --color=yes test/test_image.jl
       - name: Run convergence guards
         run: julia --project=. --color=yes test/convergence.jl
       # The full distributed suite runs at np = 2; the comment on the
@@ -193,26 +175,14 @@ jobs:
       - uses: julia-actions/cache@v3
         with:
           cache-name: julia-cache-avx2;workflow=${{ github.workflow }};job=${{ github.job }}
-      # As in the numerics job: the MPI device and Float32 phases run here,
-      # and neither this step nor buildpkg precompiles, so that the one image
-      # build happens after the preferences are set. This job also sets
-      # precompile_mpi_suite, which adds the solver configurations of the
-      # compile-bound phases of the eight-rank selection to the image (see
-      # PRECOMPILE_MPI_SUITE in src/precompile.jl): the image is built once,
-      # where eight ranks would otherwise compile those trees each.
-      - name: Set the precompile preferences
+      # As in the numerics job.
+      - name: Instantiate without precompiling
         shell: julia --project=. --color=yes {0}
         env:
           JULIA_PKG_PRECOMPILE_AUTO: "0"
         run: |
           using Pkg
           Pkg.instantiate()
-          using Preferences
-          Preferences.set_preferences!(
-              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
-              "precompile_tests" => true, "precompile_device" => true,
-              "precompile_float32" => true, "precompile_mpi_suite" => true;
-              force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # As in the numerics job, for comparison with it.
       - name: Report the restored package image
@@ -227,8 +197,13 @@ jobs:
       # their first `using` and the build is not timed as part of the first
       # phase. No `--check-bounds=yes`, for the reason given in the numerics
       # job.
-      - name: Build the package image
-        run: julia --project=. --color=yes -e 'using CompactLES'
+      #
+      # The test image takes its `mpi_suite` block here, the solver
+      # configurations of the compile-bound phases of the eight-rank selection
+      # (see test/TestPrecompile): built once, where eight ranks would
+      # otherwise compile those trees each.
+      - name: Build the package image and the test image
+        run: julia --project=. --color=yes test/test_image.jl mpi_suite=true
       # The runner has four vCPUs. The bundled MPICH (ch4) waits in a
       # collective by spinning with sched_yield between polls, which under
       # Linux CFS does not hand the core to a runnable sibling, so at np = 8
@@ -240,7 +215,7 @@ jobs:
       # The full suite at np = 8 was 29 minutes of the job.
       #
       # The test suites' precompile workload (test/precompile_workload.jl,
-      # under the preferences set above) removes most
+      # in the test image built above) removes most
       # of the compile from every rank; what remains is step-bound runtime,
       # and with two physical cores even np = 4 pays for it (a full np = 4
       # leg measured 416 s against 58 s at np = 2, with 43 s of compile).
