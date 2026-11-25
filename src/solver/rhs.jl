@@ -37,6 +37,14 @@ _ghost_remainder(interface_flux::Symbol, art) =
     interface_flux === :ghost && art.enabled
 _ghost_remainder(solver) = _ghost_remainder(solver.interface_flux, solver.art)
 
+# Whether a patch with an interface end holds `ghost_flux` arrays: under the
+# molecular ghost fluxes or the ghost-differenced remainder, the two cases
+# that write them. `interface_flux = :closure` reads none.
+_ghost_fluxes_built(interface_flux::Symbol, transport, art) =
+    _ghost_viscous(interface_flux, transport) || _ghost_remainder(interface_flux, art)
+_ghost_fluxes_built(solver) =
+    _ghost_fluxes_built(solver.interface_flux, solver.transport, solver.art)
+
 # Whether a refined patch is built with the shell's gradient ring: under the
 # molecular ghost fluxes, unless the remainder is ghost-differenced, which
 # covers every interface dimension, coarse-fine ones included, and leaves no

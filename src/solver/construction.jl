@@ -1158,6 +1158,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  gradient_ring=
                                                      _gradient_ring_built(interface_flux,
                                                                           transport, art),
+                                                 ghost_fluxes=
+                                                     _ghost_fluxes_built(interface_flux,
+                                                                         transport, art),
                                                  ring=_ring_detector(art, n_species),
                                                  boundaries, bcs, root_folds=folds,
                                                  n_sensed=_sensed_field_count(art, tile,
@@ -1314,6 +1317,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
                            gradient_ring::Bool=false,
+                           ghost_fluxes::Bool=true,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, root_folds=nothing,
@@ -1346,10 +1350,12 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                              backend, fine_decomp=decomp_f, hf, boundary, folded)
     # Every face of a refined patch but one on the domain boundary is an
     # interface end, a coarse-fine or a same-level one, so each dimension
-    # with such an end takes a ghost-flux array.
+    # with such an end takes a ghost-flux array where the right-hand side
+    # reads one (`_ghost_fluxes_built`).
+    gdims = _interface_dims(active_g, boundary)
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
                                similar(empty3, T, 0, 0, 0, 0),
-                               _interface_dims(active_g, boundary))
+                               ntuple(d -> ghost_fluxes && gdims[d], 3))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
                            fbcs, plans, empty3,
                            _patch_arrays(g, n_species, n_sensed), ws,
@@ -1647,6 +1653,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               tile::NTuple{3,Int};
                               interface_divergence=nothing,
                               gradient_ring::Bool=false,
+                              ghost_fluxes::Bool=true,
                               ring::Bool=false,
                               boundaries=fill(_NO_BOUNDARY, length(tregions)),
                               bcs=nothing, root_folds=nothing,
@@ -1660,7 +1667,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, grad_Q_columns, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             gradient_ring, ring,
+                                             gradient_ring, ghost_fluxes, ring,
                                              boundary=boundaries[ti], bcs,
                                              root_folds, n_sensed, slot=k))
         end
@@ -1690,7 +1697,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         grad_Q_columns, level; interface_divergence,
-                                        gradient_ring, ring,
+                                        gradient_ring, ghost_fluxes, ring,
                                         boundary=key[2], bcs,
                                         smoother, root_folds, n_sensed,
                                         shared_tiles=[_shared_faces(faces[held[k]])
@@ -1712,6 +1719,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            grad_Q_columns::Int, level::Int;
                            interface_divergence=nothing,
                            gradient_ring::Bool=false,
+                           ghost_fluxes::Bool=true,
                            ring::Bool=false,
                            boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
                            bcs=nothing, smoother::Symbol=:gaussian,
@@ -1745,7 +1753,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                     ntiles * stride, n_cons),
                            ntiles, stride),
         StackedArray(empty4, ntiles, stride),
-        _interface_dims(active_g, boundary))
+        ntuple(d -> ghost_fluxes && _interface_dims(active_g, boundary)[d], 3))
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (the batched phases read
     # only their kind: the members share the boundary faces, every other
@@ -1966,8 +1974,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               ws, _covered_mask(dcp), empty3, _empty_level_scratch(empty3),
               _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
                                  similar(empty3, T, 0, 0, 0, 0),
-                                 ntuple(d -> (_ghost_viscous(interface_flux, transport) ||
-                                              _ghost_remainder(interface_flux, art)) &&
+                                 ntuple(d -> _ghost_fluxes_built(interface_flux,
+                                                                 transport, art) &&
                                              dcp.active[d] &&
                                              (pbcs[d][1] isa InterfaceBC ||
                                               pbcs[d][2] isa InterfaceBC), 3)))

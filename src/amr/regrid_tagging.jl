@@ -887,6 +887,7 @@ function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
                           _grad_Q_columns(solver), fi, 1;
                           interface_divergence=spec.interface_divergence,
                           gradient_ring=_gradient_ring_built(solver),
+                          ghost_fluxes=_ghost_fluxes_built(solver),
                           ring=_ring_detector(solver),
                           boundary=bnd, bcs=patches[1].bcs,
                           root_folds=patches[1].folds) : nothing
