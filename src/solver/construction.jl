@@ -1261,7 +1261,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   Lt, orig, coord_shift, h,
                   T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
                   n_global, patches, regions, decomp.comm,
-                  GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
@@ -1977,8 +1976,19 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                              (pbcs[d][1] isa InterfaceBC ||
                                               pbcs[d][2] isa InterfaceBC), 3)))
     end
-    ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
+    # The slabs' records are the root level's, in the slot of the dimension
+    # the slabs are stacked along.
+    records = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
+    ds = something(findfirst(>(1), patch_grid), 1)
+    slot(r) = ntuple(d -> d == ds ? r : empty(r), 3)
+    root_lc = root_level_comm(world)
+    root = Level{T}(0, root_lc, [0:(root_lc.size - 1)],
+                    TileGroup(root_lc.comm, 0:(root_lc.size - 1), false),
+                    collect(eachindex(patches)), collect(eachindex(patches)),
+                    LevelTransfer{T}[],
+                    (slot(records[1]), slot(records[2]), slot(records[3]),
+                     ntuple(d -> d == ds && npatch > 1, 3)))
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
@@ -1986,10 +1996,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   Lt, orig, coord_shift, h,
                   T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
                   n_global, patches, regions, world,
-                  ghost_sends, ghost_recvs, plane_pairs,
-                  [Level{T}(0, root_level_comm(world),
-                            collect(eachindex(patches)), LevelTransfer{T}[])],
-                  false, nothing,
+                  [root], false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,

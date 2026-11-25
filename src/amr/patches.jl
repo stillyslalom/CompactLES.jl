@@ -1405,14 +1405,19 @@ into edge and corner halos using the sequential-dimension halo exchange that
 fills corners. Collective over the ranks owning either side of any
 interface; a run with one patch returns immediately.
 """
-exchange_patch_ghosts!(solver, states) =
-    _exchange_ghosts!(solver, states, solver.comm, solver.ghost_sends,
-                      solver.ghost_recvs)
+function exchange_patch_ghosts!(solver, states)
+    root = getfield(solver, :levels)[1]
+    for d in 1:3
+        _exchange_ghosts!(solver, states, root.level_comm.comm, root.ghost_sends[d],
+                          root.ghost_recvs[d])
+    end
+    return states
+end
 
 # `comm` must be the communicator the records were built over, because each
-# record's `partner` is a rank number in that communicator: `solver.comm` for
-# the root's records, the owning level's communicator for a refined level's
-# (levels_types.jl). It is a parameter rather than a read of `solver.comm` so that
+# record's `partner` is a rank number in that communicator, the one of the
+# level holding the records (levels_types.jl), which at the root is
+# `solver.comm`. It is a parameter rather than a read of `solver.comm` so that
 # a refined level's exchange stays among its subset's ranks.
 function _exchange_ghosts!(solver, states, comm::MPI.Comm, sends, recvs)
     (isempty(recvs) && isempty(sends)) && return states
@@ -1479,8 +1484,13 @@ copies with their mean, over each rank's transverse interior, and return
 result does not depend on which side is asked. Collective as
 [`exchange_patch_ghosts!`](@ref) is; no-op with one patch.
 """
-average_shared_planes!(solver, states) =
-    _average_planes!(solver, states, solver.comm, solver.plane_pairs)
+function average_shared_planes!(solver, states)
+    root = getfield(solver, :levels)[1]
+    for d in 1:3
+        _average_planes!(solver, states, root.level_comm.comm, root.plane_pairs[d])
+    end
+    return states
+end
 
 _average_planes!(solver, states, comm::MPI.Comm, planes) =
     _combine_planes!(solver, states, comm, planes, _ -> 0.5)
@@ -1528,20 +1538,17 @@ neighboring interiors, at the root and on every refined level through that
 level's own records, and exchange each patch's own rank-boundary halos so
 edge and corner cells agree with both. Called by the multi-patch drivers
 after every RK stage update and at the head of each `run!` iteration; a
-single-patch solver never reaches it. Collective over `solver.comm` for the
-root's records and over each refined level's own communicator for that
-level's, which only the level's owners enter.
+single-patch solver never reaches it. Collective over each level's own
+communicator for that level's records, which only the level's owners enter;
+the root's is `solver.comm`.
 """
 function sync_patches!(solver, states)
-    average_shared_planes!(solver, states)
-    exchange_patch_ghosts!(solver, states)
-    levels = getfield(solver, :levels)
-    for ℓ in 2:length(levels)
-        # The records of a refined level are addressed in that level's own
+    for lev in getfield(solver, :levels)
+        # The records of a level are addressed in that level's own
         # communicator, so only its owners may enter them; a rank without
         # state on the level holds no record to run either.
-        levels[ℓ].level_comm.owned || continue
-        _sync_level_records!(solver, states, levels[ℓ])
+        lev.level_comm.owned || continue
+        _sync_level_records!(solver, states, lev)
     end
     for (i, patch) in enumerate(solver.patches)
         _exchange_patch_state!(states, i, _cold(patch))

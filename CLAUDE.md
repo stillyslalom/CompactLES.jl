@@ -387,7 +387,8 @@ Names are spelled out in full. Current vocabulary:
   `patches`, `patch_regions`, `backend` (an `AbstractBackend`; `CPUBackend`),
   `interface_rhs` (`:extended` or `:onesided`), `div_plans` (divergence plans,
   = `deriv_plans` except at interface ends), `ghost_sends`/`ghost_recvs`/
-  `plane_pairs`, `sync_patches!`, `eachpatch`; a routine below the step
+  `plane_pairs` (the slabs' records, held by the root `Level`),
+  `sync_patches!`, `eachpatch`; a routine below the step
   drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
   a single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before

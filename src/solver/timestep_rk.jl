@@ -474,9 +474,7 @@ function _level_rhs_patches!(solver::Solver, lev::Level, states, dQs, prepared::
     # The molecular flux through interface ends reads every patch's interior
     # flux, so it follows the whole level (rhs.jl, phase two). A setup
     # constant, the same on every rank.
-    _ghost_fluxes_built(solver) &&
-        _level_ghost_fluxes!(solver, lev, states, dQs,
-                             lev.index == 0 ? solver.comm : lev.level_comm.comm)
+    _ghost_fluxes_built(solver) && _level_ghost_fluxes!(solver, lev, states, dQs)
     return UInt8(0)
 end
 

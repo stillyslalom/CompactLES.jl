@@ -387,16 +387,14 @@ end
 # a time: each patch's θ, the exchange that gives the faces about a shared node
 # the same θ on both patches, then each patch's corrections. A patch without a
 # same-level interface shares its face values and θ with the other patches of
-# its extent (the workspace) and takes its corrections at once. The level's
-# shared planes are the root's records at the root and the level's records of
-# the direction, in the level's communicator, below it.
+# its extent (the workspace) and takes its corrections at once. The shared
+# planes are the level's records of the direction, in the level's communicator.
 _limit_level_stage!(::Nothing, solver, lev, states, dQs, dus, stage::Int, dt) = nothing
 function _limit_level_stage!(lims::Vector{Any}, solver, lev, states, dQs, dus,
                              stage::Int, dt)
     first(lims).active || return nothing
     isempty(lev.patches) && return nothing
     patches = getfield(solver, :patches)
-    root = lev.index == 0
     for d in 1:3
         PatchSolver(solver, patches[first(lev.patches)]).decomp.active[d] || continue
         due = falses(length(patches))
@@ -409,9 +407,8 @@ function _limit_level_stage!(lims::Vector{Any}, solver, lev, states, dQs, dus,
                 due[i] = false
             end
         end
-        records = root ? solver.plane_pairs : lev.plane_pairs[d]
-        _exchange_interface_theta!(solver, lims, d, due, records,
-                                   root ? solver.comm : lev.level_comm.comm)
+        _exchange_interface_theta!(solver, lims, d, due, lev.plane_pairs[d],
+                                   lev.level_comm.comm)
         for i in lev.patches
             due[i] && _stage_correct!(lims[i], PatchSolver(solver, patches[i]), states[i],
                                       dQs[i], stage, dt, d)
@@ -1456,7 +1453,6 @@ function _limited_level_filter!(lims::Vector{Any}, solver, lev, states)
         end
         return states
     end
-    root = lev.index == 0
     for d in 1:3
         PatchSolver(solver, patches[first(lev.patches)]).decomp.active[d] || continue
         due = falses(length(patches))
@@ -1473,9 +1469,8 @@ function _limited_level_filter!(lims::Vector{Any}, solver, lev, states)
                 due[i] = false
             end
         end
-        records = root ? solver.plane_pairs : lev.plane_pairs[d]
-        _exchange_interface_theta!(solver, lims, d, due, records,
-                                   root ? solver.comm : lev.level_comm.comm, 4)
+        _exchange_interface_theta!(solver, lims, d, due, lev.plane_pairs[d],
+                                   lev.level_comm.comm, 4)
         for i in lev.patches
             due[i] || continue
             ps = PatchSolver(solver, patches[i])

@@ -65,9 +65,6 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     comm::MPI.Comm                          # reduction communicator spanning all
                                             # ranks (the sole patch's Cartesian
                                             # communicator when there is one patch)
-    ghost_sends::Vector{GhostRecord{T}}     # interface exchange records; empty
-    ghost_recvs::Vector{GhostRecord{T}}     # with one patch
-    plane_pairs::Vector{PlaneRecord{T}}
     levels::Vector{Level{T}}                # the refinement hierarchy, root
                                             # first; one entry without refinement
                                             # (levels_coupling.jl)
@@ -89,7 +86,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     wall_total::Float64                     # cumulative over the run
     # Of those, the seconds spent inside the collectives every rank of a run
     # enters (the rate and floor reductions, the level box and restriction
-    # gathers) and in a refined level's record exchange, where a lightly
+    # gathers) and in a level's record exchange, where a lightly
     # loaded rank blocks on a heavier one. `wall_step - wall_wait` is the
     # rank's own work, the quantity a rebalance compares across ranks
     # (`_rebalance_due!`); the step wall alone is nearly uniform under any

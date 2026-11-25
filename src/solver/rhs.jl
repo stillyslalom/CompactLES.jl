@@ -2073,36 +2073,25 @@ _ghost_gradient_eos(eos) =
 # Phase two over one level. Collective over the level's communicator (the
 # flux records) and over each patch's (its line solves); every rank that
 # evaluated the level's right-hand sides enters it.
-function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
+function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs)
     patches = getfield(solver, :patches)
     isempty(lev.patches) && return dQs
     n_cons = solver.equations.n_cons
-    # The same-level records: the root's are the solver's (a slab layout,
-    # so they run along one dimension), a refined level's its own per
-    # dimension. Counted as waiting, as the state's record exchange is
-    # (`_sync_level_records!`).
+    # The level's same-level records, per dimension (the root's, of a slab
+    # layout, run along one). Counted as waiting, as the state's record
+    # exchange is (`_sync_level_records!`).
     # The fluxes are wrapped as states are, so that a stacked tile's view, not
     # the stack beneath it, is the array the records index.
+    # Every dimension's records in one round: each moves its own dimension's
+    # flux, which no other record reads or writes. A dimension none of this
+    # rank's patches holds a flux along has no record here either.
     t0 = time_ns()
-    if lev.index == 0
-        # One record set for every dimension, whose buffers the dimensions
-        # take in turn.
-        for d in 1:3
-            any(p -> size(p.ghost_flux[d], 4) > 0, view(patches, lev.patches)) ||
-                continue
-            fields = [ConservedState(p.ghost_flux[d]) for p in patches]
-            _exchange_ghosts!(solver, fields, comm, solver.ghost_sends,
-                              solver.ghost_recvs)
-        end
-    else
-        # Every dimension's records in one round: each moves its own
-        # dimension's flux, which no other record reads or writes.
-        phased = [d for d in 1:3 if lev.phases[d]]
-        _exchange_ghost_sets!([[ConservedState(p.ghost_flux[d]) for p in patches]
-                               for d in phased], comm,
-                              [lev.ghost_sends[d] for d in phased],
-                              [lev.ghost_recvs[d] for d in phased])
-    end
+    phased = [d for d in 1:3 if lev.phases[d] &&
+              any(p -> size(p.ghost_flux[d], 4) > 0, view(patches, lev.patches))]
+    _exchange_ghost_sets!([[ConservedState(p.ghost_flux[d]) for p in patches]
+                           for d in phased], lev.level_comm.comm,
+                          [lev.ghost_sends[d] for d in phased],
+                          [lev.ghost_recvs[d] for d in phased])
     _charge_exchange!(solver, lev, t0)
     _wait!(solver, t0)
     lev.index == 0 || _foreach_tile(_tile_coarse_fine_fluxes!, solver, lev, lev,

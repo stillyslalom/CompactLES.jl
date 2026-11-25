@@ -496,8 +496,8 @@ subset owning it ([`LevelComm`](@ref)), the owner rank range of each of its
 tiles and this rank's [`TileGroup`](@ref), the indices into `solver.patches`
 of the tiles this rank holds and which tiles they are, the
 [`LevelTransfer`](@ref) coupling each tile to its parent (empty at the root),
-and the same-level interface records among the level's tiles (the root's
-live on the `Solver`). `solver.levels` holds them in ascending order, and
+and the same-level interface records among the level's tiles (at the root,
+among the slabs of a `patch_grid`). `solver.levels` holds them in ascending order, and
 every level below the root is nested inside the one above it. Below the root
 a level is a set of tiles on a lattice of edge `tile` parent nodes (one patch
 over the whole region when `tile` is 0), abutting tiles sharing their
