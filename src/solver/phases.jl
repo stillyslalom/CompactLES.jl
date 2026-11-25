@@ -258,8 +258,9 @@ end
 # `ProgressLog` projects the remaining time from. None of it enters a step.
 function _carry_accounts!(next::Solver, prev::Solver)
     setfield!(next, :floor_tally, deepcopy(getfield(prev, :floor_tally)))
-    for name in (:wall_step, :wall_total, :wall_wait, :wait_total)
-        setfield!(next, name, getfield(prev, name))
+    from, to = getfield(prev, :wall), getfield(next, :wall)
+    for name in fieldnames(WallAccounting)
+        setfield!(to, name, getfield(from, name))
     end
     return next
 end

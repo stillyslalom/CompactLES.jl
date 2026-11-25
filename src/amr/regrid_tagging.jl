@@ -881,7 +881,7 @@ function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
     # the same extent takes it over instead of allocating beside it.
     ws_pool = [p.rhs_workspace for p in patches]
     newfine = held ?
-        _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
+        _build_fine_patch(T, newregion, active_g, _root_spacing(solver),
                           spec.n_halo, group.comm,
                           schemes.deriv, schemes.filt, spec.smoo,
                           solver.art.smoother, schemes.interface_rhs,
@@ -903,7 +903,7 @@ function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  interpolation_order=schemes.level_interpolation_order,
                                  gradient_deriv=_gradient_ring_built(solver) ?
                                                 schemes.deriv : nothing,
-                                 parent_h=getfield(solver, :h), boundary=bnd, folded,
+                                 parent_h=_root_spacing(solver), boundary=bnd, folded,
                                  period)
     coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],
                                     Union{Nothing,Decomp{T}}[patches[1].decomp],

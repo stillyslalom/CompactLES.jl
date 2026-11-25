@@ -556,7 +556,7 @@ function profile_spacing(solver::Solver, d::Int)
             scale[idx] = 1 / invh[idx]
         end
         scale
-    end .* getfield(solver, :h)[d]
+    end .* _root_spacing(solver)[d]
     half = zeros(Int, 2) # physical node-centered low and high edges
     for p in getfield(solver, :patches)
         p.level == 0 || continue

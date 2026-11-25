@@ -263,7 +263,7 @@ bounds of the current `run!`. Built by setup.
 """
 mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
                                  B<:AbstractVector{Bool},P<:AbstractArray{T,3},
-                                 C<:AbstractArray{Int,3}}
+                                 C<:AbstractArray{Int,3}} <: LimiterState
     weights::NTuple{3,V}            # W_d at each padded position along d
     inv_weights::NTuple{3,V}        # 1 / W_d, which the face pass multiplies by
     free::Tuple{B,B,B,A}            # positions on a face whose condition
@@ -344,16 +344,16 @@ radial grid, whose limiters hold the scratch of the radial pass themselves.
 `lines` holds, per node count and per end at an interface, whether a closed
 line takes the face form (`_limiter_tile_short`).
 """
-mutable struct PatchLimiters
-    limiters::Vector{Any}
-    patches::Vector{Any}
+mutable struct PatchLimiters <: LimiterState
+    limiters::Vector{PositivityLimiter}
+    patches::Vector{Patch}
     retired::Vector{Int}
     least::Int
     separate::Bool
     lines::Dict{Tuple{Int,Bool,Bool},Bool}
 end
 
-PatchLimiters(limiters::Vector{Any}, patches::Vector{Any}, least::Int=4,
+PatchLimiters(limiters::Vector, patches::Vector, least::Int=4,
               separate::Bool=false) =
     PatchLimiters(limiters, patches, zeros(Int, 6), least, separate,
                   Dict{Tuple{Int,Bool,Bool},Bool}())
@@ -613,7 +613,7 @@ function _limiter_tile_short(solver, region::BlockRegion, ℓ::Int)
     rows = _limiter_end_rows(deriv, getfield(solver, :interface_flux),
                              schemes.interface_rhs, schemes.interface_divergence)
     n_halo = getfield(solver, :patches)[1].decomp.n_halo
-    T = eltype(getfield(solver, :h))
+    T = eltype(_root_spacing(solver))
     for d in 1:3
         (active[d] && !folded[d][1] && !all(boundary[d])) || continue
         lo_rows = boundary[d][1] ? nothing : rows

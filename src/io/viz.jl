@@ -246,7 +246,7 @@ function line_sample(solver::Solver, states::Vector{<:ConservedState}, name::Sym
     fs = field_array(solver, states, name; species=species)
     fixed = ntuple(d -> d == a ? ga : d == b ? gb : 0, 3)
     acc = MPI.Allreduce(_composite_samples(solver, fs, fixed), +, solver.comm)
-    T = eltype(getfield(solver, :h))
+    T = eltype(_root_spacing(solver))
     return _root_coordinates(solver, dim), T.(vec(_finest_values(acc)))
 end
 
@@ -343,9 +343,9 @@ _root_coordinates(solver::Solver, d::Int) =
     Float64[_root_xcoord(solver, d, g) for g in 1:solver.n_global[d]]
 
 function _root_xcoord(solver::Solver, d::Int, g::Int)
-    ξ = getfield(solver, :origin)[d] + getfield(solver, :coord_shift)[d] +
-        (g - 1) * getfield(solver, :h)[d]
-    stretch = getfield(solver, :stretch)[d]
+    ξ = solver.origin[d] + solver.coord_shift[d] +
+        (g - 1) * _root_spacing(solver)[d]
+    stretch = solver.stretch[d]
     return stretch === nothing ? ξ : stretch.x(ξ)
 end
 
@@ -1006,7 +1006,7 @@ function cartesian_slice(solver::Solver, dims, x1, x2, values; period=:auto,
         # The azimuth of a polar (r, θ) or (θ, φ) plane closes the raster when
         # that dimension is decomposed as periodic over its full extent.
         period = (_root_periodic(solver, b) && solver.n_global[b] > 1) ?
-                 solver.n_global[b] * getfield(solver, :h)[b] : nothing
+                 solver.n_global[b] * _root_spacing(solver)[b] : nothing
     end
     if axis === :auto
         axis = Tuple(dims) == (1, 2) && period !== nothing && _through_axis(solver)
@@ -1019,7 +1019,7 @@ end
 # an axis fold shifts a cylindrical radius half a spacing off its origin, since
 # a symmetry plane is rejected on r.
 _through_axis(solver::Solver) =
-    solver.metric isa CylindricalMetric && getfield(solver, :coord_shift)[1] > 0
+    solver.metric isa CylindricalMetric && solver.coord_shift[1] > 0
 
 # Whether the root grid is periodic along `d`. A slab layout (`patch_grid`)
 # splits one periodic dimension into patches that are not periodic on their
@@ -1270,16 +1270,16 @@ end
 # The physical extent of the domain along `d`. A stretched dimension stores its
 # computational coordinate on [0, 1].
 function _domain_bounds(solver::Solver, d::Int)
-    stretch = getfield(solver, :stretch)[d]
+    stretch = solver.stretch[d]
     stretch === nothing || return stretch.x(0.0), stretch.x(1.0)
-    lo = getfield(solver, :origin)[d]
-    return lo, lo + getfield(solver, :L_domain)[d]
+    lo = solver.origin[d]
+    return lo, lo + solver.L_domain[d]
 end
 
 # The node spacing of a level, divided by three per level as the constructor
 # divides it, so coordinates computed from it repeat the patches' own.
 function _level_spacing(solver::Solver, level::Int)
-    h = getfield(solver, :h)
+    h = _root_spacing(solver)
     for _ in 1:level
         h = ntuple(d -> solver.n_global[d] > 1 ? h[d] / 3 : h[d], 3)
     end
@@ -1289,8 +1289,8 @@ end
 # The coordinate of node `m` of a level's own node space along `d`, given that
 # level's spacing; `global_xcoord` with the spacing passed in.
 function _level_xcoord(solver::Solver, h, d::Int, m::Int)
-    ξ = getfield(solver, :origin)[d] + getfield(solver, :coord_shift)[d] + (m - 1) * h[d]
-    stretch = getfield(solver, :stretch)[d]
+    ξ = solver.origin[d] + solver.coord_shift[d] + (m - 1) * h[d]
+    stretch = solver.stretch[d]
     return stretch === nothing ? ξ : stretch.x(ξ)
 end
 

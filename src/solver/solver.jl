@@ -27,6 +27,54 @@ struct SchemeSettings
     bcs::FaceConditions
 end
 
+# What `Solver.positivity` holds when the limiter is on: a `PositivityLimiter`
+# on one patch, a `PatchLimiters` on several (positivity_setup.jl).
+abstract type LimiterState end
+
+# The domain's geometry as the solver was configured: the metric, the
+# per-dimension stretch, the computational extents, the root spacing and the
+# whole-grid node counts. `h` is the root level's spacing; `solver.h` is the
+# patch's own (`Patch.h`), so the root's is read as `_root_spacing(solver)`.
+struct GridGeometry{T,M<:Metric,St}
+    metric::M
+    stretch::St
+    L_domain::NTuple{3,T}
+    origin::NTuple{3,T}
+    coord_shift::NTuple{3,T}                # half-cell offset (axis grids)
+    h::NTuple{3,T}
+    n_global::NTuple{3,Int}                 # whole-grid extents (all patches)
+end
+
+# The clock of a run and the step history the controller reads.
+mutable struct ClockState{T}
+    t::T
+    tstage::T
+    step::Int
+    dt_prev::T                              # last accepted step, for growth capping
+    rate_prev::T                            # last CFL rate, for the predictor
+    filter_rate_prev::NTuple{3,T}           # its per-direction hyperbolic rates,
+                                            # for filter_weight
+end
+
+# Wall-clock accounting, filled in by `run!`. Rank-local: a reduction here
+# would be a collective on every step, paid by every run whether or not
+# anything reads it. Callers wanting load imbalance reduce these
+# themselves at their own (much lower) reporting frequency; see
+# `ProgressLog`. Seconds, and Float64 regardless of T.
+mutable struct WallAccounting
+    wall_step::Float64                      # last completed step, excl. callbacks
+    wall_total::Float64                     # cumulative over the run
+    # Of those, the seconds spent inside the collectives every rank of a run
+    # enters (the rate and floor reductions, the level box and restriction
+    # gathers) and in a level's record exchange, where a lightly
+    # loaded rank blocks on a heavier one. `wall_step - wall_wait` is the
+    # rank's own work, the quantity a rebalance compares across ranks
+    # (`_rebalance_due!`); the step wall alone is nearly uniform under any
+    # load, since every rank waits at the same reductions.
+    wall_wait::Float64                      # in the last completed step
+    wait_total::Float64                     # cumulative over the run
+end
+
 # The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a refined
 # solver stores its root and level-1 patches in one vector, and where the two
 # differ in a `Patch` parameter `P` is their typejoin. The per-patch loops
@@ -72,19 +120,14 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     eos::E
     transport::Tr
     art::ArtificialProperties{T}
-    metric::M
-    stretch::St
     sources::Src
-    L_domain::NTuple{3,T}
-    origin::NTuple{3,T}
-    coord_shift::NTuple{3,T}                # half-cell offset (axis grids)
-    h::NTuple{3,T}
+    grid::GridGeometry{T,M,St}              # metric, stretch, extents, spacing
     cfl::T
     filter_interval::Int
     filter_cfl::T                           # 0 = unrelaxed; see filter_weight
     filter_weighting::Symbol                # :none or :volume; see filter_state!
     control::StepControl                    # timestep floors, prediction, retry
-    n_global::NTuple{3,Int}                 # whole-grid extents (all patches)
+    clock::ClockState{T}                    # t, tstage, step and the step history
     # Per-patch state: everything from the decomposition and the operator plans
     # through the field arrays lives on `Patch` (patches.jl). With one patch,
     # `Base.getproperty` below forwards the patch-owned names to it, so
@@ -101,29 +144,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
                                             # (levels_coupling.jl)
     subcycle::Bool                          # Berger–Oliger subcycling; timestep_rk.jl
     regrid::Union{Nothing,RegridSpec{T}}    # tagging + regridding; regrid_*.jl
-    t::T
-    tstage::T
-    step::Int
-    dt_prev::T                              # last accepted step, for growth capping
-    rate_prev::T                            # last CFL rate, for the predictor
-    filter_rate_prev::NTuple{3,T}           # its per-direction hyperbolic rates,
-                                            # for filter_weight
-    # Wall-clock accounting, filled in by `run!`. Rank-local: a reduction here
-    # would be a collective on every step, paid by every run whether or not
-    # anything reads it. Callers wanting load imbalance reduce these
-    # themselves at their own (much lower) reporting frequency; see
-    # `ProgressLog`. Seconds, and Float64 regardless of T.
-    wall_step::Float64                      # last completed step, excl. callbacks
-    wall_total::Float64                     # cumulative over the run
-    # Of those, the seconds spent inside the collectives every rank of a run
-    # enters (the rate and floor reductions, the level box and restriction
-    # gathers) and in a level's record exchange, where a lightly
-    # loaded rank blocks on a heavier one. `wall_step - wall_wait` is the
-    # rank's own work, the quantity a rebalance compares across ranks
-    # (`_rebalance_due!`); the step wall alone is nearly uniform under any
-    # load, since every rank waits at the same reductions.
-    wall_wait::Float64                      # in the last completed step
-    wait_total::Float64                     # cumulative over the run
+    wall::WallAccounting                    # wall-clock seconds; see the type
     # What the positivity failsafe has seen and repaired. Global, unlike the
     # rank-local wall-clock fields above: the repair reduces its own
     # tally on every step it runs, and it runs only when
@@ -148,8 +169,8 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # The positivity limiter (positivity_setup.jl), a `PatchLimiters` holding one per
     # patch of a patched or refined solver, or `nothing` without it. Read by
     # `run!` alone, which steps a limited solver through `_limited_run_step!`
-    # behind a function barrier, so the field is untyped, as `inputs` is.
-    positivity::Any
+    # behind a function barrier, so the field is abstractly typed.
+    positivity::Union{Nothing,LimiterState}
     # The `Problem` and `Numerics` that `setup` built this solver from, as
     # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by
     # `_build_solver` directly. Read only by the phase change, `setup(solver, Q; ...)`
@@ -171,8 +192,33 @@ end
         length(ps) == 1 || _patch_prop_error(name)
         return _patch_property(@inbounds(ps[1]), name)
     end
+    _is_clock_prop(name) && return getfield(getfield(s, :clock), name)
+    _is_grid_prop(name) && return getfield(getfield(s, :grid), name)
+    _is_wall_prop(name) && return getfield(getfield(s, :wall), name)
     return getfield(s, name)
 end
+
+# The names of `ClockState`, `WallAccounting` and `GridGeometry`, which the
+# solver serves and assigns as its own properties: `solver.t += dt` and
+# `solver.metric` read as they did when these were its fields. `h` is absent
+# from the grid names, being a patch-owned property.
+@inline _is_clock_prop(n::Symbol) =
+    n === :t || n === :tstage || n === :step || n === :dt_prev ||
+    n === :rate_prev || n === :filter_rate_prev
+@inline _is_wall_prop(n::Symbol) =
+    n === :wall_step || n === :wall_total || n === :wall_wait || n === :wait_total
+@inline _is_grid_prop(n::Symbol) =
+    n === :metric || n === :stretch || n === :L_domain || n === :origin ||
+    n === :coord_shift || n === :n_global
+
+@inline function Base.setproperty!(s::Solver, name::Symbol, value)
+    _is_clock_prop(name) && return setproperty!(getfield(s, :clock), name, value)
+    _is_wall_prop(name) && return setproperty!(getfield(s, :wall), name, value)
+    return setfield!(s, name, convert(fieldtype(typeof(s), name), value))
+end
+
+# The root level's spacing, where `solver.h` is the patch's own.
+@inline _root_spacing(s::Solver) = getfield(getfield(s, :grid), :h)
 
 @noinline function _patch_prop_error(name::Symbol)
     diagnostics = "Pass the state vector to a diagnostic that takes it " *

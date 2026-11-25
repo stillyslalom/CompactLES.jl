@@ -66,7 +66,7 @@ function _rebuild_limiters!(solver, pl::PatchLimiters)
     patches = getfield(solver, :patches)
     held = IdDict{Any,Any}(zip(pl.patches, pl.limiters))
     template = isempty(pl.limiters) ? nothing : first(pl.limiters)
-    limiters = Any[]
+    limiters = PositivityLimiter[]
     for p in patches
         lim = pop!(held, p, nothing)
         if lim === nothing
@@ -83,7 +83,7 @@ function _rebuild_limiters!(solver, pl::PatchLimiters)
         pl.retired .+= lim.counts
     end
     pl.limiters = limiters
-    pl.patches = Any[p for p in patches]
+    pl.patches = Patch[p for p in patches]
     return pl
 end
 
@@ -268,7 +268,7 @@ end
 # The right-hand side arrays a limited stage hands `_level_rhs!`, one per
 # patch (`_LimiterRHS`); the plain arrays where the step is not limited.
 _limiter_stage_rhs(::Nothing, dQs, stage::Int, dt) = dQs
-function _limiter_stage_rhs(lims::Vector{Any}, dQs, stage::Int, dt)
+function _limiter_stage_rhs(lims::Vector{PositivityLimiter}, dQs, stage::Int, dt)
     T = eltype(first(lims).eps_rho)
     return [_LimiterRHS(dQs[i], lims[i], T(RKA[stage]), T(dt)) for i in eachindex(dQs)]
 end
@@ -391,7 +391,7 @@ end
 # its extent (the workspace) and takes its corrections at once. The shared
 # planes are the level's records of the direction, in the level's communicator.
 _limit_level_stage!(::Nothing, solver, lev, states, dQs, dus, stage::Int, dt) = nothing
-function _limit_level_stage!(lims::Vector{Any}, solver, lev, states, dQs, dus,
+function _limit_level_stage!(lims::Vector{PositivityLimiter}, solver, lev, states, dQs, dus,
                              stage::Int, dt)
     first(lims).active || return nothing
     isempty(lev.patches) && return nothing
@@ -1446,7 +1446,7 @@ end
 # then the corrections.
 _limited_level_filter!(::Nothing, solver, lev, states) =
     _level_filter!(solver, lev, states)
-function _limited_level_filter!(lims::Vector{Any}, solver, lev, states)
+function _limited_level_filter!(lims::Vector{PositivityLimiter}, solver, lev, states)
     patches = getfield(solver, :patches)
     if !any(i -> any(any, lims[i].conservative), lev.patches)
         for i in lev.patches

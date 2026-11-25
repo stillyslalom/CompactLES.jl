@@ -1205,8 +1205,9 @@ function _attach_positivity_and_implicit!(::Type{T}, solver,
         # One limiter per patch this rank holds, in the order of its patches.
         if positivity_limiter
             held = getfield(solver, :patches)
-            solver.positivity = PatchLimiters(Any[PositivityLimiter(PatchSolver(solver, p))
-                                                  for p in held], Any[p for p in held])
+            solver.positivity = PatchLimiters(
+                PositivityLimiter[PositivityLimiter(PatchSolver(solver, p)) for p in held],
+                Patch[p for p in held])
         end
     elseif nlev == 1
         # The conduction stage reads the metric, so it is built last.
@@ -1218,7 +1219,7 @@ function _attach_positivity_and_implicit!(::Type{T}, solver,
         # patches a regrid replaces (`_follow_patches!`).
         positivity_limiter &&
             (solver.positivity =
-                 PatchLimiters(Any[], Any[],
+                 PatchLimiters(PositivityLimiter[], Patch[],
                                _limiter_least_box(deriv, filt, interface_flux,
                                                   interface_rhs, interface_divergence,
                                                   n_halo, T),
@@ -1244,14 +1245,16 @@ function _single_patch_solver(::Type{T}, build::SolverBuild) where {T}
     patches = [patch]
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),typeof(patch)}(
-                  equations, eos, transport, art, metric, stretch, sources,
-                  Lt, orig, coord_shift, h,
+                  equations, eos, transport, art, sources,
+                  GridGeometry{T,typeof(metric),typeof(stretch)}(
+                      metric, stretch, Lt, orig, coord_shift, h, n_global),
                   T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
-                  n_global, patches, regions, decomp.comm,
+                  ClockState{T}(zero(T), zero(T), 0, zero(T), zero(T),
+                                ntuple(_ -> zero(T), 3)),
+                  patches, regions, decomp.comm,
                   [Level{T}(0, root_level_comm(comm), [1],
                             LevelTransfer{T}[])], false, nothing,
-                  zero(T), zero(T), 0, zero(T), zero(T),
-              ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  WallAccounting(0.0, 0.0, 0.0, 0.0), FloorTally(),
               interface_flux, schemes, truncation, nothing, nothing, nothing,
               false)
     init_geometry!(solver)
@@ -1483,13 +1486,15 @@ function _refined_solver(::Type{T}, build::SolverBuild) where {T}
      levels, patches, regrid) = build
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
-                  equations, eos, transport, art, metric, stretch, sources,
-                  Lt, orig, coord_shift, h,
+                  equations, eos, transport, art, sources,
+                  GridGeometry{T,typeof(metric),typeof(stretch)}(
+                      metric, stretch, Lt, orig, coord_shift, h, n_global),
                   T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
-                  n_global, patches, regions, decomp.comm,
+                  ClockState{T}(zero(T), zero(T), 0, zero(T), zero(T),
+                                ntuple(_ -> zero(T), 3)),
+                  patches, regions, decomp.comm,
                   levels, subcycle, regrid,
-                  zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  WallAccounting(0.0, 0.0, 0.0, 0.0), FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
                   nothing, false)
     for p in getfield(solver, :patches)
@@ -2207,13 +2212,15 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
-                  equations, eos, transport, art, metric, stretch, sources,
-                  Lt, orig, coord_shift, h,
+                  equations, eos, transport, art, sources,
+                  GridGeometry{T,typeof(metric),typeof(stretch)}(
+                      metric, stretch, Lt, orig, coord_shift, h, n_global),
                   T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
-                  n_global, patches, regions, world,
+                  ClockState{T}(zero(T), zero(T), 0, zero(T), zero(T),
+                                ntuple(_ -> zero(T), 3)),
+                  patches, regions, world,
                   [root], false, nothing,
-                  zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  WallAccounting(0.0, 0.0, 0.0, 0.0), FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
                   nothing, false)
     for p in getfield(solver, :patches)
