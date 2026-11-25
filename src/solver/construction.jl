@@ -2041,15 +2041,16 @@ function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs,
                   comm::MPI.Comm, plans=nothing)
     # `field_tuples` is derived, and the junction captures are rebuilt for
     # the new layout, their deferral clear.
-    names = filter(f -> f ∉ (:field_tuples, :reflux_captures, :reflux_deferred),
-                   fieldnames(typeof(p)))
-    args = map(names) do f
-        f === :id ? id : f === :faces ? faces : f === :bcs ? bcs :
-        f === :comm ? comm :
-        plans !== nothing && f === :filter_plans ? plans.filter :
-        plans !== nothing && f === :folds ? plans.folds : getfield(p, f)
-    end
-    return Patch(args...)
+    return Patch(id, p.level, p.region, comm, p.decomp, p.h, faces, bcs,
+                 plans === nothing ? p.folds : plans.folds,
+                 p.deriv_plans, p.div_plans,
+                 plans === nothing ? p.filter_plans : plans.filter,
+                 p.smooth_plans, p.ring_plans, p.pairbuf, p.pairout,
+                 p.rho, p.u, p.v, p.w, p.p, p.T_ion, p.c, p.cp_mix, p.Y,
+                 p.mu_art, p.beta_art, p.kappa_art, p.D_art,
+                 p.inv_J, p.area_d, p.inv_h, p.inv_r, p.cot_over_r,
+                 p.rhs_workspace, p.covered, p.overwritten, p.level_scratch,
+                 p.ghost_flux, p.sensed_fields, p.child_deep, p.child_masked)
 end
 
 # The faces a refined patch shares with a patch of its own level, from its

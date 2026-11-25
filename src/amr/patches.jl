@@ -358,6 +358,91 @@ function _workspace_slots(backend::AbstractBackend, decomp::Decomp)
 end
 
 """
+    PatchPlans
+
+The compact operator plans of one [`Patch`](@ref), per dimension: the
+derivative plans, the divergence plans (the derivative plans unless an
+interface end forces one-sided closures), the filter plans, the sensor
+smoother's and the `:d8` detector's. Each keeps a type parameter of its own;
+the note on the plan tuples in the `Patch` docstring has the reason.
+"""
+struct PatchPlans{DP,VP,FP,SP,RP}
+    deriv_plans::DP
+    div_plans::VP                           # divergence plans: deriv_plans unless an
+                                            # interface end forces one-sided closures
+    filter_plans::FP
+    smooth_plans::SP
+    ring_plans::RP
+end
+
+"""
+    PatchAMR
+
+The state a [`Patch`](@ref) holds for refinement and for its interfaces: the
+covered masks, the level transfer's device scratch, the ghost fluxes, a
+tile's sensed fields and the coarse-fine junction captures. Every patch
+carries one, with zero-extent members where a configuration has no use for
+them, so that the root and the refined tiles of a run, and a run without
+refinement, share one `Patch` type. Mutable for the two flags the right-hand
+side sets and the captures a layout change replaces.
+"""
+mutable struct PatchAMR{A,LS,GF,RC}
+    # Which orthants of each node's quadrature cell a child level covers
+    # (`_fill_covered!`): bit (s1 > 0) + 2(s2 > 0) + 4(s3 > 0) for the
+    # orthant of signs s_d, so 0 is uncovered, 0xFF fully covered, and a
+    # node on a child's face carries half its bits. Host storage over the
+    # padded extent; only the interior is written. Filled at setup and at
+    # every regrid from the child regions every rank of this level's subset
+    # holds, so a diagnostic on this level's ranks alone reads it.
+    const covered::Array{UInt8,3}
+    # Nonzero at the interior nodes a child level's restriction overwrites
+    # after every step: 1 there, and 2 at those deep inside the child, which
+    # the positivity limiter leaves free (`_fill_overwritten!`).
+    # Zero-extent on a patch of a solver with one level.
+    const overwritten::A
+    # The device scratch of this patch's level transfer (`LevelScratch`,
+    # levels_coupling.jl): the Hermite boxes and the interpolation chain's stages on
+    # the backend, so a device-resident refined patch's shell is built
+    # without host arithmetic. Empty on the host backend, whose chain runs
+    # on the transfer's own host stages, and on a patch that is nobody's
+    # child.
+    const level_scratch::LS
+    # The molecular flux of each dimension with an interface end, all
+    # conserved components, under `interface_flux = :ghost` with molecular
+    # transport (`_ghost_viscous`): written over the interior by the
+    # right-hand side, over a coarse-fine face's ghost layers from the
+    # shell's gradients, and over a same-level face's ghost layers by the
+    # level's flux records, which read the neighbour's interior (the
+    # `ghost_flux` section of rhs.jl). A zero-extent array in every other
+    # dimension and configuration.
+    const ghost_flux::GF
+    # The sensed fields of a tile on a tiled level that are computed over the
+    # interior and carry no interface ghosts of their own, the strain
+    # magnitude and the dilatation: held per tile between the phases of the
+    # level's artificial-property pass (`_level_artificial!`), whose records
+    # fill their ghost layers at a shared face. Empty on every other patch.
+    const sensed_fields::Vector{A}
+    # Per node, the dimensions along which the parent-level derivative mask
+    # may take it, as bits (`_fill_child_deep!`); written with `covered`.
+    # Zero-extent where the workspace carries no mask scratch.
+    const child_deep::A
+    # Per dimension, whether this patch's last right-hand side found a node
+    # for the parent-level derivative mask (`_arm_child_mask!`): reduced over
+    # the patch's communicator, so every rank of a line takes the extra solve
+    # or none does. All false on a patch with no child level.
+    child_masked::NTuple{3,Bool}
+    # The coarse-fine junctions this patch takes part in, as a parent or as
+    # a child (`RefluxCapture`, src/amr/reflux_types.jl); rebuilt whenever the layout
+    # changes, empty on a solver without refinement.
+    reflux_captures::RC
+    # Whether the right-hand side running on this patch defers the child's
+    # rate of Ω to its component loop (`_reflux_defer!`): set around that
+    # loop and clear outside it. Per patch, so that the tiles of a level
+    # evaluated concurrently each hold their own.
+    reflux_deferred::Bool
+end
+
+"""
     Patch
 
 Per-patch state of a [`Solver`](@ref): the patch's place in the global grid
@@ -406,16 +491,19 @@ for each kind of tile after a rank's first, and 3.3 to 4.2 s for the first;
 with one type the first tile compiles only the level phases a tile holder
 runs, about 2 s, and later tiles nothing.
 
-The struct is mutable, although no field but the flags `child_masked` and
-`reflux_deferred` is reassigned after construction, because of those dynamic
-calls and the `_cold` barriers: an argument passed
+The operator plans are grouped in a [`PatchPlans`](@ref) and the refinement
+state in a [`PatchAMR`](@ref), and the patch serves their names as its own
+properties, so `patch.deriv_plans` and `patch.covered` read as fields.
+
+The struct is mutable, although no field is reassigned after construction,
+because of those dynamic calls and the `_cold` barriers: an argument passed
 through one is boxed, and an immutable `Patch`, held inline in its
 [`PatchSolver`](@ref) with the plans and the workspace it carries, would be
 copied whole into each box, and into every `PatchSolver` built from an entry
 of the solver's abstractly typed patch list. A mutable one is boxed as a
 reference.
 """
-mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
+mutable struct Patch{T,A<:AbstractArray{T,3},Fo,PL,W,AM,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -429,12 +517,7 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     faces::NTuple{3,NTuple{2,Int}}          # 0 = physical/periodic; else neighbor patch id
     bcs::FaceConditions                     # per-face conditions (InterfaceBC at interfaces)
     folds::Fo
-    deriv_plans::DP
-    div_plans::VP                           # divergence plans: deriv_plans unless an
-                                            # interface end forces one-sided closures
-    filter_plans::FP
-    smooth_plans::SP
-    ring_plans::RP
+    plans::PL                               # the operator plans (PatchPlans)
     pairbuf::A
     pairout::A
     # primitives (full padded arrays)
@@ -455,50 +538,7 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # of the same padded extent. Its names reach callers through the property
     # forwarding below, so `solver.grad_u` and `solver.tmp_a` read as before.
     rhs_workspace::W
-    # Which orthants of each node's quadrature cell a child level covers
-    # (`_fill_covered!`): bit (s1 > 0) + 2(s2 > 0) + 4(s3 > 0) for the
-    # orthant of signs s_d, so 0 is uncovered, 0xFF fully covered, and a
-    # node on a child's face carries half its bits. Host storage over the
-    # padded extent; only the interior is written. Filled at setup and at
-    # every regrid from the child regions every rank of this level's subset
-    # holds, so a diagnostic on this level's ranks alone reads it.
-    covered::Array{UInt8,3}
-    # Nonzero at the interior nodes a child level's restriction overwrites
-    # after every step: 1 there, and 2 at those deep inside the child, which
-    # the positivity limiter leaves free (`_fill_overwritten!`).
-    # Zero-extent on a patch of a solver with one level.
-    overwritten::A
-    # The device scratch of this patch's level transfer (`LevelScratch`,
-    # levels_coupling.jl): the Hermite boxes and the interpolation chain's stages on
-    # the backend, so a device-resident refined patch's shell is built
-    # without host arithmetic. Empty on the host backend, whose chain runs
-    # on the transfer's own host stages, and on a patch that is nobody's
-    # child.
-    level_scratch::LS
-    # The molecular flux of each dimension with an interface end, all
-    # conserved components, under `interface_flux = :ghost` with molecular
-    # transport (`_ghost_viscous`): written over the interior by the
-    # right-hand side, over a coarse-fine face's ghost layers from the
-    # shell's gradients, and over a same-level face's ghost layers by the
-    # level's flux records, which read the neighbour's interior (the
-    # `ghost_flux` section of rhs.jl). A zero-extent array in every other
-    # dimension and configuration.
-    ghost_flux::GF
-    # The sensed fields of a tile on a tiled level that are computed over the
-    # interior and carry no interface ghosts of their own, the strain
-    # magnitude and the dilatation: held per tile between the phases of the
-    # level's artificial-property pass (`_level_artificial!`), whose records
-    # fill their ghost layers at a shared face. Empty on every other patch.
-    sensed_fields::Vector{A}
-    # Per node, the dimensions along which the parent-level derivative mask
-    # may take it, as bits (`_fill_child_deep!`); written with `covered`.
-    # Zero-extent where the workspace carries no mask scratch.
-    child_deep::A
-    # Per dimension, whether this patch's last right-hand side found a node
-    # for the parent-level derivative mask (`_arm_child_mask!`): reduced over
-    # the patch's communicator, so every rank of a line takes the extra solve
-    # or none does. All false on a patch with no child level.
-    child_masked::NTuple{3,Bool}
+    amr::AM                                 # the refinement state (PatchAMR)
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
@@ -506,15 +546,6 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # `grad_Y` and `flux` off the workspace); the convenience constructor
     # below derives them.
     field_tuples::TF
-    # The coarse-fine junctions this patch takes part in, as a parent or as
-    # a child (`RefluxCapture`, src/amr/reflux_types.jl); rebuilt whenever the layout
-    # changes, empty on a solver without refinement.
-    reflux_captures::RC
-    # Whether the right-hand side running on this patch defers the child's
-    # rate of Ω to its component loop (`_reflux_defer!`): set around that
-    # loop and clear outside it. Per patch, so that the tiles of a level
-    # evaluated concurrently each hold their own.
-    reflux_deferred::Bool
 end
 
 # The positional argument list every construction site uses; `field_tuples`
@@ -541,15 +572,16 @@ Base.@nospecializeinfer function Patch(id, level, region, comm, decomp, h, faces
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
                     flux=FieldMatrix(rhs_workspace.flux))
+    plans = PatchPlans(deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans)
+    captures = RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
+                             typeof(similar(rho, 0))}[]
+    amr = PatchAMR(covered, overwritten, level_scratch, ghost_flux, sensed_fields,
+                   child_deep, child_masked, captures, false)
     patch = Patch(id, level, region, comm, decomp, h, faces, _UNSET_FACES, folds,
-                  deriv_plans, div_plans, filter_plans, smooth_plans,
-                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
+                  plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                   cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                   inv_J, area_d, inv_h, inv_r, cot_over_r,
-                  rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-                  sensed_fields, child_deep, child_masked, field_tuples,
-                  RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
-                                typeof(similar(rho, 0))}[], false)
+                  rhs_workspace, amr, field_tuples)
     setfield!(patch, :bcs, bcs::FaceConditions)
     return patch
 end
@@ -815,10 +847,27 @@ end
     n === :overwritten || n === :child_deep || n === :child_masked ||
     n === :field_tuples || _is_workspace_prop(n)
 
+# The names `PatchPlans` and `PatchAMR` hold, which a patch's own property
+# surface serves as it did when they were its fields.
+@inline _is_plan_prop(n::Symbol) =
+    n === :deriv_plans || n === :div_plans || n === :filter_plans ||
+    n === :smooth_plans || n === :ring_plans
+@inline _is_amr_prop(n::Symbol) =
+    n === :covered || n === :overwritten || n === :level_scratch ||
+    n === :ghost_flux || n === :sensed_fields || n === :child_deep ||
+    n === :child_masked || n === :reflux_captures || n === :reflux_deferred
+
+@inline Base.getproperty(p::Patch, n::Symbol) =
+    _is_plan_prop(n) ? getfield(getfield(p, :plans), n) :
+    _is_amr_prop(n) ? getfield(getfield(p, :amr), n) : getfield(p, n)
+@inline Base.setproperty!(p::Patch, n::Symbol, value) =
+    _is_amr_prop(n) ? setproperty!(getfield(p, :amr), n, value) :
+                      setfield!(p, n, convert(fieldtype(typeof(p), n), value))
+
 # The read behind both forwards: a workspace name takes one further hop.
 @inline _patch_property(p::Patch, n::Symbol) =
     _is_workspace_prop(n) ? getfield(getfield(p, :rhs_workspace), n) :
-                            getfield(p, n)
+                            getproperty(p, n)
 
 """
     PatchSolver(solver, patch)
@@ -861,12 +910,12 @@ end
 # (`_mark_sensors!`). One reference store per pass.
 @inline function _mark_gradients!(solver)
     p = _patch_of(solver)
-    getfield(p, :rhs_workspace).gradients_filled_by[] = getfield(p, :covered)
+    getfield(p, :rhs_workspace).gradients_filled_by[] = p.covered
     return nothing
 end
 @inline function _mark_sensors!(solver)
     p = _patch_of(solver)
-    getfield(p, :rhs_workspace).sensors_filled_by[] = getfield(p, :covered)
+    getfield(p, :rhs_workspace).sensors_filled_by[] = p.covered
     return nothing
 end
 
@@ -877,7 +926,7 @@ function _check_scratch_writer(solver, group::Symbol, name::Symbol)
     p = _patch_of(solver)
     ws = getfield(p, :rhs_workspace)
     mark = group === :gradients ? ws.gradients_filled_by[] : ws.sensors_filled_by[]
-    (mark === getfield(p, :covered) || mark === SCRATCH_UNFILLED) && return nothing
+    (mark === p.covered || mark === SCRATCH_UNFILLED) && return nothing
     throw(ArgumentError(
         "scalar_field: `$name` is read from RHS scratch that this patch shares " *
         "with other patches of the same extent, and another patch wrote it last. " *

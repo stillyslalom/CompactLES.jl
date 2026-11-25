@@ -544,8 +544,8 @@ end
 
 # --- Capture hooks ----------------------------------------------------------------
 
-_reflux_captures(solver::PatchSolver) = getfield(getfield(solver, :patch), :reflux_captures)
-_reflux_captures(solver::Solver) = getfield(getfield(solver, :patches)[1], :reflux_captures)
+_reflux_captures(solver::PatchSolver) = getfield(solver, :patch).reflux_captures
+_reflux_captures(solver::Solver) = getfield(solver, :patches)[1].reflux_captures
 _reflux_captures(solver) = ()
 
 # The hooks on a single-patch `Solver`, which has no junction: captures exist
@@ -607,14 +607,14 @@ end
 # of a level evaluated concurrently each read their own.
 @noinline function _reflux_defer!(solver::PatchSolver, on::Bool)
     p = getfield(solver, :patch)
-    setfield!(p, :reflux_deferred, on && !isempty(getfield(p, :reflux_captures)))
+    p.reflux_deferred = on && !isempty(p.reflux_captures)
     return nothing
 end
 # A single-patch `Solver` holds no junction, and its hooks read no deferral.
 _reflux_defer!(solver, on::Bool) = nothing
 
 @inline _reflux_deferred(solver::PatchSolver) =
-    getfield(getfield(solver, :patch), :reflux_deferred)
+    getfield(solver, :patch).reflux_deferred
 @inline _reflux_deferred(solver) = false
 
 # The child's rate of Ω from component `c` of `dQ`, which the component's
