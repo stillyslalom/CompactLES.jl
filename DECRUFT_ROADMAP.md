@@ -53,7 +53,7 @@ Further rulings made during execution:
 | 2A | Done: settled toggles deleted, three promoted, the rest gathered in `src/instrumentation.jl` with `with_knob`. About thirty direct assignments to a knob remain in the tests where the surrounding code was irregular. |
 | 2B | Done: `RegridSpec.whole_sensors` replaced by a trailing `mask_child` argument. |
 | 2C | Deferred to Phase 6. |
-| Checkpoint 1 | Pending the Phase 2 end gate and the maintainer's review. |
+| Checkpoint 1 | The Phase 2 end gate passed at `891a7ee`; awaiting the maintainer's review. |
 | 3 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
