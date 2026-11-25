@@ -297,7 +297,7 @@ end
                                   center[]) < π / 6
     s = mk(8; regrid_interval=1, tag_threshold=1e6, tag_buffer=2,
            tag_predicate=predicate)
-    @test getfield(s, :regrid).interpolation_order == 8
+    @test getfield(s, :schemes).level_interpolation_order == 8
     states = allocate_state(s)
     initialize!(s, states, (x, y, z) -> Prim(rho=1 + 0.2sin(x), u=(0.5, 0, 0), p=1.0))
     center[] = π + 0.5

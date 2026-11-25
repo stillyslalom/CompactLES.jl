@@ -268,7 +268,7 @@ end
     for tile in (8, 0)
         stem = joinpath(dir, "tile$tile")
         s = mk(tile=tile)
-        @test getfield(s, :regrid).interface_divergence === bl
+        @test getfield(s, :schemes).interface_divergence === bl
         states = allocate_state(s)
         initialize!(s, states, ic)
         run!(s, states; tfinal=1.0, nmax=23)
