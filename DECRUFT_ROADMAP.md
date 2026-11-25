@@ -58,7 +58,8 @@ Further rulings made during execution:
 | 3 | Done: the four large files split, `RefluxCapture` and the regrid records moved ahead of their users, `src/` grouped into `core`, `physics`, `amr`, `solver` and `io`. The phase gate passed at `31e4b8b`. |
 | 4 | Done: `RegridSpec` reads the schemes from the solver, the root's slab records live in its `Level`, the flat `Solver(; ...)` constructor is removed and `_Solver` runs as named phases over a `SolverBuild` record. The flat keyword vocabulary survives only in `test/flat_solver.jl`, an adapter for the suites, and the test configurations precompile under the `precompile_tests` preference. The phase gate passed at `517267c`. |
 | Checkpoint 2 | Awaiting review. |
-| 5 to 9 | Not started. |
+| 5 | Done: the compute path takes a `PatchSolver` alone, built by `sole_patch` at the entry points, and `SolverLike` is removed. `Patch` holds `PatchPlans` and `PatchAMR`; `Solver` holds `GridGeometry`, `ClockState` and `WallAccounting`; the limiter holds four groups and leases the workspace scratch it borrows. The phase gate passed at `f2b754f`. Departures from the text: `PatchAMR` is always present, so a configuration keeps one patch type; `positivity` is `Union{Nothing,LimiterState}`, with the single-patch `PatchLimiters` left to Phase 6; the forwarding `getproperty` methods remain. The precompile cost did not fall, and no workload entry or `_cold` barrier was removed. |
+| 6 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
 parallel HDF5 against a system MPI, and the Makie suite has not been run.
