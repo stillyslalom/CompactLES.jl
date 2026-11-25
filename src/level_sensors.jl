@@ -226,11 +226,11 @@ function _unit_sensed!(ps, Q, prepared::Bool)
     _sensed_fields!(ps)
     return nothing
 end
-function _unit_detect!(ps, Q, ::Nothing)
+function _unit_detect!(ps, Q, mask_child::Bool)
     _level_sensor_detect!(ps, Q)
     # A tile with a child level drops its overwritten nodes from every sensor
     # before the first smoothing pass, as `smooth_sensor!` does on one patch.
-    _sensor_mask_patch(ps) &&
+    _sensor_mask_patch(ps, mask_child) &&
         _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f
             _mask_child_sensor!(f, ps)
         end
@@ -279,11 +279,11 @@ exchanges are point-to-point over the level's records, and each tile's line
 solves and halo exchanges are collective over its own communicator.
 """
 function _level_artificial!(solver::Solver, lev::Level, states, prepared::Bool,
-                            held=nothing)
+                            held=nothing, mask_child::Bool=true)
     _each_unit(_unit_sensed!, solver, lev, states, prepared)
     _sync_sensor_fields!(solver, lev, _level_field_lists(solver, lev, _sensed_list),
                          solver.art.detector !== :d8, 1:3)
-    _each_unit(_unit_detect!, solver, lev, states)
+    _each_unit(_unit_detect!, solver, lev, states, mask_child)
     sensors = _level_field_lists(solver, lev, _sensor_list)
     n_global = solver.n_global
     for d in 1:3

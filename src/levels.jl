@@ -4297,7 +4297,7 @@ The tag is the union of the criteria `_tag_sweep!` evaluates over the
 parent level's state: `threshold` on the relative undivided fourth
 difference of the mixture density, always on; `sensor_threshold` on the
 artificial diffusivity number, from coefficients a check computes on that
-state with `whole_sensors` set, which keeps the sensors a parent otherwise
+state with `mask_child = false`, which keeps the sensors a parent otherwise
 drops at its overwritten nodes (`_tag_coefficients!`); `gradient_threshold`
 on the mass-fraction change per cell; `vorticity_threshold` on the vorticity
 magnitude; and `predicate`, a user closure over the parent patch. A zero
@@ -4374,8 +4374,6 @@ mutable struct RegridSpec{T}
     boundaries::Bool                 # tags may place a level on a domain face
     edges::Vector{NTuple{3,Int}}     # per refined level, its lattice's edges
     costs::LatticeCosts              # the lattice cost model and its timers
-    whole_sensors::Bool              # a check is computing the coefficients its
-                                     # sensor criterion tags from
     subdivide::Bool                  # a level may take a finer lattice than `tile`
 end
 
@@ -4388,7 +4386,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
                   T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
                   Dict{BlockRegion,Int}[], true, NTuple{3,Int}[], LatticeCosts(),
-                  false, true)
+                  true)
 
 # The creation record of refined level `ℓ` (`created` for level 1).
 _created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]

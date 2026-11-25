@@ -960,22 +960,11 @@ end
 function _tag_coefficients!(solver::Solver, states::Vector{<:ConservedState})
     spec = getfield(solver, :regrid)
     (spec.sensor_threshold > 0 && solver.art.enabled) || return nothing
-    _with_whole_sensors(spec) do
-        solver.tstage = solver.t
-        _presync!(solver, states)
-        _prime_level_coefficients!(solver, states)
-    end
+    solver.tstage = solver.t
+    _presync!(solver, states)
+    # Every patch's sensors kept whole (`_sensor_mask_patch`).
+    _prime_level_coefficients!(solver, states, false)
     return nothing
-end
-
-# `f()` with every patch's sensors kept whole (`_sensor_mask_patch`).
-function _with_whole_sensors(f::F, spec::RegridSpec) where {F}
-    spec.whole_sensors = true
-    try
-        return f()
-    finally
-        spec.whole_sensors = false
-    end
 end
 
 # Grow or shrink this rank's patch vector (and the state vectors aligned with

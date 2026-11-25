@@ -376,30 +376,30 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 
 # Whether this patch's sensors take that mask: it holds overwritten nodes'
 # storage (a solver of more than one level), a child level holds a patch, and
-# no regrid check is computing the coefficients its sensor criterion tags
-# from, which keep every sensor (`_tag_coefficients!`). Read from the
-# hierarchy and the regrid record every rank of the patch holds.
-_sensor_mask_patch(solver::SolverLike) = false
-function _sensor_mask_patch(ps::PatchSolver)
+# the caller asks for the mask. `mask_child` is false where a regrid check
+# computes the coefficients its sensor criterion tags from, which keep every
+# sensor (`_tag_coefficients!`); every other evaluation passes the default.
+# Read from the hierarchy every rank of the patch holds.
+_sensor_mask_patch(solver::SolverLike, mask_child::Bool=true) = false
+function _sensor_mask_patch(ps::PatchSolver, mask_child::Bool=true)
+    mask_child || return false
     MASK_CHILD_SENSORS[] || return false
     isempty(ps.patch.overwritten) && return false
-    spec = getfield(ps.solver, :regrid)
-    (spec === nothing || !spec.whole_sensors) || return false
     levels = getfield(ps.solver, :levels)
     child = ps.patch.level + 2
     return child <= length(levels) && !isempty(levels[child].transfers)
 end
 
 """
-    _mask_child_sensor!(f, solver)
+    _mask_child_sensor!(f, solver, mask_child = true)
 
 Set the detector output `f` to zero at the nodes of a parent patch that a
 child's restriction overwrites (`Patch.overwritten`), ahead of its smoothing,
 and return it; `f` unchanged on a patch with no child level
 (`MASK_CHILD_SENSORS` has the reason). Rank-local.
 """
-function _mask_child_sensor!(f, solver::SolverLike)
-    _sensor_mask_patch(solver) || return f
+function _mask_child_sensor!(f, solver::SolverLike, mask_child::Bool=true)
+    _sensor_mask_patch(solver, mask_child) || return f
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -2627,12 +2627,13 @@ end
 # one patch's at a time. The branch sits here rather than in `compute_rhs!`,
 # whose unoptimized body bench/audit.jl reads: there each branch statement
 # counts as a value of type `Any`.
-function _artificial_step!(solver, Q, coefficients_current::Bool)
+function _artificial_step!(solver, Q, coefficients_current::Bool,
+                           mask_child::Bool=true)
     if coefficients_current
         _gated(solver.art) && gate_beta!(solver)
         return solver
     end
-    return compute_artificial!(solver, Q)
+    return compute_artificial!(solver, Q, mask_child)
 end
 
 """

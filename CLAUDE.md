@@ -506,8 +506,9 @@ Names are spelled out in full. Current vocabulary:
   writes, 2 at those of them the positivity limiter leaves free),
   `MASK_CHILD_SENSORS` / `_mask_child_sensor!` / `smooth_sensor!` (a
   parent's sensors set to zero at those nodes before smoothing),
-  `_tag_coefficients!` and `RegridSpec.whole_sensors` (the coefficients a
-  regrid check's sensor criterion reads, computed with every sensor kept)
+  `_tag_coefficients!` and `mask_child` (the coefficients a regrid check's
+  sensor criterion reads, computed with every sensor kept: the trailing
+  argument of `compute_artificial!` and the routines between, false there)
 - `junction` (one coarse-fine face of one tile as the conservative coupling
   treats it, its `box` the parent lines crossing it, `_reflux_junctions`),
   `RefluxCapture` / `reflux_captures` (a `Patch` field: the patch's side of

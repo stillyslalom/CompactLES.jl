@@ -831,7 +831,8 @@ end
 # `smooth!` of a detector output on its way to a coefficient: on a parent
 # patch the nodes a child's restriction overwrites are dropped from it first
 # (`_mask_child_sensor!`, rhs.jl).
-smooth_sensor!(f, solver) = smooth!(_mask_child_sensor!(f, solver), solver)
+smooth_sensor!(f, solver, mask_child::Bool=true) =
+    smooth!(_mask_child_sensor!(f, solver, mask_child), solver)
 
 # Whether the pass along `d` may write its result straight into the field it
 # reads. A host solve fills a line's buffer from that line of the field alone,
@@ -907,7 +908,7 @@ passed here. Both detectors read it: `:delta4` mirrors its taps with that
 sign, and `:d8` selects the closure rows planned for it, one set per sign at
 every wall face; see [`ring_sum!`](@ref).
 """
-function velocity_mu!(solver, C_mu)
+function velocity_mu!(solver, C_mu, mask_child::Bool=true)
     vel = (solver.u, solver.v, solver.w)
     fill!(solver.sensor, 0)
     for j in 1:3
@@ -915,7 +916,7 @@ function velocity_mu!(solver, C_mu)
                     parity=ntuple(d -> vel_parity(solver, d, j), 3),
                     wall_parity=ntuple(d -> d == j ? -1 : 1, 3), ghosts=true)
     end
-    smooth_sensor!(solver.sensor, solver)
+    smooth_sensor!(solver.sensor, solver, mask_child)
     rho_sensor!(solver.mu_art, solver, C_mu)
     return solver
 end
@@ -1055,7 +1056,7 @@ discontinuity, and reproduces as the strain sensor does.
 `solver.sensor` and `solver.tmp_a` are scratch here, as is `solver.tmp_b` in
 the gated form, under the invariant recorded on `compute_artificial!`.
 """
-function dilatation_beta!(solver, C_beta, gated::Bool)
+function dilatation_beta!(solver, C_beta, gated::Bool, mask_child::Bool=true)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -1070,7 +1071,8 @@ function dilatation_beta!(solver, C_beta, gated::Bool)
     end
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
-    smooth_sensor!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
+    # The smoother clobbers tmp_a, which is spent by now.
+    smooth_sensor!(solver.sensor, solver, mask_child)
     if !gated
         rho_sensor!(solver.beta_art, solver, C_beta)
         return solver
@@ -1156,10 +1158,10 @@ not overwrite them. The workspace records the patch whose pass wrote them (see
 Any additional post-artificial reader of the other scratch fields must provide
 its own storage.
 """
-function compute_artificial!(solver, Q)
+function compute_artificial!(solver, Q, mask_child::Bool=true)
     solver.art.enabled || return solver   # arrays stay zero from allocation
     _compute_artificial!(patch_fields(solver), solver.eos, solver.art,
-                         equation_layout(solver.equations), Q, solver)
+                         equation_layout(solver.equations), Q, solver, mask_child)
     _mark_sensors!(solver)
     return solver
 end
@@ -1172,16 +1174,17 @@ end
 # the handle themselves.
 _detect!(out, f, solver, wpow::Int, ghosts::Bool) =
     detect_sum!(out, f, solver, wpow; ghosts=ghosts)
-_velocity_mu!(solver) = velocity_mu!(solver, solver.art.C_mu)
-_dilatation_beta!(solver, gated::Bool) =
-    dilatation_beta!(solver, solver.art.C_beta, gated)
-function _bulk_diffusivity!(solver)
+_velocity_mu!(solver, mask_child::Bool=true) =
+    velocity_mu!(solver, solver.art.C_mu, mask_child)
+_dilatation_beta!(solver, gated::Bool, mask_child::Bool=true) =
+    dilatation_beta!(solver, solver.art.C_beta, gated, mask_child)
+function _bulk_diffusivity!(solver, mask_child::Bool=true)
     art = solver.art
     h_bound, inv_n = _species_bound_length(solver.decomp, solver.h, art.C_D)
     a1, a2, a3 = solver.decomp.active
     ih1, ih2, ih3 = solver.inv_h
     return bulk_diffusivity!(solver, art.C_D, art.C_Y, h_bound, inv_n,
-                             ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance)
+                             ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance, mask_child)
 end
 
 # The mass-fraction bound's length is the geometric mean of the local physical
@@ -1209,7 +1212,8 @@ end
 # dynamic dispatch in front of a whole-array sweep whose callee specializes on
 # the concrete solver. Those calls pass only arrays loaded from `f`, the
 # already-boxed handle, and small integers, so none of them allocates.
-function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
+function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops),
+                              mask_child::Bool=true)
     n_species, _, i_energy, (m1, m2, m3) = eqi
     decomp = f.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -1243,7 +1247,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     if strain_mu || strain_beta
         exchange_halos!(f.strain_mag, decomp)
         _detect!(f.sensor, f.strain_mag, ops, 2, false)
-        smooth_sensor!(f.sensor, ops)
+        smooth_sensor!(f.sensor, ops, mask_child)
         if strain_mu && strain_beta
             pointwise!(_mu_beta_point!, f.mu_art, nx, ny, nz,
                        f.mu_art, f.beta_art, f.rho,
@@ -1259,13 +1263,13 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     # μ* may instead come from the velocity components, and β* may be keyed on
     # compression, rebuilt from the dilatation, or both. Each rebuild writes one
     # coefficient array and leaves the other untouched.
-    art.mu_sensor === :velocity && _velocity_mu!(ops)
+    art.mu_sensor === :velocity && _velocity_mu!(ops, mask_child)
     if art.beta_sensor === :gated_strain
         pointwise!(_gate_beta_point!, f.beta_art, nx, ny, nz,
                    f.beta_art, f.ft.grad_u, o1, o2, o3)
     end
-    art.beta_sensor === :dilatation && _dilatation_beta!(ops, true)
-    art.beta_sensor === :ungated_dilatation && _dilatation_beta!(ops, false)
+    art.beta_sensor === :dilatation && _dilatation_beta!(ops, true, mask_child)
+    art.beta_sensor === :ungated_dilatation && _dilatation_beta!(ops, false, mask_child)
 
     # κ* sensor: Σ_d Δ_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight
@@ -1277,7 +1281,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
                f.tmp_a, Q, f.rho, m1, m2, m3, i_energy)
     exchange_halos!(f.tmp_a, decomp)
     _detect!(f.sensor, f.tmp_a, ops, 1, true)
-    smooth_sensor!(f.sensor, ops)
+    smooth_sensor!(f.sensor, ops, mask_child)
     pointwise!(_kappa_point!, f.kappa_art, nx, ny, nz,
                f.kappa_art, eos, f.rho, f.c,
                f.T_ion, f.cp_mix, f.sensor, C_kappa,
@@ -1292,7 +1296,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     # despite unequal D_k. Only meaningful with more than one species.
     if n_species > 1
         if _shared_species_diffusivity(art, n_species)
-            _bulk_diffusivity!(ops)
+            _bulk_diffusivity!(ops, mask_child)
             return nothing
         end
         h_bound, inv_n = _species_bound_length(decomp, f.h, C_D)
@@ -1303,7 +1307,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
             pointwise!(_species_bound_point!, f.sensor_sp, nx, ny, nz,
                        f.sensor_sp, f.Y[sp], C_D, C_Y, h_bound, inv_n,
                        ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
-            smooth_sensor!(f.sensor_sp, ops)
+            smooth_sensor!(f.sensor_sp, ops, mask_child)
             pointwise!(_species_diffusivity_point!, f.sensor_sp,
                        nx, ny, nz, f.D_art[sp], f.c,
                        f.sensor_sp, o1, o2, o3)
@@ -1344,14 +1348,14 @@ after the last field is in. Every rank must call this: the detector and the
 smoother carry the collectives recorded on `compute_artificial!`.
 """
 function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
-                           a1, a2, a3, Y_tolerance)
+                           a1, a2, a3, Y_tolerance, mask_child::Bool=true)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     acc = solver.sensor_sp
     _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
                           a1, a2, a3, Y_tolerance)
-    smooth_sensor!(acc, solver)
+    smooth_sensor!(acc, solver, mask_child)
     for sp in 1:solver.equations.n_species
         pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
                    solver.D_art[sp], solver.c, acc, o1, o2, o3)

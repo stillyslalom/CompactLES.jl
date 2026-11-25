@@ -1456,7 +1456,6 @@ end
     initialize!(r, rstates, slabs)
     rline(A) = A[rows, 1 + o[2], 1 + o[3]]
     CL._tag_coefficients!(r, rstates)
-    @test !getfield(r, :regrid).whole_sensors
     @test rline(r.patches[1].D_art[1])[inside] == whole.D[inside]
     CL._regrid_prime!(r, rstates, CL.Workspace(rstates), nothing, false)
     @test all(iszero, rline(r.patches[1].D_art[1])[inside])
