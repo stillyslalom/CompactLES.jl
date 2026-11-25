@@ -109,7 +109,7 @@ Global coordinate vector along dimension `d`, covering the whole domain, not
 this rank's block. It is identical on every rank, so building it needs no
 communication.
 """
-global_axis(solver::SolverLike, d::Int) =
+global_axis(solver::PatchSolver, d::Int) =
     Float64[global_xcoord(solver, d, i) for i in 1:solver.decomp.n_global[d]]
 
 """
@@ -131,11 +131,11 @@ Number of artificial-coefficient fields a checkpoint of `solver` carries: μ*,
 β*, κ* and one D* per species when the artificial properties are enabled,
 none otherwise. Shared between the per-rank and shared-file checkpoint paths.
 """
-n_art_fields(solver::SolverLike) =
+n_art_fields(solver::Union{Solver,PatchSolver}) =
     solver.art.enabled ? 3 + solver.equations.n_species : 0
 
 # The arrays behind those fields, in the order the checkpoint stores them.
-art_arrays(solver::SolverLike) =
+art_arrays(solver::PatchSolver) =
     n_art_fields(solver) == 0 ? () :
     (solver.mu_art, solver.beta_art, solver.kappa_art, solver.D_art...)
 
@@ -145,7 +145,7 @@ a trailing index in the order μ*, β*, κ*, D*_1 .. D*_n (see
 `n_art_fields`); empty along that index when the artificial properties are
 disabled. The block a checkpoint writes beside the state.
 """
-function art_block(solver::SolverLike)
+function art_block(solver::PatchSolver)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -172,7 +172,7 @@ Write `block`, as `art_block` produced it, onto the interior of the
 patch's artificial coefficient arrays. Halos are left untouched; nothing reads
 them before the next evaluation rewrites the arrays.
 """
-function set_art_block!(solver::SolverLike, block)
+function set_art_block!(solver::PatchSolver, block)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -767,8 +767,9 @@ end
 # This rank's checkpoint image, onto any stream: the file of `save_checkpoint`,
 # or the buffer through which a phase change carries the run (phases.jl).
 function _write_checkpoint(io, solver::Solver, Q)
-    _write_ckpt_header(io, solver, solver, Q)
-    _write_ckpt_block(io, solver, Q)
+    root = sole_patch(solver)
+    _write_ckpt_header(io, solver, root, Q)
+    _write_ckpt_block(io, root, Q)
     return io
 end
 
@@ -821,7 +822,7 @@ end
 # The header, describing the state of the root patch `root` (the solver
 # itself when it holds one patch) well enough for the reader to reject a
 # solver it does not belong to, and the mutable run state.
-function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
+function _write_ckpt_header(io, solver::Solver, root::PatchSolver, Q)
     decomp = root.decomp
     write(io, UInt64(CKPT_MAGIC))
     write(io, Int64(CKPT_VERSION))
@@ -859,7 +860,7 @@ end
 # One patch's interior block of `Q`, then its artificial coefficient block
 # behind the field count. A slice of device storage is a device array, which
 # `write` would dump by its pointer as host memory; it is downloaded first.
-function _write_ckpt_block(io, ps::SolverLike, Q)
+function _write_ckpt_block(io, ps::PatchSolver, Q)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -929,8 +930,9 @@ end
 # and are not reported, and whose boundary conditions are its own.
 function _read_checkpoint!(io, solver::Solver, Q, source::AbstractString, allow;
                            phase::Bool=false)
-    _read_ckpt_header!(io, solver, solver, Q, source, allow, phase)
-    _read_ckpt_block!(io, solver, Q, source, phase)
+    root = sole_patch(solver)
+    _read_ckpt_header!(io, solver, root, Q, source, allow, phase)
+    _read_ckpt_block!(io, root, Q, source, phase)
     return Q
 end
 
@@ -1007,7 +1009,7 @@ end
 
 # The header checks, each against the root patch `root`, then the mutable run
 # state onto `solver`.
-function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
+function _read_ckpt_header!(io, solver::Solver, root::PatchSolver, Q,
                             path::AbstractString, allow, phase::Bool=false)
     decomp = root.decomp
     n_cons = solver.equations.n_cons
@@ -1082,7 +1084,7 @@ end
 # switch the artificial properties on or off (phases.jl): a block of the
 # previous phase's coefficients is then read past, and a solver expecting one
 # the previous phase did not compute is primed there instead.
-function _read_ckpt_block!(io, ps::SolverLike, Q, path::AbstractString,
+function _read_ckpt_block!(io, ps::PatchSolver, Q, path::AbstractString,
                            phase::Bool=false)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -1107,7 +1109,8 @@ function _check_level_count(stored::Int, solver::Solver, source::AbstractString)
     return stored
 end
 
-function _check_art_count(stored::Int, solver::SolverLike, source::AbstractString)
+function _check_art_count(stored::Int, solver::Union{Solver,PatchSolver},
+                          source::AbstractString)
     stored == n_art_fields(solver) ||
         error("artificial-property mismatch: $source carries $stored " *
               "coefficient field(s) and this solver expects " *
@@ -1178,7 +1181,7 @@ _metric_name(metric::Metric) = lowercase(chopsuffix(type_name(metric), "Metric")
 _gas_constants(::EOS) = nothing
 _gas_constants(eos::Union{IdealMixture,Nasa9Mixture}) = collect(Float64, eos.Rk)
 
-# The solver a `SolverLike` belongs to.
+# The solver a patch routine's argument belongs to.
 _owner(solver::Solver) = solver
 _owner(ps::PatchSolver) = getfield(ps, :solver)
 
@@ -1276,11 +1279,11 @@ const VTK_BYTE_ORDER = Base.ENDIAN_BOM == 0x04030201 ? "LittleEndian" : "BigEndi
 
 # A resolved angular dimension makes the grid curvilinear; a collapsed angular
 # dimension leaves a tensor-product grid.
-_curvilinear(solver::SolverLike) = _curvilinear(solver, solver.metric)
-_curvilinear(solver::SolverLike, ::CartesianMetric) = false
+_curvilinear(solver::Union{Solver,PatchSolver}) = _curvilinear(solver, solver.metric)
+_curvilinear(solver::Union{Solver,PatchSolver}, ::CartesianMetric) = false
 # Read from the whole-grid extents, which a multi-patch solver also carries.
-_curvilinear(solver::SolverLike, ::CylindricalMetric) = solver.n_global[2] > 1
-_curvilinear(solver::SolverLike, ::SphericalMetric) =
+_curvilinear(solver::Union{Solver,PatchSolver}, ::CylindricalMetric) = solver.n_global[2] > 1
+_curvilinear(solver::Union{Solver,PatchSolver}, ::SphericalMetric) =
     solver.n_global[2] > 1 || solver.n_global[3] > 1
 
 """
@@ -1331,7 +1334,7 @@ _wants_artificial(name::Symbol) =
 
 # `sensor` is the patch's held sensor where its level took the level-wide pass
 # (`_output_level_artificial!`), and `nothing` elsewhere.
-function _prepare_fields!(solver::SolverLike, Q, fields, sensor=nothing)
+function _prepare_fields!(solver::PatchSolver, Q, fields, sensor=nothing)
     if any(_wants_gradients, fields) || any(_wants_artificial, fields)
         # This exchanges halos, so ρ and the velocities are valid into the halo
         # and the derivative passes remain accurate at a rank boundary. It also
@@ -1378,7 +1381,8 @@ call leaves the integrator's next timestep and regrid decision unchanged.
 `active = false` runs `f()` with no copies, for a request that does not reach
 `compute_artificial!`. The return value is that of `f`.
 """
-function preserving_artificial(f, solver::SolverLike, active::Bool=true)
+function preserving_artificial(f, solver::Union{Solver,PatchSolver},
+                               active::Bool=true)
     active || return f()
     targets = _artificial_targets(solver)
     saved = [map(_dense_copy, arrays) for arrays in targets]
@@ -1448,7 +1452,7 @@ Local interior indices this rank writes along each dimension, given `stride` and
 an optional `slice`. Empty along the sliced dimension on a rank whose block does
 not span the requested plane.
 """
-function _output_ranges(solver::SolverLike, stride::NTuple{3,Int}, slice)
+function _output_ranges(solver::PatchSolver, stride::NTuple{3,Int}, slice)
     decomp = solver.decomp
     sd = _slice_dim(slice)
     sg = slice === nothing ? 0 : Int(slice[2])
@@ -1471,7 +1475,7 @@ _has_output(ranges) = all(!isempty, ranges)
 # Extent of this rank's piece in the output grid's own index space, and the
 # extent of that whole grid. The sliced dimension contributes a single point at
 # index 0 on the ranks that hold it.
-_output_piece_extent(solver::SolverLike, stride, slice, ranges) = begin
+_output_piece_extent(solver::PatchSolver, stride, slice, ranges) = begin
     off = solver.decomp.offset
     sd = _slice_dim(slice)
     lo = ntuple(d -> d == sd ? 0 :
@@ -1504,7 +1508,7 @@ Per dimension, whether this rank sends its first output plane to its low
 neighbor and whether it receives one from its high neighbor (`_close_seams`).
 Both are false along the sliced dimension and on a rank with no output.
 """
-function _output_seams(solver::SolverLike, slice, ranges)
+function _output_seams(solver::PatchSolver, slice, ranges)
     decomp = solver.decomp
     sd = _slice_dim(slice)
     held = _has_output(ranges)
@@ -1558,7 +1562,7 @@ end
 
 # The field entries of `vtk_field_entries` with the high neighbors' planes
 # appended, for the piece over `_seam_ranges`.
-function _close_seams(solver::SolverLike, entries, ranges, seams)
+function _close_seams(solver::PatchSolver, entries, ranges, seams)
     any(s -> s[1] || s[2], seams) || return entries
     data = _close_seams(solver.decomp, [e[3] for e in entries], [e[2] for e in entries],
                         length.(ranges), seams)
@@ -1566,12 +1570,12 @@ function _close_seams(solver::SolverLike, entries, ranges, seams)
                                              for (e, v) in zip(entries, data)]
 end
 
-_output_whole_extent(solver::SolverLike, stride, slice) = begin
+_output_whole_extent(solver::PatchSolver, stride, slice) = begin
     n = _output_global(solver, stride, slice)
     ntuple(d -> 0, 3), ntuple(d -> n[d] - 1, 3)
 end
 
-_output_global(solver::SolverLike, stride, slice) = begin
+_output_global(solver::PatchSolver, stride, slice) = begin
     n = solver.decomp.n_global
     sd = _slice_dim(slice)
     ntuple(d -> d == sd ? 1 : length(1:stride[d]:n[d]), 3)
@@ -1581,7 +1585,7 @@ end
 # that rank no valid piece to write. The test is collective, making every rank
 # throw; a single rank throwing would leave the others blocked in the Allgather
 # below. The sliced dimension is exempt because it is empty off the plane.
-function _check_output(solver::SolverLike, stride::NTuple{3,Int}, slice, ranges)
+function _check_output(solver::PatchSolver, stride::NTuple{3,Int}, slice, ranges)
     sd = _slice_dim(slice)
     if slice !== nothing
         n = solver.decomp.n_global
@@ -1621,10 +1625,10 @@ _host_copy(a) = _cpu_storage(a) ? Array(a) : _host_field(a)
 _host_similar(a) = Array{eltype(a)}(undef, size(a))
 
 # The mass fractions of every species on the host, as `mole_fraction` reads them.
-_host_mass_fractions(solver::SolverLike) =
+_host_mass_fractions(solver::PatchSolver) =
     [_host_field(solver.Y[sp]) for sp in 1:solver.equations.n_species]
 
-_interior(solver::SolverLike, a, ranges) = begin
+_interior(solver::PatchSolver, a, ranges) = begin
     a = _host_field(a)
     o1, o2, o3 = solver.decomp.n_halo_d
     Float32[a[i+o1, j+o2, k+o3]
@@ -1633,7 +1637,7 @@ end
 
 # Interleaved 3-component payload, rotated into the Cartesian frame when the
 # grid being written is curvilinear.
-function _interior_vector(solver::SolverLike, a1, a2, a3, rotate::Bool, ranges)
+function _interior_vector(solver::PatchSolver, a1, a2, a3, rotate::Bool, ranges)
     a1, a2, a3 = _host_field(a1), _host_field(a2), _host_field(a3)
     npts = prod(length.(ranges))
     out = Vector{Float32}(undef, 3 * npts)
@@ -1656,7 +1660,7 @@ end
 # its own derivative pass because `grad_u` carries velocity gradients only.
 # `deriv_scaled_along!` is a distributed solve. Every rank traverses the same
 # `fields` tuple in the same order, preserving its collective call order.
-function _schlieren(solver::SolverLike)
+function _schlieren(solver::PatchSolver)
     g = similar(solver.rho)
     acc = zeros(eltype(solver.rho), size(solver.rho))
     for d in 1:3
@@ -1675,7 +1679,7 @@ function _schlieren(solver::SolverLike)
 end
 
 # grad_u[d, j] is ∂u_j/∂x_d, so the curl reads the off-diagonal pairs.
-_vorticity_arrays(solver::SolverLike) = begin
+_vorticity_arrays(solver::PatchSolver) = begin
     _check_scratch_writer(solver, :gradients, :vorticity)
     g = _host_gradients(solver)
     w1, w2, w3 = (_host_similar(solver.rho) for _ in 1:3)
@@ -1691,7 +1695,7 @@ end
 # contract's `mole_fraction`, which the species channels of the artificial
 # diffusivity also read. `Y` is `_host_mass_fractions(solver)`, which a caller
 # taking every species passes once.
-function _mole_fraction_array(solver::SolverLike, species::Int,
+function _mole_fraction_array(solver::PatchSolver, species::Int,
                               Y=_host_mass_fractions(solver))
     out = _host_similar(solver.rho)
     eos = solver.eos
@@ -1703,12 +1707,12 @@ function _mole_fraction_array(solver::SolverLike, species::Int,
 end
 
 # The velocity gradients on the host, indexed as `solver.grad_u` is.
-_host_gradients(solver::SolverLike) =
+_host_gradients(solver::PatchSolver) =
     [_host_field(solver.grad_u[a, b]) for a in 1:3, b in 1:3]
 
 # A derived field `f(idx)` on the host; `f` reads the host arrays its caller
 # downloaded.
-function _scalar_from(solver::SolverLike, f)
+function _scalar_from(solver::PatchSolver, f)
     out = _host_similar(solver.rho)
     @inbounds for idx in eachindex(out)
         out[idx] = f(idx)
@@ -1759,7 +1763,7 @@ directional sub-communicators must reach this call in the same order.
 
 The result is valid only over the interior unless halos have been refreshed.
 """
-function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
+function scalar_field(solver::PatchSolver, name::Symbol; species::Int=1)
     if name === :rho
         return solver.rho
     elseif name === :p
@@ -1842,7 +1846,7 @@ Most names produce a single entry via [`scalar_field`](@ref). `:Y`, `:X` and
 three-component entry. `Q` is taken for uniformity with the rest of the write
 path and is not read.
 """
-function vtk_field_entries(solver::SolverLike, Q, name::Symbol, rotate::Bool, ranges)
+function vtk_field_entries(solver::PatchSolver, Q, name::Symbol, rotate::Bool, ranges)
     E = Tuple{String,Int,Vector{Float32}}
     if name === :velocity
         return E[("velocity", 3, _interior_vector(solver, solver.u, solver.v,
@@ -1978,7 +1982,7 @@ Every rank in `solver.comm` must call this function with the same `fields`,
 `stride`, and `slice`, since the derived fields run distributed solves in tuple
 order.
 """
-function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
+function save_vtk(solver::PatchSolver, Q, prefix::AbstractString;
                   fields=DEFAULT_VTK_FIELDS, stride=1, slice=nothing)
     st = _normalize_stride(stride)
     ranges = _output_ranges(solver, st, slice)
@@ -2005,7 +2009,7 @@ end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
 
-function _save_vtr(solver::SolverLike, entries, prefix::AbstractString, stride,
+function _save_vtr(solver::PatchSolver, entries, prefix::AbstractString, stride,
                    slice, ranges, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
@@ -2023,7 +2027,7 @@ end
 # the output record as `FieldData` and, when `ghost` is given, the
 # `vtkGhostType` point array that blanks the nodes a child level covers (the
 # multiblock writer below).
-function _write_vtr_piece(path::AbstractString, solver::SolverLike, entries, lo, hi,
+function _write_vtr_piece(path::AbstractString, solver::PatchSolver, entries, lo, hi,
                           ranges, ghost::Union{Nothing,Vector{UInt8}}, record)
     coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in ranges[d]], 3)
     blocks = Any[coords[1], coords[2], coords[3]]
@@ -2059,7 +2063,7 @@ end
 
 # --- Structured: an explicit Cartesian position per point.
 
-function _save_vts(solver::SolverLike, entries, prefix::AbstractString, stride,
+function _save_vts(solver::PatchSolver, entries, prefix::AbstractString, stride,
                    slice, ranges, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
@@ -2106,7 +2110,7 @@ end
 # --- The container, identical in shape for both grid types, and carrying the
 # record as its pieces do.
 
-function _write_parallel_container(solver::SolverLike, entries, prefix, lo, hi,
+function _write_parallel_container(solver::PatchSolver, entries, prefix, lo, hi,
                                    curvilinear::Bool, stride, slice, record)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)

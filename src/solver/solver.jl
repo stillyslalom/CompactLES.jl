@@ -194,12 +194,81 @@ end
 @inline _patch_of(s::Solver) = @inbounds getfield(s, :patches)[1]
 
 """
-Union of the two objects the compute path accepts: a (single-patch) `Solver`,
-whose property forwarding exposes its sole patch, and a [`PatchSolver`](@ref)
-binding one patch of a multi-patch solver. Every routine between the
-step drivers and the arrays is written against this type.
+    sole_patch(solver) -> PatchSolver
+
+The [`PatchSolver`](@ref) binding a single-patch solver's one patch, which is
+the object every routine between the step drivers and the arrays is written
+against. The public entry points build it once; a routine that takes a
+`PatchSolver` also accepts a single-patch `Solver` through a forwarding
+method (`@sole_patch_forward`). Throws on a solver holding several patches,
+whose routines take one patch at a time through [`eachpatch`](@ref).
 """
-const SolverLike{T} = Union{Solver{T},PatchSolver{T}}
+@inline function sole_patch(s::Solver)
+    ps = getfield(s, :patches)
+    length(ps) == 1 || _sole_patch_error()
+    return PatchSolver(s, @inbounds(ps[1]))
+end
+
+@noinline _sole_patch_error() =
+    error("this routine evaluates one patch and this solver holds several " *
+          "patches (a refined or patched run). Pass the state vector to a " *
+          "routine that takes it, or iterate `for (ps, Q) in " *
+          "eachpatch(solver, states)` and pass `ps`")
+
+# `f(solver::Solver, args...)` for each named routine of one patch, calling
+# its `PatchSolver` method on the sole patch. The compute tree is then
+# compiled for `PatchSolver` alone, whichever of the two a caller holds, and
+# a single-patch run shares it with a refined run whose solver and root patch
+# have the same types. A more specific `Solver` method of the same function,
+# such as a state-vector form, takes precedence over the forward.
+const _FWD = Set{String}()
+@noinline function _fwd_note(f::Symbol)
+    for fr in stacktrace()[3:min(end, 6)]
+        file = string(fr.file)
+        occursin("solver.jl", file) && fr.func in (:macro_expansion, f) && continue
+        push!(_FWD, string(f, " <- ", fr.func, " @ ", file, ":", fr.line))
+        open(joinpath(ENV["FWD_DIR"], "fwd_$(getpid()).txt"), "a") do io
+            println(io, f, " <- ", fr.func, " @ ", file, ":", fr.line)
+        end
+        break
+    end
+    return nothing
+end
+macro sole_patch_forward_noted(names...)
+    defs = [:($(esc(f))(s::Solver, args...; kwargs...) =
+                  (_fwd_note($(QuoteNode(f))); $(esc(f))(sole_patch(s), args...; kwargs...))) for f in names]
+    return Expr(:block, defs...)
+end
+macro sole_patch_forward(names...)
+    defs = [:(@inline $(esc(f))(s::Solver, args...; kwargs...) =
+                  $(esc(f))(sole_patch(s), args...; kwargs...)) for f in names]
+    return Expr(:block, defs...)
+end
+
+@sole_patch_forward(
+    xcoord, padded_index, interior_index, boundary_plane, point_spacing,
+    quad_weight, cell_measure, volume_integral, plane_profile,
+    initialize!, primitives!, refresh_primitives!, apply_bcs!,
+    compute_artificial!, compute_primitives_and_gradients!,
+    compute_rhs!, assemble_fluxes!, filter_state!, filter_weight,
+    vel_parity, cons_parity, global_axis, art_arrays, art_block,
+    set_art_block!, scalar_field, save_vtk, vtk_field_entries,
+    _validate_transport_state!, _local_volume_integral, _local_max_rate_launch,
+    _edge_factor, _bulk_gradients!, _species_gradients!, _prepare_fields!,
+    _check_output, _output_global, _output_piece_extent, _output_ranges,
+    _local_state_report, _initialize!, _initialize_interior!)
+
+@sole_patch_forward_noted(_arm_child_mask!, _child_mask!, _child_mask_along!, _child_mask_dim, _child_mask_patch, _child_mask_record, _child_masked, _child_masked_solve!, _close_seams, _coarse_fine_ghost_fluxes!, _conserved_fraction, _domain_coordinate, _edge_factor_at, _edge_factors, _extrapolate_coarse_fine!, _filter_volume!, _flux_remainder, _flux_sign, _ghost_face, _ghost_flux_dims, _ghost_flux_solves!, _ghost_geometry, _ghost_inv_r, _has_child, _host_gradients, _host_mass_fractions, _interface_dim, _interior, _interior_vector, _junction_integral, _limiter_exempt, _line_box, _local_conserved_budget, _local_domain_volume, _local_max_rate, _local_max_rate_loop, _local_positivity_mins, _local_positivity_repair!, _masked_filter, _mole_fraction_array, _molecular_ghost_flux!, _ops_parts, _output_seams, _output_whole_extent, _patch_part, _patch_slice, _reads_ghost_flux, _reads_gradient_ring, _reflux_captures, _reflux_defer!, _reflux_deferred, _release_child_mask!, _remainder_ghosted, _ring_dim, _root_part, _save_vtr, _save_vts, _scalar_from, _schlieren, _sensor_mask_patch, _sharpening_fluxes!, _snapshot_blocks, _snapshot_runs, _vorticity_arrays, _vtk_ghost_points, _weighted_filter, _write_parallel_container, allocate_state, callback_geometry)  # TEMP
+
+# The same for the line operators, which take the solver third.
+for op in (:deriv_along!, :div_along!, :deriv_scaled_along!, :filt_along!,
+           :smooth_along!, :ring_along!)
+    @eval @inline $op(out, f, s::Solver, args...) = $op(out, f, sole_patch(s), args...)
+end
+@inline div_subtract_along!(dQ, c::Int, f, s::Solver, args...) =
+    div_subtract_along!(dQ, c, f, sole_patch(s), args...)
+@inline _volume_fraction_gradients!(out, s::Solver, sp::Int) =
+    _volume_fraction_gradients!(out, sole_patch(s), sp)
 
 "Number of patches this rank's solver holds."
 npatches(s::Solver) = length(getfield(s, :patches))
@@ -221,7 +290,7 @@ single-patch solver). On a refined patch across a periodic seam the
 coordinate runs on past the domain's face, one period above the point it
 names.
 """
-xcoord(solver::SolverLike, d::Int, i::Int) =
+xcoord(solver::PatchSolver, d::Int, i::Int) =
     global_xcoord(solver, d,
                   solver.region.offset[d] + solver.decomp.offset[d] + i)
 
@@ -234,7 +303,8 @@ grid, not a patch. Every rank returns the same value for the same `(d, g)`.
 Use this form when assembling a global coordinate vector and [`xcoord`](@ref)
 for a local interior index.
 """
-global_xcoord(solver::SolverLike, d::Int, g::Int) = _global_xcoord(solver, d, g)
+global_xcoord(solver::Union{Solver,PatchSolver}, d::Int, g::Int) =
+    _global_xcoord(solver, d, g)
 
 # The body of `global_xcoord`, for a solver or a `CallbackGeometry`.
 function _global_xcoord(solver, d::Int, g::Int)
@@ -251,7 +321,7 @@ halo-padded state and solver fields. Collapsed directions have zero padding.
 The result is rank-local; it does not locate a global point owned by another
 rank.
 """
-function padded_index(solver::SolverLike, i::Int, j::Int, k::Int)
+function padded_index(solver::PatchSolver, i::Int, j::Int, k::Int)
     pad = solver.decomp.n_halo_d
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
@@ -274,7 +344,7 @@ end
 Indices of halo cells come back outside `1:n_local[d]`, and are meaningful only
 as an offset from this rank's block.
 """
-@inline function interior_index(solver::SolverLike, I::CartesianIndex{3})
+@inline function interior_index(solver::PatchSolver, I::CartesianIndex{3})
     pad = solver.decomp.n_halo_d
     return (I[1] - pad[1], I[2] - pad[2], I[3] - pad[3])
 end
@@ -300,7 +370,7 @@ Mixture density at padded index `I`, the sum of the partial densities. Prefer
 this method to explicit component indices; the expression then remains valid
 when the species count changes.
 """
-@inline function mixture_density(solver::SolverLike, Q, I)
+@inline function mixture_density(solver::Union{Solver,PatchSolver}, Q, I)
     ρ = zero(eltype(Q))
     @inbounds for sp in 1:solver.equations.n_species
         ρ += Q[I, sp]
@@ -314,18 +384,18 @@ end
 Physical, coordinate-aligned velocity components at padded index `I`, recovered
 from the momenta and the mixture density.
 """
-@inline function velocity(solver::SolverLike, Q, I)
+@inline function velocity(solver::Union{Solver,PatchSolver}, Q, I)
     ri = one(eltype(Q)) / mixture_density(solver, Q, I)
     m1, m2, m3 = solver.equations.i_mom
     @inbounds return (Q[I, m1] * ri, Q[I, m2] * ri, Q[I, m3] * ri)
 end
 
 "Total energy per unit volume at padded index `I`."
-@inline total_energy(solver::SolverLike, Q, I) =
+@inline total_energy(solver::Union{Solver,PatchSolver}, Q, I) =
     @inbounds Q[I, solver.equations.i_energy]
 
 "Mass fraction of species `sp` at padded index `I`."
-@inline mass_fraction(solver::SolverLike, Q, I, sp::Int) =
+@inline mass_fraction(solver::Union{Solver,PatchSolver}, Q, I, sp::Int) =
     @inbounds Q[I, sp] / mixture_density(solver, Q, I)
 
 """
@@ -351,7 +421,7 @@ globally only in a serial calculation.
 These are padded indices. Convert one with [`interior_index`](@ref) before
 passing it to [`xcoord`](@ref) or anything else expecting an interior index.
 """
-boundary_plane(solver::SolverLike, d::Int, side::Int) = wallplane(solver.decomp, d, side)
+boundary_plane(solver::PatchSolver, d::Int, side::Int) = wallplane(solver.decomp, d, side)
 
 """
     allocate_state(solver)

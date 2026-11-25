@@ -308,9 +308,10 @@ backend; the scratch of one right-hand-side evaluation sits on an
 `RHSWorkspace` the rank's patches share (see
 [Tiles and adjacency](#tiles-and-adjacency)).
 `Solver` holds the physics configuration plus this rank's patches; a
-single-patch solver forwards patch-owned property names to its sole patch,
-so the single-patch code path is the old code path. Routines between the
-step drivers and the arrays take a `SolverLike`, so one body serves both.
+single-patch solver forwards patch-owned property names to its sole patch
+for callers outside the step path. Routines between the step drivers and
+the arrays take a `PatchSolver`, which the entry points build from a
+single-patch solver with `sole_patch`, so one compiled body serves both.
 
 Rank assignment partitions the rank set over patches proportionally to
 volume (one `MPI.Comm_split`); a serial run advances every patch in

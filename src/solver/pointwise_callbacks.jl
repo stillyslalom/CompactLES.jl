@@ -8,7 +8,7 @@ reports its 3:1 smaller spacing. At a coordinate singularity an active
 direction is clamped to the solver's positive floating-point floor, matching
 the geometry arrays; `0` is returned only when every direction is collapsed.
 """
-@inline point_spacing(solver::SolverLike, I::CartesianIndex{3}) = _point_spacing(solver, I)
+@inline point_spacing(solver::PatchSolver, I::CartesianIndex{3}) = _point_spacing(solver, I)
 
 # The body of `point_spacing`, for a solver or a `CallbackGeometry`.
 @inline function _point_spacing(solver, I::CartesianIndex{3})

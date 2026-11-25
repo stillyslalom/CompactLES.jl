@@ -72,7 +72,7 @@ edge, 1 on collapsed and periodic dimensions. The conserving integrals
 multiply an edge node's weight by the metric edge factor (see the quadrature
 note in `src/solver/diagnostics.jl`).
 """
-@inline function quad_weight(solver::SolverLike, d::Int, i::Int)
+@inline function quad_weight(solver::PatchSolver, d::Int, i::Int)
     decomp = solver.decomp
     (decomp.active[d] && !decomp.periodic[d]) || return 1.0
     g = decomp.offset[d] + i                          # 1-based global index
@@ -85,7 +85,7 @@ end
 # The factor on `quad_weight(solver, d, il)` at padded node `I` that removes
 # the metric's share of the edge term (the quadrature note above); 1 away
 # from a physical edge of the patch along `d`.
-@inline function _edge_factor(solver::SolverLike, d::Int, il::Int, I::CartesianIndex{3})
+@inline function _edge_factor(solver::PatchSolver, d::Int, il::Int, I::CartesianIndex{3})
     decomp = solver.decomp
     (decomp.active[d] && !decomp.periodic[d]) || return 1.0
     g = decomp.offset[d] + il
@@ -95,7 +95,7 @@ end
 end
 
 # The three factors of interior node (i, j, k) at padded index `I`.
-@inline _edge_factors(solver::SolverLike, i::Int, j::Int, k::Int, I::CartesianIndex{3}) =
+@inline _edge_factors(solver::PatchSolver, i::Int, j::Int, k::Int, I::CartesianIndex{3}) =
     _edge_factor(solver, 1, i, I) * _edge_factor(solver, 2, j, I) *
     _edge_factor(solver, 3, k, I)
 
@@ -104,7 +104,7 @@ end
 # from a fold. Written in differences, so a J constant along `d` gives exactly
 # zero. `inv_J` is filled analytically over the padded array, so a neighbor in
 # the halo of a thin block is the same value its owner holds.
-@noinline function _edge_factor_at(solver::SolverLike, d::Int, side::Int,
+@noinline function _edge_factor_at(solver::PatchSolver, d::Int, side::Int,
                                    I::CartesianIndex{3})
     solver.bcs[d][side] isa InterfaceBC && return 1.0
     fold = solver.folds[d]
@@ -121,7 +121,7 @@ end
 end
 
 "Computational cell measure Πh_d over active dimensions (collapsed dims give 1)."
-cell_measure(solver::SolverLike) = prod(ntuple(d -> solver.decomp.active[d] ?
+cell_measure(solver::PatchSolver) = prod(ntuple(d -> solver.decomp.active[d] ?
                                            solver.h[d] : one(eltype(solver.h)), 3))
 
 # Whether a solver's diagnostics take the composite (multi-patch, masked)
@@ -147,7 +147,7 @@ as the Cartesian trapezoid rule is; see the quadrature note at the top of this
 file. This is the single-patch quadrature; use the `Vector` form below on a
 refined run.
 """
-function volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
+function volume_integral(solver::PatchSolver, f::AbstractArray{<:Real,3})
     return MPI.Allreduce(_local_volume_integral(solver, f, false), +, solver.comm)
 end
 
@@ -183,7 +183,7 @@ end
 
 # One patch's interior contribution. `masked` applies the covered mask
 # (the composite forms); the single-patch forms leave it off.
-function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3},
+function _local_volume_integral(solver::PatchSolver, f::AbstractArray{<:Real,3},
                                 masked::Bool)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -213,9 +213,12 @@ end
 # establishes which history or drift representation belongs in the API;
 # unlike separate `volume_integral` calls, every channel here uses the same
 # state, mask and reduction.
-function _conserved_budget(solver::SolverLike, Q::ConservedState)
+function _conserved_budget(solver::Solver, Q::ConservedState)
     _composite(solver) && throw(ArgumentError(
         "a multi-patch or refined solver requires the state-vector form"))
+    return _conserved_budget(sole_patch(solver), Q)
+end
+function _conserved_budget(solver::PatchSolver, Q::ConservedState)
     local_budget = _local_conserved_budget(solver, Q, false)
     return _budget_tuple(MPI.Allreduce(local_budget, +, solver.comm),
                          solver.equations)
@@ -240,7 +243,7 @@ function _conserved_budget(solver::Solver, states::Vector{<:ConservedState};
                          solver.equations)
 end
 
-function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
+function _local_conserved_budget(solver::PatchSolver, Q::ConservedState,
                                  masked::Bool, junctions::Bool=masked)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -272,7 +275,7 @@ end
 # quadrature of src/amr/reflux.jl: none where a child covers the node's whole
 # cell, the whole cell at a parent's face node however much of it a child
 # covers, and none at a refined patch's two nodes nearest a parent-fed face.
-@inline function _conserved_fraction(solver::SolverLike, m::UInt8, i::Int, j::Int,
+@inline function _conserved_fraction(solver::PatchSolver, m::UInt8, i::Int, j::Int,
                                      k::Int)
     m == 0xff && return 0.0
     decomp = solver.decomp
@@ -304,20 +307,20 @@ end
 this function. On a multi-patch or refined solver this is the composite
 quadrature of `volume_integral`, so it is the physical volume exactly once.
 """
-function domain_volume(solver::SolverLike)
-    if _composite(solver)
-        _reflux_current!(solver)
-        acc = 0.0
-        for p in getfield(solver, :patches)
-            ps = PatchSolver(solver, p)
-            acc += _local_domain_volume(ps, true) + _junction_integral(ps, nothing)
-        end
-        return MPI.Allreduce(acc, +, solver.comm)
+function domain_volume(solver::Solver)
+    _composite(solver) || return domain_volume(sole_patch(solver))
+    _reflux_current!(solver)
+    acc = 0.0
+    for p in getfield(solver, :patches)
+        ps = PatchSolver(solver, p)
+        acc += _local_domain_volume(ps, true) + _junction_integral(ps, nothing)
     end
-    return MPI.Allreduce(_local_domain_volume(solver, false), +, solver.comm)
+    return MPI.Allreduce(acc, +, solver.comm)
 end
+domain_volume(solver::PatchSolver) =
+    MPI.Allreduce(_local_domain_volume(solver, false), +, solver.comm)
 
-function _local_domain_volume(solver::SolverLike, masked::Bool)
+function _local_domain_volume(solver::PatchSolver, masked::Bool)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -340,7 +343,8 @@ end
 ∫ f dV / ∫ dV. Every rank in `solver.comm` must call this function. The
 `Vector` form is the composite one.
 """
-volume_average(solver::SolverLike, f) = volume_integral(solver, f) / domain_volume(solver)
+volume_average(solver::Union{Solver,PatchSolver}, f) =
+    volume_integral(solver, f) / domain_volume(solver)
 
 """
     plane_profile(solver, f, d) -> Vector{Float64}
@@ -353,7 +357,7 @@ Cartesian grid and the correct area average on a curvilinear one. Every rank
 in the relevant decomposition communicators must call this function. This is
 the single-patch form; see the `Vector` form for a multi-patch or refined solver.
 """
-function plane_profile(solver::SolverLike, f::AbstractArray{<:Real,3}, d::Int)
+function plane_profile(solver::PatchSolver, f::AbstractArray{<:Real,3}, d::Int)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -512,8 +516,10 @@ The composite form is local (the root coordinates follow from global solver
 configuration) and returns the same vector on every rank. On a refined solver
 the stations are the root's.
 """
-function profile_coordinate(solver::SolverLike, d::Int)
-    _composite(solver) && return _root_coordinates(solver, d)
+profile_coordinate(solver::Solver, d::Int) =
+    _composite(solver) ? _root_coordinates(solver, d) :
+                         profile_coordinate(sole_patch(solver), d)
+function profile_coordinate(solver::PatchSolver, d::Int)
     decomp = solver.decomp
     loc = Float64[xcoord(solver, d, i) for i in 1:decomp.n_local[d]]
     decomp.sub_size[d] == 1 && return loc
@@ -540,35 +546,36 @@ branch together. On a refined solver the stations are the root's, and this is
 the unmasked root-grid spacing because the profile length element describes
 geometry rather than solution coverage.
 """
-function profile_spacing(solver::SolverLike, d::Int)
-    if _composite(solver)
-        solver.n_global[d] == 1 && return [1.0]
-        prof = _root_profile(solver, d) do ps, i
-            scale = ps.tmp_a
-            invh = ps.inv_h[d]
-            @inbounds for idx in eachindex(scale)
-                scale[idx] = 1 / invh[idx]
-            end
-            scale
-        end .* getfield(solver, :h)[d]
-        half = zeros(Int, 2) # physical node-centered low and high edges
-        for p in getfield(solver, :patches)
-            p.level == 0 || continue
-            ps = PatchSolver(solver, p)
-            fold = ps.folds[d]
-            lo_fold = fold !== nothing && fold.lo
-            hi_fold = fold !== nothing && fold.hi
-            p.region.offset[d] == 0 && p.faces[d][1] == 0 &&
-                !ps.decomp.periodic[d] && !lo_fold && (half[1] = 1)
-            p.region.offset[d] + p.region.extent[d] == solver.n_global[d] &&
-                p.faces[d][2] == 0 && !ps.decomp.periodic[d] && !hi_fold &&
-                (half[2] = 1)
+function profile_spacing(solver::Solver, d::Int)
+    _composite(solver) || return profile_spacing(sole_patch(solver), d)
+    solver.n_global[d] == 1 && return [1.0]
+    prof = _root_profile(solver, d) do ps, i
+        scale = ps.tmp_a
+        invh = ps.inv_h[d]
+        @inbounds for idx in eachindex(scale)
+            scale[idx] = 1 / invh[idx]
         end
-        half = MPI.Allreduce(half, max, solver.comm)
-        half[1] == 1 && (prof[1] *= 0.5)
-        half[2] == 1 && (prof[end] *= 0.5)
-        return prof
+        scale
+    end .* getfield(solver, :h)[d]
+    half = zeros(Int, 2) # physical node-centered low and high edges
+    for p in getfield(solver, :patches)
+        p.level == 0 || continue
+        ps = PatchSolver(solver, p)
+        fold = ps.folds[d]
+        lo_fold = fold !== nothing && fold.lo
+        hi_fold = fold !== nothing && fold.hi
+        p.region.offset[d] == 0 && p.faces[d][1] == 0 &&
+            !ps.decomp.periodic[d] && !lo_fold && (half[1] = 1)
+        p.region.offset[d] + p.region.extent[d] == solver.n_global[d] &&
+            p.faces[d][2] == 0 && !ps.decomp.periodic[d] && !hi_fold &&
+            (half[2] = 1)
     end
+    half = MPI.Allreduce(half, max, solver.comm)
+    half[1] == 1 && (prof[1] *= 0.5)
+    half[2] == 1 && (prof[end] *= 0.5)
+    return prof
+end
+function profile_spacing(solver::PatchSolver, d::Int)
     decomp = solver.decomp
     decomp.active[d] || return [1.0]
     # 1/inv_h[d] is the physical arclength per unit computational coordinate.
@@ -715,7 +722,7 @@ function species_pdf(solver::Solver, sp::Int; nbins::Int=32)
             _pdf_accumulate!(bins, PatchSolver(solver, p), sp, true)
         end
     else
-        _pdf_accumulate!(bins, solver, sp, false)
+        _pdf_accumulate!(bins, sole_patch(solver), sp, false)
     end
     bins = MPI.Allreduce(bins, +, solver.comm)
     width = 1 / nbins
@@ -724,7 +731,7 @@ function species_pdf(solver::Solver, sp::Int; nbins::Int=32)
     return ([(b - 0.5) * width for b in 1:nbins], bins)
 end
 
-function _pdf_accumulate!(bins::Vector{Float64}, solver::SolverLike, sp::Int,
+function _pdf_accumulate!(bins::Vector{Float64}, solver::PatchSolver, sp::Int,
                           masked::Bool)
     nbins = length(bins)
     decomp = solver.decomp

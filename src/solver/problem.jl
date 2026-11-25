@@ -190,7 +190,7 @@ Rank-local and non-collective. Each rank writes only its own block, so the
 halos hold whatever they held before and a caller needing them current must
 exchange afterwards; [`run!`](@ref) and [`step!`](@ref) do so themselves.
 """
-initialize!(solver::SolverLike, Q, ic) =
+initialize!(solver::PatchSolver, Q, ic) =
     _initialize!(solver, solver.eos, Q, _bind_initial(ic, solver))
 
 initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
@@ -201,7 +201,7 @@ initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
 # (a `Layers`, regions.jl) is completed here; a plain function is used as is.
 _bind_initial(ic, solver) = ic
 
-function _initialize!(solver::SolverLike, eos, Q, ic)
+function _initialize!(solver::PatchSolver, eos, Q, ic)
     if _cpu_storage(Q)
         _initialize_interior!(solver, Q, ic)
     else
@@ -236,7 +236,7 @@ function _domain_coordinate(geom::CallbackGeometry, d::Int, i::Int)
     return _global_xcoord(geom, d, P > 0 && g > P ? g - P : P > 0 && g < 1 ? g + P : g)
 end
 
-function _initialize_interior!(solver::SolverLike, Q, ic)
+function _initialize_interior!(solver::PatchSolver, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -306,7 +306,8 @@ state_report(solver::Solver, Q; species_band::Real=solver.control.species_band) 
 function _state_report(solver::Solver, Q, species_band::Real)
     _cpu_storage(Q) || return StateReport()
     return _reduce_state_report(solver,
-                                _local_state_report(solver, Q, species_band))
+                                _local_state_report(sole_patch(solver), Q,
+                                                    species_band))
 end
 
 function _state_report(solver::Solver, states::Vector{<:ConservedState},
@@ -359,7 +360,7 @@ end
     return q_min < -ρ_band || q_max - ρ > ρ_band
 end
 
-_local_state_report(solver::SolverLike, Q, species_band) =
+_local_state_report(solver::PatchSolver, Q, species_band) =
     _state_sweep(solver.decomp, solver.eos, equation_layout(solver.equations), Q,
                  species_band)
 

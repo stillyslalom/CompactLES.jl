@@ -571,7 +571,7 @@ function _bind_initial(ic::Hydrostatic, solver)
     return BoundHydrostatic(inner, P)
 end
 
-function _initialize_interior!(solver::SolverLike, Q, ic::BoundHydrostatic)
+function _initialize_interior!(solver::PatchSolver, Q, ic::BoundHydrostatic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local

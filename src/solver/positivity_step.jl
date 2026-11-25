@@ -170,20 +170,21 @@ end
 function _limited_run_step!(solver, Q, workspace, dt, prepared::Bool, control)
     lim = getfield(solver, :positivity)
     dQ, du = workspace.dQ, workspace.du
-    decomp = solver.decomp
+    ps = sole_patch(solver)
+    decomp = ps.decomp
     for stage in 1:5
         solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         if !first_prepared
             _ledger_open!(solver, Q)
-            apply_bcs!(solver, Q)
+            apply_bcs!(ps, Q)
             _ledger!(solver, Q, :wall_enforce)
         end
         T = eltype(lim.eps_rho)
-        compute_rhs!(solver, Q, _LimiterRHS(dQ, lim, T(RKA[stage]), T(dt)),
+        compute_rhs!(ps, Q, _LimiterRHS(dQ, lim, T(RKA[stage]), T(dt)),
                      first_prepared)
         _ledger_faces!(solver, 1)
-        _limit_stage!(lim, solver, Q, dQ, du, stage, dt)
+        _limit_stage!(lim, ps, Q, dQ, du, stage, dt)
         _ledger_open!(solver, Q)
         _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
                     RKA[stage], RKB[stage], dt)
@@ -191,9 +192,9 @@ function _limited_run_step!(solver, Q, workspace, dt, prepared::Bool, control)
     end
     solver.tstage = solver.t + dt
     _ledger_open!(solver, Q)
-    apply_bcs!(solver, Q)
+    apply_bcs!(ps, Q)
     _ledger!(solver, Q, :wall_enforce)
-    _validate_transport_state!(solver, Q)
+    _validate_transport_state!(ps, Q)
     return nothing
 end
 
@@ -304,11 +305,11 @@ Base.view(x::_LimiterRHS, I...) = view(x.dQ, I...)
 @inline _ghost_rhs_arg(x::_LimiterRHS) = x
 _rhs_state(x::_LimiterRHS) = x
 
-div_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::SolverLike, d::Int, σf::Int,
+div_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::PatchSolver, d::Int, σf::Int,
                     inv_J) = _limited_subtract!(dQ, c, c, f, solver, d, σf, inv_J)
 
 # The radial pressure gradient, kept in register n_cons + 1 of its direction.
-pressure_subtract_along!(dQ::_LimiterRHS, c::Int, solver::SolverLike, d::Int) =
+pressure_subtract_along!(dQ::_LimiterRHS, c::Int, solver::PatchSolver, d::Int) =
     _limited_subtract!(dQ, c, solver.equations.n_cons + 1, solver.p, solver, d, 1,
                        solver.inv_h[d])
 
@@ -325,10 +326,10 @@ end
 # the registers in the same way. The derivative is the one
 # `_ext_subtract_along!` forms, through the fused route's plan where that
 # route is taken, so the subtraction is bit for bit the unlimited one.
-_ext_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::SolverLike, d::Int, inv_J,
+_ext_subtract_along!(dQ::_LimiterRHS, c::Int, f, solver::PatchSolver, d::Int, inv_J,
                      σf::Int) = _limited_ext_subtract!(dQ, c, c, f, solver, d, σf, inv_J)
 
-_ext_pressure_subtract!(dQ::_LimiterRHS, c::Int, solver::SolverLike, d::Int) =
+_ext_pressure_subtract!(dQ::_LimiterRHS, c::Int, solver::PatchSolver, d::Int) =
     _limited_ext_subtract!(dQ, c, solver.equations.n_cons + 1, solver.p, solver, d, 1,
                            solver.inv_h[d])
 
@@ -1415,7 +1416,7 @@ end
 # arithmetic. A fold's face takes its limit from node 1 alone: the filter's
 # face flux there vanishes for an even field and not for an odd one.
 _limited_filter_state!(solver, Q::ConservedState) =
-    _limited_filter_pass!(getfield(solver, :positivity), solver, Q)
+    _limited_filter_pass!(getfield(solver, :positivity), sole_patch(solver), Q)
 
 # The multi-patch `filter_state!`, each patch's passes limited. The filter's
 # rows at a node two same-level patches share conserve, and the averaging that

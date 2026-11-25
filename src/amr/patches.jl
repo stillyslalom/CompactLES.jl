@@ -848,7 +848,7 @@ end
 @inline Base.setproperty!(ps::PatchSolver, name::Symbol, value) =
     setproperty!(getfield(ps, :solver), name, value)
 
-# The patch a `SolverLike` evaluates; the `Solver` method is in solver.jl.
+# The patch a routine evaluates; the `Solver` method is in solver.jl.
 @inline _patch_of(ps::PatchSolver) = getfield(ps, :patch)
 
 # Record the patch of `solver` as the last writer of its workspace's

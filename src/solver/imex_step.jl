@@ -93,6 +93,7 @@ end
 # restored), or a `SolverFailure`.
 function _imex_attempt!(solver, integ::ImexIntegrator{T}, Q, t0, h,
                         prepared::Bool) where {T}
+    ps = sole_patch(solver)
     copyto!(integ.base, Q)
     γh = integ.gamma * h
     for i in 1:ARK436_STAGES
@@ -104,8 +105,8 @@ function _imex_attempt!(solver, integ::ImexIntegrator{T}, Q, t0, h,
             _stage_tendency!(integ, solver, Q, i, γh)
         end
         first = prepared && i == 1
-        first || apply_bcs!(solver, Q)
-        compute_rhs!(solver, Q, integ.explicit[i], first)
+        first || apply_bcs!(ps, Q)
+        compute_rhs!(ps, Q, integ.explicit[i], first)
         if i == 1
             # The primitives are those of Qⁿ: the tendency of the explicit
             # first stage, and the thermal energy the step rule measures by.
@@ -128,8 +129,8 @@ function _imex_attempt!(solver, integ::ImexIntegrator{T}, Q, t0, h,
         return false
     end
     solver.tstage = t0 + h
-    apply_bcs!(solver, Q)
-    _validate_transport_state!(solver, Q)
+    apply_bcs!(ps, Q)
+    _validate_transport_state!(ps, Q)
     return true
 end
 
@@ -257,7 +258,7 @@ function _solve_implicit_stage!(solver, integ::ImexIntegrator{T}, Q, γh) where 
     rtol = T(settings.rtol)
     sums = zeros(T, 2)
     for k in 0:settings.max_outer
-        primitives!(solver, Q)
+        primitives!(sole_patch(solver), Q)
         valid = _refresh_conduction!(integ, solver)
         _on_every_rank(valid, solver.comm) ||
             return _imex_failure(solver, γh / integ.gamma, "an implicit trial state " *

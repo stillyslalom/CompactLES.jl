@@ -143,7 +143,8 @@ default in place unless it has done the same. The argument is positional for
 the reason given under [`compute_rhs!`](@ref).
 """
 function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
-    decomp = solver.decomp
+    ps = sole_patch(solver)
+    decomp = ps.decomp
     for stage in 1:5
         solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         # RKC[1] = 0, so a prepared caller's boundary values are the ones this
@@ -151,10 +152,10 @@ function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
         first_prepared = prepared && stage == 1
         if !first_prepared
             _ledger_open!(solver, Q)
-            apply_bcs!(solver, Q)
+            apply_bcs!(ps, Q)
             _ledger!(solver, Q, :wall_enforce)
         end
-        compute_rhs!(solver, Q, dQ, first_prepared)
+        compute_rhs!(ps, Q, dQ, first_prepared)
         _ledger_faces!(solver, 1)
         _ledger_open!(solver, Q)
         _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
@@ -163,9 +164,9 @@ function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     end
     solver.tstage = solver.t + dt
     _ledger_open!(solver, Q)
-    apply_bcs!(solver, Q)
+    apply_bcs!(ps, Q)
     _ledger!(solver, Q, :wall_enforce)
-    _validate_transport_state!(solver, Q)
+    _validate_transport_state!(ps, Q)
     return Q
 end
 
@@ -953,10 +954,11 @@ state has lost positivity. Without this check, failure is not detected until
 the diffusive term subsequently drives `dt` toward zero.
 """
 function max_rate(solver::Solver, Q)
-    exchange_state!(Q, solver.decomp)   # keep halos consistent for primitives!
-    primitives!(solver, Q)
-    _validate_transport_state!(solver, Q; current=true)
-    rate, ρ_min, dir = _local_max_rate(solver, Q)
+    ps = sole_patch(solver)
+    exchange_state!(Q, ps.decomp)   # keep halos consistent for primitives!
+    primitives!(ps, Q)
+    _validate_transport_state!(ps, Q; current=true)
+    rate, ρ_min, dir = _local_max_rate(ps, Q)
     # One collective, not five: every quantity is reduced with `max` by
     # negating the density, and this runs every step of every run.
     t0 = time_ns()
@@ -1041,7 +1043,7 @@ _wait!(solver::Solver, t0::UInt64) =
 # Maximum and minimum are exact and order-independent, so the two paths agree
 # bitwise. The azimuthal rate cap (modes.jl) is read by the loop alone, which
 # setup's host-backend restriction on `polar_truncation` makes sufficient.
-function _local_max_rate(solver::SolverLike, Q)
+function _local_max_rate(solver::PatchSolver, Q)
     _cpu_storage(Q) || return _local_max_rate_launch(solver, Q)
     if !FORCE_KA[] || _truncating(solver.truncation)
         return _local_max_rate_loop(solver, Q)
@@ -1114,7 +1116,7 @@ end
     return nothing
 end
 
-function _local_max_rate_launch(solver::SolverLike, Q)
+function _local_max_rate_launch(solver::PatchSolver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -1139,7 +1141,7 @@ function _local_max_rate_launch(solver::SolverLike, Q)
     return (maximum(rates), minimum(rhos), dir)
 end
 
-function _local_max_rate_loop(solver::SolverLike, Q)
+function _local_max_rate_loop(solver::PatchSolver, Q)
     decomp = solver.decomp
     nx, ny, nz = decomp.n_local
     T = eltype(Q)
@@ -1375,7 +1377,7 @@ function positivity_floors(solver::Solver, Q, control::StepControl)
     _cpu_storage(Q) ||
         error("StepControl.floor_ratio: the positivity failsafe is a host " *
               "sweep and is not yet supported on a DeviceBackend")
-    ρ_min, e_min = _local_positivity_mins(solver, Q)
+    ρ_min, e_min = _local_positivity_mins(sole_patch(solver), Q)
     t0 = time_ns()
     red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
     _wait!(solver, t0)
@@ -1400,7 +1402,7 @@ function positivity_floors(solver::Solver, states::Vector{<:ConservedState},
     return (control.floor_ratio * red[1], control.floor_ratio * red[2])
 end
 
-function _local_positivity_mins(solver::SolverLike, Q)
+function _local_positivity_mins(solver::PatchSolver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -1510,7 +1512,7 @@ function _reduce_floor_tally(solver, tally, species)
             energy=red[4], momentum=red[5], species=red[6:end])
 end
 
-function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
+function _local_positivity_repair!(solver::PatchSolver, Q, rho_floor, e_floor,
                                    scope::Symbol, species_band::Real,
                                    species::Vector{Float64}=zeros(
                                        solver.equations.n_species))
@@ -1773,7 +1775,7 @@ against. That holds on a freshly built solver and after a rollback; inside
 `run!` the step is recorded before the filter runs, so the relaxed weight is in
 force from the first pass.
 """
-function filter_weight(solver::SolverLike{T}, d::Int) where {T}
+function filter_weight(solver::PatchSolver{T}, d::Int) where {T}
     solver.filter_cfl > 0 || return one(T)
     solver.dt_prev > 0 || return one(T)
     n_active = count(solver.decomp.active)
@@ -1841,7 +1843,7 @@ deficit in opposite directions at the axis and at the origin; the
 measurements are `bench/archive/filter_conservation.jl`'s and the default rests on
 them.
 """
-function filter_state!(solver::SolverLike, Q)
+function filter_state!(solver::PatchSolver, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
     weighted = _weighted_filter(solver)
@@ -1913,7 +1915,6 @@ end
 # holding a patch. The test reads the level hierarchy, which every rank of the
 # patch holds, so every rank of a line takes the extra solve or none does. A
 # stacked level takes the plain pass.
-_has_child(solver::SolverLike, Q) = false
 function _has_child(ps::PatchSolver, Q)
     MASK_CHILD_RESIDUAL[] || return false
     levels = getfield(ps.solver, :levels)
@@ -1931,23 +1932,22 @@ end
 # current; at a self-paired fold the partial densities are mirror-filled here,
 # as their own pass would. On device storage the covered bytes are uploaded
 # into the scratch first and the body reads them back from it.
-_masked_filter(solver::SolverLike, Q, weighted::Bool) =
+_masked_filter(solver::PatchSolver, Q, weighted::Bool) =
     !weighted & _has_child(solver, Q)
 
 # The pass's mask along `d`, `nothing` when the pass takes none, and the pass
 # of one component under it. Kept out of `filter_state!` so that its body
 # carries no branches on the mask, which bench/audit.jl's inference count
 # reads as non-concrete control-flow values.
-_child_mask!(solver::SolverLike, Q, comps, d::Int, masked::Bool) =
+_child_mask!(solver::PatchSolver, Q, comps, d::Int, masked::Bool) =
     masked ? _child_mask!(solver, Q, comps, d) : nothing
 
-function _filter_line!(out, f, solver::SolverLike, d::Int, σ::Int, mask)
+function _filter_line!(out, f, solver::PatchSolver, d::Int, σ::Int, mask)
     filt_along!(out, f, solver, d, σ)
     mask === nothing || _drop_child_residual!(out, f, solver, d, σ, mask)
     return nothing
 end
 
-_child_mask!(solver::SolverLike, Q, comps, d::Int) = nothing
 function _child_mask!(ps::PatchSolver, Q, comps, d::Int)
     fold = _fold_at(ps, d)
     fold === nothing || fold.pair === nothing || return nothing
@@ -2049,7 +2049,7 @@ end
 # `out` holds the plain pass of `f` along `d`; subtract A⁻¹ of the residual
 # the mask drops, through `solver.tmp_b`. A pair fold's pass runs through its
 # butterfly and is left plain.
-function _drop_child_residual!(out, f, solver::SolverLike, d::Int, σ::Int, mask)
+function _drop_child_residual!(out, f, solver::PatchSolver, d::Int, σ::Int, mask)
     fold = _fold_at(solver, d)
     fold === nothing || fold.pair === nothing || return out
     plan = fold === nothing ? _operator_plan(solver.filter_plans, d) :
@@ -2072,7 +2072,7 @@ end
 # on and the volume is not uniform. A refined level is unstretched, so it takes
 # the weighted path on the axisymmetric cylindrical metric only, with its own
 # J = r, which is analytic on the ghost layers its interface rows read.
-_weighted_filter(solver::SolverLike) =
+_weighted_filter(solver::PatchSolver) =
     solver.filter_weighting === :volume &&
     !(solver.metric isa CartesianMetric && all(isnothing, solver.stretch))
 
@@ -2080,7 +2080,7 @@ _weighted_filter(solver::SolverLike) =
 # extent of `solver.tmp_a` from `inv_J`, which is analytic there, so the pass
 # reads current halos along `d` without an exchange; a fold on `d` folds J
 # with its own parity.
-function _filter_volume!(solver::SolverLike, d::Int)
+function _filter_volume!(solver::PatchSolver, d::Int)
     decomp = solver.decomp
     n1, n2, n3 = padded_extent(decomp)
     pointwise!(_reciprocal_point!, solver.tmp_a, n1, n2, n3, solver.tmp_a,
@@ -2099,7 +2099,7 @@ end
 # halo is read), the filter of that into the interior of `q` itself, then the
 # division by F_d(J) from `_filter_volume!`, blended with the unfiltered
 # component read back as (J q) / J where the pass is relaxed.
-function _filter_weighted!(q, solver::SolverLike, d::Int, σ::Int, w)
+function _filter_weighted!(q, solver::PatchSolver, d::Int, σ::Int, w)
     decomp = solver.decomp
     n1, n2, n3 = padded_extent(decomp)
     pointwise!(_volume_weight_point!, solver.tmp_a, n1, n2, n3, solver.tmp_a, q,

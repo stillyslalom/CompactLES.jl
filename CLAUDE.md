@@ -392,8 +392,10 @@ Names are spelled out in full. Current vocabulary:
   = `deriv_plans` except at interface ends), `ghost_sends`/`ghost_recvs`/
   `plane_pairs` (the slabs' records, held by the root `Level`),
   `sync_patches!`, `eachpatch`; a routine below the step
-  drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
-  a single-patch `Solver` forwards patch-owned property names to its sole
+  drivers takes a `PatchSolver`, which the entry points build from a
+  single-patch `Solver` with `sole_patch`; `@sole_patch_forward` gives such
+  a routine a `Solver` method for callers outside the step path, and a
+  single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
 - `rhs_workspace` (an `RHSWorkspace`: the scratch of one right-hand-side
   evaluation, `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`,

@@ -28,7 +28,7 @@ function _check_transport_status(solver, status)
         "(domain status $status). No extrapolation or clamping is permitted."))
 end
 
-function _validate_transport_state!(solver::SolverLike, Q; current::Bool=false)
+function _validate_transport_state!(solver::PatchSolver, Q; current::Bool=false)
     transport_has_domain(solver.transport) || return nothing
     current || refresh_primitives!(solver, Q)
     status = MPI.Allreduce(_local_transport_status(solver), max, solver.decomp.comm)

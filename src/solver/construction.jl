@@ -1211,7 +1211,8 @@ function _attach_positivity_and_implicit!(::Type{T}, solver,
     elseif nlev == 1
         # The conduction stage reads the metric, so it is built last.
         implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
-        positivity_limiter && (solver.positivity = PositivityLimiter(solver))
+        positivity_limiter &&
+            (solver.positivity = PositivityLimiter(sole_patch(solver)))
     else
         # The patches' limiters are built as `run!` starts, and again for the
         # patches a regrid replaces (`_follow_patches!`).
