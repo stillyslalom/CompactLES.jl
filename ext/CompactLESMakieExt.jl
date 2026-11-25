@@ -1,6 +1,6 @@
 module CompactLESMakieExt
 
-# Makie plotting for the extraction API declared in src/viz.jl. As with the HDF5
+# Makie plotting for the extraction API declared in src/io/viz.jl. As with the HDF5
 # extension, the core package declares `profileplot`, `fieldheatmap`,
 # `meshplot`, and their mutating forms as stubs that error until a backend is
 # loaded; this module adds the methods once the caller writes `using CairoMakie`

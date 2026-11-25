@@ -40,7 +40,7 @@
 #   julia bench/repeat.jl runs=5 timeout=600 "$ROW" \
 #       -- "$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 30
 #
-# The runner itself loads only Base and Printf (it includes `src/scriptargs.jl`
+# The runner itself loads only Base and Printf (it includes `src/core/scriptargs.jl`
 # rather than loading the package), so it adds no compile work and takes no part
 # in the precompile lock. Precompile each environment serially before a sweep
 # anyway, or let `warmup` discard the run that pays for it: a precompile inside
@@ -103,7 +103,7 @@
 # Prints tables and asserts nothing about the numbers; the exit status is
 # nonzero when too few runs succeeded or no value was extracted.
 
-include(joinpath(@__DIR__, "..", "src", "scriptargs.jl"))
+include(joinpath(@__DIR__, "..", "src", "core", "scriptargs.jl"))
 using Printf
 
 const DEFAULTS = (runs = 5, warmup = 1, min_runs = 0, pattern = "", keys = "",

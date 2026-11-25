@@ -573,7 +573,7 @@ truncation_study("C10 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_10()
 
 # ---------------------------------------------------------------------------
 # The staggered operators of the implicit diffusion operator
-# (src/staggered.jl): D_s from nodes to midpoints, G back to nodes, the
+# (src/core/staggered.jl): D_s from nodes to midpoints, G back to nodes, the
 # midpoint interpolation of the coefficient, and their composition
 # L = G K D_s against (κ T')'. Each is measured on a line of N nodes along x,
 # periodic, and closed with the wall mirror on fields of its parity (T and κ
@@ -1204,7 +1204,7 @@ temporal_study("two levels, subcycled, ghost fluxes", (14, 20, 28),
                                   cfl=TEMPORAL_CFL), 0.5, 2240;
                expect=3.8, tol=0.6, recorded=3.85)
 
-# The additive pair of src/imex.jl, the molecular conduction in its implicit
+# The additive pair of src/solver/imex.jl, the molecular conduction in its implicit
 # half and fixed steps under `step_rule = :none`: the viscous standing wave
 # on the periodic line at Pr = 0.7, where the conductive rate is below the
 # acoustic one and the pair reads four, and between adiabatic no-slip walls

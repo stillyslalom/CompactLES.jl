@@ -204,7 +204,7 @@
 # histories. The misfits are the quantity the joint alpha/cadence/filter_cfl fit
 # minimizes; the peak alone is one scalar and one parameter always fits it.
 #
-# Parsed by `script_args` (src/scriptargs.jl), shared with the cluster scripts;
+# Parsed by `script_args` (src/core/scriptargs.jl), shared with the cluster scripts;
 # the reasoning for ARGS over environment variables is there. An unknown key is
 # an error, so a typo produces a message rather than an hour-long run at the
 # default.

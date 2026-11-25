@@ -50,7 +50,7 @@ hdf5_available() = _hdf5_extension() !== nothing
     hdf5_parallel() -> Bool
 
 Whether the loaded libhdf5 supports MPI-parallel I/O. `false` selects the
-serialized write described at the top of `src/hdf5.jl`, which produces the same
+serialized write described at the top of `src/io/hdf5.jl`, which produces the same
 file at O(P) cost. Errors when the extension is not loaded.
 """
 function hdf5_parallel()
@@ -64,7 +64,7 @@ function _hdf5_required(name)
           "and write `using HDF5` alongside `using CompactLES`; the extension " *
           "loads itself. For MPI-parallel writes the libhdf5 binary must also " *
           "be built against the MPI this run uses; see the note at the top of " *
-          "src/hdf5.jl.")
+          "src/io/hdf5.jl.")
 end
 
 """

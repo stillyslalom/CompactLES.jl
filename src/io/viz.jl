@@ -10,7 +10,7 @@
 # Nothing here depends on a plotting package. `profileplot`, `fieldheatmap`,
 # `meshplot`, and their mutating forms are declared as stubs that error until a
 # Makie backend is loaded; `ext/CompactLESMakieExt.jl` supplies the methods.
-# This mirrors the HDF5 split in src/hdf5.jl exactly.
+# This mirrors the HDF5 split in src/io/hdf5.jl exactly.
 
 # --- Named scalar → padded array -------------------------------------------
 

@@ -507,7 +507,7 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF,RC}
     # below derives them.
     field_tuples::TF
     # The coarse-fine junctions this patch takes part in, as a parent or as
-    # a child (`RefluxCapture`, src/reflux_types.jl); rebuilt whenever the layout
+    # a child (`RefluxCapture`, src/amr/reflux_types.jl); rebuilt whenever the layout
     # changes, empty on a solver without refinement.
     reflux_captures::RC
     # Whether the right-hand side running on this patch defers the child's

@@ -17,7 +17,7 @@
 #   julia --project=. probes/steprofile.jl
 #   julia --project=. probes/steprofile.jl grid=48 steps=5 mincount=100
 #
-# Options are parsed by `script_args` (src/scriptargs.jl): grid (cube edge),
+# Options are parsed by `script_args` (src/core/scriptargs.jl): grid (cube edge),
 # steps (profiled steps, after one warm-up step that is not profiled), mincount
 # (frames with fewer samples are not printed), art (artificial properties on),
 # delay (sampling interval in seconds).

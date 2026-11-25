@@ -129,7 +129,7 @@ suites cannot see the fault.
 ## What was done
 
 The bodies take the quotient and remainder through `_unchecked_div` and
-`_unchecked_rem` (`src/pointwise.jl`), the intrinsics `sdiv_int` and
+`_unchecked_rem` (`src/core/pointwise.jl`), the intrinsics `sdiv_int` and
 `srem_int` without the divisor test, which give the values of `div` and
 `rem` for the positive divisors the bodies divide by, and the two rate
 helpers read inside `@inbounds`. The host results are bitwise unchanged.

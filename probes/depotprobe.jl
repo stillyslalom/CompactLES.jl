@@ -19,7 +19,7 @@
 # run it at several rank counts, and again with JULIA_DEPOT_PATH pointed at a
 # staged depot, and compare.
 #
-# Options, parsed by `script_args` (src/scriptargs.jl):
+# Options, parsed by `script_args` (src/core/scriptargs.jl):
 #   stage=<dir>   directory to stage a depot copy into; empty skips the phase
 #   grid=<N>      minimum cube edge for the per-rank step timing; raised to
 #                 9 x the largest decomposition dimension so it survives the
@@ -497,7 +497,7 @@ end
 # The C8 filter needs 9 points per rank per dimension, so a fixed cube edge
 # stops decomposing somewhere above a handful of ranks. Size it from the
 # decomposition MPI would pick. The second argument to Dims_create is the dims
-# array, not the dimension count; see the note in src/decomposition.jl.
+# array, not the dimension count; see the note in src/core/decomposition.jl.
 function probe_grid()
     dims = try
         Int.(MPI.Dims_create(np, zeros(Cint, 3)))

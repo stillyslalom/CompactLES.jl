@@ -450,7 +450,7 @@ Names are spelled out in full. Current vocabulary:
   / `MIGRATION_AUDIT_RESULT` (the test hook comparing the two bitwise)
 - `_level_artificial!` (the artificial coefficients of a tiled level with a
   shared face, computed over the whole level in stages separated by exchanges
-  over the level's records, `src/level_sensors.jl`), `sensed_fields` (a
+  over the level's records, `src/amr/level_sensors.jl`), `sensed_fields` (a
   `Patch` field: a tile's strain magnitude and dilatation between those
   stages), `InterfaceSmoothPlans` (a refined patch's smoother plans, `ghost`
   reading the interface ghost layers the pass fills, `closed` the scheme's
@@ -724,7 +724,7 @@ fails to compile a kernel that keeps a `throw`: the divisor test of an integer
 `div`, `rem` or `%`, a bounds check outside `@inbounds`, a checked conversion.
 The symptom is `InvalidIRError ... call to kernel_state()` at the first device
 launch, with the KA-CPU suite green. Divide extents and strides with
-`_unchecked_div` / `_unchecked_rem` (`src/pointwise.jl`), keep every access
+`_unchecked_div` / `_unchecked_rem` (`src/core/pointwise.jl`), keep every access
 inside `@inbounds`, and narrow an integer as `x % UInt8`, not `UInt8(x)`;
 `reference/bugreports/amdgpu_exception_path_bug_report.md` has the reproducer.
 
@@ -737,7 +737,7 @@ check in `max_rate` reads ρ out of `Q` directly and not from `solver.rho`.
 
 ## Threading
 
-`@threaded <work> for ... end` (`src/threading.jl`) uses `Threads.@threads`
+`@threaded <work> for ... end` (`src/core/threading.jl`) uses `Threads.@threads`
 only when `work >= THREAD_MIN_WORK` (1024 points per thread × the session's
 thread count; override the total via `CL_THREAD_MIN_WORK`) *and* the loop has
 more than one trip; it runs serially otherwise. Allocation is
@@ -783,7 +783,7 @@ be revisited.
   slow machine); they measure the machine, not the solver, and run from the
   checkout root with `--project=.`.
 - Scripts take their settings from `ARGS`, not the environment: positional
-  values first, then `key=value`, parsed by `script_args` (`src/scriptargs.jl`)
+  values first, then `key=value`, parsed by `script_args` (`src/core/scriptargs.jl`)
   against a defaults `NamedTuple` that doubles as the schema. Give a new script
   the same shape. An unknown key is an error: the environment
   form it replaced answered a typo by running the default for the length of the

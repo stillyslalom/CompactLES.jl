@@ -440,7 +440,7 @@ end
                (interface_flux=:ghost,),
                (interface_flux=:ghost, transport=ConstantTransport(mu0=1e-3)))
         # The conservative coarse-fine coupling is host-only and leaves a
-        # stacked device level uncorrected (src/reflux.jl), so `tiled` builds
+        # stacked device level uncorrected (src/amr/reflux.jl), so `tiled` builds
         # both runs without it.
         s1, q1, initial = tiled(CPUBackend(); kw...)
         s2, q2, _ = CL.with_knob(CL.FORCE_KA => true, CL.FORCE_DEVICE_EXCHANGE => true) do
@@ -1080,8 +1080,9 @@ const POINTWISE_BODIES = (
     # come nearest it; both pack scalars into isbits tuples to stay under.
     src = joinpath(@__DIR__, "..", "src")
     found = Set{Symbol}()
-    for f in readdir(src; join=true)
-        endswith(f, ".jl") || continue
+    for (dir, _, files) in walkdir(src), name in files
+        endswith(name, ".jl") || continue
+        f = joinpath(dir, name)
         for m in eachmatch(r"pointwise!\(\s*(_[A-Za-z0-9_]*point!)",
                            read(f, String))
             push!(found, Symbol(m.captures[1]))

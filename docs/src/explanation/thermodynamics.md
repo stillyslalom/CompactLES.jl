@@ -213,7 +213,7 @@ primitive-to-conserved conversion, the species enthalpy, the pressure-to-energy
 derivative and its composition derivatives used by NSCBC, the
 artificial-conductivity scale, and the internal energy at an isothermal wall.
 [Extending CompactLES](@ref) lists the hook for each of these with its
-signature; the comment at the top of `src/physics.jl` records the mathematical
+signature; the comment at the top of `src/physics/physics.jl` records the mathematical
 contracts.
 
 These calls occur behind array-level function barriers. Dynamic dispatch is

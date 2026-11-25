@@ -1,4 +1,4 @@
-# The binned form of the ablation drive (src/ablation.jl): the front and the layer
+# The binned form of the ablation drive (src/physics/ablation.jl): the front and the layer
 # normalization summed over angular bins about the capsule centre rather than along
 # grid lines, so the drive runs on r–z (cylindrical) and 3-D Cartesian grids, on
 # stretched grids and on refined levels. docs/src/explanation/ablation-drive.md,

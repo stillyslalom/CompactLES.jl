@@ -403,7 +403,7 @@ function main(opt)
         run!(s, states; tfinal=1e6, nmax=6)
         return s, states
     end
-    # The coarse-fine flux correction (src/reflux.jl) runs on host storage
+    # The coarse-fine flux correction (src/amr/reflux.jl) runs on host storage
     # only, and a shock crossing the tiled Sod's faces takes it, so these
     # comparisons build without it on both sides.
     for (label, build) in (("two viscous slabs", two_slabs),

@@ -3296,7 +3296,7 @@ function test_staged_exchange()
         return s, states
     end
     # The conservative coarse-fine coupling is host-only and leaves a stacked
-    # device level uncorrected (src/reflux.jl), so the refined builds above
+    # device level uncorrected (src/amr/reflux.jl), so the refined builds above
     # pass `interface_conservative = false` and both runs go without it.
     for (label, build) in (("two viscous slabs", slabs),
                            ("tiled regridding Sod", tiled),
@@ -4537,7 +4537,7 @@ function test_mode_truncation()
 end
 
 # ---------------------------------------------------------------------------
-# Staggered operators of the implicit diffusion operator (src/staggered.jl),
+# Staggered operators of the implicit diffusion operator (src/core/staggered.jl),
 # split along each dimension in turn, periodic, closed under both wall
 # parities and folded at both ends under both plane parities: the midpoint
 # flux κ D_s T and L = G K D_s T against the same operators on an undivided
@@ -4645,7 +4645,7 @@ function test_staggered()
     test_implicit_stage()
 end
 
-# The implicit diffusion stage (src/implicit.jl) on a decomposed solver
+# The implicit diffusion stage (src/solver/implicit.jl) on a decomposed solver
 # against the same stage on COMM_SELF: the solution of (I − γΔt L) T = r at
 # a stiffness far beyond the explicit limit, its residual evaluated by the
 # decomposed operator, and a uniform right-hand side, which must return at
@@ -4717,7 +4717,7 @@ function test_implicit_stage()
 end
 
 # ---------------------------------------------------------------------------
-# The additive pair with the conduction implicit (src/imex_step.jl) on a
+# The additive pair with the conduction implicit (src/solver/imex_step.jl) on a
 # decomposed patch, against the same run on COMM_SELF.
 #
 #   1. A temperature pulse in a periodic box with an acoustic flow, at about
@@ -5087,7 +5087,7 @@ include("conservation_mpi.jl")
 include("positivity_mpi.jl")
 
 # ---------------------------------------------------------------------------
-# The incompressible solver (src/incompressible.jl) decomposed against the
+# The incompressible solver (src/solver/incompressible.jl) decomposed against the
 # same run on COMM_SELF: a periodic plane split along x, a slip-walled box
 # split along y, and a no-slip channel and a three-dimensional box with slip
 # walls in z on the default process grid. The pressure solves stop at their

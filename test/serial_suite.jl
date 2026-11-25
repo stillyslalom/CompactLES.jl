@@ -2476,7 +2476,7 @@ end
     # c²ρ − p, u_t and Y_k, vanish up to the truncation gap between the
     # conservative divergence in dQ and the characteristic form; the outgoing
     # one stays of order one. The transverse pressure gradient's share of 𝒯_t
-    # carries the Mach number instead (src/nscbc.jl), so the u_t rate measured
+    # carries the Mach number instead (src/physics/nscbc.jl), so the u_t rate measured
     # is the remainder after the −(1 − M) ∇_t p/ρ that share leaves, with ∇_t p
     # the solver's own derivative. Under beta_t = 0 the same rates are of
     # order one, and doubling the transverse resolution shrinks the gap at the

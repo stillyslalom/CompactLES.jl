@@ -2385,7 +2385,7 @@ the peak weakens from 1.000 to 0.950 under refinement
 ```
 
 At the moment of failure the regularization is suppressed by the evacuation itself. Since
-β\* is proportional to density by construction (`src/artificial.jl`), it falls with the
+β\* is proportional to density by construction (`src/physics/artificial.jl`), it falls with the
 symmetry cell's density over the last rows of the `:d8` column above, and the profile at
 the failing step shows the evacuated origin with its velocity reversed:
 
@@ -3231,7 +3231,7 @@ rows takes the filter passes' share of the tiled level's mass drift down to the 
 remains of the drift under `:closure` enters through the right-hand side at the closure-row
 faces. The rows are the default (package commits `be418e3`, `5853b90` and `b4388f9`), the test
 toggle `CONSERVATIVE_INTERFACE_FILTER` off restoring the identity row for the off columns below,
-and `_conservative_filter_rows` in src/kernels.jl describes them: the two
+and `_conservative_filter_rows` in src/core/kernels.jl describes them: the two
 faces beside the shared node take the explicit value g/σ of the filter's face flux, g the face
 stencil of the residual B − A and σ the left-hand side's row sum, so that a patch's corrections
 telescope to the same face value on both sides. A coarse-fine end keeps the identity row, its node
@@ -6430,7 +6430,7 @@ The transcript of the four commands is `bench/archive/results/nscbcinflow.txt`.
 Every imposed amplitude of `NSCBCInflowBC` carries `−beta_t·𝒯`, the
 weighted transverse contribution of its characteristic, except the transverse
 pressure gradient ∇_t p/ρ in the transverse-velocity amplitudes, which takes
-min(`beta_t`, M) (the derivation is in `src/nscbc.jl`); `NSCBCOutflowBC` carries
+min(`beta_t`, M) (the derivation is in `src/physics/nscbc.jl`); `NSCBCOutflowBC` carries
 the same weight on its one incoming wave. The instrument measures both faces on a
 two-dimensional stream, artificial properties off and the default filter every
 step, against the same run on a domain extended two units past the face under
@@ -6757,7 +6757,7 @@ the last doubling is N = 128 to 256
 
 **The diagnostics' edge correction.** `volume_integral`, `domain_volume`, the conserved
 budget and its ledger, and the positivity floor's tally take the same correction in a form
-that reads only the metric (the quadrature note in `src/diagnostics.jl`). Their rule is the
+that reads only the metric (the quadrature note in `src/solver/diagnostics.jl`). Their rule is the
 trapezoid rule on f = J q in ξ, the midpoint rule along a folded dimension, whose
 Euler–Maclaurin edge terms are −(h²/12) ∂ₙf and +(h²/24) ∂ₙf with ∂ₙf = q ∂ₙJ + J ∂ₙq;
 the edge node's weight removes q ∂ₙJ, with ∂ₙJ from the node and its two inward neighbours.
@@ -11089,7 +11089,7 @@ julia --project=. -t 1 bench/archive/stiffdiffusion.jl parts=walls
 `L = G K D_s` on a closed line with nodes on the walls. The rows close each end with
 one-sided explicit rows on K points (D_s at the first midpoint, G at the first two nodes with
 the wall flux as data, the interpolation at sixth order); the mirror is the node-centred wall
-of `src/staggered.jl`, the periodic operator on the doubled line folded back. Errors are max-norm
+of `src/core/staggered.jl`, the periodic operator on the doubled line folded back. Errors are max-norm
 truncation errors; `asym` is ‖W L − (W L)ᵀ‖/‖W L‖ with trapezoidal node weights W, `cons` the
 defect of Σ W L T against the wall-flux difference, and the last column the largest real part
 of an eigenvalue of the zero-flux operator. The rows run on a smooth field and coefficient;
@@ -11299,7 +11299,7 @@ julia --project=. -t 16 bench/archive/implicitstage.jl part=manufactured
 julia --project=. -t 16 bench/archive/implicitstage.jl part=preconditioner
 ```
 
-`(I − γΔt L) T = r` by `solve_stage!` of `src/implicit.jl` to rtol = 1e-10 in the L2 norm of
+`(I − γΔt L) T = r` by `solve_stage!` of `src/solver/implicit.jl` to rtol = 1e-10 in the L2 norm of
 the residual, with a smooth variable κ (κ_max/κ_min ≈ 3) and the manufactured T as r. The
 curved outer wall of the axis and origin grids lies at r = 1.5, where T = e^(−16 r²) is
 negligible. Iterations of conjugate gradients (CG) or GMRES, each one V-cycle, at three
@@ -11369,7 +11369,7 @@ The pairing of the staggered operator with `L₂` is flat everywhere, the ball i
 growth on the ball is the cycle's. Near the origin both angular couplings dominate the radial
 one, and line relaxation does not smooth an error that varies slowly in both angles and
 alternates in r; plane relaxation would. Three alternatives to the cycle, measured by
-editing `src/implicit.jl`, each take more iterations than the cycle kept. Coarsening the
+editing `src/solver/implicit.jl`, each take more iterations than the cycle kept. Coarsening the
 angular dimensions with the others leaves the ball unchanged, and a W-cycle on the halved
 operator takes no fewer iterations than the V-cycle.
 
@@ -11392,7 +11392,7 @@ julia --project=. -t 1 bench/archive/imexconduction.jl part=cfl
 ```
 
 `ARK4(3)6L[2]SA` with the molecular conduction implicit (`ImplicitConduction`,
-`src/imex.jl`), one patch, one rank, workstation. A Gaussian pulse diffuses on a periodic
+`src/solver/imex.jl`), one patch, one rank, workstation. A Gaussian pulse diffuses on a periodic
 line in a gas chosen so that the flow the pulse drives is negligible; the error is the
 maximum over the amplitude against the image sum of the heat kernel. R is the step over the
 forward-Euler limit h²/2α. Fixed steps, `step_rule = :none`:
@@ -12467,7 +12467,7 @@ mpiexec -n 8 julia --project=. -t 1 bench/archive/incompressible_tgv.jl 64 10.0
 
 `convection=divergence` on either script gives the divergence-form rows.
 
-`src/incompressible.jl` under its defaults: the skew-symmetric convective term, the pressure
+`src/solver/incompressible.jl` under its defaults: the skew-symmetric convective term, the pressure
 solve to rtol = 1e-12, and the projection that also removes the state's divergence over one
 step. The design is [INCOMPRESSIBLE.md](INCOMPRESSIBLE.md).
 

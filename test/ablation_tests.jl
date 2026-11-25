@@ -1,4 +1,4 @@
-# The stage-0 x-ray ablation drive (src/ablation.jl): its closure, its angular
+# The stage-0 x-ray ablation drive (src/physics/ablation.jl): its closure, its angular
 # factor, and the exact radial integrals of its force and mass sink.
 #
 # Standalone: julia --project=. test/ablation_tests.jl
@@ -130,7 +130,7 @@ using Test
     @test_throws ArgumentError CompactLES.add_source!(d1, sb, similar(Qb), Qb, 0.0)
 end
 
-# The binned form (src/ablation_bins.jl): the same drive on r–z and 3-D Cartesian
+# The binned form (src/physics/ablation_bins.jl): the same drive on r–z and 3-D Cartesian
 # grids, the front and the layer normalization summed over angular bins.
 @testset "ablation drive, binned geometry" begin
     ts = [0.0, 1.0, 2.0, 8.0, 9.0]

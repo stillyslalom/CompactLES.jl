@@ -14,7 +14,7 @@
 # Do not pass a bare `Vector{<:AbstractArray}` or `Matrix{<:AbstractArray}`
 # kernel argument to a device launch: it does not raise an error, it hangs
 # in kernel-argument adaptation (measured on AMDGPU). The supported routes are
-# the FieldVector / FieldMatrix wrappers (src/pointwise.jl), zero-cost on the
+# the FieldVector / FieldMatrix wrappers (src/core/pointwise.jl), zero-cost on the
 # host and adapted to isbits tuples at launch, and tuples of arrays, which
 # adapt element by element. The section below runs the full flux-assembly
 # body with its collections as tuples, the form the package launches it with,

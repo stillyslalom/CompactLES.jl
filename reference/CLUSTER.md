@@ -253,7 +253,7 @@ julia --project=. probes/clusterlaunch.jl 256 nodes=36 cores_per_node=112
 
 **Threaded BLAS costs a factor of ninety and buys nothing.** The only BLAS this
 solver calls is the reduced interface stage of the compact solve along a
-periodic direction held by one rank (`_reduced_solve!` in `src/tridiag.jl`): a
+periodic direction held by one rank (`_reduced_solve!` in `src/core/tridiag.jl`): a
 2q x 2q system with one right-hand side per line, solved once per dimension per
 field per Runge-Kutta stage. A direction split over ranks takes a band solve
 that calls no BLAS. OpenBLAS forks its thread pool for each of those and waits on
@@ -350,7 +350,7 @@ the development workstation on the two-species tube of
   | pinned | 21.7 ms | 18.6 ms | 12.8 and 13.2 s |
 
   The comparison across
-  thread counts in the `@threaded` note of `src/threading.jl` and the `-t 16`
+  thread counts in the `@threaded` note of `src/core/threading.jl` and the `-t 16`
   guidance elsewhere were taken unpinned, so their spread includes this.
 - *Compilation inside the timed wall.* The deck's callback is a closure, so
   `run!` is compiled afresh inside the wall the script prints, 3.2 s at `-t 8`.

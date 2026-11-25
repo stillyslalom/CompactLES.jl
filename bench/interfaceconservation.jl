@@ -39,7 +39,7 @@
 # uniform one included, which carries the molecular flux through the ghost
 # fluxes under `iflux=ghost`.
 # `ledger=true` attributes each run's drift to the mechanism that made it
-# (the private budget ledger of src/ledger.jl): one row per mechanism,
+# (the private budget ledger of src/solver/ledger.jl): one row per mechanism,
 # summed over levels, on the drift's scales, at the sample of largest drift
 # and at the end, the telescoping residual, the unattributed
 # writes, the right-hand side against its stage-integrated form, and the

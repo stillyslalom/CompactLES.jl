@@ -36,7 +36,7 @@ One solver runs on four axes of configuration, combinable except where
 - **Same-level patches**: the domain tiles into conforming slab patches
   along one dimension, the rank set partitioned over them, coupled by ghost
   exchange, interface closure rows, and shared-plane averaging
-  (`src/patches.jl`).
+  (`src/amr/patches.jl`).
 - **Nested refinement**: a chain of levels, each covering a region of its
   parent at ratio 3 with one patch or with the tiles of a global lattice,
   at a global timestep or Berger–Oliger subcycled recursively; the
@@ -66,7 +66,7 @@ One solver runs on four axes of configuration, combinable except where
   rebuilds the level on whatever rank count it is given, continuing bit
   for bit on the writing one; field output is one piece per patch under a
   multiblock index with the covered coarse nodes blanked
-  (`src/io_levels.jl`, `src/io.jl`).
+  (`src/io/io_levels.jl`, `src/io/io.jl`).
 - **Storage backend**: `CPUBackend` (`Array`s, `@threaded` loops) or
   `DeviceBackend(ka)` wrapping any KernelAbstractions backend. A
   device-resident solver (decomposed, refined, regridding, Float64 or
@@ -75,8 +75,8 @@ One solver runs on four axes of configuration, combinable except where
   level rather than once per tile.
 
 The pointwise physics is written once as per-point bodies launched through
-`pointwise!` (`src/pointwise.jl`); the compact line solves run through host
-plans or their device mirrors (`src/lines_device.jl`) behind one
+`pointwise!` (`src/core/pointwise.jl`); the compact line solves run through host
+plans or their device mirrors (`src/core/lines_device.jl`) behind one
 `apply_along!` entry point. There is no second code path for the device
 beyond the launchers.
 
@@ -176,7 +176,7 @@ numbering.
 
 ## Transfer operators
 
-`src/transfer.jl`; measurements in `bench/archive/amr_transfer.jl`, guarded by
+`src/amr/transfer.jl`; measurements in `bench/archive/amr_transfer.jl`, guarded by
 serial testsets and a multi-rank section.
 
 **Source.** Pyranda's
@@ -270,7 +270,7 @@ outside these smooth budgets: Noh's shock leaving a tile lost mass at the
 crossing, planar or on the axis, far above the drift of the uniform runs at
 either spacing.
 
-**The conservative coupling** (`src/reflux.jl`). The composite quadrature is
+**The conservative coupling** (`src/amr/reflux.jl`). The composite quadrature is
 the one the coupling conserves: a parent node takes its whole cell unless a
 child covers all of it, a child's nodes count from the third in from a
 parent-fed face, so the cells meet at the half node beyond the parent's face
@@ -301,7 +301,7 @@ It runs on host storage and not under the positivity limiter.
 
 ## Patches and same-level interfaces
 
-`src/patches.jl`. A `Patch` carries a block's place in the global grid
+`src/amr/patches.jl`. A `Patch` carries a block's place in the global grid
 (`region`), its communicator and `Decomp`, its operator plans and folds, and
 every persistent field array, typed `A <: AbstractArray{T,3}` by the storage
 backend; the scratch of one right-hand-side evaluation sits on an
@@ -332,7 +332,7 @@ through the face with the gradient plans' interface rows, its inviscid part
 from the exchanged ghost state; the ghost values of the rest move in a second
 phase after every patch of the level has evaluated its right-hand side
 (`_level_ghost_fluxes!`), so no cross-patch communication sits inside one
-patch's `compute_rhs!` (`src/rhs.jl`, "The flux divergence through interface
+patch's `compute_rhs!` (`src/solver/rhs.jl`, "The flux divergence through interface
 ends"). `:closure` keeps the scheme's own one-sided closures
 (`Patch.div_plans`) for the whole flux. A banded scheme takes `q` such rows
 per end
@@ -358,7 +358,7 @@ identical step counts once a patch itself decomposes
 The pentadiagonal C10 (`lele_d1_10`) closes a patch interface with two
 rows per end, one per left-hand-side band that would couple a ghost
 unknown (`interface_closures(::BandedCompactScheme)`,
-`src/kernels_banded.jl`). Each is a compact row whose left-hand side
+`src/core/kernels_banded.jl`). Each is a compact row whose left-hand side
 couples interior unknowns only, Taylor-matched at construction in exact
 rationals to the interior formal order, on a right-hand side centered on
 its own node. Row 1 reads four ghost layers, the default halo.
@@ -488,7 +488,7 @@ every sensor
 ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
 
 **Distribution of the coupling.** Data moves point to point and work
-divides over a tile's own ranks (`LevelCoupling`, `src/levels_coupling.jl`). A
+divides over a tile's own ranks (`LevelCoupling`, `src/amr/levels_coupling.jl`). A
 tile's buffered box goes from the parent ranks holding its nodes to the
 tile's owners, each receiving the components it interpolates, and the
 coincident samples of `:inject` restriction go from the tile's owners to
@@ -920,7 +920,7 @@ converging shock that put μ\* and β\* up to half their peak off within three
 nodes of the face and left a checkerboard along the lattice. Exact
 coefficients need the strain magnitude six nodes into the neighbor, past the
 halo of four, so a level with a shared face computes them over the whole level
-before its right-hand sides (`_level_artificial!`, `src/level_sensors.jl`):
+before its right-hand sides (`_level_artificial!`, `src/amr/level_sensors.jl`):
 gradients and the sensed fields per tile into `Patch.sensed_fields`, an
 exchange of those over the level's records, the detectors reading the
 ghosts, then an exchange of every sensor before each directional smoothing
@@ -937,7 +937,7 @@ no face, keeps the per-tile path.
 **Shared RHS scratch.** A rank advances its tiles in sequence and nothing
 in the right-hand side's scratch outlives the evaluation that filled it, so
 the gradients, the sensor fields and their scratch, and the assembled fluxes
-live on an `RHSWorkspace` (`src/patches.jl`) shared by every patch of equal
+live on an `RHSWorkspace` (`src/amr/patches.jl`) shared by every patch of equal
 padded extent; the conserved state, the artificial coefficients, the
 primitives and the geometry remain per tile, each for a reason recorded on
 that type (`mu_art`/`beta_art`/`kappa_art`/`D_art` survive into the next
@@ -973,7 +973,7 @@ box, which is the implosion argument for tiles
 `regrid_interval = K` retags the parent level every K steps at the head of
 the step loop. The tag is a union of criteria, each a per-point body over
 the parent level's state run through `pointwise!` on the host
-(`_tag_sweep!`, `src/regrid_tagging.jl`), writing into a host scratch on the
+(`_tag_sweep!`, `src/amr/regrid_tagging.jl`), writing into a host scratch on the
 `RegridSpec`:
 
 - the relative undivided fourth difference of the mixture density,
@@ -1076,7 +1076,7 @@ step count, and the tiled regrid reproduces the Sod gate
 `max_levels` fixes the depth of a tiled, regridded hierarchy, the root
 included; the constructor builds every level, those `refine` does not give
 with no tiles, so the solver type and the level vector never change
-(`_regrid_hierarchy!`, `src/regrid_swap.jl`). Each check first restricts the whole
+(`_regrid_hierarchy!`, `src/amr/regrid_swap.jl`). Each check first restricts the whole
 hierarchy, finest first, which is the last restriction of every tile about
 to leave, taken while every old communicator is live. The levels are then
 regridded top-down: level ℓ is tagged on level ℓ − 1 after that level has
@@ -1565,7 +1565,7 @@ the level owned by one.
 
 A checkpoint of a refined run carries, beside the root's state, a record of
 the hierarchy and every tile's state, and a restart rebuilds the level from
-the record on whatever rank count it is given (`src/io_levels.jl`).
+the record on whatever rank count it is given (`src/io/io_levels.jl`).
 
 ### What the checkpoint carries
 
@@ -1635,7 +1635,7 @@ six-tile initial region, continues to the round-off tier
 
 ### Phase change
 
-`setup(solver, Q; bcs, sources, transport, numerics)` (`src/phases.jl`)
+`setup(solver, Q; bcs, sources, transport, numerics)` (`src/solver/phases.jl`)
 continues a run under other conditions or numerics: it builds the next
 phase's solver through `setup(problem, numerics)` from the `Problem` and
 `Numerics` the first solver recorded, then writes this rank's per-rank
@@ -1736,7 +1736,7 @@ the device and the shell writes from it directly. Under `interface_flux =
 chain's fine box and the gradient ring, which the chain fills beside the
 shell ring and the coarse-fine ghost fluxes read in place, on a tile whose
 coarse-fine faces read it (the artificial properties off,
-`_reads_gradient_ring` in `src/rhs.jl`); only a decomposed tile's
+`_reads_gradient_ring` in `src/solver/rhs.jl`); only a decomposed tile's
 Allgatherv stages the rings through the host.
 
 ### Communication
@@ -1772,8 +1772,8 @@ batches its launches across the tiles through stacked storage.
 **Stacked storage.** On a device backend a tiled level's tiles of equal
 padded extent share one allocation per field, the tiles' padded blocks
 laid along the third array dimension at a fixed stride, the padded extent
-of one tile (`StackedArray`, `src/pointwise.jl`; `TileStack` on the
-`Level`, `src/levels_coupling.jl`; the construction in `src/construction.jl`). A spanning
+of one tile (`StackedArray`, `src/core/pointwise.jl`; `TileStack` on the
+`Level`, `src/amr/levels_coupling.jl`; the construction in `src/solver/construction.jl`). A spanning
 `Patch` holds the stacked arrays, the first tile's decomposition and
 communicator, a stacked `RHSWorkspace`, and batched device plans; each
 tile's `Patch` holds plain views of the same arrays, workspace included,

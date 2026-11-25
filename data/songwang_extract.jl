@@ -17,7 +17,7 @@
 #
 # This script reads that dump, fits log(D12) at x1 = 0.50 with a polynomial
 # in log(T / 300 K) of the given degree, and prints the SONG_WANG_2016 rows
-# of src/neutral_diffusion_data.jl together with each pair's largest node
+# of src/physics/neutral_diffusion_data.jl together with each pair's largest node
 # residual and its largest departure between the three compositions. It
 # vendors the fit and its diagnostics, not the tables. The independently
 # implemented Xpdf/layout audit in songwang_verify.jl checks the publisher

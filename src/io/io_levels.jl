@@ -1,6 +1,6 @@
 # Checkpointing the refinement hierarchy: the record a checkpoint carries
 # beyond the root's state, and the restart that rebuilds the level-1 tile set
-# from it. The two checkpoint formats (the per-rank files of src/io.jl and the
+# from it. The two checkpoint formats (the per-rank files of src/io/io.jl and the
 # shared HDF5 file of the extension) store the record differently and share
 # everything else here.
 #

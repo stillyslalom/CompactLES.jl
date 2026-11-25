@@ -39,7 +39,7 @@ diffusion requires separately supplied binary diffusivities. The original
 
 The binary diffusion correlations of Marrero and Mason, J. Phys. Chem. Ref.
 Data 1, 3--118 (1972), Tables 12 and 13, are not a vendored file: they are
-transcribed as source constants in `src/neutral_diffusion_data.jl`, the
+transcribed as source constants in `src/physics/neutral_diffusion_data.jl`, the
 printed digits converted to SI on construction, with each pair's stated range
 and reliability group, from the NIST reprint at <https://www.nist.gov/system/files/documents/srd/jpcrd1.pdf>.
 The transcription was made twice independently and diffed. The paper is a

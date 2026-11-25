@@ -509,7 +509,7 @@ rank of the parent level's subset, since the parent's side of the coupling
 exchange (`coupling`, a [`LevelCoupling`](@ref)) reads them there, and are
 indexed by tile. `owners` is the
 authority across regrids: a surviving tile keeps its range there until a
-rebalance moves it (`_place_tiles`, `src/levels_types.jl`). A regridded tiled
+rebalance moves it (`_place_tiles`, `src/amr/levels_types.jl`). A regridded tiled
 level may hold no tiles; `owners` and `transfers` are then empty and every
 rank carries an absent `LevelComm`.
 `patches[i]` is tile `tiles[i]`; `transfers[t].fine_index` is the

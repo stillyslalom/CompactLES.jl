@@ -28,7 +28,7 @@
 # The one argument is the grid you actually intend to run, as N or NX,NY,NZ
 # (default 64, i.e. 64^3). It decides the decomposition, so the scheme-floor and
 # points-per-rank checks below describe a different run if it is left at the
-# default. Parsed by `script_args` (src/scriptargs.jl).
+# default. Parsed by `script_args` (src/core/scriptargs.jl).
 
 const t_start = time()
 

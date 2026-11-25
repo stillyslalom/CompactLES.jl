@@ -663,7 +663,7 @@ const OTHER = length(PHASES)
 # source: the one `_level_rhs!` call there with both flags false. A stack
 # whose innermost `_advance_level!` frame stands on it is that evaluation.
 function endpoint_lines()
-    file = joinpath(dirname(pathof(CompactLES)), "timestep_rk.jl")
+    file = joinpath(dirname(pathof(CompactLES)), "solver", "timestep_rk.jl")
     isfile(file) || return Int[]
     lines = readlines(file)
     start = findfirst(l -> occursin("function _advance_level!(", l), lines)
@@ -836,7 +836,7 @@ function print_profile(spec, config, prof, wall, steps, points)
     isempty(prof.rhs_lines) && return
     @printf("  right-hand-side samples by line of _advance_level! (endpoint at %s):\n",
             join(prof.endpoint, ", "))
-    file = joinpath(dirname(pathof(CompactLES)), "timestep_rk.jl")
+    file = joinpath(dirname(pathof(CompactLES)), "solver", "timestep_rk.jl")
     source = isfile(file) ? readlines(file) : String[]
     for (line, c) in first(sort(collect(prof.rhs_lines), by=x -> -x[2]), 6)
         text = 1 <= line <= length(source) ? strip(source[line]) : ""

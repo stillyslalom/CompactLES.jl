@@ -144,7 +144,7 @@ unconfirmed; no LLVM 21 build was at hand to narrow the range.
 
 ## How it reached the package
 
-`_delta4_signed_point!` (`src/artificial.jl`) chose the mirror sign of the
+`_delta4_signed_point!` (`src/physics/artificial.jl`) chose the mirror sign of the
 paired-fold detector as `(sd == 0 || v <= half) ? sgn_a : sgn_b`. On the
 GPU, under Julia 1.11, every thread took `sgn_b`, so the resolved-θ axis
 sensed the lower half of θ with the wrong sign. The KernelAbstractions CPU

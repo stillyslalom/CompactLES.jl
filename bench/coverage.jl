@@ -1,12 +1,13 @@
-# Parse the .cov files julia --code-coverage=user leaves next to src/*.jl and
-# report per-file line coverage plus the uncovered lines themselves.
+# Parse the .cov files julia --code-coverage=user leaves next to the files
+# under src/ and report per-file line coverage plus the uncovered lines
+# themselves.
 #
 # This script only reads what a coverage-enabled run produced. Every run drops
 # its own .cov file per source file, named with the pid; they are merged here
 # by summing hit counts, so a line counts as covered if ANY run hit it. Clear
 # the old ones first or a stale run inflates the result:
 #
-#   rm -f src/*.cov test/*.cov
+#   find src test -name "*.cov" -delete
 #   julia --project=. --code-coverage=user test/runtests.jl
 #   julia --project=. --code-coverage=user test/convergence.jl
 #   mpiexec -n 2 julia --project=. --code-coverage=user test/mpi_tests.jl
@@ -29,12 +30,13 @@ const SRC = joinpath(@__DIR__, "..", "src")
 
 "Merge every <file>.jl.*.cov into a hit-count vector (nothing = not executable)."
 function merged(file::String)
+    dir = joinpath(SRC, dirname(file))
     covs = filter(f -> startswith(f, basename(file) * ".") && endswith(f, ".cov"),
-                  readdir(SRC))
+                  readdir(dir))
     isempty(covs) && return nothing
     acc = Union{Nothing,Int}[]
     for c in covs
-        for (i, ln) in enumerate(eachline(joinpath(SRC, c)))
+        for (i, ln) in enumerate(eachline(joinpath(dir, c)))
             tok = strip(first(ln, 9))
             v = tok == "-" ? nothing : parse(Int, tok)
             if i > length(acc)
@@ -50,12 +52,14 @@ function merged(file::String)
 end
 
 function report()
-srcs = sort(filter(f -> endswith(f, ".jl"), readdir(SRC)))
+# Paths relative to src/, over its subdirectories.
+srcs = sort([relpath(joinpath(dir, f), SRC) for (dir, _, files) in walkdir(SRC)
+             for f in files if endswith(f, ".jl")])
 total_cov = 0; total_exe = 0
 gaps = Dict{String,Vector{Int}}()
 
-@printf("%-24s %8s %8s %7s\n", "file", "covered", "total", "pct")
-println("-"^52)
+@printf("%-34s %8s %8s %7s\n", "file", "covered", "total", "pct")
+println("-"^62)
 for f in srcs
     acc = merged(f)
     acc === nothing && continue
@@ -64,12 +68,12 @@ for f in srcs
     exe == 0 && continue
     total_cov += cov; total_exe += exe
     pct = 100cov / exe
-    @printf("%-24s %8d %8d %6.1f%%\n", f, cov, exe, pct)
+    @printf("%-34s %8d %8d %6.1f%%\n", f, cov, exe, pct)
     miss = [i for (i, v) in enumerate(acc) if v !== nothing && v == 0]
     isempty(miss) || (gaps[f] = miss)
 end
-println("-"^52)
-@printf("%-24s %8d %8d %6.1f%%\n", "TOTAL", total_cov, total_exe,
+println("-"^62)
+@printf("%-34s %8d %8d %6.1f%%\n", "TOTAL", total_cov, total_exe,
         100total_cov / max(total_exe, 1))
 
 println("\n\n=== uncovered lines ===")

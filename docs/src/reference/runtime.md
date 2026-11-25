@@ -66,7 +66,7 @@ CompactLES.check_step
 
 Triggers fire only between completed steps and produce the same verdict on every
 rank. These requirements preserve collective ordering; the implementation note
-at the top of `src/callbacks.jl` gives the details. A phase change,
+at the top of `src/solver/callbacks.jl` gives the details. A phase change,
 [`setup`](@ref)`(solver, Q; bcs)`, rests on the same agreement: a
 [`Callback`](@ref) whose effect returns `true` ends the run on the same step
 on every rank, and the next phase's conditions start there everywhere.

@@ -75,7 +75,7 @@ KernelAbstractions 0.9.42 wraps the CPU-backend body of a kernel in
 `Expr(:aliasscope)` ... `Expr(:popaliasscope)` when, and only when, the
 kernel declares a `@Const` argument (`src/macros.jl`; the scope was dropped
 for the other kernels in KernelAbstractions PR #653 after a miscompile of the
-same family). The ten kernels of `src/lines_device.jl` declared their
+same family). The ten kernels of `src/core/lines_device.jl` declared their
 coefficient arrays and input fields `@Const`, and their bodies are
 `@inbounds`. The Thomas sweep (`_dev_thomas_kernel!`) is the recurrence above
 with `B[l, i]` and `lmul[i]`; every element of every line came out wrong.
@@ -93,7 +93,7 @@ specific to the CPU emulation the test suite relies on for bitwise checks.
 
 ## What was done
 
-`@Const` was removed from every kernel in `src/lines_device.jl`, so
+`@Const` was removed from every kernel in `src/core/lines_device.jl`, so
 KernelAbstractions emits no alias scope for them on the CPU backend. With
 that change the `device line solves` and `staged device exchange` phases pass
 at np = 2 under 1.13.0 (17/17), and the isolated Thomas kernel reproduces

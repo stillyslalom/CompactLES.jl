@@ -1,6 +1,6 @@
 module CompactLESHDF5Ext
 
-# HDF5 implementation of the shared-file writes declared in src/hdf5.jl. Read
+# HDF5 implementation of the shared-file writes declared in src/io/hdf5.jl. Read
 # the note at the top of that file first: it explains why this is an extension,
 # and why there are two write backends.
 
@@ -19,7 +19,7 @@ using HDF5
 has_parallel() = HDF5.has_parallel()
 
 # The checkpoint format, written under `meta/format`. The reader accepts only
-# its own format; the reasoning is at the top of `src/io.jl`.
+# its own format; the reasoning is at the top of `src/io/io.jl`.
 const CKPT_FORMAT = 7
 
 # --- Opening a shared file --------------------------------------------------
@@ -76,7 +76,7 @@ const CKPT_FORMAT = 7
 # filesystem, and `BLOCK_TRANSFER[] = :independent` is the switch back.
 
 # The relay token's tag. Nothing else uses 0 on these communicators; the halo
-# families start at 10 (see the tag note in src/halo.jl).
+# families start at 10 (see the tag note in src/core/halo.jl).
 const TOKEN_TAG = 0
 
 function with_shared_file(body, path::AbstractString, mode::AbstractString,
@@ -223,7 +223,7 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
 # different state. The header records everything the interpretation depends on, and
 # `load_checkpoint_hdf5!` checks all of it.
 #
-# The reasoning for each field is at the top of `src/io.jl`, whose per-rank
+# The reasoning for each field is at the top of `src/io/io.jl`, whose per-rank
 # checkpoint records the same set for the same reasons, and `type_name`,
 # `global_axis` and `axis_matches` are taken from there, not restated here, so
 # that the two paths cannot drift apart.
@@ -298,7 +298,7 @@ end
 
 # The header, describing the root patch `root`'s state (the solver itself
 # when it holds one patch) and the mutable run state; the reasoning per field
-# is at the top of src/io.jl.
+# is at the top of src/io/io.jl.
 function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
     decomp = root.decomp
     g = create_group(file, "meta")
@@ -314,7 +314,7 @@ function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
     write_strings!(g, "metric", [type_name(solver.metric)], rank)
     write_strings!(g, "eos", [type_name(solver.eos)], rank)
     write_strings!(g, "eltype", [string(eltype(Q))], rank)
-    # The mutable run state, for the reasons src/io.jl gives: a retry
+    # The mutable run state, for the reasons src/io/io.jl gives: a retry
     # lowers `cfl`, and the growth cap and `filter_weight` read `dt_prev`
     # and `rate_prev`.
     write_meta!(g, "cfl", Float64(solver.cfl), rank)
@@ -353,7 +353,7 @@ _read_configuration(file) =
 
 # One patch's state under group `name`: `Q` over the patch's node space
 # `extent`, and the artificial coefficients beside it when they are
-# computed, for the reason src/io.jl gives (the next step is sized from
+# computed, for the reason src/io/io.jl gives (the next step is sized from
 # them). `ps === nothing` on a rank holding no block of the patch, which
 # reaches the (collective) creation and writes nothing.
 function _write_state!(file, name::AbstractString, ps, Q, extent, comm::MPI.Comm,

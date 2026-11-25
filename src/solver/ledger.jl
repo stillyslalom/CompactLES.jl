@@ -6,7 +6,7 @@
 # one half at a node-centered edge and at a patch's interface end, the metric
 # Jacobian with its edge factor (the quadrature note in `diagnostics.jl`), and
 # on a composite solver the quadrature the coarse-fine coupling conserves
-# (src/reflux.jl).
+# (src/amr/reflux.jl).
 # Every driver that writes the state brackets the write with two hooks:
 # `_ledger_open!` before it and `_ledger!(…, phase)` after it. A hook
 # recomputes the budget of the patches it names and adds the change since

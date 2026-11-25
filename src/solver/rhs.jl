@@ -323,7 +323,7 @@ pressure_subtract_along!(dQ, c::Int, solver::SolverLike, d::Int) =
 # uncovered nodes exchange through a coarse-fine face: with no flux
 # correction at the face, a Sod shock crossing a level drifted five to twenty
 # times as far with the mask, whatever the step and with the dropped source
-# restored at the masked nodes. The conservative coupling (src/reflux.jl)
+# restored at the masked nodes. The conservative coupling (src/amr/reflux.jl)
 # corrects the junction fluxes where the parent's uncovered nodes hold an
 # unresolved feature, and with it the masked crossings conserve mass to 1e-5.
 

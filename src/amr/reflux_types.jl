@@ -7,7 +7,7 @@
 
 One side of a coarse-fine junction as one patch holds it: the parent's lines
 through the face node beside a child tile, or the child's lines through its
-first counted nodes (src/reflux.jl). `nodes` are the padded indices along `d`
+first counted nodes (src/amr/reflux.jl). `nodes` are the padded indices along `d`
 whose increments enter the junction's face flux, with the coefficients of the
 derivative (`dcoef`) and of the filter (`fcoef`); `dr` and `fr` are the
 padded index `j` of the anchor face `j + ½` whose explicit stencil this rank

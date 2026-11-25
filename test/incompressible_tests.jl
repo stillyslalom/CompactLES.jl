@@ -1,4 +1,4 @@
-# The incompressible solver (src/incompressible.jl) on the two-dimensional
+# The incompressible solver (src/solver/incompressible.jl) on the two-dimensional
 # Taylor–Green vortex, an exact solution whose convective term is a pure
 # gradient: the velocity decays as exp(−2νt) and the kinematic pressure is
 # (cos 2x + cos 2y) exp(−4νt)/4. Periodic on [0, 2π)², and between slip walls

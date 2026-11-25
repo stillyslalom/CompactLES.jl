@@ -225,7 +225,7 @@ one residual and are not updated in sequence, as H2 requires.
 
 ## Stages
 
-1. **Staggered operator.** `src/staggered.jl`: the plans from nodes to
+1. **Staggered operator.** `src/core/staggered.jl`: the plans from nodes to
    midpoints and back and the midpoint interpolation of the coefficient,
    periodic, with the wall mirror and across the half-offset folds, on the
    distributed tridiagonal solve of `plan_direction`, and on the metrics and
@@ -235,7 +235,7 @@ one residual and are not updated in sequence, as H2 requires.
    adjoint and symmetry identities in the serial suite, the decomposed solve against the undivided one in the MPI suite,
    off-rank folds included, and an explicit conduction run against the
    wide form (`bench/archive/staggeredconduction.jl`).
-2. **Implicit solve on one patch.** `src/implicit.jl`: the matrix-free
+2. **Implicit solve on one patch.** `src/solver/implicit.jl`: the matrix-free
    stage operator on the volume-weighted system, `L₂` assembled on the patch
    metric, conjugate gradients (GMRES at the axis and poles) preconditioned
    by one multigrid V-cycle on `L₂`; host storage only, not reached from the

@@ -51,7 +51,7 @@
 # reduce once over `solver.comm`, so a rank holding no piece of a refined
 # level enters the same reduction and returns the same number. The
 # integrals take the quadrature the coarse-fine coupling conserves
-# (src/reflux.jl): a coarse node with its whole cell unless a child covers
+# (src/amr/reflux.jl): a coarse node with its whole cell unless a child covers
 # all of it (`Patch.covered`), a refined patch's nodes from the third in
 # from a face its parent feeds, and the correction Ω on the child's nodes
 # beside each such face. A plane average weights a coarse node by the
@@ -70,7 +70,7 @@ Quadrature weight of local interior index `i` along dimension `d`: 1 in the
 interior and on any folded (half-offset) edge, ½ on a node-centered physical
 edge, 1 on collapsed and periodic dimensions. The conserving integrals
 multiply an edge node's weight by the metric edge factor (see the quadrature
-note in `src/diagnostics.jl`).
+note in `src/solver/diagnostics.jl`).
 """
 @inline function quad_weight(solver::SolverLike, d::Int, i::Int)
     decomp = solver.decomp
@@ -223,7 +223,7 @@ end
 
 # On a composite solver the budget is the quantity the coarse-fine coupling
 # conserves: the cells of `volume_integral` and, under `junctions`, the
-# correction Ω beside each coarse-fine face (src/reflux.jl), which makes the
+# correction Ω beside each coarse-fine face (src/amr/reflux.jl), which makes the
 # rule's rate high-order there and is not exact for a linear field on its own.
 function _conserved_budget(solver::Solver, states::Vector{<:ConservedState};
                            junctions::Bool=true)
@@ -269,7 +269,7 @@ function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
 end
 
 # The composite budget's weight factor at an interior node, the conserved
-# quadrature of src/reflux.jl: none where a child covers the node's whole
+# quadrature of src/amr/reflux.jl: none where a child covers the node's whole
 # cell, the whole cell at a parent's face node however much of it a child
 # covers, and none at a refined patch's two nodes nearest a parent-fed face.
 @inline function _conserved_fraction(solver::SolverLike, m::UInt8, i::Int, j::Int,

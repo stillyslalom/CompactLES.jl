@@ -14,7 +14,7 @@
 #
 # The derived line multiplies the floor by `regions`, the approximate number of
 # threaded regions one `compute_rhs!` evaluation enters (~120 after the fused
-# scatters; the count is in the note at the top of `src/threading.jl`). That
+# scatters; the count is in the note at the top of `src/core/threading.jl`). That
 # product is the per-RHS overhead a threaded rank pays before threads help at
 # all, and is the quantity to weigh against the halo-exchange savings of a
 # coarser decomposition.

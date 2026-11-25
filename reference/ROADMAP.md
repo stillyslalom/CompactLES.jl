@@ -1090,7 +1090,7 @@ limiter.
 - [ ] **H4a — Add isotope-resolved H/D/T ion transport.**
   The coefficient foundation, a standalone Stanton–Murillo evaluator for fully
   ionized H/D/T interdiffusion with its regime diagnostics, is in
-  `src/ion_transport.jl` (commit `7c33651`) and does not enter the runtime
+  `src/physics/ion_transport.jl` (commit `7c33651`) and does not enter the runtime
   flux. Remaining ([the transport plan](TRANSPORT.md#staged-execution-and-gates)):
   the concentration, pressure, ion/electron temperature and electric-field
   driving terms with a defined ambipolar closure, the plasma cross-model
@@ -1448,7 +1448,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
 ## Incompressible flow
 
 The constant-density solver on one patch, decomposed over ranks on host
-storage, is the prototype `src/incompressible.jl`; the design, the stages
+storage, is the prototype `src/solver/incompressible.jl`; the design, the stages
 and the production configuration they lead to are in
 [INCOMPRESSIBLE.md](INCOMPRESSIBLE.md).
 

@@ -6,7 +6,7 @@
     LatticeCosts
 
 The cost model a regrid chooses each tiled level's lattice by
-(`_choose_lattice`, `src/regrid_lattice.jl`), and the timers of the run that feed it.
+(`_choose_lattice`, `src/amr/regrid_lattice.jl`), and the timers of the run that feed it.
 A tile of `V` fine nodes with interface ends along `g` dimensions costs
 `s (a V + b V g + k)` seconds per root step, where `s` is its level's steps
 per root step, `a` the cost per node, `b` the ghost-flux pass per node and

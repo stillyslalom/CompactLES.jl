@@ -2,7 +2,7 @@
 
 This document is the design of the incompressible solver, roadmap item I1,
 and of the stages that take it from the delivered prototype to the
-production configuration. The prototype is `src/incompressible.jl`; its
+production configuration. The prototype is `src/solver/incompressible.jl`; its
 measurements are in the appendix under
 [the incompressible prototype](CALIBRATION_APPENDIX.md#the-incompressible-prototype).
 
@@ -57,7 +57,7 @@ same operator with a coefficient.
 
 The kinematic pressure φ lives at the nodes and velocity component i at the
 midpoints along dimension i and the nodes along the others. The operators
-are those of `src/staggered.jl`: the compact derivatives `D_s` (nodes to
+are those of `src/core/staggered.jl`: the compact derivatives `D_s` (nodes to
 midpoints) and `G` (midpoints to nodes), α = 9/62, sixth order, and the
 explicit sixth-order interpolations between nodes and midpoints in both
 directions. The divergence is `Σ_i G_i u_i`, the gradient `D_s,i φ`, and
@@ -182,7 +182,7 @@ prototype covers its first part.
 ## Stages
 
 1. **Constant density on one patch, host storage, decomposed.**
-   `src/incompressible.jl`: the arrangement, the operators, the projection
+   `src/solver/incompressible.jl`: the arrangement, the operators, the projection
    and the projected low-storage step, the skew-symmetric and divergence
    forms, periodic and slip-wall dimensions, and the no-slip mirror at first
    order. Delivered with the Taylor–Green vortex at sixth order periodic and

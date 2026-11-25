@@ -14,7 +14,7 @@
 #   julia --project=. probes/clusterlaunch.jl 256 nodes=36 cores_per_node=112
 #
 # Positional grid, written as N or NX,NY,NZ, then `key=value` options — parsed by
-# `script_args` (src/scriptargs.jl), which explains why these are arguments and
+# `script_args` (src/core/scriptargs.jl), which explains why these are arguments and
 # not environment variables:
 #
 #   nodes            nodes available          (default 1)
@@ -50,7 +50,7 @@ const n_halo = 4
 
 # Minimum local extent per dimension, from the schemes themselves rather than a
 # remembered number. This mirrors the guard in `plan_direction`
-# (src/operators.jl, src/operators_banded.jl) — if that expression changes, this
+# (src/core/operators.jl, src/core/operators_banded.jl) — if that expression changes, this
 # is the other place that has to move.
 scheme_min(s) = max(2 * CL.nclosure(s) + 1, 2 * CL.halfwidth(s) + 1,
                     2 * (hasproperty(s, :q) ? s.q : 0) + 1)

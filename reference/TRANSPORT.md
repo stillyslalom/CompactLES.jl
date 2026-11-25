@@ -10,7 +10,7 @@ model assumptions, data coverage and transport verification.
 
 ## Present contract and its limit
 
-At each point and in each direction, `src/rhs.jl` assembles
+At each point and in each direction, `src/solver/rhs.jl` assembles
 
 ```
 J_k = rho * (-D_k * grad(Y_k) + Y_k * sum_j(D_j * grad(Y_j))).
@@ -314,7 +314,7 @@ inversion checks, not a qualified CD model.
    rescaling.  Keep fully ionized, classical-ion, unmagnetized and equilibrium-
    temperature assumptions explicit, and report degeneracy even inside the
    current `theta >= 10` software domain.  Delivered in
-   `src/ion_transport.jl` (commit `7c33651`), with the H-D, H-T and D-T
+   `src/physics/ion_transport.jl` (commit `7c33651`), with the H-D, H-T and D-T
    values checked against the authors' independent calculator.
 2. **H5a cold-to-warm material contract.** Select an openly usable multiphase
    DT EOS or construct a documented table from open data and published models. Its query

@@ -76,63 +76,68 @@ validation cases are discussed, and never a viscosity.
 
 ## Source map
 
+The files are grouped by directory: `core/` holds the decomposition, the line
+solves and the operators, `physics/` the models and boundary conditions,
+`amr/` the patches, levels and regridding, `solver/` the solver, its
+construction and time integration, and `io/` the output.
+
 | File | Responsibility |
 |------|----------------|
 | `src/CompactLES.jl`       | Module: include order and exports |
-| `src/instrumentation.jl`  | the process-global test, benchmark and profiling switches and counters, and `with_knob`, which sets them for the length of a block |
-| `src/threading.jl`        | `@threaded`: the per-region work threshold, and the task backend it was measured against |
-| `src/decomposition.jl`    | 3-D MPI Cartesian decomposition, sub-communicators, halo buffers |
-| `src/pointwise.jl`        | `pointwise!`: the shared launcher of every per-point body, over `@threaded` or KernelAbstractions |
-| `src/halo.jl`             | Sequential-dimension `Sendrecv!` halo exchange; batched multi-field exchange; axis parity fill |
-| `src/tridiag.jl`          | Thomas factorization + spike/reduced-interface distributed tridiagonal solve |
-| `src/banded.jl`           | Generalization of the distributed solve to half-bandwidth q (pentadiagonal and up) |
-| `src/lines_transposed.jl` | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
-| `src/kernels.jl`          | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
-| `src/kernels_banded.jl`   | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
-| `src/physics.jl`          | EOS abstraction, `IdealMixture`, `ConstantTransport`, `primitives!` |
-| `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database bundled in `data/` |
-| `src/transport.jl`        | CEA transport reader, mixture properties, binary diffusion model, and shared pointwise transport dispatch |
-| `src/transport_domain.jl` | Collective neutral-diffusion domain preflight and parent-level failure propagation support |
-| `src/ion_transport.jl`    | Standalone fully ionized isotope interdiffusion reference; the state/flux and cold-to-warm design is in [TRANSPORT.md](TRANSPORT.md) |
-| `src/equations.jl`        | `EquationSet`, conserved layout, names, and fold parity rules |
-| `src/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
-| `src/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
-| `src/operators_banded.jl` | `BandPlan`: the banded counterpart |
-| `src/staggered.jl`        | `StaggeredPlan`: the staggered compact derivatives between nodes and midpoints and the midpoint interpolation, with the wall mirror and the half-offset folds; `StaggeredPair`, their paired-fold form; `StaggeredDiffusion`, the implicit diffusion operator of [IMPLICIT.md](IMPLICIT.md) on the solver's metric |
-| `src/implicit.jl`         | `DiffusionStage`: the implicit stage `(I − γΔt L) T = r` on one patch, solved by conjugate gradients (GMRES at the axis and poles) preconditioned by a multigrid V-cycle on the second-order operator; `VariableLines`, its distributed tridiagonal lines with per-line coefficients |
-| `src/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
-| `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
-| `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the gradient form of the radial and polar pressure terms |
-| `src/folds.jl`            | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
-| `src/modes.jl`            | Azimuthal mode truncation near a cylindrical axis: the `mode_limit` table, the ring projection, the θ rate cap |
-| `src/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
-| `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
-| `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
-| `src/reflux_types.jl`     | `RefluxCapture`, a patch's side of a coarse–fine junction |
-| `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
-| `src/levels_types.jl`     | Nested level refinement: the design, level and tile ownership, the transfer records |
-| `src/levels_coupling.jl`  | The patch–parent coupling, the `Level` hierarchy, the tile lattice, levels on a boundary or a periodic seam |
-| `src/levels_transfer.jl`  | Prolongation, shell imposition, restriction, the Hermite box of a subcycled run |
-| `src/regrid_types.jl`     | `LatticeCosts` and `RegridSpec` |
-| `src/solver.jl`           | `Solver` container, property forwarding, index maps, state readers, `allocate_state` |
-| `src/construction.jl`     | `Solver` construction: validation, plans, root patch, refined levels and tiles |
-| `src/rhs.jl`              | Flux assembly, the conservative NS RHS |
-| `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
-| `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
-| `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
-| `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` / `BeforeWallLimit` triggers and their effects |
-| `src/timestep_rk.jl`      | RK45, the per-level phases, subcycling, CFL timestep, per-step filtering |
-| `src/runloop.jl`          | The `run!` loop, the priming of its first step, rollback, `mpi_main` |
-| `src/regrid_tagging.jl`   | The tag criteria and the box regrid |
-| `src/regrid_lattice.jl`   | The tile lattice of a regrid and its cost model |
-| `src/regrid_swap.jl`      | Tile carry and migration, the tiled regrid, the regrid of a deeper hierarchy |
-| `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
-| `src/ledger.jl`           | The budget ledger: composite conserved integrals attributed to the mechanism that changed them |
-| `src/reflux.jl`           | The conservative coarse–fine coupling: junction face fluxes, the conserved quadrature's correction, the gated correction |
-| `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
-| `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
-| `src/scriptargs.jl`       | `script_args`: `ARGS` parsing for the scripts in `bench/` and at the repo root |
-| `src/display.jl`          | Concise `show` methods for `Solver`, `Problem`, `Numerics`, and the `(solver, Q)` pair |
+| `src/core/instrumentation.jl`  | the process-global test, benchmark and profiling switches and counters, and `with_knob`, which sets them for the length of a block |
+| `src/core/threading.jl`        | `@threaded`: the per-region work threshold, and the task backend it was measured against |
+| `src/core/decomposition.jl`    | 3-D MPI Cartesian decomposition, sub-communicators, halo buffers |
+| `src/core/pointwise.jl`        | `pointwise!`: the shared launcher of every per-point body, over `@threaded` or KernelAbstractions |
+| `src/core/halo.jl`             | Sequential-dimension `Sendrecv!` halo exchange; batched multi-field exchange; axis parity fill |
+| `src/core/tridiag.jl`          | Thomas factorization + spike/reduced-interface distributed tridiagonal solve |
+| `src/core/banded.jl`           | Generalization of the distributed solve to half-bandwidth q (pentadiagonal and up) |
+| `src/core/lines_transposed.jl` | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
+| `src/core/kernels.jl`          | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
+| `src/core/kernels_banded.jl`   | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
+| `src/physics/physics.jl`          | EOS abstraction, `IdealMixture`, `ConstantTransport`, `primitives!` |
+| `src/physics/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database bundled in `data/` |
+| `src/physics/transport.jl`        | CEA transport reader, mixture properties, binary diffusion model, and shared pointwise transport dispatch |
+| `src/physics/transport_domain.jl` | Collective neutral-diffusion domain preflight and parent-level failure propagation support |
+| `src/physics/ion_transport.jl`    | Standalone fully ionized isotope interdiffusion reference; the state/flux and cold-to-warm design is in [TRANSPORT.md](TRANSPORT.md) |
+| `src/physics/equations.jl`        | `EquationSet`, conserved layout, names, and fold parity rules |
+| `src/physics/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
+| `src/core/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
+| `src/core/operators_banded.jl` | `BandPlan`: the banded counterpart |
+| `src/core/staggered.jl`        | `StaggeredPlan`: the staggered compact derivatives between nodes and midpoints and the midpoint interpolation, with the wall mirror and the half-offset folds; `StaggeredPair`, their paired-fold form; `StaggeredDiffusion`, the implicit diffusion operator of [IMPLICIT.md](IMPLICIT.md) on the solver's metric |
+| `src/solver/implicit.jl`         | `DiffusionStage`: the implicit stage `(I − γΔt L) T = r` on one patch, solved by conjugate gradients (GMRES at the axis and poles) preconditioned by a multigrid V-cycle on the second-order operator; `VariableLines`, its distributed tridiagonal lines with per-line coefficients |
+| `src/core/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
+| `src/amr/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
+| `src/core/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the gradient form of the radial and polar pressure terms |
+| `src/core/folds.jl`            | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
+| `src/core/modes.jl`            | Azimuthal mode truncation near a cylindrical axis: the `mode_limit` table, the ring projection, the θ rate cap |
+| `src/physics/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
+| `src/solver/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
+| `src/physics/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
+| `src/amr/reflux_types.jl`     | `RefluxCapture`, a patch's side of a coarse–fine junction |
+| `src/amr/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
+| `src/amr/levels_types.jl`     | Nested level refinement: the design, level and tile ownership, the transfer records |
+| `src/amr/levels_coupling.jl`  | The patch–parent coupling, the `Level` hierarchy, the tile lattice, levels on a boundary or a periodic seam |
+| `src/amr/levels_transfer.jl`  | Prolongation, shell imposition, restriction, the Hermite box of a subcycled run |
+| `src/amr/regrid_types.jl`     | `LatticeCosts` and `RegridSpec` |
+| `src/solver/solver.jl`           | `Solver` container, property forwarding, index maps, state readers, `allocate_state` |
+| `src/solver/construction.jl`     | `Solver` construction: validation, plans, root patch, refined levels and tiles |
+| `src/solver/rhs.jl`              | Flux assembly, the conservative NS RHS |
+| `src/physics/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
+| `src/io/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
+| `src/io/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
+| `src/solver/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` / `BeforeWallLimit` triggers and their effects |
+| `src/solver/timestep_rk.jl`      | RK45, the per-level phases, subcycling, CFL timestep, per-step filtering |
+| `src/solver/runloop.jl`          | The `run!` loop, the priming of its first step, rollback, `mpi_main` |
+| `src/amr/regrid_tagging.jl`   | The tag criteria and the box regrid |
+| `src/amr/regrid_lattice.jl`   | The tile lattice of a regrid and its cost model |
+| `src/amr/regrid_swap.jl`      | Tile carry and migration, the tiled regrid, the regrid of a deeper hierarchy |
+| `src/solver/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
+| `src/solver/ledger.jl`           | The budget ledger: composite conserved integrals attributed to the mechanism that changed them |
+| `src/amr/reflux.jl`           | The conservative coarse–fine coupling: junction face fluxes, the conserved quadrature's correction, the gated correction |
+| `src/io/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
+| `src/solver/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
+| `src/core/scriptargs.jl`       | `script_args`: `ARGS` parsing for the scripts in `bench/` and at the repo root |
+| `src/io/display.jl`          | Concise `show` methods for `Solver`, `Problem`, `Numerics`, and the `(solver, Q)` pair |
 
 The table follows the include order in `CompactLES.jl`, which is bottom-up:
 low-level solvers first, then operators, then physics, then the RHS and frontend
@@ -1764,14 +1769,14 @@ physical edge and at each patch's interface end (so a shared plane counts
 once between its two patches), one at a folded half-offset edge and on
 periodic and collapsed dimensions, the physical cell volume
 Πh_d / inv_J, at a physical edge node the factor removing the Jacobian's
-share of the edge error (the quadrature note in `src/diagnostics.jl`), and
+share of the edge error (the quadrature note in `src/solver/diagnostics.jl`), and
 at a coarse–fine face the quadrature the coupling conserves: a parent node
 its whole cell unless a child covers all of it, a child's nodes from the
 third in from a parent-fed face, and the correction Ω on the child's nodes
-beside each face (`src/reflux.jl`). This is `_conserved_budget`, the
+beside each face (`src/amr/reflux.jl`). This is `_conserved_budget`, the
 instrument of `bench/interfaceconservation.jl` and `bench/archive/reflux.jl`.
 
-`src/ledger.jl` attributes the change of that budget to the mechanism that
+`src/solver/ledger.jl` attributes the change of that budget to the mechanism that
 made it. Every state write in `run!`, the global-step driver and the
 subcycled recursion is bracketed by two hooks; the second recomputes the
 budget of the patches written and books the change to one of `:rhs` (the

@@ -98,7 +98,7 @@ decomposition: `:to_mid` (the compact derivative from nodes to midpoints),
 interpolation from nodes to midpoints) or `:interpolate_to_node` (the same
 interpolation from midpoints to nodes). Built by `plan_staggered` and applied
 by `apply_along!`; the storage convention, the wall mirror and the folded
-ends are described at the top of `src/staggered.jl`.
+ends are described at the top of `src/core/staggered.jl`.
 """
 struct StaggeredPlan{T}
     dim::Int
