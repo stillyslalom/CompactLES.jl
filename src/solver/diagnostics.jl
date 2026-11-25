@@ -189,7 +189,7 @@ function _local_volume_integral(solver::PatchSolver, f::AbstractArray{<:Real,3},
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     dV = cell_measure(solver)
-    covered = solver.covered
+    covered = solver.amr.covered
     acc = 0.0
     @inbounds for k in 1:nz
         wk = quad_weight(solver, 3, k)
@@ -251,7 +251,7 @@ function _local_conserved_budget(solver::PatchSolver, Q::ConservedState,
     eq = solver.equations
     nsp = eq.n_species
     out = zeros(Float64, nsp + 4)
-    covered = solver.covered
+    covered = solver.amr.covered
     dV = Float64(cell_measure(solver))
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -324,7 +324,7 @@ function _local_domain_volume(solver::PatchSolver, masked::Bool)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    covered = solver.covered
+    covered = solver.amr.covered
     acc = 0.0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -431,7 +431,7 @@ function _plane_accumulate!(num::Vector{Float64}, den::Vector{Float64},
         decomp.active[t] && (area *= solver.h[t])
     end
     Ad = solver.area_d[d]
-    covered = solver.covered
+    covered = solver.amr.covered
     @inbounds for k in 1:nz
         wk = d == 3 ? 1.0 : quad_weight(solver, 3, k)
         for j in 1:ny
@@ -739,7 +739,7 @@ function _pdf_accumulate!(bins::Vector{Float64}, solver::PatchSolver, sp::Int,
     nx, ny, nz = decomp.n_local
     dV = cell_measure(solver)
     Y = solver.Y[sp]
-    covered = solver.covered
+    covered = solver.amr.covered
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *

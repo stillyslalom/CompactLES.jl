@@ -320,12 +320,12 @@ end
             fresh = CL._fine_plans(p.decomp, p.h, schemes.deriv, schemes.filt, spec.smoo,
                                    schemes.interface_rhs, spec.backend;
                                    shared=CL._shared_faces(p.faces))
-            rows(p.filter_plans[1]) == rows(fresh.filter[1])
+            rows(p.plans.filter_plans[1]) == rows(fresh.filter[1])
         end
         @test all(same)
         # The tiles at the level's ends close their coarse-fine face with
         # the identity row.
-        @test any(i -> s.patches[i].filter_plans[1].clo[1] == [1.0] ||
-                       s.patches[i].filter_plans[1].chi[1] == [1.0], s.levels[2].patches)
+        @test any(i -> s.patches[i].plans.filter_plans[1].clo[1] == [1.0] ||
+                       s.patches[i].plans.filter_plans[1].chi[1] == [1.0], s.levels[2].patches)
     end
 end

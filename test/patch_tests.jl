@@ -243,10 +243,10 @@ end
     mk(pg, det) = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                               eos=eos, art=ArtificialProperties(detector=det),
                               filter_interval=0, patch_grid=pg)
-    @test mk((2, 1, 1), :species_d8).patches[1].ring_plans !== nothing
-    @test mk((2, 1, 1), :delta4).patches[1].ring_plans === nothing
+    @test mk((2, 1, 1), :species_d8).patches[1].plans.ring_plans !== nothing
+    @test mk((2, 1, 1), :delta4).patches[1].plans.ring_plans === nothing
     @test flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                      patch_grid=(2, 1, 1)).patches[1].ring_plans === nothing
+                      patch_grid=(2, 1, 1)).patches[1].plans.ring_plans === nothing
     function face_error(det)
         single = mk((1, 1, 1), det)
         Q = allocate_state(single)
@@ -322,7 +322,7 @@ end
                         patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl,
                         interface_flux=:closure)
         p1 = getfield(s, :patches)[1]
-        @test _div_rows_match(p1.div_plans[1], p1.decomp, c6, p1.h[1],
+        @test _div_rows_match(p1.plans.div_plans[1], p1.decomp, c6, p1.h[1],
                               nothing, bl.closures)
     end
     # Under the closure rows an interface takes the cascade3 rows in place of
@@ -498,7 +498,7 @@ end
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
                               patch_grid=(2, 1, 1); kw...)
-    extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
+    extents(s) = [size(p.amr.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
     off = ArtificialProperties(enabled=false)
     @test all(==(0), extents(mk(interface_flux=:ghost, art=off)))
     @test all(==(0), extents(mk(interface_flux=:closure,

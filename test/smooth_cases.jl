@@ -658,7 +658,7 @@ function state_difference(solver, a, b; patch=0)
         nl = ps.decomp.n_local
         for c in 1:solver.equations.n_cons, k in 1:nl[3], j in 1:nl[2], i in 1:nl[1]
             I = padded_index(ps, i, j, k)
-            ps.covered[I] == 0 || continue
+            ps.amr.covered[I] == 0 || continue
             e = max(e, abs(as[pi][I, c] - bs[pi][I, c]))
         end
     end
@@ -853,7 +853,7 @@ function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W,
             if e > max(wall, interface, covered, interior)
                 at = (pi, i)
             end
-            if ps.covered[I] != 0
+            if ps.amr.covered[I] != 0
                 covered = max(covered, e)
             elseif (i <= W && lo_wall) || (i > n - W && hi_wall)
                 wall = max(wall, e)
@@ -962,7 +962,7 @@ function regional_errors2d(solver, states, reference; comp=1, W=SMOOTH_W)
             e = abs(Q[I, comp] - reference(xcoord(ps, 1, i), xcoord(ps, 2, j))[comp])
             e2[I] = e * e
             e > max(interface, covered, interior) && (at = (pi, i))
-            if ps.covered[I] != 0
+            if ps.amr.covered[I] != 0
                 covered = max(covered, e)
             elseif pi > 1 && (min(i, j) <= W || i > n[1] - W || j > n[2] - W)
                 interface = max(interface, e)

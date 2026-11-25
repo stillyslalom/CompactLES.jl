@@ -1230,7 +1230,7 @@ end
 # nothing to upload.
 function _upload_hermite!(lt::LevelTransfer, patches, at_end::Bool)
     lt.fine_index == 0 && return nothing
-    scratch = patches[lt.fine_index].level_scratch
+    scratch = patches[lt.fine_index].amr.level_scratch
     isempty(scratch.stages) && return nothing
     copyto!(at_end ? scratch.Q1 : scratch.Q0, at_end ? lt.box_Q1 : lt.box_Q0)
     copyto!(at_end ? scratch.dQ1 : scratch.dQ0, at_end ? lt.box_dQ1 : lt.box_dQ0)

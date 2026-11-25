@@ -48,8 +48,8 @@ using CompactLES: compute_rhs!, max_rate, ConservedState, CPUBackend
     # device plans.
     sp = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                      bcs=(per, per, per), backend=bk, patch_grid=(2, 1, 1))
-    @test all(p.deriv_plans[1] isa DevicePlan for p in sp.patches)
-    @test all(p.filter_plans[1] isa DevicePlan for p in sp.patches)
+    @test all(p.plans.deriv_plans[1] isa DevicePlan for p in sp.patches)
+    @test all(p.plans.filter_plans[1] isa DevicePlan for p in sp.patches)
 end
 
 @testset "device-resident patch layout: two slabs reproduce the CPU solver" begin
@@ -467,17 +467,17 @@ end
         @test st.members == lev.patches
         @test length(unique(CL._shared_faces(getfield(s2, :patches)[i].faces)
                             for i in lev.patches)) > 1
-        @test st.patch.filter_plans[1].rows isa CL.DeviceRowVariants
+        @test st.patch.plans.filter_plans[1].rows isa CL.DeviceRowVariants
         @test st.patch.rho isa CL.StackedArray
         @test st.patch.rho.ntiles == length(st.members)
-        @test st.patch.deriv_plans[1].ntiles == length(st.members)
-        @test st.patch.deriv_plans[1].lines == length(st.members)
+        @test st.patch.plans.deriv_plans[1].ntiles == length(st.members)
+        @test st.patch.plans.deriv_plans[1].lines == length(st.members)
         # The batched divergence plans close with the source scheme's rows.
         if haskey(kw, :interface_divergence)
             rows = kw.interface_divergence.closures
             ref = CL.plan_direction(st.patch.decomp, lele_d1_6(), 1, st.patch.h[1];
                                     lo_closures=rows, hi_closures=rows)
-            @test st.patch.div_plans[1].host.chi == ref.chi
+            @test st.patch.plans.div_plans[1].host.chi == ref.chi
         end
         for (slot, li) in enumerate(st.members)
             tile = getfield(s2, :patches)[li]
@@ -533,7 +533,7 @@ end
     lev = getfield(s2, :levels)[2]
     @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
     @test lev.stacks[1].patch.rho.stride > 1
-    @test length(lev.stacks[1].patch.filter_plans[3].rows.nclo) == 3
+    @test length(lev.stacks[1].patch.plans.filter_plans[3].rows.nclo) == 3
     @test s1.step == s2.step
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
 end
@@ -575,7 +575,7 @@ end
     lev = getfield(s2, :levels)[2]
     @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
     @test !isempty(lev.stacks[1].patch.rhs_workspace.grad_Q)
-    @test length(lev.stacks[1].patch.filter_plans[1].rows.nclo) == 3
+    @test length(lev.stacks[1].patch.plans.filter_plans[1].rows.nclo) == 3
     @test s1.step == s2.step
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
     @test all(maximum(Array(p.D_art[1])) > 0 for p in getfield(s2, :patches))

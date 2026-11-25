@@ -354,7 +354,7 @@ end
 @inline function _node_weight(ps, i, j, k, I)
     w = CL.quad_weight(ps, 1, i) * CL.quad_weight(ps, 2, j) *
         CL.quad_weight(ps, 3, k)
-    m = ps.covered[I]
+    m = ps.amr.covered[I]
     m == 0 || (w *= CL.uncovered_fraction(m))
     return w
 end

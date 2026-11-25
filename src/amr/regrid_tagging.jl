@@ -652,12 +652,12 @@ function _fill_tile_from_box!(solver::Solver, states, lt::LevelTransfer)
     # Device patch: every component runs through the scratch's chain, whose
     # stages hold this rank's share of the components, in slices of that
     # width (the whole set at once on a one-rank tile).
-    stages = fine.level_scratch.stages
+    stages = fine.amr.level_scratch.stages
     width = size(stages[1], 4)
     for lo in 1:width:n_cons
         comps = lo:min(lo + width - 1, n_cons)
         _fill_stage0_dev!(BoxFill(), view(stages[1], :, :, :, 1:length(comps)),
-                          fine.level_scratch, lt, comps)
+                          fine.amr.level_scratch, lt, comps)
         for k in 1:K
             _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], length(comps))
         end

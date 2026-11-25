@@ -286,7 +286,7 @@ end
 # `lv` a `LevelSetup` (amr_frontend.jl). `equations` is the `EquationSet`
 # owning the conserved layout, built from the EOS when not given. `extent`
 # gives the domain's three extents where the caller holds them apart from the
-# endpoints (test/flat_solver.jl).
+# endpoints, as the test suites' keyword adapter does.
 function _Solver(::Type{T}, prob, num, lv; equations=nothing,
                  extent=nothing) where {T}
     # One compiled body for every configuration of a precision. Specialized,
@@ -886,7 +886,8 @@ function _plan_layout_and_schemes(inp::BuildInputs{T}, geom::GeometrySetup{T}) w
         something(lv.level_interpolation_order,
                   default_interpolation_order(deriv, interface_flux))
     schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
-                             interface_conservative, level_interpolation_order, level_restriction, bcs)
+                             interface_conservative, level_interpolation_order,
+                             level_restriction, bcs)
     isfinite(num.polar_truncation) &&
         (num.polar_truncation == 0 || num.polar_truncation >= 1) ||
         throw(ArgumentError("polar_truncation must be 0 (off) or a margin of at " *
@@ -1133,23 +1134,20 @@ function _build_root_plans_and_patch(inp::BuildInputs{T}, geom::GeometrySetup{T}
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
                              ring_det,
                              _grad_Q_columns(art, n_species, n_cons), nlev > 1)
+    empty3 = empty_field(backend, T)
+    arrays = _patch_arrays(f, n_species)
+    amr = PatchAMR(arrays, ws_root, _covered_mask(decomp), nlev > 1 ? f() : empty3,
+                   _empty_level_scratch(empty3),
+                   ntuple(_ -> similar(empty3, T, 0, 0, 0, 0), 3))
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
-                  deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
+                  PatchPlans(deriv_plans, deriv_plans, filter_plans, smooth_plans,
+                             ring_plans),
                   # Only a paired fold's butterfly reads these; a self-paired
                   # fold (the axisymmetric axis, a symmetry plane) needs
                   # neither, so it carries no padded field of its own.
-                  paired_fold ? f() : empty_field(backend, T),
-                  paired_fold ? f() : empty_field(backend, T),
-                  f(), f(), f(), f(), f(), f(), f(), f(),
-                  [f() for _ in 1:n_species],
-                  f(), f(), f(),
-                  [f() for _ in 1:n_species],
-                  f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
-                  ws_root, _covered_mask(decomp),
-                  nlev > 1 ? f() : empty_field(backend, T),
-                  _empty_level_scratch(empty_field(backend, T)),
-                  ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
+                  paired_fold ? f() : empty3, paired_fold ? f() : empty3,
+                  arrays, ws_root, amr)
     return RootSetup{T}(decomp, truncation, folds, orig, ws_pool, patch)
 end
 
@@ -1537,11 +1535,11 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
                                similar(empty3, T, 0, 0, 0, 0),
                                ntuple(d -> ghost_fluxes && gdims[d], 3))
+    arrays = _patch_arrays(g, n_species)
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
-                           fbcs, plans, empty3,
-                           _patch_arrays(g, n_species, n_sensed), ws,
-                           _covered_mask(decomp_f),
-                           scratch, gflux)
+                           fbcs, plans, empty3, arrays, ws,
+                           _covered_mask(decomp_f), g(), scratch, gflux,
+                           append!(empty(arrays.Y), (g() for _ in 1:n_sensed)))
 end
 
 # The dimensions of a refined patch with an interface end: active, and not
@@ -1775,29 +1773,16 @@ function _idle_fold(rf::FoldSpec, dp, vp, fp, sp, rp)
                     twice(vp), vp !== dp)
 end
 
-# The persistent arrays of a patch from an allocator `g()`, by name, in the
-# order the `Patch` constructor takes them.
-function _patch_arrays(g::F, n_species::Int, n_sensed::Int=0) where {F}
-    Y = [g() for _ in 1:n_species]
-    return (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
-            Y=Y, mu_art=g(), beta_art=g(), kappa_art=g(),
-            D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
-            inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), overwritten=g(),
-            sensed_fields=append!(empty(Y), (g() for _ in 1:n_sensed)))
-end
-
 # The refined `Patch` from its parts, with no pair buffers (`empty` stands in
 # for both): a refined patch's folds, those of a symmetry plane or the r-z
 # axis, are self-paired.
 Base.@nospecializeinfer _assemble_patch(id::Int, level::Int, region, comm, decomp, hf,
-                faces, @nospecialize(bcs), plans, empty, a, ws, covered, scratch, gflux) =
-    Patch(id, level, region, comm, decomp, hf, faces, bcs,
-          plans.folds, plans.deriv, plans.div, plans.filter,
-          plans.smooth, plans.ring, empty, empty,
-          a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
-          a.mu_art, a.beta_art, a.kappa_art, a.D_art,
-          a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r,
-          ws, covered, a.overwritten, scratch, gflux, a.sensed_fields)
+                faces, @nospecialize(bcs), plans, empty, a, ws, covered, overwritten,
+                scratch, gflux, sensed) =
+    Patch(id, level, region, comm, decomp, hf, faces, bcs, plans.folds,
+          PatchPlans(plans.deriv, plans.div, plans.filter, plans.smooth, plans.ring),
+          empty, empty, a, ws,
+          PatchAMR(a, ws, covered, overwritten, scratch, gflux, sensed))
 
 # --- Stacked tiles of a device level ------------------------------------------
 #
@@ -1925,7 +1910,9 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                       ntiles * stride),
                              ntiles, stride)
     empty_s = StackedArray(empty_raw, ntiles, stride)
-    arrays = _patch_arrays(stacked, n_species, n_sensed)
+    arrays = _patch_arrays(stacked, n_species)
+    overwritten = stacked()
+    sensed = append!(empty(arrays.Y), (stacked() for _ in 1:n_sensed))
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
                              ring, grad_Q_columns; active=decomp1.active)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
@@ -1943,8 +1930,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     span = _assemble_patch(0, level, region1, comm, decomp1, hf, faces[1],
                            _fine_bcs(active_g, faces[1], boundary, bcs),
                            span_plans, empty_s,
-                           arrays, ws_span, zeros(UInt8, 0, 0, 0),
-                           _empty_level_scratch(empty_raw), gflux_span)
+                           arrays, ws_span, zeros(UInt8, 0, 0, 0), overwritten,
+                           _empty_level_scratch(empty_raw), gflux_span, sensed)
     tiles = Patch[]
     for (slot, refine) in enumerate(tregions)
         region_t, decomp_t, _ = slot == 1 ? (region1, decomp1, hf) :
@@ -1965,11 +1952,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        kappa_art=v(arrays.kappa_art), D_art=map(v, arrays.D_art),
                        inv_J=v(arrays.inv_J), area_d=map(v, arrays.area_d),
                        inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
-                       cot_over_r=v(arrays.cot_over_r),
-                       overwritten=v(arrays.overwritten),
-                       # Typed as `Y`'s views also when there is none.
-                       sensed_fields=append!(empty(map(v, arrays.Y)),
-                                             (v(a) for a in arrays.sensed_fields)))
+                       cot_over_r=v(arrays.cot_over_r))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, ring, boundary, wall_faces,
                               gaussian=smoother === :gaussian, folded, root_folds,
@@ -1983,11 +1966,14 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                      _fine_bcs(active_g, faces[slot], boundary, bcs),
                                      plans_t, view(empty_raw, :, :, 1:0),
                                      tile_arrays, _view_workspace(ws_span, kr),
-                                     _covered_mask(decomp_t), scratch,
+                                     _covered_mask(decomp_t), v(overwritten), scratch,
                                      map(a -> size(a, 3) == 0 ?
                                               view(parent(a), :, :, 1:0, :) :
                                               view(parent(a), :, :, kr, :),
-                                         gflux_span)))
+                                         gflux_span),
+                                     # Typed as `Y`'s views also when there is none.
+                                     append!(empty(tile_arrays.Y),
+                                             (v(a) for a in sensed))))
     end
     return span, tiles
 end
@@ -2013,16 +1999,16 @@ function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs,
                   comm::MPI.Comm, plans=nothing)
     # `field_tuples` is derived, and the junction captures are rebuilt for
     # the new layout, their deferral clear.
+    old, amr = p.plans, p.amr
+    kept = plans === nothing ? old :
+           PatchPlans(old.deriv_plans, old.div_plans, plans.filter, old.smooth_plans,
+                      old.ring_plans)
     return Patch(id, p.level, p.region, comm, p.decomp, p.h, faces, bcs,
-                 plans === nothing ? p.folds : plans.folds,
-                 p.deriv_plans, p.div_plans,
-                 plans === nothing ? p.filter_plans : plans.filter,
-                 p.smooth_plans, p.ring_plans, p.pairbuf, p.pairout,
-                 p.rho, p.u, p.v, p.w, p.p, p.T_ion, p.c, p.cp_mix, p.Y,
-                 p.mu_art, p.beta_art, p.kappa_art, p.D_art,
-                 p.inv_J, p.area_d, p.inv_h, p.inv_r, p.cot_over_r,
-                 p.rhs_workspace, p.covered, p.overwritten, p.level_scratch,
-                 p.ghost_flux, p.sensed_fields, p.child_deep, p.child_masked)
+                 plans === nothing ? p.folds : plans.folds, kept, p.pairbuf, p.pairout,
+                 _patch_arrays(p), p.rhs_workspace,
+                 PatchAMR(amr.covered, amr.overwritten, amr.level_scratch,
+                          amr.ghost_flux, amr.sensed_fields, amr.child_deep,
+                          amr.child_masked, empty(amr.reflux_captures), false))
 end
 
 # The faces a refined patch shares with a patch of its own level, from its
@@ -2146,22 +2132,19 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         # interface plans as `grad_Y`.
         ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, ring_det,
                             _grad_Q_columns(art, n_species, n_cons))
+        arrays = _patch_arrays(g, n_species)
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
-              dplans, vplans, fplans, splans, rplans,
-              empty3, empty3,
-              g(), g(), g(), g(), g(), g(), g(), g(),
-              [g() for _ in 1:n_species],
-              g(), g(), g(),
-              [g() for _ in 1:n_species],
-              g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
-              ws, _covered_mask(dcp), empty3, _empty_level_scratch(empty3),
+              PatchPlans(dplans, vplans, fplans, splans, rplans), empty3, empty3,
+              arrays, ws,
+              PatchAMR(arrays, ws, _covered_mask(dcp), empty3,
+                       _empty_level_scratch(empty3),
               _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
                                  similar(empty3, T, 0, 0, 0, 0),
                                  ntuple(d -> _ghost_fluxes_built(interface_flux,
                                                                  transport, art) &&
                                              dcp.active[d] &&
                                              (pbcs[d][1] isa InterfaceBC ||
-                                              pbcs[d][2] isa InterfaceBC), 3)))
+                                              pbcs[d][2] isa InterfaceBC), 3))))
     end
     # The slabs' records are the root level's, in the slot of the dimension
     # the slabs are stacked along.

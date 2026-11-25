@@ -247,7 +247,7 @@ end
             d == 2 || (w *= quad_weight(ps, 2, j) * _edge_factor(ps, 2, j, I))
             d == 3 || (w *= quad_weight(ps, 3, k) * _edge_factor(ps, 3, k, I))
             if masked
-                m = ps.covered[I]
+                m = ps.amr.covered[I]
                 m == 0 || (w *= uncovered_plane_fraction(m, d))
             end
             w *= sgn * area * Float64(Ad[I])
@@ -260,7 +260,7 @@ end
     # Where the coupling captures its junctions, columns 3 and 4 are the
     # captures' (`_ledger_junction_faces!`), read once the whole right-hand
     # side has run.
-    if !isempty(patch.reflux_captures)
+    if !isempty(patch.amr.reflux_captures)
         J[:, 3] .= 0
         L.stage_face[pi] = J
         return nothing
@@ -285,7 +285,7 @@ end
 # correction adds. The registers are complete once the right-hand side's
 # second phase has run, so this is read at the stage update.
 function _ledger_junction_faces!(J, solver, patch)
-    caps = patch.reflux_captures
+    caps = patch.amr.reflux_captures
     isempty(caps) && return J
     eq = solver.equations
     comps = Int[1:eq.n_species; collect(eq.i_mom); eq.i_energy]

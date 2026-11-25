@@ -417,7 +417,7 @@ function _impose_shell_dev!(solver, Qf, lt::LevelTransfer, fill, fine, sendbuf, 
     ringlen = shell.len
     padb = lt.pdecomps[K+1].n_halo_d
     shift = _box_shift(lt)
-    scratch = fine.level_scratch
+    scratch = fine.amr.level_scratch
     stages = scratch.stages
     _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
     for k in 1:K
@@ -793,7 +793,7 @@ function _impose_shell_gradients_dev!(solver, fine, Qf, lt::LevelTransfer, fill,
     table = (shell.table...,)
     boxf = lt.pdecomps[K+1]
     padb = boxf.n_halo_d
-    scratch = fine.level_scratch
+    scratch = fine.amr.level_scratch
     stages = scratch.stages
     n_owned = length(owned)
     _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)

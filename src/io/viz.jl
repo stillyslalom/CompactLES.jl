@@ -850,7 +850,7 @@ function _snapshot_blocks(ps::PatchSolver, Q, names, plane=nothing, win=nothing)
     end
     T = eltype(ps.rho)
     coords = ntuple(d -> T[xcoord(ps, d, i) for i in ranges[d]], 3)
-    covered = BitArray(ps.covered[interior...] .== 0xff)
+    covered = BitArray(ps.amr.covered[interior...] .== 0xff)
     data = collect(data)
     out = Any[]
     for (box, span) in boxes

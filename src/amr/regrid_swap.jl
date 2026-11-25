@@ -283,15 +283,16 @@ end
 function _copy_tile!(pnew::Patch, Qnew, pold::Patch, Qold)
     _assign!(parent(Qnew), parent(Qold))
     for name in (:rho, :u, :v, :w, :p, :T_ion, :c, :cp_mix, :mu_art, :beta_art,
-                 :kappa_art, :inv_J, :inv_r, :cot_over_r, :overwritten)
-        _assign!(getproperty(pnew, name), getproperty(pold, name))
+                 :kappa_art, :inv_J, :inv_r, :cot_over_r)
+        _assign!(getfield(pnew, name), getfield(pold, name))
     end
+    _assign!(pnew.amr.overwritten, pold.amr.overwritten)
     for name in (:Y, :D_art, :area_d, :inv_h)
         for (a, b) in zip(getfield(pnew, name), getfield(pold, name))
             _assign!(a, b)
         end
     end
-    copyto!(pnew.covered, pold.covered)
+    copyto!(pnew.amr.covered, pold.amr.covered)
     return pnew
 end
 
@@ -884,7 +885,7 @@ function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
     else
         for li in levels[ℓ].patches
             p = patches[li]
-            _tag_sweep!(mark!, solver, p, states[li], zeros(Int8, size(p.covered)),
+            _tag_sweep!(mark!, solver, p, states[li], zeros(Int8, size(p.amr.covered)),
                         false)
         end
     end

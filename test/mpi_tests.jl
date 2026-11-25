@@ -1974,7 +1974,7 @@ function test_unrefined_start()
     empty_everywhere(s, states) =
         gmax(!(isempty(level_regions(s, 1)) && length(states) == 1 &&
                !s.levels[2].level_comm.owned &&
-               all(==(0), s.patches[1].covered)))
+               all(==(0), s.patches[1].amr.covered)))
     solver, states = setup(prob, num)
     check("unrefined start: no tile on any rank at setup",
           empty_everywhere(solver, states), 0.5)
@@ -3775,10 +3775,10 @@ function test_tiled_level()
         # fill from the current tile set on every rank, and the composite
         # volume stays exact across them.
         root = solver.patches[1]
-        kept = copy(root.covered)
+        kept = copy(root.amr.covered)
         CL._fill_covered!(root, level_regions(solver, 1))
         check("covered mask: rewritten by the regrids on every rank",
-              gsum(count(kept .!= root.covered)), 0.5)
+              gsum(count(kept .!= root.amr.covered)), 0.5)
         check("covered mask: composite volume exact after the regrids",
               gmax(abs(domain_volume(solver) - 1)), 1e-13)
     end

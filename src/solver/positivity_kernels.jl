@@ -342,8 +342,8 @@ end
 # not admissible. Empty where no node is exempt.
 _limiter_exempt(solver) = similar(solver.tmp_a, eltype(solver.tmp_a), 0, 0, 0)
 _limiter_exempt(ps::PatchSolver) =
-    isempty(ps.patch.overwritten) ?
-    similar(ps.tmp_a, eltype(ps.tmp_a), 0, 0, 0) : ps.patch.overwritten
+    isempty(ps.patch.amr.overwritten) ?
+    similar(ps.tmp_a, eltype(ps.tmp_a), 0, 0, 0) : ps.patch.amr.overwritten
 
 # A node is held unless a face condition overwrites it or it is exempt
 # (`_limiter_exempt`).

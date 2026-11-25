@@ -131,7 +131,7 @@ fold leaves `f` untouched, running the even/odd butterfly through
 @noinline function deriv_along!(out, f, solver::PatchSolver, d::Int, σf::Int)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.plans.deriv_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
@@ -142,11 +142,11 @@ end
     div_along!(out, f, solver, d, σf)
 
 Compact derivative of `f` along `d` through the divergence plans. These are
-`solver.deriv_plans` except at a patch-interface end under
+`solver.plans.deriv_plans` except at a patch-interface end under
 `interface_rhs = :extended`, where the gradient plans read exchanged ghost
 data that a flux array does not carry, so the divergence keeps one-sided
 closure rows there, the scheme's own or the cascade's for the neutral set
-(`interface_divergence_closures`, `solver.div_plans`). A folded dimension draws on the
+(`interface_divergence_closures`, `solver.plans.div_plans`). A folded dimension draws on the
 fold's own divergence plans instead, which are its derivative plans except on a
 refined patch whose folded dimension ends at an interface. Same collective,
 halo, and fold contract as [`deriv_along!`](@ref).
@@ -154,7 +154,7 @@ halo, and fold contract as [`deriv_along!`](@ref).
 @noinline function div_along!(out, f, solver::PatchSolver, d::Int, σf::Int)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _operator_plan(solver.div_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.plans.div_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:div))
     end
@@ -197,8 +197,8 @@ halo, and fold contract as `deriv_along!`.
 @noinline function deriv_scaled_along!(out, f, solver::PatchSolver, d::Int, σf::Int,
                                       mask::Bool=true)
     fold = _fold_at(solver, d)
-    if fold === nothing && !_device_plan_at(solver.deriv_plans, d)
-        apply_along_scaled!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp,
+    if fold === nothing && !_device_plan_at(solver.plans.deriv_plans, d)
+        apply_along_scaled!(out, _operator_plan(solver.plans.deriv_plans, d), f, solver.decomp,
                             solver.inv_h[d])
         mask && _mask_child_derivative!(out, f, solver, d, σf, Val(:deriv), true)
     elseif _fused_fold(solver, fold, d)
@@ -222,7 +222,7 @@ end
 @noinline function _plain_deriv_along!(out, f, solver::PatchSolver, d::Int, σf::Int)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _operator_plan(solver.deriv_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.plans.deriv_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
@@ -246,8 +246,9 @@ derivatives along `d` take the child mask take the two-pass route through
                              σf::Int, inv_J)
     fold = _fold_at(solver, d)
     _reflux_open!(solver, dQ, c, d, inv_J)
-    if fold === nothing && !_device_plan_at(solver.div_plans, d)
-        apply_along_subtract!(dQ, c, _operator_plan(solver.div_plans, d), f, solver.decomp,
+    if fold === nothing && !_device_plan_at(solver.plans.div_plans, d)
+        apply_along_subtract!(dQ, c, _operator_plan(solver.plans.div_plans, d), f,
+                              solver.decomp,
                               inv_J)
     elseif _fused_fold(solver, fold, d)
         fold_fill!(f, solver.decomp, d, fold.lo, fold.hi, σf)
@@ -391,7 +392,7 @@ pressure_subtract_along!(dQ, c::Int, solver::PatchSolver, d::Int) =
 function _sensor_mask_patch(ps::PatchSolver, mask_child::Bool=true)
     mask_child || return false
     MASK_CHILD_SENSORS[] || return false
-    isempty(ps.patch.overwritten) && return false
+    isempty(ps.patch.amr.overwritten) && return false
     levels = getfield(ps.solver, :levels)
     child = ps.patch.level + 2
     return child <= length(levels) && !isempty(levels[child].transfers)
@@ -410,7 +411,7 @@ function _mask_child_sensor!(f, solver::PatchSolver, mask_child::Bool=true)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    pointwise!(_mask_sensor_point!, f, nx, ny, nz, f, solver.overwritten, o1, o2, o3)
+    pointwise!(_mask_sensor_point!, f, nx, ny, nz, f, solver.amr.overwritten, o1, o2, o3)
     return f
 end
 
@@ -441,7 +442,7 @@ const CHILD_DERIVATIVE_DEPTH = 3
 # workspace views carry no scratch.
 function _child_mask_patch(ps::PatchSolver)
     MASK_CHILD_DERIVATIVE[] || return false
-    (isempty(ps.child_mask) || isempty(ps.child_deep)) && return false
+    (isempty(ps.child_mask) || isempty(ps.amr.child_deep)) && return false
     getfield(ps.solver, :positivity) === nothing || return false
     levels = getfield(ps.solver, :levels)
     child = ps.patch.level + 2
@@ -476,14 +477,14 @@ function _arm_child_mask!(ps::PatchSolver)
     end
     bits, lines = _child_mask_lines(ps.child_mask, ps.decomp, dims)
     record = _child_mask_record(ps)
-    record.patch = ps.patch.covered
+    record.patch = ps.patch.amr.covered
     record.lines = lines
     # A patch held whole by one rank reduces over itself, so the reduction is
     # left out there: it is the identity, and MPI, initialized `:funneled`,
     # may not be called from the task a tile is evaluated in (`_foreach_tile`).
     armed = prod(ps.decomp.dims) == 1 ? bits :
             MPI.Allreduce(bits, MPI.BOR, ps.patch.comm)
-    ps.patch.child_masked = (isodd(armed), isodd(armed >> 1), isodd(armed >> 2))
+    ps.patch.amr.child_masked = (isodd(armed), isodd(armed >> 1), isodd(armed >> 2))
     return ps
 end
 
@@ -492,7 +493,7 @@ end
 # primitives it finds. Returns `out`.
 function _release_child_mask!(ps::PatchSolver, out=ps)
     record = _child_mask_record(ps)
-    record.patch === ps.patch.covered && (record.patch = SCRATCH_UNFILLED)
+    record.patch === ps.patch.amr.covered && (record.patch = SCRATCH_UNFILLED)
     return out
 end
 
@@ -500,14 +501,14 @@ end
     getfield(getfield(ps, :patch), :rhs_workspace).child_mask_record
 
 @inline _child_masked(ps::PatchSolver, d::Int) =
-    ps.patch.child_masked[d] && _child_mask_patch(ps)
+    ps.patch.amr.child_masked[d] && _child_mask_patch(ps)
 
 # The mask along `d` and the range of the plan's lines holding its nodes: the
 # mask the right-hand side armed while it holds the workspace's, or one built
 # here from the current primitives, with every line.
 function _child_mask_along!(ps::PatchSolver, d::Int)
     record = _child_mask_record(ps)
-    held = record.patch === ps.patch.covered && record.patch !== SCRATCH_UNFILLED
+    held = record.patch === ps.patch.amr.covered && record.patch !== SCRATCH_UNFILLED
     held && return ps.child_mask, record.lines[d]
     record.patch = SCRATCH_UNFILLED
     _child_mask!(ps, d, 0)
@@ -532,7 +533,7 @@ function _child_mask!(ps::PatchSolver, d::Int, keep::Int)
     n = decomp.n_global[d]
     lo, hi = decomp.periodic[d] ? (typemin(Int), typemax(Int)) :
                                   (reach + 3, n - reach - 2)
-    pointwise!(_child_derivative_mask_point!, m, nx, ny, nz, m, ps.child_deep, ps.rho,
+    pointwise!(_child_derivative_mask_point!, m, nx, ny, nz, m, ps.amr.child_deep, ps.rho,
                eltype(m)(CHILD_MASK_THRESHOLD[]), reach, lo, hi, decomp.offset[d], d,
                keep, o1, o2, o3)
     return m
@@ -612,8 +613,8 @@ function _child_mask_plan(solver, d, σf, role::Val)
     return fold === nothing ? _operator_plan(_role_plans(solver, role), d) :
                               _fold_plan(fold, σf, role, 1, false)
 end
-_role_plans(solver, ::Val{:div}) = solver.div_plans
-_role_plans(solver, ::Val{:deriv}) = solver.deriv_plans
+_role_plans(solver, ::Val{:div}) = solver.plans.div_plans
+_role_plans(solver, ::Val{:deriv}) = solver.plans.deriv_plans
 
 # sgn · A⁻¹ M B f into `child_solve`, which is returned. The mask is the one
 # the right-hand side armed from its primitives (`_child_mask_along!`); `f`
@@ -807,7 +808,7 @@ halo and fold contract matches `deriv_along!`.
 @noinline function filt_along!(out, f, solver::PatchSolver, d::Int, σf::Int)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _operator_plan(solver.filter_plans, d), f, solver.decomp)
+        apply_along!(out, _operator_plan(solver.plans.filter_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:filter))
     end
@@ -842,7 +843,8 @@ Every rank in the directional sub-communicator must call this function, as for
                        ghosts::Bool=false)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _smooth_plan(_operator_plan(solver.smooth_plans, d), ghosts), f,
+        apply_along!(out, _smooth_plan(_operator_plan(solver.plans.smooth_plans, d),
+                                       ghosts), f,
                      solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:smooth), 1, ghosts)
@@ -879,7 +881,7 @@ _same_smooth(plan) = InterfaceSmoothPlans(plan, plan)
 
 Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
 the ringing detector selected by `ArtificialProperties(detector = :d8)`. Only `ring_sum!`
-calls this, and only under that setting: `solver.ring_plans` is `nothing`
+calls this, and only under that setting: `solver.plans.ring_plans` is `nothing`
 otherwise, which keeps this function off the default configuration's inference
 path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
 
@@ -902,7 +904,8 @@ halo and fold contract matches `deriv_along!`.
                      ghosts::Bool=false)
     fold = _fold_at(solver, d)
     if fold === nothing
-        apply_along!(out, _ring_plan(_operator_plan(solver.ring_plans, d), σw, ghosts), f,
+        apply_along!(out, _ring_plan(_operator_plan(solver.plans.ring_plans, d), σw,
+                                     ghosts), f,
                      solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:ring), σw, ghosts)
@@ -1301,7 +1304,8 @@ end
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline function _interface_dim(solver::PatchSolver, d::Int)
     fold = _fold_at(solver, d)
-    fold === nothing && return _distinct_at(solver.div_plans, solver.deriv_plans, d)
+    fold === nothing && return _distinct_at(solver.plans.div_plans,
+                                            solver.plans.deriv_plans, d)
     return fold.own_div
 end
 
@@ -1476,7 +1480,7 @@ function _generic_split!(rem, out, solver::PatchSolver, F, Q, c::Int, d::Int, Ad
         dest === nothing && continue
         pointwise!(_inviscid_flux_point!, dest, n1f, n2f, n3f,
                    dest, F, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, solver.field_tuples.Y, solver.ghost_flux[d], Ad, c, d,
+                   solver.p, solver.field_tuples.Y, solver.amr.ghost_flux[d], Ad, c, d,
                    eq.n_species, m1, m2, m3, eq.i_energy, remainder, false, less_p,
                    0, 0, 0)
     end
@@ -1618,7 +1622,7 @@ function _molecular_ghost_flux!(solver::PatchSolver, Q)
     # A dimension carrying the assembled flux overwrites the molecular one
     # over every point its readers take, so the molecular pass skips it.
     viscous = ntuple(d -> dims[d] && !_remainder_ghosted(solver, d), 3)
-    G1, G2, G3 = solver.ghost_flux
+    G1, G2, G3 = solver.amr.ghost_flux
     route = viscous[1] ? G1 : viscous[2] ? G2 : G3
     _ghost_viscous(solver) && any(viscous) &&
         pointwise!(_molecular_flux_point!, route, n1f, n2f, n3f,
@@ -1629,7 +1633,7 @@ function _molecular_ghost_flux!(solver::PatchSolver, Q)
                    decomp.n_halo_d, n3f)
     for d in 1:3
         _remainder_ghosted(solver, d) || continue
-        G = solver.ghost_flux[d]
+        G = solver.amr.ghost_flux[d]
         if _stack_of(G) === nothing && !_fold_active(_fold_at(solver, d))
             _store_assembled_flux!(G, solver, Q, d)
             continue
@@ -1646,8 +1650,8 @@ function _molecular_ghost_flux!(solver::PatchSolver, Q)
         end
     end
     for d in 1:3
-        dims[d] && size(solver.ghost_flux[d], 4) > 0 &&
-            exchange_dim_batch!(ComponentViews(solver.ghost_flux[d]), decomp, d)
+        dims[d] && size(solver.amr.ghost_flux[d], 4) > 0 &&
+            exchange_dim_batch!(ComponentViews(solver.amr.ghost_flux[d]), decomp, d)
     end
     return solver
 end
@@ -1658,7 +1662,7 @@ end
 function _remainder_ghosted(solver::PatchSolver, d::Int)
     _ghost_remainder(solver) || return false
     solver.decomp.active[d] && _interface_dim(solver, d) || return false
-    return size(solver.ghost_flux[d], 4) > 0
+    return size(solver.amr.ghost_flux[d], 4) > 0
 end
 
 # The flux's ghost layers at each coarse-fine face of `d` this rank holds: the
@@ -1673,7 +1677,7 @@ function _extrapolate_coarse_fine!(solver::PatchSolver, d::Int, Q)
     m1, m2, m3 = eq.i_mom
     pad = decomp.n_halo_d
     nl = decomp.n_local
-    G = solver.ghost_flux[d]
+    G = solver.amr.ghost_flux[d]
     deg = min(GHOST_REMAINDER_DEGREE, nl[d] - 1)
     o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     for side in 1:2
@@ -1866,7 +1870,7 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::PatchSolver, Q, d::Int
     viscous = _ghost_viscous(solver)
     (viscous || _ghost_remainder(solver)) && c == 1 &&
         d == findfirst(_ghost_flux_dims(solver)) && _molecular_ghost_flux!(solver, Q)
-    G = solver.ghost_flux[d]
+    G = solver.amr.ghost_flux[d]
     Y = solver.field_tuples.Y
     Ad, iJ = _ghost_geometry(solver, d)
     # The flux's sign across a fold at the dimension's other end (a refined
@@ -1928,9 +1932,10 @@ end
     _reflux_open!(solver, dQ, c, d, inv_J)
     if fold !== nothing && !_fold_active(fold) && !(fold_dplan(fold, 1) isa DevicePlan)
         apply_along_subtract!(dQ, c, fold_dplan(fold, 1), f, decomp, inv_J)
-    elseif fold !== nothing || _device_plan_at(solver.deriv_plans, d)
+    elseif fold !== nothing || _device_plan_at(solver.plans.deriv_plans, d)
         fold === nothing ?
-            apply_along!(solver.tmp_a, _operator_plan(solver.deriv_plans, d), f, decomp) :
+            apply_along!(solver.tmp_a, _operator_plan(solver.plans.deriv_plans, d), f,
+                         decomp) :
             fold_apply!(solver.tmp_a, f, solver, fold, σf, Val(:deriv))
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
@@ -1942,7 +1947,7 @@ end
                        dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
         end
     else
-        apply_along_subtract!(dQ, c, _operator_plan(solver.deriv_plans, d), f, decomp,
+        apply_along_subtract!(dQ, c, _operator_plan(solver.plans.deriv_plans, d), f, decomp,
                               inv_J)
     end
     _mask_child_divergence!(dQ, c, f, solver, d, σf, inv_J, Val(:deriv))
@@ -2079,8 +2084,8 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs)
     # rank's patches holds a flux along has no record here either.
     t0 = time_ns()
     phased = [d for d in 1:3 if lev.phases[d] &&
-              any(p -> size(p.ghost_flux[d], 4) > 0, view(patches, lev.patches))]
-    _exchange_ghost_sets!([[ConservedState(p.ghost_flux[d]) for p in patches]
+              any(p -> size(p.amr.ghost_flux[d], 4) > 0, view(patches, lev.patches))]
+    _exchange_ghost_sets!([[ConservedState(p.amr.ghost_flux[d]) for p in patches]
                            for d in phased], lev.level_comm.comm,
                           [lev.ghost_sends[d] for d in phased],
                           [lev.ghost_recvs[d] for d in phased])
@@ -2115,7 +2120,7 @@ function _coarse_fine_fluxes_at!(solver, p, lt, states, pi::Int)
     end
     if _reads_gradient_ring(ps)
         lt.gradients === nothing && _unbuilt_ring_error()
-        _coarse_fine_ghost_fluxes!(ps, lt, p.level_scratch, states[pi])
+        _coarse_fine_ghost_fluxes!(ps, lt, p.amr.level_scratch, states[pi])
     end
     return nothing
 end
@@ -2140,7 +2145,7 @@ _ghost_flux_solves_at!(solver, p, states, dQs, pi::Int, n_cons::Int) =
 # the solver-wide toggles, so every rank of the patch takes the same value.
 _ring_dim(solver::PatchSolver, d::Int) =
     _ghost_viscous(solver) && _ghost_flux_dims(solver)[d] &&
-    size(solver.ghost_flux[d], 4) > 0 && !_remainder_ghosted(solver, d)
+    size(solver.amr.ghost_flux[d], 4) > 0 && !_remainder_ghosted(solver, d)
 
 # Whether some coarse-fine face of the patch reads the gradient ring. The shell
 # imposition fills the ring only then (`_fills_gradient_ring`), so the filling
@@ -2162,7 +2167,7 @@ function _coarse_fine_ghost_fluxes!(solver::PatchSolver, lt, scratch, Q)
     ft = solver.field_tuples
     for d in 1:3
         _ring_dim(solver, d) || continue
-        G = solver.ghost_flux[d]
+        G = solver.amr.ghost_flux[d]
         gring = _device_path(G) ? scratch.gring : lt.gradients.gring
         for side in 1:2
             parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) ||
@@ -2186,7 +2191,7 @@ end
 # `d`, whose mirror fill writes the field's ghosts. The copy would then hold
 # the same values over the lines the solve reads.
 @inline _reads_ghost_flux(solver::PatchSolver, G, Ad, d::Int, less_p::Bool) =
-    G isa Array && !_device_path(G) && !_device_plan_at(solver.deriv_plans, d) &&
+    G isa Array && !_device_path(G) && !_device_plan_at(solver.plans.deriv_plans, d) &&
     Ad === nothing && !less_p && _fold_at(solver, d) === nothing
 
 # dQ[:, c] -= D_ext(P) along every interface dimension, P the ghost-differenced
@@ -2201,7 +2206,7 @@ function _ghost_flux_solves!(solver::PatchSolver, Q, dQ, n_cons::Int)
     dims = _ghost_flux_dims(solver)
     viscous = _ghost_viscous(solver)
     for d in 1:3
-        G = solver.ghost_flux[d]
+        G = solver.amr.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
         whole = _remainder_ghosted(solver, d)
         viscous || whole || continue

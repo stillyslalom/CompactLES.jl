@@ -399,7 +399,7 @@ function composite_errors(solver, states, ref, spec)
             o = ps.decomp.n_halo_d
             n = ps.decomp.n_local
             m1, m2, m3 = maps[li]
-            covered = ps.covered
+            covered = ps.amr.covered
             for k in 1:n[3], j in 1:n[2], i in 1:n[1]
                 g1, g2, g3 = m1[i], m2[j], m3[k]
                 if g1 == 0 || g2 == 0 || g3 == 0
@@ -510,7 +510,7 @@ function patch_rates!(classes, ps, Q, scale, zero_cache)
     Dz = [Z for _ in 1:nsp]
     sharp = CL._sharpening_constants(ps)
     level = ps.patch.level
-    covered = ps.covered
+    covered = ps.amr.covered
     for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         ρ = ps.rho[I]

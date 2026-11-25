@@ -363,24 +363,6 @@ mutable struct PositivityLimiter{T,A<:AbstractArray{T,3},V<:AbstractVector{T},
     active::Bool
 end
 
-# The grouped names read as the limiter's own properties.
-@inline _is_limiter_weight(n::Symbol) =
-    n === :weights || n === :inv_weights || n === :free || n === :areas ||
-    n === :volume || n === :deriv_lhs || n === :deriv_rhs ||
-    n === :filter_lhs || n === :filter_psi
-@inline _is_limiter_line(n::Symbol) =
-    n === :anchor || n === :anchor_hi || n === :totals || n === :aux ||
-    n === :offset || n === :wrap || n === :cstar || n === :zero_plane ||
-    n === :dropped || n === :dropped_mid || n === :line_counts ||
-    n === :staged || n === :send || n === :recv
-@inline _is_limiter_scratch(n::Symbol) =
-    n === :faces || n === :base || n === :rates || n === :speeds || n === :theta
-@inline Base.getproperty(lim::PositivityLimiter, n::Symbol) =
-    _is_limiter_weight(n) ? getfield(getfield(lim, :weight_set), n) :
-    _is_limiter_line(n) ? getfield(getfield(lim, :line_buffers), n) :
-    _is_limiter_scratch(n) ? getfield(getfield(lim, :scratch), n) :
-    n === :counts ? getfield(getfield(lim, :counters), :counts) : getfield(lim, n)
-
 """
     borrow_stage_buffers(lim) -> LimiterScratch
     borrow_filter_buffers(lim) -> LimiterScratch
@@ -853,7 +835,7 @@ function PositivityLimiter(solver; separate::Bool=false)
     n_cons = solver.equations.n_cons
     # A refined patch's inactive fold holds the plans along its dimension.
     plan_scheme(d) = (fold = _fold_at(solver, d);
-                      p = fold === nothing ? _plan_at(solver.div_plans, d) :
+                      p = fold === nothing ? _plan_at(solver.plans.div_plans, d) :
                           fold_vplan(fold, 1);
                       (p isa DevicePlan ? p.host : p).scheme)
     schemes = solver.schemes

@@ -1959,7 +1959,7 @@ function _child_mask!(ps::PatchSolver, Q, comps, d::Int)
         end
     end
     m = ps.sensor_sp
-    covered = ps.patch.covered
+    covered = ps.patch.amr.covered
     cov = covered
     if _device_path(parent(Q))
         T = eltype(m)
@@ -2052,7 +2052,7 @@ end
 function _drop_child_residual!(out, f, solver::PatchSolver, d::Int, σ::Int, mask)
     fold = _fold_at(solver, d)
     fold === nothing || fold.pair === nothing || return out
-    plan = fold === nothing ? _operator_plan(solver.filter_plans, d) :
+    plan = fold === nothing ? _operator_plan(solver.plans.filter_plans, d) :
                               _fold_plan(fold, σ, Val(:filter), 1, false)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d

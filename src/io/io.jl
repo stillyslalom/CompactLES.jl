@@ -2204,7 +2204,7 @@ hidden-point flag where a child level covers a node's whole quadrature cell
 """
 function _vtk_ghost_points(ps::PatchSolver, ranges)
     o1, o2, o3 = ps.decomp.n_halo_d
-    covered = ps.covered
+    covered = ps.amr.covered
     return UInt8[covered[i+o1, j+o2, k+o3] == 0xff ? VTK_HIDDENPOINT : 0x00
                  for i in ranges[1], j in ranges[2], k in ranges[3]][:]
 end

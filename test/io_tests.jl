@@ -262,7 +262,7 @@ end
         all(getfield(s, :patches)[2:end]) do p
             ref = CL.plan_direction(p.decomp, lele_d1_6(), 1, p.h[1];
                                     lo_closures=bl.closures, hi_closures=bl.closures)
-            p.div_plans[1].clo == ref.clo && p.div_plans[1].chi == ref.chi
+            p.plans.div_plans[1].clo == ref.clo && p.plans.div_plans[1].chi == ref.chi
         end
     end
     dir = mktempdir()
@@ -533,7 +533,7 @@ end
     ranges = CL._output_ranges(root, (1, 1, 1), nothing)
     ghost = CL._vtk_ghost_points(root, ranges)
     @test count(==(CL.VTK_HIDDENPOINT), ghost) == 23 * 23
-    @test count(==(0xff), root.covered) == 23 * 23
+    @test count(==(0xff), root.amr.covered) == 23 * 23
     @test container_extension(solver) == ".vtm"
 
     # A FieldWriter on the state vector numbers .vtm frames into its .pvd.

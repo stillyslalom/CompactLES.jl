@@ -499,8 +499,8 @@ with one type the first tile compiles only the level phases a tile holder
 runs, about 2 s, and later tiles nothing.
 
 The operator plans are grouped in a `PatchPlans` and the refinement
-state in a `PatchAMR`, and the patch serves their names as its own
-properties, so `patch.deriv_plans` and `patch.covered` read as fields.
+state in a `PatchAMR`, read as `patch.plans.deriv_plans` and
+`patch.amr.covered`.
 
 The struct is mutable, although no field is reassigned after construction,
 because of those dynamic calls and the `_cold` barriers: an argument passed
@@ -555,9 +555,10 @@ mutable struct Patch{T,A<:AbstractArray{T,3},Fo,PL,W,AM,TF}
     field_tuples::TF
 end
 
-# The positional argument list every construction site uses; `field_tuples`
-# is derived here, not at the sites, so the sites never fall out of
-# step with the wrapper set.
+# The constructor every site uses: the plans and the refinement state as
+# their records, the persistent arrays as the named tuple `_patch_arrays`
+# returns. `field_tuples` is derived here, not at the sites, so the sites
+# never fall out of step with the wrapper set.
 #
 # The conditions are kept out of this method's specialization as they are
 # kept out of the type: the struct is built with `_UNSET_FACES` and the
@@ -565,32 +566,49 @@ end
 # each new combination, which a regrid meets mid-run when it first places a
 # tile on a domain face whose condition holds a user function.
 Base.@nospecializeinfer function Patch(id, level, region, comm, decomp, h, faces,
-               @nospecialize(bcs), folds,
-               deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
-               pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
-               mu_art, beta_art, kappa_art, D_art,
-               inv_J, area_d, inv_h, inv_r, cot_over_r,
-               rhs_workspace, covered, overwritten, level_scratch, ghost_flux,
-               sensed_fields=empty(Y),
-               child_deep=isempty(rhs_workspace.child_mask) ?
-                          rhs_workspace.child_mask : zero(overwritten),
-               child_masked=(false, false, false))
-    field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
+               @nospecialize(bcs), folds, plans::PatchPlans, pairbuf, pairout,
+               a::NamedTuple, rhs_workspace, amr::PatchAMR)
+    field_tuples = (Y=FieldVector(a.Y), D_art=FieldVector(a.D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
                     flux=FieldMatrix(rhs_workspace.flux))
-    plans = PatchPlans(deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans)
-    captures = RefluxCapture{eltype(rho),typeof(similar(rho, 0, 0)),
-                             typeof(similar(rho, 0))}[]
-    amr = PatchAMR(covered, overwritten, level_scratch, ghost_flux, sensed_fields,
-                   child_deep, child_masked, captures, false)
     patch = Patch(id, level, region, comm, decomp, h, faces, _UNSET_FACES, folds,
-                  plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
-                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
-                  inv_J, area_d, inv_h, inv_r, cot_over_r,
+                  plans, pairbuf, pairout, a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c,
+                  a.cp_mix, a.Y, a.mu_art, a.beta_art, a.kappa_art, a.D_art,
+                  a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r,
                   rhs_workspace, amr, field_tuples)
     setfield!(patch, :bcs, bcs::FaceConditions)
     return patch
+end
+
+# The persistent arrays of a patch from an allocator `g()`, by name: the
+# primitives, the artificial coefficients and the geometry.
+function _patch_arrays(g::F, n_species::Int) where {F}
+    return (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
+            Y=[g() for _ in 1:n_species], mu_art=g(), beta_art=g(), kappa_art=g(),
+            D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
+            inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g())
+end
+
+# Those arrays of an existing patch.
+_patch_arrays(p::Patch) =
+    (rho=p.rho, u=p.u, v=p.v, w=p.w, p=p.p, T_ion=p.T_ion, c=p.c, cp_mix=p.cp_mix,
+     Y=p.Y, mu_art=p.mu_art, beta_art=p.beta_art, kappa_art=p.kappa_art,
+     D_art=p.D_art, inv_J=p.inv_J, area_d=p.area_d, inv_h=p.inv_h, inv_r=p.inv_r,
+     cot_over_r=p.cot_over_r)
+
+# A patch's refinement state from its arrays, with no junction captures and
+# the derivative mask unarmed. `a` is the patch's array set and gives the
+# captures' storage types; the derivative mask's node field exists where the
+# workspace carries the mask's scratch.
+function PatchAMR(a::NamedTuple, rhs_workspace, covered, overwritten, level_scratch,
+                  ghost_flux, sensed_fields=empty(a.Y))
+    captures = RefluxCapture{eltype(a.rho),typeof(similar(a.rho, 0, 0)),
+                             typeof(similar(a.rho, 0))}[]
+    child_deep = isempty(rhs_workspace.child_mask) ? rhs_workspace.child_mask :
+                 zero(overwritten)
+    return PatchAMR(covered, overwritten, level_scratch, ghost_flux, sensed_fields,
+                    child_deep, (false, false, false), captures, false)
 end
 
 const _UNSET_FACES = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -621,18 +639,18 @@ _covered_mask(decomp::Decomp) =
 """
     _fill_covered!(patch, regions, period=(0, 0, 0))
 
-Rewrite `patch.covered` from the child regions `regions`, given in this
+Rewrite `patch.amr.covered` from the child regions `regions`, given in this
 patch's level node space (a `LevelTransfer.region` of the level below), a
 region across a periodic seam covering through its images under `period`
-(that node space's period, `_level_period`), and with it `patch.overwritten`
+(that node space's period, `_level_period`), and with it `patch.amr.overwritten`
 (`_fill_overwritten!`). Rank-local: it reads the regions and the patch's own
 block placement, both of which every rank of the patch's level holds.
 """
 function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
                         period::NTuple{3,Int}=(0, 0, 0))
     regions = [_shifted(r, σ) for r in regions for σ in _images(period)]
-    covered = patch.covered
-    overwritten = patch.overwritten
+    covered = patch.amr.covered
+    overwritten = patch.amr.overwritten
     decomp = patch.decomp
     o = decomp.n_halo_d
     n = decomp.n_local
@@ -641,7 +659,7 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
     # is formed, `LEVEL_BUFFER` nodes beyond it on every active side, which
     # their erosions read: those nodes may lie on another rank or another
     # tile, so they are evaluated from the regions, not exchanged.
-    eroded = !isempty(overwritten) || !isempty(patch.child_deep)
+    eroded = !isempty(overwritten) || !isempty(patch.amr.child_deep)
     pad = ntuple(d -> decomp.active[d] && eroded ? LEVEL_BUFFER : 0, 3)
     bits_ext = zeros(UInt8, ntuple(d -> n[d] + 2 * pad[d], 3))
     # The patch's own edge nodes along each dimension, and whether the face
@@ -688,8 +706,8 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion},
     isempty(overwritten) ||
         _fill_overwritten!(overwritten, bits_ext, pad, base, edge_lo, edge_hi,
                            closed, decomp)
-    isempty(patch.child_deep) ||
-        _fill_child_deep!(patch.child_deep, bits_ext, pad, base, edge_lo, edge_hi,
+    isempty(patch.amr.child_deep) ||
+        _fill_child_deep!(patch.amr.child_deep, bits_ext, pad, base, edge_lo, edge_hi,
                           closed, decomp)
     return patch
 end
@@ -843,19 +861,19 @@ end
 # plain `getfield` at every call site.
 @inline _is_patch_prop(n::Symbol) =
     n === :decomp || n === :bcs || n === :folds || n === :faces ||
-    n === :region || n === :h || n === :deriv_plans || n === :div_plans ||
-    n === :filter_plans || n === :smooth_plans || n === :ring_plans ||
-    n === :pairbuf || n === :pairout || n === :ghost_flux || n === :sensed_fields ||
+    n === :region || n === :h || n === :plans || n === :amr ||
+    n === :pairbuf || n === :pairout ||
     n === :rho || n === :u || n === :v || n === :w ||
     n === :p || n === :T_ion || n === :c || n === :cp_mix || n === :Y ||
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
-    n === :cot_over_r || n === :covered ||
-    n === :overwritten || n === :child_deep || n === :child_masked ||
-    n === :field_tuples || _is_workspace_prop(n)
+    n === :cot_over_r || n === :field_tuples || _is_workspace_prop(n) ||
+    _is_plan_prop(n) || _is_amr_prop(n)
 
-# The names `PatchPlans` and `PatchAMR` hold, which a patch's own property
-# surface serves as it did when they were its fields.
+# The names `PatchPlans` and `PatchAMR` hold. A `Patch` and a `PatchSolver`
+# read them through the record (`patch.plans.deriv_plans`,
+# `ps.amr.covered`); the single-patch `Solver` alone serves them flat, as it
+# does every other patch-owned name.
 @inline _is_plan_prop(n::Symbol) =
     n === :deriv_plans || n === :div_plans || n === :filter_plans ||
     n === :smooth_plans || n === :ring_plans
@@ -864,17 +882,12 @@ end
     n === :ghost_flux || n === :sensed_fields || n === :child_deep ||
     n === :child_masked || n === :reflux_captures || n === :reflux_deferred
 
-@inline Base.getproperty(p::Patch, n::Symbol) =
-    _is_plan_prop(n) ? getfield(getfield(p, :plans), n) :
-    _is_amr_prop(n) ? getfield(getfield(p, :amr), n) : getfield(p, n)
-@inline Base.setproperty!(p::Patch, n::Symbol, value) =
-    _is_amr_prop(n) ? setproperty!(getfield(p, :amr), n, value) :
-                      setfield!(p, n, convert(fieldtype(typeof(p), n), value))
-
-# The read behind both forwards: a workspace name takes one further hop.
+# The single-patch `Solver`'s read of a patch-owned name: a workspace name
+# and a grouped name take one further hop.
 @inline _patch_property(p::Patch, n::Symbol) =
     _is_workspace_prop(n) ? getfield(getfield(p, :rhs_workspace), n) :
-                            getproperty(p, n)
+    _is_plan_prop(n) ? getfield(getfield(p, :plans), n) :
+    _is_amr_prop(n) ? getfield(getfield(p, :amr), n) : getfield(p, n)
 
 """
     PatchSolver(solver, patch)
@@ -899,11 +912,18 @@ mutable struct PatchSolver{T,S,P<:Patch{T}}
 end
 
 @inline function Base.getproperty(ps::PatchSolver, name::Symbol)
-    _is_patch_prop(name) && return _patch_property(getfield(ps, :patch), name)
     name === :solver && return getfield(ps, :solver)
     name === :patch && return getfield(ps, :patch)
+    _is_workspace_prop(name) &&
+        return getfield(getfield(getfield(ps, :patch), :rhs_workspace), name)
+    (_is_plan_prop(name) || _is_amr_prop(name)) && _grouped_prop_error(name)
+    _is_patch_prop(name) && return getfield(getfield(ps, :patch), name)
     return getproperty(getfield(ps, :solver), name)
 end
+
+@noinline _grouped_prop_error(name::Symbol) =
+    error("property `$name` of a patch is read through its record: " *
+          (_is_plan_prop(name) ? "`ps.plans.$name`" : "`ps.amr.$name`"))
 
 # Solver clock updates written through a PatchSolver land on the solver.
 @inline Base.setproperty!(ps::PatchSolver, name::Symbol, value) =
@@ -930,12 +950,12 @@ end
 
 @inline function _mark_gradients!(solver)
     p = _patch_of(solver)
-    getfield(p, :rhs_workspace).gradients_filled_by[] = p.covered
+    getfield(p, :rhs_workspace).gradients_filled_by[] = p.amr.covered
     return nothing
 end
 @inline function _mark_sensors!(solver)
     p = _patch_of(solver)
-    getfield(p, :rhs_workspace).sensors_filled_by[] = p.covered
+    getfield(p, :rhs_workspace).sensors_filled_by[] = p.amr.covered
     return nothing
 end
 
@@ -946,7 +966,7 @@ function _check_scratch_writer(solver, group::Symbol, name::Symbol)
     p = _patch_of(solver)
     ws = getfield(p, :rhs_workspace)
     mark = group === :gradients ? ws.gradients_filled_by[] : ws.sensors_filled_by[]
-    (mark === p.covered || mark === SCRATCH_UNFILLED) && return nothing
+    (mark === p.amr.covered || mark === SCRATCH_UNFILLED) && return nothing
     throw(ArgumentError(
         "scalar_field: `$name` is read from RHS scratch that this patch shares " *
         "with other patches of the same extent, and another patch wrote it last. " *

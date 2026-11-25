@@ -1212,7 +1212,8 @@ end
         run!(s, states; tfinal=0.2, nmax=40000)
         @test s.t ≈ 0.2
         @test level_regions(s, 1) != initial
-        @test all(p -> p.level == 0 || p.ring_plans[1] isa CL.InterfaceRingPlans, s.patches)
+        @test all(p -> p.level == 0 ||
+                       p.plans.ring_plans[1] isa CL.InterfaceRingPlans, s.patches)
         for (psq, Q) in CL.eachpatch(s, states)
             n = psq.decomp.n_local[1]
             @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
@@ -1244,10 +1245,10 @@ end
         interior = ntuple(d -> o[d]+1:o[d]+n[d], 3)
         view(parent(Q), interior..., :) .= 1 .+ 0.1 .* rand(rng, n..., size(Q, 4))
         expected = Array(parent(Q)[interior..., :])
-        keep = ps.patch.covered[interior...] .!= 0xff
+        keep = ps.patch.amr.covered[interior...] .!= 0xff
         @test count(!, keep) > 0
         for d in 1:2
-            scheme = CL._plan_at(ps.filter_plans, d).scheme
+            scheme = CL._plan_at(ps.plans.filter_plans, d).scheme
             lhs = scheme isa CL.CompactScheme ? [scheme.alpha] : scheme.lhs
             m = n[d]
             circ(c0, c) = [i == j ? c0 : (k = mod(i - j, m); k = min(k, m - k);
@@ -1281,7 +1282,7 @@ end
     rng = Random.MersenneTwister(11)
     view(parent(Q), rows, 1 + o[2], 1 + o[3], :) .= 1 .+ 0.1 .* rand(rng, n, size(Q, 4))
     f0 = Array(parent(Q)[rows, 1 + o[2], 1 + o[3], :])
-    covered = ps.patch.covered[rows, 1 + o[2], 1 + o[3]] .== 0xff
+    covered = ps.patch.amr.covered[rows, 1 + o[2], 1 + o[3]] .== 0xff
     @test count(covered) > 0
     fold = ps.folds[1]
     expected = similar(f0)
@@ -1338,7 +1339,7 @@ end
     o = ps.decomp.n_halo_d
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3], :]
-    uncovered = ps.patch.covered[rows, 1 + o[2], 1 + o[3]] .== 0
+    uncovered = ps.patch.amr.covered[rows, 1 + o[2], 1 + o[3]] .== 0
     @test count(uncovered) > 20
     rates(masked) = begin
         dQ = ConservedState(zero(parent(Q)))
@@ -1349,7 +1350,7 @@ end
     end
     plain = rates(false)
     masked = rates(true)
-    @test ps.patch.child_masked == (true, false, false)
+    @test ps.patch.amr.child_masked == (true, false, false)
     scale = maximum(abs, plain)
     @test maximum(abs, plain[uncovered, :]) > 1e-4 * scale
     @test maximum(abs, masked[uncovered, :]) < 1e-13 * scale
@@ -1359,7 +1360,7 @@ end
                                              p=1.0))
     plain = rates(false)
     masked = rates(true)
-    @test ps.patch.child_masked == (false, false, false)
+    @test ps.patch.amr.child_masked == (false, false, false)
     @test masked == plain
 end
 
@@ -1396,7 +1397,7 @@ end
     end
     plain = gradients(false, false)
     species_plain = gradients(true, false)
-    @test ps.patch.child_masked == (true, false, false)
+    @test ps.patch.amr.child_masked == (true, false, false)
     masked = gradients(true, true)
     @test species_plain.Y == plain.Y
     @test species_plain.rhoY == plain.rhoY
@@ -1430,7 +1431,7 @@ end
     o = ps.decomp.n_halo_d
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3]]
-    grade = line(ps.patch.overwritten)
+    grade = line(ps.patch.amr.overwritten)
     @test findall(>(0), grade) == 19:47
     @test findall(==(2), grade) == 22:44
     coefficients(masked) = begin
@@ -1526,7 +1527,7 @@ end
             root, Q = s.patches[1], states[1]
             o = root.decomp.n_halo_d
             nodes = [CartesianIndex(i + o[1], 1 + o[2], 1 + o[3]) for i in 1:n
-                     if root.covered[i + o[1], 1 + o[2], 1 + o[3]] == 0x00]
+                     if root.amr.covered[i + o[1], 1 + o[2], 1 + o[3]] == 0x00]
             density() = [Q[I, 1] + Q[I, 2] for I in nodes]
             ρ0 = density()
             try
@@ -1659,10 +1660,10 @@ end
     first_tile, last_tile = patches[2], patches[end]
     ws = first_tile.rhs_workspace
     @test ws.sensor === last_tile.rhs_workspace.sensor
-    @test ws.gradients_filled_by[] === first_tile.covered
-    @test last_tile.rhs_workspace.gradients_filled_by[] === last_tile.covered
-    @test ws.sensors_filled_by[] === last_tile.covered
-    @test patches[1].rhs_workspace.sensors_filled_by[] === patches[1].covered
+    @test ws.gradients_filled_by[] === first_tile.amr.covered
+    @test last_tile.rhs_workspace.gradients_filled_by[] === last_tile.amr.covered
+    @test ws.sensors_filled_by[] === last_tile.amr.covered
+    @test patches[1].rhs_workspace.sensors_filled_by[] === patches[1].amr.covered
     ps_first = CL.PatchSolver(solver, first_tile)
     ps_last = CL.PatchSolver(solver, last_tile)
     for name in (:sensor, :strain_mag)
@@ -1678,7 +1679,7 @@ end
     run!(plain, plain_states; tfinal=1.0, nmax=1)
     plain_first, plain_last = plain.patches[2], plain.patches[end]
     @test plain_first.rhs_workspace === plain_last.rhs_workspace
-    @test plain_first.rhs_workspace.gradients_filled_by[] === plain_last.covered
+    @test plain_first.rhs_workspace.gradients_filled_by[] === plain_last.amr.covered
     for name in gradient_names
         @test_throws ArgumentError CL.scalar_field(CL.PatchSolver(plain, plain_first), name)
         @test CL.scalar_field(CL.PatchSolver(plain, plain_last), name) isa AbstractArray
@@ -1701,7 +1702,7 @@ end
     @test_throws ArgumentError CL.scalar_field(ps_last, :sensor)
     # A surviving tile keeps its identity through a regrid's repatching.
     @test CL._repatch(first_tile, 99, first_tile.faces, first_tile.bcs,
-                      first_tile.comm).covered === first_tile.covered
+                      first_tile.comm).amr.covered === first_tile.amr.covered
     # The multi-patch forward names the scratch as shared.
     err = try
         solver.sensor
@@ -1743,7 +1744,7 @@ end
         serial, s1, sets1 = evolve(1, subcycle)
         tasks, s3, sets3 = evolve(3, subcycle)
         @test sets1 == 1 && sets3 == 3
-        @test any(p -> !isempty(p.reflux_captures), s3.patches[2:end])
+        @test any(p -> !isempty(p.amr.reflux_captures), s3.patches[2:end])
         @test length(serial) == length(tasks)
         @test all(a == b for (a, b) in zip(serial, tasks))
         @test s1.t == s3.t
@@ -1774,8 +1775,8 @@ end
     initialize!(sb, qb, ic)
     @test CL._level_sensors(st, st.levels[2])
     @test !CL._level_sensors(sb, sb.levels[2])
-    @test all(length(p.sensed_fields) == 1 for p in st.patches[2:end])
-    @test isempty(sb.patches[2].sensed_fields)
+    @test all(length(p.amr.sensed_fields) == 1 for p in st.patches[2:end])
+    @test isempty(sb.patches[2].amr.sensed_fields)
     CL._prime_coefficients!(st, qt, Workspace(qt))
     CL._prime_coefficients!(sb, qb, Workspace(qb))
     box = sb.patches[2]
@@ -1865,8 +1866,8 @@ end
     initialize!(sb, qb, ic)
     @test CL._level_sensors(st, st.levels[2])
     # The strain magnitude, then one gradient slot per dimension.
-    @test all(length(p.sensed_fields) == 4 for p in st.patches[2:end])
-    @test isempty(sb.patches[2].sensed_fields)
+    @test all(length(p.amr.sensed_fields) == 4 for p in st.patches[2:end])
+    @test isempty(sb.patches[2].amr.sensed_fields)
     CL._prime_coefficients!(st, qt, Workspace(qt))
     CL._prime_coefficients!(sb, qb, Workspace(qb))
     # The smoothed gradients a patch forms alone, from its current primitives.
@@ -2339,7 +2340,7 @@ end
         # normal to x a face node at x = x_lo is fully covered, in the
         # plane normal to y it is half covered.
         root = PatchSolver(s, s.patches[1])
-        m(g1, g2, g3) = root.covered[padded_index(root, g1, g2, g3)]
+        m(g1, g2, g3) = root.amr.covered[padded_index(root, g1, g2, g3)]
         @test CL.uncovered_fraction(m(10, 10, 10)) == 0
         @test CL.uncovered_fraction(m(lo, 10, 10)) == 0.5
         @test CL.uncovered_fraction(m(hi, 10, 10)) == 0.5
@@ -2374,13 +2375,13 @@ end
     states = allocate_state(sa)
     initialize!(sa, states, (x, y, z) -> x < 0.5 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-    mask0 = copy(sa.patches[1].covered)
+    mask0 = copy(sa.patches[1].amr.covered)
     run!(sa, states; tfinal=1.0, nmax=20)
     root = sa.patches[1]
-    @test root.covered != mask0
-    kept = copy(root.covered)
+    @test root.amr.covered != mask0
+    kept = copy(root.amr.covered)
     CL._fill_covered!(root, level_regions(sa, 1))
-    @test root.covered == kept
+    @test root.amr.covered == kept
     @test abs(domain_volume(sa) - 1) < 1e-13
     @test abs(volume_integral(sa, fields(sa, states, (x, y, z) -> x)) - 0.5) < 1e-13
 end
@@ -2611,7 +2612,7 @@ end
     empty_level(s, states) = isempty(level_regions(s, 1)) && nlevels(s) == 2 &&
         length(states) == length(s.patches) == 1 &&
         !getfield(s, :levels)[2].level_comm.owned &&
-        all(==(0), getfield(s, :patches)[1].covered)
+        all(==(0), getfield(s, :patches)[1].amr.covered)
     s, states = setup(prob, num)
     @test empty_level(s, states)
     dir = mktempdir()
@@ -2686,7 +2687,7 @@ end
     tiled = Dict{Int,Int8}()
     for li in getfield(s, :levels)[2].patches
         p = s.patches[li]
-        CL._tag_sweep!(marks(tiled), s, p, states[li], zeros(Int8, size(p.covered)),
+        CL._tag_sweep!(marks(tiled), s, p, states[li], zeros(Int8, size(p.amr.covered)),
                        false)
     end
     uniform = Dict{Int,Int8}()
@@ -2955,7 +2956,7 @@ const WALL_LEVEL_TOL = 1e-7
     H = solver.patches[1].h[1]
     @test volume_integral(solver, lin) ≈ 2.0 + 2 * (H^2 - (H / 3)^2) / 12 atol = 1e-13
     root = PatchSolver(solver, solver.patches[1])
-    @test root.covered[padded_index(root, 1, 1, 1)] == 0xff
+    @test root.amr.covered[padded_index(root, 1, 1, 1)] == 0xff
     # Against the uniform run at the level's spacing in the same equal steps,
     # the refined patch differs by the refinement's error alone, at the low
     # wall and, mirrored, at the high one.
@@ -3312,7 +3313,7 @@ const NSCBC_REFLECTION_TOL = 1e-6
         refresh_primitives!(s, q)
         for (ps, Q) in CL.eachpatch(s, q), i in 1:ps.decomp.n_local[1]
             I = padded_index(ps, i, 1, 1)
-            ps.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
+            ps.amr.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
         end
         r
     end
@@ -3484,7 +3485,7 @@ const AXIS_FILTER_TOL = 2e-5
     # at the root's spacing, taken at the tile's instead:
     # (h² − (h/3)²)/24 = h²/27. The junction's Ω on the tile's high face
     # takes −(h² − (h/3)²)/24 of the volume's integrand r, which cancels it.
-    @test CL.uncovered_fraction(root.covered[padded_index(root, 1, 1, 1)]) == 0
+    @test CL.uncovered_fraction(root.amr.covered[padded_index(root, 1, 1, 1)]) == 0
     @test CL.quad_weight(fine, 1, 1) == 1.0
     @test CL._edge_factor(fine, 1, 1, padded_index(fine, 1, 1, 1)) ≈ 11 / 12
     alone = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
@@ -3780,7 +3781,7 @@ const PLACED_NSCBC_TOL = 5e-6
     p = s.patches[k]
     marks = Ref(0)
     CL._tag_sweep!((g1, g2, g3, level) -> (marks[] += 1), s, p, q[k],
-                   zeros(Int8, size(p.covered)), false)
+                   zeros(Int8, size(p.amr.covered)), false)
     @test marks[] == 0
 
     # --- A pulse leaving through an NSCBC outflow ---------------------------------
@@ -3808,7 +3809,7 @@ const PLACED_NSCBC_TOL = 5e-6
         refresh_primitives!(s, q)
         for (ps, Q) in CL.eachpatch(s, q), i in 1:ps.decomp.n_local[1]
             local I = padded_index(ps, i, 1, 1)
-            ps.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
+            ps.amr.covered[I] == 0 && (r = max(r, abs(ps.p[I] - 1)))
         end
         return r
     end
@@ -4256,7 +4257,7 @@ const SEAM_REGRID_TOL = 5e-9
         @test lt.period == (N, 0, 0) && lt.coarse_regions == [b.patches[1].region]
         # The root's covered mask is the translated one, the covered nodes on
         # both sides of the seam, and the composite quadrature is exact.
-        ca, cb = a.patches[1].covered[:, 1, 1], b.patches[1].covered[:, 1, 1]
+        ca, cb = a.patches[1].amr.covered[:, 1, 1], b.patches[1].amr.covered[:, 1, 1]
         pad = a.patches[1].decomp.n_halo_d[1]
         @test all(cb[mod1(g + 36, N) + pad] == ca[g + pad] for g in 1:N)
         @test domain_volume(b) ≈ 1.0 atol = 1e-14

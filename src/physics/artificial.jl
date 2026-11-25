@@ -750,7 +750,7 @@ The choice is made once per sensor, not inside either kernel: both are
 full array passes, and a per-point test would cost more than the difference
 between the detectors themselves.
 
-It is also made on a type, not on the `Symbol`. `solver.ring_plans` is
+It is also made on a type, not on the `Symbol`. `solver.plans.ring_plans` is
 `nothing` exactly when no sensor takes `:d8` (under `:delta4`, and under
 `:species_d8` without a species sensor), and this case never reaches
 `ring_sum!`; reaching it in dead code would leave `bench/jetcheck.jl`
@@ -766,7 +766,7 @@ detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
             parity::NTuple{3,Int}=(1, 1, 1),
             wall_parity::NTuple{3,Int}=(1, 1, 1), ghosts::Bool=false) =
     _detect_sum!(out, f, solver, wpow, accumulate, parity, wall_parity, ghosts,
-                 solver.ring_plans)
+                 solver.plans.ring_plans)
 
 _detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
              ::Nothing) =
@@ -787,7 +787,7 @@ end
 # `:species_d8` with a species sensor, and `delta4_sum!` under `:delta4`. The
 # same dispatch on the plans' type as `detect_sum!`, without its `Symbol` test.
 species_detect_sum!(out, f, solver) =
-    _species_detect_sum!(out, f, solver, solver.ring_plans)
+    _species_detect_sum!(out, f, solver, solver.plans.ring_plans)
 _species_detect_sum!(out, f, solver, ::Nothing) =
     delta4_sum!(out, f, solver, 1; ghosts=true)
 _species_detect_sum!(out, f, solver, ::Tuple) =
@@ -842,7 +842,7 @@ smooth_sensor!(f, solver, mask_child::Bool=true) =
 # keep the copy.
 _smooth_in_place(solver, d::Int) = _smooth_in_place(_fold_at(solver, d), solver, d)
 _smooth_in_place(::Nothing, solver, d::Int) =
-    !(_smooth_plan(_operator_plan(solver.smooth_plans, d), false) isa DevicePlan)
+    !(_smooth_plan(_operator_plan(solver.plans.smooth_plans, d), false) isa DevicePlan)
 _smooth_in_place(fold::FoldSpec, solver, d::Int) =
     fold.pair === nothing && !(_fold_plan(fold, 1, Val(:smooth), 1, false) isa DevicePlan)
 

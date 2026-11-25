@@ -231,8 +231,9 @@ end
               diagnostics * ", which recompute it for each patch")
     error("property `$name` is per-patch state and this solver holds several " *
           "patches (a refined or patched run). " * diagnostics * ", or iterate " *
-          "`for (ps, Q) in eachpatch(solver, states)`, where `ps.$name` is one " *
-          "patch's array")
+          "`for (ps, Q) in eachpatch(solver, states)`, where `ps." *
+          (_is_plan_prop(name) ? "plans." : _is_amr_prop(name) ? "amr." : "") *
+          "$name` is one patch's")
 end
 
 # The sole patch of a single-patch solver, for the scratch-writer records

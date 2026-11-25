@@ -57,7 +57,7 @@ function _follow_patches!(solver, pl::PatchLimiters)
     # The exempt nodes are written over the interior by a regrid; a θ pass
     # reads them on the rank halos as well, as the rank holding them does.
     for (lim, p) in zip(pl.limiters, patches)
-        isempty(lim.free[4]) || exchange_halos!(lim.free[4], p.decomp)
+        isempty(lim.weight_set.free[4]) || exchange_halos!(lim.weight_set.free[4], p.decomp)
     end
     return pl.limiters
 end
@@ -80,7 +80,7 @@ function _rebuild_limiters!(solver, pl::PatchLimiters)
         push!(limiters, lim)
     end
     for lim in values(held)
-        pl.retired .+= lim.counts
+        pl.retired .+= lim.counters.counts
     end
     pl.limiters = limiters
     pl.patches = Patch[p for p in patches]
@@ -157,8 +157,9 @@ function positivity_counts(solver)
     lim = getfield(solver, :positivity)
     lim === nothing && throw(ArgumentError(
         "positivity_counts: the solver was built without positivity_limiter"))
-    local_counts = lim isa PositivityLimiter ? lim.counts :
-                   foldl((s, l) -> s .+ l.counts, lim.limiters; init=copy(lim.retired))
+    local_counts = lim isa PositivityLimiter ? lim.counters.counts :
+                   foldl((s, l) -> s .+ l.counters.counts,
+                         lim.limiters; init=copy(lim.retired))
     c = MPI.Allreduce(local_counts, +, solver.comm)
     return (stage_faces=c[1], stage_limited=c[2], filter_faces=c[3],
             filter_limited=c[4], unguaranteed=c[5], axis_limited=c[6])
@@ -363,14 +364,16 @@ function _limited_registers!(dQ::_LimiterRHS, c::Int, slot::Int, f, solver, d::I
     if decomp.coords[d] == 0
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_anchor_point!, solver.tmp_a, nA, nB, 1,
-                   lim.anchor[d], f, solver.tmp_a, lim.weights[d], dQ.A, dQ.dt, slot, d,
+                   lim.line_buffers.anchor[d], f, solver.tmp_a, lim.weight_set.weights[d],
+                   dQ.A, dQ.dt, slot, d,
                    lim.periodic[d] || lim.open[d][1], lim.fold_lo[d], σf,
-                   lim.anchor_face[d], lim.deriv_lhs, lim.deriv_rhs, o1, o2, o3)
+                   lim.anchor_face[d], lim.weight_set.deriv_lhs, lim.weight_set.deriv_rhs,
+                   o1, o2, o3)
     end
     if lim.interface[d][2] && !lim.open[d][2] && decomp.coords[d] == decomp.dims[d] - 1
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_end_anchor_point!, solver.tmp_a, nA, nB, 1,
-                   lim.anchor_hi[d], f, dQ.A, dQ.dt, slot, d, decomp.n_local[d],
+                   lim.line_buffers.anchor_hi[d], f, dQ.A, dQ.dt, slot, d, decomp.n_local[d],
                    o1, o2, o3)
     end
     return dQ
@@ -439,19 +442,20 @@ function _stage_theta!(lim::PositivityLimiter, solver, Q, dQ, du, stage::Int, dt
     if _limiter_ends(lim, decomp, d)[5] && !lim.open[d][2]
         nA, nB = _transverse(decomp.n_local, d)
         pointwise!(_limiter_end_face_point!, solver.tmp_a, nA, nB, 1,
-                   lim.faces, lim.anchor_hi[d], B, lim.n_comp[d], decomp.n_local[d], d,
+                   lim.scratch.faces, lim.line_buffers.anchor_hi[d], B, lim.n_comp[d],
+                   decomp.n_local[d], d,
                    decomp.n_halo_d...)
     end
     if lim.radial[d]
         # A tile's correction waits for the exchange of θ at its shared faces.
         any(any, lim.interface) &&
             return _radial_theta!(lim, solver, Q, dQ, du, d, T(RKA[stage]), B, T(dt), τ,
-                                  lim.theta)
+                                  lim.scratch.theta)
         _limit_radial!(lim, solver, Q, dQ, du, d, T(RKA[stage]), B, T(dt), τ)
         return false
     end
     limited, shared = _limit_faces!(lim, solver, Q, d, τ, 1)
-    lim.counts[2] += limited
+    lim.counters.counts[2] += limited
     return limited + shared > 0
 end
 
@@ -460,19 +464,21 @@ function _stage_correct!(lim::PositivityLimiter, solver, Q, dQ, stage::Int, dt, 
     T = eltype(lim.eps_rho)
     B = T(RKB[stage])
     τ = T(_stage_advance(stage) * dt)
-    lim.radial[d] && return _radial_correct!(lim, solver, Q, dQ, d, B, T(dt), τ, lim.theta)
+    lim.radial[d] && return _radial_correct!(lim, solver, Q, dQ, d, B, T(dt), τ,
+                                             lim.scratch.theta)
     o1, o2, o3 = decomp.n_halo_d
     inv_B = one(T) / B
     inv_Bdt = one(T) / (B * T(dt))
     n = decomp.n_local[d]
     nA, nB = _transverse(decomp.n_local, d)
     pointwise!(_limiter_correct_point!, solver.tmp_a, n, nA, nB,
-               _LinearState(dQ), lim.register_fields[d], lim.faces, lim.theta,
+               _LinearState(dQ), lim.register_fields[d], lim.scratch.faces, lim.scratch.theta,
                _LinearState(Q), (solver.u, solver.v, solver.w), solver.c, solver.p,
-               lim.weights[d], d, one(T), τ, 1, (inv_B, inv_Bdt),
+               lim.weight_set.weights[d], d, one(T), τ, 1, (inv_B, inv_Bdt),
                _limiter_layout(solver), _limiter_ends(lim, decomp, d), n,
-               false, lim.volume, solver.inv_J, lim.areal[d],
-               (lim.anchor[d], lim.anchor_hi[d]), lim.free, o1, o2, o3)
+               false, lim.weight_set.volume, solver.inv_J, lim.areal[d],
+               (lim.line_buffers.anchor[d], lim.line_buffers.anchor_hi[d]),
+               lim.weight_set.free, o1, o2, o3)
     return nothing
 end
 
@@ -500,7 +506,7 @@ end
 function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm,
                                      tally::Int=2)
     isempty(records) && return nothing
-    _device_path(lims[first(records).patch].theta) &&
+    _device_path(lims[first(records).patch].scratch.theta) &&
         return _exchange_interface_theta_staged!(solver, lims, d, due, records, comm, tally)
     patches = getfield(solver, :patches)
     me = MPI.Comm_rank(comm)
@@ -516,7 +522,7 @@ function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm,
         s = _end_shift(patches[pl.patch].decomp, pl.mine, d)
         idx = 1
         for I in CartesianIndices(pl.mine)
-            pl.sbuf[idx] = lim.theta[_shift_index(I, d, s)]
+            pl.sbuf[idx] = lim.scratch.theta[_shift_index(I, d, s)]
             idx += 1
         end
         push!(reqs, MPI.Isend(pl.sbuf, comm; dest=pl.partner, tag=pl.sendtag))
@@ -527,14 +533,14 @@ function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm,
         lim = lims[pl.patch]
         s = _end_shift(patches[pl.patch].decomp, pl.mine, d)
         local_pair = pl.partner == me
-        other = local_pair ? lims[pl.partner_patch].theta : nothing
+        other = local_pair ? lims[pl.partner_patch].scratch.theta : nothing
         so = local_pair ? _end_shift(patches[pl.partner_patch].decomp, pl.theirs, d) : 0
         theirs = local_pair ? CartesianIndices(pl.theirs) : nothing
         decomp = patches[pl.patch].decomp
         idx = 1
         for I in CartesianIndices(pl.mine)
             Ie = _shift_index(I, d, s)
-            mine = lim.theta[Ie]
+            mine = lim.scratch.theta[Ie]
             partner = local_pair ? other[_shift_index(theirs[idx], d, so)] : pl.buf[idx]
             idx += 1
             # A level's records reach into the transverse halos, where no θ
@@ -546,12 +552,12 @@ function _exchange_interface_theta!(solver, lims, d::Int, due, records, comm,
             # node's high face at a patch's high end (shift 0) and its low face
             # at a low end (shift −1).
             Ib = _shift_index(Ie, d, s == 0 ? -1 : 1)
-            lim.theta[Ie] = m
-            lim.theta[Ib] = m
+            lim.scratch.theta[Ie] = m
+            lim.scratch.theta[Ib] = m
             due[pl.patch] = true
             # Faces this patch counts that the exchange limits: at a high end
             # both, at a low end the face beside the node.
-            mine == 1 && (lim.counts[tally] += s == 0 ? 2 : 1)
+            mine == 1 && (lim.counters.counts[tally] += s == 0 ? 2 : 1)
         end
     end
     return nothing
@@ -577,26 +583,27 @@ function _exchange_interface_theta_staged!(solver, lims, d::Int, due, records, c
     end
     for pl in records
         normal(pl) && pl.partner != me || continue
-        _pack_fields!(pl.sbuf, (lims[pl.patch].theta,), end_planes(pl))
+        _pack_fields!(pl.sbuf, (lims[pl.patch].scratch.theta,), end_planes(pl))
         push!(reqs, MPI.Isend(pl.sbuf, comm; dest=pl.partner, tag=pl.sendtag))
     end
     MPI.Waitall(reqs)
     for pl in records
         normal(pl) || continue
         lim = lims[pl.patch]
-        T = eltype(lim.theta)
+        T = eltype(lim.scratch.theta)
         s = _end_shift(patches[pl.patch].decomp, pl.mine, d)
         re = _shift_ranges(pl.mine, d, s)
         rb = _shift_ranges(re, d, s == 0 ? -1 : 1)
         m = prod(length.(re))
         own = Vector{T}(undef, m)
         beside = Vector{T}(undef, m)
-        _pack_fields!(own, (lim.theta,), re)
-        _pack_fields!(beside, (lim.theta,), rb)
+        _pack_fields!(own, (lim.scratch.theta,), re)
+        _pack_fields!(beside, (lim.scratch.theta,), rb)
         partner = if pl.partner == me
             so = _end_shift(patches[pl.partner_patch].decomp, pl.theirs, d)
             v = Vector{T}(undef, m)
-            _pack_fields!(v, (lims[pl.partner_patch].theta,), _shift_ranges(pl.theirs, d, so))
+            _pack_fields!(v, (lims[pl.partner_patch].scratch.theta,),
+                          _shift_ranges(pl.theirs, d, so))
             v
         else
             pl.buf
@@ -612,11 +619,11 @@ function _exchange_interface_theta_staged!(solver, lims, d::Int, due, records, c
             beside[idx] = v
             changed = true
             due[pl.patch] = true
-            mine == 1 && (lim.counts[tally] += s == 0 ? 2 : 1)
+            mine == 1 && (lim.counters.counts[tally] += s == 0 ? 2 : 1)
         end
         if changed
-            _unpack_fields!((lim.theta,), own, re)
-            _unpack_fields!((lim.theta,), beside, rb)
+            _unpack_fields!((lim.scratch.theta,), own, re)
+            _unpack_fields!((lim.scratch.theta,), beside, rb)
         end
     end
     return nothing
@@ -640,7 +647,7 @@ _limiter_layout(solver) =
     (solver.equations.n_species, solver.equations.i_mom...,
      solver.equations.i_energy, solver.equations.n_cons)
 
-# The face values of direction d into `lim.faces`: the local running sums of
+# The face values of direction d into `lim.scratch.faces`: the local running sums of
 # each line, the line totals gathered over the direction's sub-communicator,
 # and the offsets that make them one running sum along the global line,
 # anchored at the global low face. `mode` 1 is the stage register, scaled by
@@ -662,18 +669,22 @@ function _line_faces!(lim::PositivityLimiter, solver, Q, d::Int, mode::Int, scal
     whole = decomp.dims[d] == 1
     whole && mode == 2 && lim.measure[d] == 0 && _no_measure_error(d)
     pointwise!(_limiter_scan_point!, solver.tmp_a, 1, nA, nB,
-               lim.faces, lim.register_fields[d], _LinearState(Q), lim.base, lim.weights[d],
-               solver.h[d], lim.totals[d], lim.aux[d], lim.anchor[d], n_comp, n, d, mode,
-               mode == 2 ? lim.measure[d] : 0, lim.filter_lhs, lim.filter_psi, wf,
-               volume, lim.volume, solver.inv_J, cmask, drop, lim.dropped[d],
-               lim.dropped_mid[d], (whole, lim.periodic[d], scale), o1, o2, o3)
+               lim.scratch.faces, lim.register_fields[d], _LinearState(Q), lim.scratch.base,
+               lim.weight_set.weights[d],
+               solver.h[d], lim.line_buffers.totals[d], lim.line_buffers.aux[d],
+               lim.line_buffers.anchor[d], n_comp, n, d, mode,
+               mode == 2 ? lim.measure[d] : 0, lim.weight_set.filter_lhs,
+               lim.weight_set.filter_psi, wf,
+               volume, lim.weight_set.volume, solver.inv_J, cmask, drop,
+               lim.line_buffers.dropped[d],
+               lim.line_buffers.dropped_mid[d], (whole, lim.periodic[d], scale), o1, o2, o3)
     whole && return nothing
     _line_offsets!(lim, decomp, d, mode, cmask === nothing ? zero(wf) : wf)
     last_rank = decomp.coords[d] == decomp.dims[d] - 1
     pointwise!(_limiter_offset_point!, solver.tmp_a, n + 1, nA, nB,
-               lim.faces, lim.offset[d], lim.wrap[d],
-               mode == 1 ? lim.zero_plane[d] : lim.cstar[d], scale,
-               lim.periodic[d] && last_rank, n, d, n_comp, volume, lim.volume,
+               lim.scratch.faces, lim.line_buffers.offset[d], lim.line_buffers.wrap[d],
+               mode == 1 ? lim.line_buffers.zero_plane[d] : lim.line_buffers.cstar[d], scale,
+               lim.periodic[d] && last_rank, n, d, n_comp, volume, lim.weight_set.volume,
                o1, o2, o3)
     return nothing
 end
@@ -684,21 +695,22 @@ end
 # every rank of it; the prefix sums are formed in rank order on every rank, so
 # the face two ranks share carries the same value on both.
 function _line_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int, wd=0)
-    tot = lim.totals[d]
+    tot = lim.line_buffers.totals[d]
     # The stage's anchor is the face register at the global low face.
-    aux = mode == 1 ? lim.anchor[d] : lim.aux[d]
+    aux = mode == 1 ? lim.line_buffers.anchor[d] : lim.line_buffers.aux[d]
     L = length(tot)
-    send = lim.send[d]
+    send = lim.line_buffers.send[d]
     # Device storage crosses to the host message here, and the offsets formed
     # on the host are uploaded after: one copy of each plane per pass.
     copyto!(send, 1, vec(tot), 1, L)
     copyto!(send, L + 1, vec(aux), 1, L)
     if !iszero(wd)
-        copyto!(send, 2L + 1, vec(lim.dropped[d]), 1, L)
-        copyto!(send, 3L + 1, vec(lim.dropped_mid[d]), 1, L)
+        copyto!(send, 2L + 1, vec(lim.line_buffers.dropped[d]), 1, L)
+        copyto!(send, 3L + 1, vec(lim.line_buffers.dropped_mid[d]), 1, L)
     end
     _device_path(tot) ? _staged_offsets!(lim, decomp, d, mode, wd) :
-                        _form_offsets!(lim.offset[d], lim.wrap[d], lim.cstar[d], lim, decomp,
+                        _form_offsets!(lim.line_buffers.offset[d], lim.line_buffers.wrap[d],
+                                       lim.line_buffers.cstar[d], lim, decomp,
                                        d, mode, wd)
     return nothing
 end
@@ -707,21 +719,21 @@ end
 function _staged_offsets!(lim::PositivityLimiter, decomp, d::Int, mode::Int, wd)
     planes = _staged_planes!(lim, d)
     _form_offsets!(planes..., lim, decomp, d, mode, wd)
-    copyto!(lim.offset[d], planes[1])
-    copyto!(lim.wrap[d], planes[2])
-    copyto!(lim.cstar[d], planes[3])
+    copyto!(lim.line_buffers.offset[d], planes[1])
+    copyto!(lim.line_buffers.wrap[d], planes[2])
+    copyto!(lim.line_buffers.cstar[d], planes[3])
     return nothing
 end
 
 # The host copies of the offset planes of d, allocated at the first device pass.
 function _staged_planes!(lim::PositivityLimiter{T}, d::Int) where {T}
-    if isempty(lim.staged)
+    if isempty(lim.line_buffers.staged)
         for e in 1:3
-            dims = size(lim.offset[e])
-            push!(lim.staged, (zeros(T, dims), zeros(T, dims), zeros(T, dims)))
+            dims = size(lim.line_buffers.offset[e])
+            push!(lim.line_buffers.staged, (zeros(T, dims), zeros(T, dims), zeros(T, dims)))
         end
     end
-    return lim.staged[d]
+    return lim.line_buffers.staged[d]
 end
 
 # The Allgather of the message `send` holds, and the offsets of this rank's
@@ -734,7 +746,7 @@ function _form_offsets!(off, wrap, cstar, lim::PositivityLimiter, decomp, d::Int
                         mode::Int, wd=0)
     L = length(off)
     P = decomp.dims[d]
-    send, recv = lim.send[d], lim.recv[d]
+    send, recv = lim.line_buffers.send[d], lim.line_buffers.recv[d]
     send[end] = mode == 2 && lim.measure[d] > 0 ? 1 : 0
     MPI.Allgather!(send, MPI.UBuffer(recv, length(send)), decomp.sub[d])
     stride = length(send)
@@ -759,7 +771,7 @@ function _form_offsets!(off, wrap, cstar, lim::PositivityLimiter, decomp, d::Int
         cstar[e] = mode == 2 ? Ov + recv[v*stride+L+e] : zero(eltype(recv))
     end
     if mode == 2 && !iszero(wd)
-        lhs = Array(lim.filter_lhs)
+        lhs = Array(lim.weight_set.filter_lhs)
         sum_l = one(eltype(recv))
         for s in eachindex(lhs)
             sum_l += 2 * lhs[s]
@@ -833,7 +845,7 @@ function _limiter_bounds(lim)
             (LIMITER_ENERGY_ULPS - LIMITER_ENERGY_TOLERANCE) * eps(T))
 end
 
-# θ per face of direction d into `lim.theta`, a line per body, then the faces and
+# θ per face of direction d into `lim.scratch.theta`, a line per body, then the faces and
 # the unguaranteed sides of this rank counted. Returns the number of faces
 # limited that this rank owns, and whether its low face, which the rank below
 # owns and counts, is limited anywhere: its node 1 takes that face's
@@ -846,13 +858,14 @@ function _limit_faces!(lim::PositivityLimiter, solver, Q, d::Int, τ, mode::Int)
     ends = mode == 1 ? _limiter_ends(lim, decomp, d) : _filter_ends(lim, decomp, d)
     closed_hi, fold = ends[2], ends[3]
     pointwise!(_limiter_theta_point!, solver.tmp_a, 1, nA, nB,
-               lim.theta, lim.line_counts[d], _linear(Q), lim.faces,
-               (solver.u, solver.v, solver.w), solver.c, solver.p, lim.inv_weights,
-               lim.free, decomp.active, d, n, ends, solver.h[d],
+               lim.scratch.theta, lim.line_buffers.line_counts[d], _linear(Q),
+               lim.scratch.faces,
+               (solver.u, solver.v, solver.w), solver.c, solver.p, lim.weight_set.inv_weights,
+               lim.weight_set.free, decomp.active, d, n, ends, solver.h[d],
                τ, mode, _limiter_bounds(lim), _limiter_layout(solver),
                mode == 2 ? lim.radial[d] : lim.areal[d],
                mode == 2 ? lim.volume_state : (true, true, true, true, true), solver.inv_J,
-               mode == 1 && lim.areal[d], lim.rates, o1, o2, o3)
+               mode == 1 && lim.areal[d], lim.scratch.rates, o1, o2, o3)
     return _limiter_tally!(lim, decomp, d, closed_hi, mode, fold, ends[5])
 end
 
@@ -862,14 +875,14 @@ end
 # with its faces.
 function _limiter_tally!(lim, decomp, d, closed_hi, mode, fold, end_face=false)
     n = decomp.n_local[d]
-    tallies = lim.line_counts[d]
+    tallies = lim.line_buffers.line_counts[d]
     nA, nB = size(tallies, 2), size(tallies, 3)
     limited, shared, sides, axis = _device_path(tallies) ? _tally_reduced(tallies) :
                                    _tally_sum(tallies)
     faces = ((closed_hi ? n - 1 : n) + (fold ? 1 : 0) + (end_face ? 1 : 0)) * nA * nB
-    lim.counts[mode == 1 ? 1 : 3] += faces
-    lim.counts[5] += sides
-    lim.counts[6] += axis
+    lim.counters.counts[mode == 1 ? 1 : 3] += faces
+    lim.counters.counts[5] += sides
+    lim.counters.counts[6] += axis
     return limited, shared
 end
 
@@ -920,26 +933,29 @@ function _radial_theta!(lim::PositivityLimiter, solver, Q, dQ, du, d::Int, A, B,
     lay = _limiter_layout(solver)
     bounds = _limiter_bounds(lim)
     regs = (lim.register_fields[1], lim.register_fields[2], lim.register_fields[3])
-    speeds = lim.speeds
+    speeds = lim.scratch.speeds
     Ql = _LinearState(Q)
     dQl = _LinearState(dQ)
-    pointwise!(_limiter_radial_rate_point!, lim.rates, 1, nA, nB,
-               lim.rates, speeds, Ql, dQl, _LinearState(du), regs, uvw, solver.c,
-               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights,
-               lim.areas[d], decomp.active, d, (fold, closed_hi, n, end_lo), (A, B, dt),
-               bounds, lay, lim.free, o1, o2, o3)
+    pointwise!(_limiter_radial_rate_point!, lim.scratch.rates, 1, nA, nB,
+               lim.scratch.rates, speeds, Ql, dQl, _LinearState(du), regs, uvw, solver.c,
+               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weight_set.weights,
+               lim.weight_set.areas[d], decomp.active, d, (fold, closed_hi, n, end_lo), (A,
+                                                                                         B,
+                                                                                         dt),
+               bounds, lay, lim.weight_set.free, o1, o2, o3)
     # The face two ranks share takes the same θ on both, from both cells'
     # rates, along r here and along z in the pass that follows.
     for e in 1:3
-        decomp.active[e] && decomp.dims[e] > 1 && exchange_dim!(lim.rates, decomp, e)
+        decomp.active[e] && decomp.dims[e] > 1 && exchange_dim!(lim.scratch.rates, decomp, e)
     end
     pointwise!(_limiter_radial_theta_point!, solver.tmp_a, 1, nA, nB,
-               theta, lim.line_counts[d], Ql, lim.faces, lim.rates, uvw, solver.c,
-               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weights[d],
-               lim.areas[d], speeds, lim.free, d,
+               theta, lim.line_buffers.line_counts[d], Ql, lim.scratch.faces,
+               lim.scratch.rates, uvw, solver.c,
+               solver.p, solver.rho, solver.inv_J, solver.inv_h[d], lim.weight_set.weights[d],
+               lim.weight_set.areas[d], speeds, lim.weight_set.free, d,
                (fold, closed_lo, closed_hi, n, end_lo, end_hi), τ, bounds, lay, o1, o2, o3)
     limited, shared = _limiter_tally!(lim, decomp, d, closed_hi, 1, fold, end_hi)
-    lim.counts[2] += limited
+    lim.counters.counts[2] += limited
     return limited + shared > 0
 end
 
@@ -951,11 +967,13 @@ function _radial_correct!(lim::PositivityLimiter, solver, Q, dQ, d::Int, B, dt, 
     nA, nB = _transverse(decomp.n_local, d)
     _, _, fold, end_lo, end_hi = _limiter_ends(lim, decomp, d)
     pointwise!(_limiter_radial_correct_point!, solver.tmp_a, n, nA, nB,
-               _LinearState(dQ), lim.register_fields[d], lim.faces, theta, _LinearState(Q),
+               _LinearState(dQ), lim.register_fields[d], lim.scratch.faces, theta,
+               _LinearState(Q),
                (solver.u, solver.v, solver.w), solver.p, solver.inv_J, solver.inv_h[d],
-               lim.weights[d], lim.areas[d], lim.speeds, (lim.anchor[d], lim.anchor_hi[d]),
+               lim.weight_set.weights[d], lim.weight_set.areas[d], lim.scratch.speeds,
+               (lim.line_buffers.anchor[d], lim.line_buffers.anchor_hi[d]),
                d, τ, (one(B) / B, one(B) / (B * dt)), _limiter_layout(solver),
-               (fold, end_lo, end_hi, n), lim.free, o1, o2, o3)
+               (fold, end_lo, end_hi, n), lim.weight_set.free, o1, o2, o3)
     return nothing
 end
 
@@ -1510,7 +1528,7 @@ function _dropped_rows(solver, d::Int, mask)
     fold = _fold_at(solver, d)
     fold === nothing || !_fold_active(fold) && fold.pair === nothing ||
         return (nothing, nothing)
-    plan = fold === nothing ? _operator_plan(solver.filter_plans, d) :
+    plan = fold === nothing ? _operator_plan(solver.plans.filter_plans, d) :
                               _fold_plan(fold, 1, Val(:filter), 1, false)
     r = _residual_stencil(plan)
     M = something(findlast(m -> !iszero(r[m + 1]), 1:4), 0)
@@ -1548,7 +1566,7 @@ function _limited_filter_theta!(lim::PositivityLimiter, solver, Q, d::Int, w,
     mask = _child_mask!(solver, Q, comps, d, masked)
     for c in 1:n_cons
         pointwise!(_copy_component_point!, solver.tmp_a, n1, n2, n3,
-                   lim.base[c], Q, c)
+                   lim.scratch.base[c], Q, c)
     end
     for c in 1:n_cons
         _filter_line!(solver.tmp_a, comps[c], solver, d, cons_parity(solver, d, c),
@@ -1562,9 +1580,9 @@ function _limited_filter_theta!(lim::PositivityLimiter, solver, Q, d::Int, w,
     cmask, drop = _dropped_rows(solver, d, mask)
     _line_faces!(lim, solver, Q, d, 2, one(w), w, cmask, drop)
     # The half states are read from the state before the pass.
-    limited, shared = _limit_faces!(lim, solver, _BaseState(lim.base), d,
+    limited, shared = _limit_faces!(lim, solver, _BaseState(lim.scratch.base), d,
                                     zero(w), 2)
-    lim.counts[4] += limited
+    lim.counters.counts[4] += limited
     return limited + shared > 0
 end
 
@@ -1576,13 +1594,14 @@ function _limited_filter_correct!(lim::PositivityLimiter, solver, Q, d::Int, w)
     nA, nB = _transverse(decomp.n_local, d)
     Ql = _LinearState(Q)
     pointwise!(_limiter_correct_point!, solver.tmp_a, n, nA, nB,
-               Ql, lim.register_fields[d], lim.faces, lim.theta, Ql,
+               Ql, lim.register_fields[d], lim.scratch.faces, lim.scratch.theta, Ql,
                (solver.u, solver.v, solver.w), solver.c, solver.p,
-               lim.weights[d], d, solver.h[d], zero(w), 2, (one(w), one(w)),
+               lim.weight_set.weights[d], d, solver.h[d], zero(w), 2, (one(w), one(w)),
                _limiter_layout(solver),
                _filter_ends(lim, decomp, d), n,
-               lim.radial[d], lim.volume, solver.inv_J, false,
-               (lim.anchor[d], lim.anchor_hi[d]), lim.free,
+               lim.radial[d], lim.weight_set.volume, solver.inv_J, false,
+               (lim.line_buffers.anchor[d], lim.line_buffers.anchor_hi[d]),
+               lim.weight_set.free,
                o1, o2, o3)
     return nothing
 end

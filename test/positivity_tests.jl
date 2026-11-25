@@ -73,8 +73,9 @@ end
 # with parity σ, as a stage takes it.
 function pos_fold_face(lim, f, div, σ, halo)
     anchor = zeros(1, 1, 1)
-    CL._limiter_anchor_point!(anchor, f, div, lim.weights[1], 0.0, 1.0, 1, 1, false,
-                              true, σ, 0, lim.deriv_lhs, lim.deriv_rhs, halo..., 1, 1, 1)
+    CL._limiter_anchor_point!(anchor, f, div, lim.weight_set.weights[1], 0.0, 1.0, 1, 1, false,
+                              true, σ, 0, lim.weight_set.deriv_lhs, lim.weight_set.deriv_rhs,
+                              halo..., 1, 1, 1)
     return anchor[1]
 end
 
@@ -124,13 +125,13 @@ end
                 nA, nB = CL._transverse(dec.n_local, d)
                 for b in 1:nB, a in 1:nA
                     node(p) = CL._line_node(d, p, a, b, o...)
-                    S = sum(lim.weights[d][p+o[d]] * out[node(p)] for p in 1:n)
+                    S = sum(lim.weight_set.weights[d][p+o[d]] * out[node(p)] for p in 1:n)
                     ref = dec.periodic[d] ? 0.0 : f[node(n)] - f[node(1)]
                     worst = max(worst, abs(S - ref))
                 end
             end
             @test worst < 1e-12
-            @test all(>(0), lim.weights[1]) && all(>(0), lim.weights[3])
+            @test all(>(0), lim.weight_set.weights[1]) && all(>(0), lim.weight_set.weights[3])
         end
         # The wall node's weight under the default closure rows, which sets
         # the first-order bound there.
@@ -232,7 +233,7 @@ end
             o = s.decomp.n_halo_d[1]
             idx(i) = CL.padded_index(s, i, 1, 1)
             r = [CL.xcoord(s, 1, i) for i in 1:N]
-            lhs, rhs = lim.deriv_lhs, lim.deriv_rhs
+            lhs, rhs = lim.weight_set.deriv_lhs, lim.weight_set.deriv_rhs
             for σ in (1, -1), g in (cos.(3 .* r) .* (σ > 0 ? 1 : r) .+ r .^ 2,
                                     pos_noise(N))
                 f = zero(s.tmp_a)
@@ -242,7 +243,8 @@ end
                 out = zero(f)
                 CL.div_along!(out, f, s, 1, σ)
                 F0 = pos_fold_face(lim, f, out, σ, s.decomp.n_halo_d)
-                F = F0 .+ [0.0; cumsum([lim.weights[1][o+i] * out[idx(i)] for i in 1:N])]
+                W1 = lim.weight_set.weights[1]
+                F = F0 .+ [0.0; cumsum([W1[o+i] * out[idx(i)] for i in 1:N])]
                 worst_far = max(worst_far, abs(F[end] - g[N]))
                 face(k) = k >= 0 ? F[k+1] : σ * F[1-k]
                 node(l) = l >= 1 ? g[l] : σ * g[1-l]
@@ -300,7 +302,7 @@ end
                           positivity_limiter=true)
         lim = getfield(s, :positivity)
         o = s.decomp.n_halo_d[1]
-        total(c) = sum(lim.weights[1][o+i] / s.inv_J[CL.padded_index(s, i, 1, 1)] *
+        total(c) = sum(lim.weight_set.weights[1][o+i] / s.inv_J[CL.padded_index(s, i, 1, 1)] *
                        Q[CL.padded_index(s, i, 1, 1), c] for i in 1:96)
         mass0, energy0 = total(1), total(5)
         bad = pos_bad_points(s, Q; tfinal=1.0, nmax=60)
@@ -468,7 +470,7 @@ end
                 @test lim.open[1] == (flux === :ghost, flux === :ghost)
                 CL._line_faces!(lim, ps, q, 1, 1, 1.0, 0.0)
                 n = ps.decomp.n_local[1]
-                face(p) = lim.faces[1][CL.padded_index(ps, 1, 1, 1) +
+                face(p) = lim.scratch.faces[1][CL.padded_index(ps, 1, 1, 1) +
                                        CartesianIndex(p - 1, 0, 0)] / dt
                 x(p) = CL.xcoord(ps, 1, p)
                 ends = max(ends, abs(face(0) - exact(x(1))), abs(face(n) - exact(x(n))))
@@ -637,7 +639,7 @@ end
         function total(c)
             acc = 0.0
             for (p, (ps, q)) in enumerate(CL.eachpatch(s, Q))
-                W = lims[p].weights
+                W = lims[p].weight_set.weights
                 o = ps.decomp.n_halo_d
                 for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1]
                     acc += W[1][i+o[1]] * W[2][j+o[2]] * q[CL.padded_index(ps, i, j, 1), c]

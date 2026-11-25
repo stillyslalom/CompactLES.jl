@@ -79,7 +79,7 @@ _sensor_field_count(art::ArtificialProperties) = 1 + Int(_dilatation_sensed(art)
 # a tile of a level taking the pass holds for its sharpening flux, the slot
 # kept along a collapsed dimension as well.
 _sharpen_gradient(p, art::ArtificialProperties, sp::Int, d::Int) =
-    p.sensed_fields[_sensor_field_count(art) + 3 * (sp - 1) + d]
+    p.amr.sensed_fields[_sensor_field_count(art) + 3 * (sp - 1) + d]
 
 # The coefficient arrays of patch `p` that hold the level's sensors between
 # detection and the coefficients: the μ* sensor in `mu_art` unless β* shares
@@ -205,7 +205,7 @@ _tile_rhs!(solver, p, states, dQs, pi::Int, prepared::Bool, current::Bool) =
 # anew on each rank whose last tile departed.
 function _level_field_lists(solver::Solver, lev::Level, select::F) where {F}
     patches = getfield(solver, :patches)
-    held = isempty(lev.patches) ? typeof(patches[1].sensed_fields)[] :
+    held = isempty(lev.patches) ? typeof(patches[1].amr.sensed_fields)[] :
            [select(patches[pi], solver) for pi in lev.patches]
     lists = similar(held, length(patches))
     for (k, pi) in enumerate(lev.patches)
@@ -214,7 +214,7 @@ function _level_field_lists(solver::Solver, lev::Level, select::F) where {F}
     return lists
 end
 
-_sensed_list(p, solver) = p.sensed_fields
+_sensed_list(p, solver) = p.amr.sensed_fields
 _sensor_list(p, solver) = _sensor_arrays(p, solver.art, solver.equations.n_species)
 _sharpen_list(p, solver) =
     [_sharpen_gradient(p, solver.art, sp, d)
@@ -336,7 +336,7 @@ function _sensed_fields!(ps)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    sf = ps.sensed_fields
+    sf = ps.amr.sensed_fields
     grad_u = ps.field_tuples.grad_u
     pointwise!(_strain_mag_point!, sf[1], nx, ny, nz, sf[1], _dims_tuple(grad_u, Val(3)),
                o1, o2, o3)
@@ -354,7 +354,7 @@ function _level_sensor_detect!(ps, Q)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     n_species, _, i_energy, (m1, m2, m3) = equation_layout(ps.equations)
-    sf = ps.sensed_fields
+    sf = ps.amr.sensed_fields
     _strain_sensed(art) &&
         _detect!(_strain_beta(art) ? ps.beta_art : ps.mu_art, sf[1], ps, 2, true)
     if art.mu_sensor === :velocity
@@ -404,7 +404,7 @@ function _level_coefficients!(ps)
     decomp = ps.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    copy_interior!(ps.strain_mag, ps.sensed_fields[1], decomp)
+    copy_interior!(ps.strain_mag, ps.amr.sensed_fields[1], decomp)
     copy_interior!(ps.sensor, ps.kappa_art, decomp)
     _mark_sensors!(ps)
     mu, beta, rho = ps.mu_art, ps.beta_art, ps.rho
@@ -476,7 +476,7 @@ held `sensor` copied into the shared workspace for `scalar_field`.
 function _output_artificial!(ps, Q, sensor)
     sensor === nothing && return compute_artificial!(ps, Q)
     _gated(ps.art) && gate_beta!(ps)
-    copy_interior!(ps.strain_mag, ps.sensed_fields[1], ps.decomp)
+    copy_interior!(ps.strain_mag, ps.amr.sensed_fields[1], ps.decomp)
     copy_interior!(ps.sensor, sensor, ps.decomp)
     _mark_sensors!(ps)
     return ps

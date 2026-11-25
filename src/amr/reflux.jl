@@ -328,7 +328,7 @@ function _build_reflux!(@nospecialize(solver::Solver))
     T = _float_type(solver)
     patches = getfield(solver, :patches)
     for p in patches
-        empty!(p.reflux_captures)
+        empty!(p.amr.reflux_captures)
     end
     REFLUX_KEYS[solver] = _reflux_key(solver)
     # A new layout starts with nothing held back; what a regrid replaces
@@ -373,7 +373,7 @@ function _build_reflux!(@nospecialize(solver::Solver))
                 cap = _reflux_capture(T, solver, p, ℓp, jn, false, jc.d, s, box,
                                       dc, dj, drs, drsc, fc, fj, frs, frsc, gp,
                                       Int[], Float64[], n_cons, gb, lt, wrap)
-                cap === nothing || push!(p.reflux_captures, cap)
+                cap === nothing || push!(p.amr.reflux_captures, cap)
             end
             # The child's side.
             lt.fine_index == 0 && continue
@@ -397,7 +397,7 @@ function _build_reflux!(@nospecialize(solver::Solver))
             cap = _reflux_capture(T, solver, f, ℓp, jn, true, jc.d, -s, jc.box,
                                   dc, aj, drs, drsc, fc, af, frs, frsc, 0,
                                   band, om, n_cons, gb, lt)
-            cap === nothing || push!(f.reflux_captures, cap)
+            cap === nothing || push!(f.amr.reflux_captures, cap)
         end
     end
     return solver
@@ -544,8 +544,8 @@ end
 
 # --- Capture hooks ----------------------------------------------------------------
 
-_reflux_captures(solver::PatchSolver) = getfield(solver, :patch).reflux_captures
-_reflux_captures(solver::Solver) = getfield(solver, :patches)[1].reflux_captures
+_reflux_captures(solver::PatchSolver) = getfield(solver, :patch).amr.reflux_captures
+_reflux_captures(solver::Solver) = getfield(solver, :patches)[1].amr.reflux_captures
 _reflux_captures(solver) = ()
 
 # The hooks on a single-patch `Solver`, which has no junction: captures exist
@@ -607,14 +607,14 @@ end
 # of a level evaluated concurrently each read their own.
 @noinline function _reflux_defer!(solver::PatchSolver, on::Bool)
     p = getfield(solver, :patch)
-    p.reflux_deferred = on && !isempty(p.reflux_captures)
+    p.amr.reflux_deferred = on && !isempty(p.amr.reflux_captures)
     return nothing
 end
 # A single-patch `Solver` holds no junction, and its hooks read no deferral.
 _reflux_defer!(solver, on::Bool) = nothing
 
 @inline _reflux_deferred(solver::PatchSolver) =
-    getfield(solver, :patch).reflux_deferred
+    getfield(solver, :patch).amr.reflux_deferred
 @inline _reflux_deferred(solver) = false
 
 # The child's rate of Ω from component `c` of `dQ`, which the component's
@@ -744,7 +744,7 @@ end
 
 # The stage update of patch `p`: the stage fluxes through the recurrence.
 @noinline function _reflux_fold!(solver, p, dQ, A, B, dt)
-    for cap in p.reflux_captures
+    for cap in p.amr.reflux_captures
         @. cap.du = A * cap.du + dt * cap.stage
         @. cap.reg += B * cap.du
     end
@@ -932,7 +932,7 @@ function _reflux_begin_step!(solver::Solver, states::Vector{<:ConservedState})
     end
     ns = solver.equations.n_species
     for (pi, p) in enumerate(getfield(solver, :patches))
-        _reflux_reset!(p.reflux_captures, states[pi], ns)
+        _reflux_reset!(p.amr.reflux_captures, states[pi], ns)
     end
     return nothing
 end
@@ -979,7 +979,7 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     buf = zeros(Float64, base[end] * stride)
     at(jn, line, k) = (base[jn] + line - 1) * stride + k
     for (pi, p) in enumerate(patches)
-        _reflux_gather!(buf, p.reflux_captures, states[pi], ℓp, ns, n_cons, base, stride)
+        _reflux_gather!(buf, p.amr.reflux_captures, states[pi], ℓp, ns, n_cons, base, stride)
     end
     t0 = time_ns()
     MPI.Allreduce!(buf, +, lev.level_comm.comm)
@@ -1026,7 +1026,7 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     eq = solver.equations
     for (pi, p) in enumerate(patches)
-        _reflux_guard!(θs, run_of, p.reflux_captures, parent(states[pi]), eq, change,
+        _reflux_guard!(θs, run_of, p.amr.reflux_captures, parent(states[pi]), eq, change,
                        base, n_cons, ℓp)
     end
     t1 = time_ns()
@@ -1040,7 +1040,7 @@ function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
         change[i] *= θs[r]
     end
     for (pi, p) in enumerate(patches)
-        _reflux_change!(p.reflux_captures, states[pi], change, base, n_cons, ℓp, ns)
+        _reflux_change!(p.amr.reflux_captures, states[pi], change, base, n_cons, ℓp, ns)
     end
     return nothing
 end
@@ -1159,11 +1159,11 @@ end
 _junction_budget!(out, solver, Q) = out
 function _junction_budget!(out, solver::PatchSolver, Q)
     p = getfield(solver, :patch)
-    isempty(p.reflux_captures) && return out
+    isempty(p.amr.reflux_captures) && return out
     eq = solver.equations
     nsp = eq.n_species
     comps = Int[1:nsp; collect(eq.i_mom); eq.i_energy]
-    for cap in p.reflux_captures
+    for cap in p.amr.reflux_captures
         cap.child || continue
         om = _reflux_omega!(similar(cap.om0), cap, p, Q)
         for l in eachindex(cap.entry), (b, c) in enumerate(comps)
@@ -1181,7 +1181,7 @@ _junction_integral(solver, f) = 0.0
 function _junction_integral(solver::PatchSolver, f)
     p = getfield(solver, :patch)
     acc = 0.0
-    for cap in p.reflux_captures
+    for cap in p.amr.reflux_captures
         cap.child || continue
         for (l, (i1, i2)) in enumerate(Iterators.product(cap.lines...))
             cap.entry[l] == 0 && continue

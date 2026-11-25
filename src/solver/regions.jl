@@ -500,7 +500,7 @@ function _bind_initial(ic::Hydrostatic, solver)
     (xg[1] <= ic.at <= xg[n]) || throw(ArgumentError(
         "Hydrostatic: at = $(ic.at) lies outside the grid along direction $d, " *
         "[$(xg[1]), $(xg[n])]"))
-    plan = _plan_at(solver.div_plans, d)
+    plan = _plan_at(solver.plans.div_plans, d)
     plan = plan isa DevicePlan ? plan.host : plan
     T = eltype(solver.h)
     D = _line_operator(plan.scheme, n, solver.h[d], decomp.n_halo, T)
