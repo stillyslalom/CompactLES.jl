@@ -397,6 +397,19 @@ Names are spelled out in full. Current vocabulary:
   a routine a `Solver` method for callers outside the step path, and a
   single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
+- `PatchPlans` and `PatchAMR` (a `Patch`'s operator plans and its refinement
+  state, whose names the patch serves as its own properties, so
+  `patch.deriv_plans` and `patch.covered` read as fields), `GridGeometry` /
+  `ClockState` / `WallAccounting` (the `Solver` groups behind `solver.metric`,
+  `solver.t` and `solver.wall_step`), `_root_spacing` (the root level's `h`,
+  where `solver.h` is the patch's), `LimiterState` (the supertype of what
+  `Solver.positivity` holds)
+- `LimiterWeights` / `LimiterLineBuffers` / `LimiterScratch` /
+  `LimiterCounters` (the `PositivityLimiter` groups, read as its own
+  properties), `borrow_stage_buffers` / `borrow_filter_buffers` /
+  `release_buffers!` (the lease a limiter pass holds on the workspace
+  scratch, `RHSWorkspace.scratch_lease`, which `compute_rhs!` checks on
+  entry through `_check_scratch_free`)
 - `rhs_workspace` (an `RHSWorkspace`: the scratch of one right-hand-side
   evaluation, `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`,
   `sensor_sp`, `tmp_a`, `tmp_b`, `ring_buf`, and `flux`, held once per
