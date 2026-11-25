@@ -17,6 +17,7 @@ the place to record a result.
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
 | `reference/IMPLICIT.md` | the implicit-diffusion and IMEX design for the HED items: staggered operator, preconditioned Krylov solve, ARK pair |
 | `reference/INCOMPRESSIBLE.md` | the incompressible solver: staggered arrangement, exact projection, stages toward refined levels and devices |
+| `DECRUFT_ROADMAP.md` | the structural cleanup in progress: the maintainer's decisions, the status of each phase, and the roadmap itself; read it before continuing that work |
 | `docs/` | the Documenter site: `make.jl` and the `src/` pages. `docs/src/tutorials/` and `docs/build/` are generated (from `docs/literate/`) and gitignored, so edit `literate/`, never `src/tutorials/` |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it
