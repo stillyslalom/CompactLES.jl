@@ -211,280 +211,193 @@ function _warn_collapsed_radius(metric, n_global, comm)
     return nothing
 end
 
-# What the phases of the constructor hand one another: every quantity one of
-# them derives and a later one reads. The fields are untyped, and a phase reads
-# and writes them by name, so that the phases compile once for every
-# configuration of a precision, as the single body they were cut from did. A
-# field is unset until its phase has run.
-mutable struct SolverBuild
-    n_global
+# What the constructor's phases read: the `Problem`, the `Numerics` and the
+# `LevelSetup` as given, beside the inputs that are converted to the solver's
+# precision or brought to a standard form. The fields carry no type parameter
+# but `T`, so a phase taking this record compiles once for a precision whatever
+# the configuration, the user's tuple of boundary conditions included.
+struct BuildInputs{T}
+    prob
+    num
+    lv
+    n_global::NTuple{3,Int}
     origin
     L_domain
-    eos
-    transport
-    art
-    metric
-    sources
-    stretch
-    deriv
-    filt
-    cfl
-    filter_interval
-    filter_cfl
-    filter_weighting
-    polar_truncation
-    control
-    dims
-    n_halo
-    comm
-    patch_grid
-    backend
-    interface_rhs
+    eos::EOS
+    transport::AbstractTransport{T}
+    art::ArtificialProperties{T}
+    deriv::AbstractCompactScheme
+    filt::AbstractCompactScheme
     interface_divergence
-    interface_flux
-    interface_conservative
-    interface_limited_ghost
-    implicit
-    positivity_limiter
-    refine
-    level_restriction
-    level_interpolation_order
-    subcycle
-    regrid_interval
-    tag_threshold
-    tag_buffer
-    tag_sensor_threshold
-    tag_gradient_threshold
-    tag_vorticity_threshold
-    tag_predicate
-    untag_ratio
-    tile_lifetime
-    tile
-    rebalance
-    rebalance_persist
-    max_levels
-    level_boundaries
-    subdivide_lattice
     bcs
-    tiled
+    tile::NTuple{3,Int}
+    tiled::Bool
     equations
-    axis
-    orig1
-    poles
-    symplane
-    periodic
-    Lt
-    active_g
-    fold_lo_dim
-    fold_hi_dim
-    h
-    coord_shift
-    npatch
-    regions
-    refines
-    nlev
+end
+
+# The folds, the periodicity and the spacing the boundary conditions give the
+# grid.
+struct GeometrySetup{T}
+    axis::Bool
+    orig1::Bool
+    poles::Bool
+    symplane::NTuple{3,NTuple{2,Bool}}
+    periodic::NTuple{3,Bool}
+    active_g::NTuple{3,Bool}
+    fold_lo_dim::NTuple{3,Bool}
+    fold_hi_dim::NTuple{3,Bool}
+    Lt::NTuple{3,T}
+    h::NTuple{3,T}
+    coord_shift::NTuple{3,T}
+end
+
+# The patch slabs, the refined regions and the schemes of a checked
+# configuration. `transport` is the explicit half's and `interface_flux` the
+# treatment the run takes, which the request does not fix alone.
+struct LayoutSetup{T}
+    npatch::Int
+    regions::Vector{BlockRegion}
+    refines::Vector{BlockRegion}
+    nlev::Int
+    transport::AbstractTransport{T}
+    interface_flux::Symbol
+    level_interpolation_order::Int
     schemes
-    faces_all
+    faces_all::Vector{NTuple{3,NTuple{2,Int}}}
     smoo
     ring
-    ring_det
-    wall_face
-    swrow
-    rwrow
-    n_species
-    n_cons
-    decomp
+    ring_det::Bool
+    wall_face::NTuple{3,NTuple{2,Bool}}
+    n_species::Int
+    n_cons::Int
+end
+
+# The root patch with its decomposition, folds and workspace pool.
+struct RootSetup{T}
+    decomp::Decomp{T}
     truncation
     folds
-    orig
+    orig::NTuple{3,T}
     ws_pool
     patch
-    levels
-    level_tiles
-    patches
-    margin
-    regrid
-    SolverBuild() = new()
 end
 
 # `prob` is a `Problem`, `num` a `Numerics` with its step control filled in and
-# `lv` a `LevelSetup` (amr_frontend.jl); the three are read into the locals the
-# body works with, the components that carry a scalar type converted to `T`.
-# `equations` is the `EquationSet` owning the conserved layout, built from the
-# EOS when not given. `extent` gives the domain's three extents where the
-# caller holds them apart from the endpoints (test/flat_solver.jl).
+# `lv` a `LevelSetup` (amr_frontend.jl). `equations` is the `EquationSet`
+# owning the conserved layout, built from the EOS when not given. `extent`
+# gives the domain's three extents where the caller holds them apart from the
+# endpoints (test/flat_solver.jl).
 function _Solver(::Type{T}, prob, num, lv; equations=nothing,
                  extent=nothing) where {T}
     # One compiled body for every configuration of a precision. Specialized,
-    # this body was compiled again for each combination of the types of its
-    # arguments, the user's tuple of boundary conditions among them, at
+    # the constructor was compiled again for each combination of the types of
+    # its arguments, the user's tuple of boundary conditions among them, at
     # 12k LLVM instructions a time. It runs once per solver, assembles
     # objects and calls the routines that build the grid-sized arrays, which
-    # are compiled for the concrete types they are called with.
+    # are compiled for the concrete types they are called with. The phases
+    # below take records whose only type parameter is the precision.
     @nospecialize
-    build = SolverBuild()
-    _read_inputs!(T, build, prob, num, lv, equations, extent)
-    _validate_geometry_and_folds!(T, build)
-    build.npatch > 1 && return _build_patch_grid(T, build)
-    _build_root_plans_and_patch!(T, build)
-    build.nlev == 1 && return _single_patch_solver(T, build)
-    _build_refined_hierarchy!(T, build)
-    _build_regrid_spec!(T, build)
-    return _refined_solver(T, build)
+    inp = _build_inputs(T, prob, num, lv, equations, extent)
+    _validate_config(inp)
+    geom = _derive_geometry_and_folds(inp)
+    lay = _plan_layout_and_schemes(inp, geom)
+    lay.npatch > 1 && return _build_patch_grid(inp, geom, lay)
+    root = _build_root_plans_and_patch(inp, geom, lay)
+    lay.nlev == 1 && return _single_patch_solver(inp, geom, lay, root)
+    levels, level_tiles, patches = _build_refined_hierarchy(inp, geom, lay, root)
+    regrid = _build_regrid_spec(inp, lay, root, level_tiles)
+    return _refined_solver(inp, geom, lay, root, levels, patches, regrid)
 end
 
-# The `Problem`, the `Numerics` and the `LevelSetup` read into the names the
-# phases work with, the components that carry a scalar type converted to `T`.
-function _read_inputs!(::Type{T}, build::SolverBuild, prob, num, lv, equations,
-                       extent) where {T}
+# The inputs in the form the phases read, the components that carry a scalar
+# type converted to `T`.
+function _build_inputs(::Type{T}, prob, num, lv, equations, extent) where {T}
     @nospecialize
-    n_global = num.n_global::NTuple{3,Int}
     origin = ntuple(d -> prob.domain[d][1], 3)
     L_domain = extent === nothing ?
                ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3) : extent
     eos = _to_precision(T, prob.eos)::EOS
-    transport = _to_precision(T, prob.transport)::AbstractTransport{T}
-    art = _to_precision(T, num.art)::ArtificialProperties{T}
-    metric = prob.metric
-    sources = prob.sources
-    stretch = num.stretch
-    deriv = _to_precision(T, num.deriv)::AbstractCompactScheme
-    filt = _to_precision(T, num.filter.scheme)::AbstractCompactScheme
-    cfl = num.cfl
-    filter_interval = num.filter.interval::Int
-    filter_cfl = num.filter.cfl
-    filter_weighting = num.filter.weighting::Symbol
-    polar_truncation = num.polar_truncation
-    control = num.control::StepControl
-    dims = num.execution.dims
-    n_halo = num.n_halo::Int
-    comm = num.execution.comm::MPI.Comm
-    patch_grid = num.execution.patch_grid::NTuple{3,Int}
-    backend = num.execution.backend::AbstractBackend
-    interface_rhs = num.patch_interfaces.rhs::Symbol
-    interface_divergence = num.patch_interfaces.divergence === nothing ? nothing :
-                           _to_precision(T, num.patch_interfaces.divergence)
-    interface_flux = num.patch_interfaces.flux::Symbol
-    interface_conservative = num.patch_interfaces.conservative::Bool
-    interface_limited_ghost = num.patch_interfaces.limited_ghost::Bool
-    implicit = num.implicit
-    positivity_limiter = num.positivity_limiter::Bool
-    (; refine, level_restriction, level_interpolation_order, subcycle, regrid_interval,
-     tag_threshold, tag_buffer, tag_sensor_threshold, tag_gradient_threshold,
-     tag_vorticity_threshold, tag_predicate, untag_ratio, tile_lifetime, tile,
-     rebalance, rebalance_persist, max_levels, level_boundaries,
-     subdivide_lattice) = lv
-    bcs = _face_conditions(prob.bcs)
-    tile = _tile_edges(tile)
-    tiled = _tiled(tile)
-    build.n_global = n_global
-    build.origin = origin
-    build.L_domain = L_domain
-    build.eos = eos
-    build.transport = transport
-    build.art = art
-    build.metric = metric
-    build.sources = sources
-    build.stretch = stretch
-    build.deriv = deriv
-    build.filt = filt
-    build.cfl = cfl
-    build.filter_interval = filter_interval
-    build.filter_cfl = filter_cfl
-    build.filter_weighting = filter_weighting
-    build.polar_truncation = polar_truncation
-    build.control = control
-    build.dims = dims
-    build.n_halo = n_halo
-    build.comm = comm
-    build.patch_grid = patch_grid
-    build.backend = backend
-    build.interface_rhs = interface_rhs
-    build.interface_divergence = interface_divergence
-    build.interface_flux = interface_flux
-    build.interface_conservative = interface_conservative
-    build.interface_limited_ghost = interface_limited_ghost
-    build.implicit = implicit
-    build.positivity_limiter = positivity_limiter
-    build.refine = refine
-    build.level_restriction = level_restriction
-    build.level_interpolation_order = level_interpolation_order
-    build.subcycle = subcycle
-    build.regrid_interval = regrid_interval
-    build.tag_threshold = tag_threshold
-    build.tag_buffer = tag_buffer
-    build.tag_sensor_threshold = tag_sensor_threshold
-    build.tag_gradient_threshold = tag_gradient_threshold
-    build.tag_vorticity_threshold = tag_vorticity_threshold
-    build.tag_predicate = tag_predicate
-    build.untag_ratio = untag_ratio
-    build.tile_lifetime = tile_lifetime
-    build.tile = tile
-    build.rebalance = rebalance
-    build.rebalance_persist = rebalance_persist
-    build.max_levels = max_levels
-    build.level_boundaries = level_boundaries
-    build.subdivide_lattice = subdivide_lattice
-    build.bcs = bcs
-    build.tiled = tiled
-    build.equations = equations
-    return build
+    divergence = num.patch_interfaces.divergence
+    tile = _tile_edges(lv.tile)
+    return BuildInputs{T}(prob, num, lv, num.n_global, origin, L_domain, eos,
+                          _to_precision(T, prob.transport),
+                          _to_precision(T, num.art),
+                          _to_precision(T, num.deriv),
+                          _to_precision(T, num.filter.scheme),
+                          divergence === nothing ? nothing :
+                          _to_precision(T, divergence),
+                          _face_conditions(prob.bcs), tile, _tiled(tile),
+                          equations === nothing ? NavierStokes1T(eos) : equations)
 end
 
-# Phase 2: the configuration checks, interleaved with the quantities they
-# derive: the folds and symmetry planes, the periodicity, the spacing `h`, the
-# half-cell `coord_shift`, the patch slabs and their faces, the refined
-# regions, the interface treatment, the sensor schemes and the equation set.
-function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, origin, L_domain, eos, transport, art, metric, stretch, deriv, filt, cfl,
-     filter_interval, filter_cfl, filter_weighting, polar_truncation, dims, n_halo, comm,
-     patch_grid, backend, interface_rhs, interface_divergence, interface_flux,
-     interface_conservative, interface_limited_ghost, implicit, positivity_limiter, refine,
-     level_restriction, level_interpolation_order, subcycle, regrid_interval,
-     tag_threshold, tag_buffer, tag_sensor_threshold, tag_gradient_threshold,
-     tag_vorticity_threshold, tag_predicate, untag_ratio, tile_lifetime, tile, rebalance,
-     rebalance_persist, max_levels, bcs, tiled, equations) = build
-    _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
-                            origin, cfl, filter_interval, filter_cfl)
-    if positivity_limiter
-        nlev_limited = something(max_levels, refine === nothing ? 1 :
-                                 refine isa BlockRegion ? 2 : length(refine) + 1)
-        # The limiter's face form holds on a line whose divergence closes at an
-        # interface with the closure rows, or with the gradient plans' rows
-        # where those take the whole flux (`_limiter_ghost`), which the
-        # limiter takes only under `interface_limited_ghost`; otherwise the
-        # interfaces take the closure rows before any plan is built.
-        ghost_kept = interface_limited_ghost
-        if interface_flux === :ghost && (prod(patch_grid) > 1 || nlev_limited > 1) &&
-           (!ghost_kept || !_limiter_ghost(art))
+# The hierarchy's depth as `refine` and `max_levels` ask for it, the root
+# included.
+_requested_levels(lv) =
+    something(lv.max_levels, lv.refine === nothing ? 1 :
+              lv.refine isa BlockRegion ? 2 : length(lv.refine) + 1)
+
+# The interface flux a run takes with the positivity limiter. The limiter's
+# face form holds on a line whose divergence closes at an interface with the
+# closure rows, or with the gradient plans' rows where those take the whole
+# flux (`_limiter_ghost`), which the limiter takes only under
+# `interface_limited_ghost`; otherwise the interfaces take the closure rows
+# before any plan is built.
+function _limited_interface_flux(inp::BuildInputs)
+    (; num, lv, art) = inp
+    flux = num.patch_interfaces.flux
+    num.positivity_limiter && flux === :ghost || return flux
+    prod(num.execution.patch_grid) > 1 || _requested_levels(lv) > 1 || return flux
+    num.patch_interfaces.limited_ghost && _limiter_ghost(art) && return flux
+    return :closure
+end
+
+# Phase 1: the checks that derive nothing, with those of the limiter and of
+# the implicit conduction.
+function _validate_config(inp::BuildInputs{T}) where {T}
+    (; prob, num, lv, n_global, origin, L_domain, eos, art, deriv, filt, bcs) = inp
+    interfaces, execution = num.patch_interfaces, num.execution
+    _validate_configuration(inp.transport, eos, art, bcs, prob.metric, n_global,
+                            L_domain, origin, num.cfl, num.filter.interval,
+                            num.filter.cfl)
+    if num.positivity_limiter
+        interface_flux = _limited_interface_flux(inp)
+        if interface_flux !== interfaces.flux
             # The warning prints on one rank, and this is the constructor's
             # first MPI call.
             MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-            MPI.Comm_rank(comm) == 0 &&
+            MPI.Comm_rank(execution.comm) == 0 &&
                 @warn "positivity_limiter: " *
-                      (ghost_kept ? "with the artificial properties off " : "") *
+                      (interfaces.limited_ghost ?
+                       "with the artificial properties off " : "") *
                       "the limiter takes interface lines closed by the closure rows, " *
                       "so the patch and level interfaces close with them " *
                       "(PatchInterfaces(flux = :closure)) in place of :ghost; this can " *
                       "lower the order of accuracy at an interface."
-            interface_flux = :closure
         end
-        _validate_positivity(bcs, metric, stretch, patch_grid, nlev_limited,
-                             backend, eos,
-                             implicit, equations === nothing ? NavierStokes1T(eos) :
-                                       equations,
-                             deriv, filt, filter_weighting, n_global, n_halo,
-                             L_domain, T; interface_flux, interface_rhs,
-                             interface_divergence, tile, level_restriction)
+        _validate_positivity(bcs, prob.metric, num.stretch, execution.patch_grid,
+                             _requested_levels(lv), execution.backend, eos,
+                             num.implicit, inp.equations, deriv, filt,
+                             num.filter.weighting, n_global, num.n_halo, L_domain, T;
+                             interface_flux, interface_rhs=interfaces.rhs,
+                             interface_divergence=inp.interface_divergence,
+                             tile=inp.tile, level_restriction=lv.level_restriction)
     end
-    if implicit !== nothing
-        _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
-        # The explicit half carries the molecular transport without its
-        # conductivity; the implicit half reads the conductivity from the
-        # wrapped model (imex.jl).
-        transport = WithoutConduction(transport)
-    end
+    num.implicit === nothing ||
+        _validate_implicit(bcs, execution.patch_grid, lv.refine, lv.max_levels,
+                           execution.backend)
+    return nothing
+end
+
+# A domain endpoint supplied in the solver's storage type can only represent
+# π to that type's precision. Configuration checks should reject a different
+# angular range, not the Float32 representation of the requested one.
+_angle_tolerance(::Type{T}) where {T} = max(1e-10, 8 * Float64(eps(T)) * π)
+
+# Phase 2: the folds and symmetry planes, the periodicity, the spacing `h` and
+# the half-cell `coord_shift`, each with the checks on what it is derived from.
+function _derive_geometry_and_folds(inp::BuildInputs{T}) where {T}
+    (; prob, num, n_global, origin, L_domain, bcs) = inp
+    metric, stretch = prob.metric, num.stretch
     # ---- Coordinate-singularity folds -----------------------------------
     axis   = bcs[1][1] isa AxisBC
     orig1  = bcs[1][1] isa OriginBC
@@ -492,11 +405,7 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
     pole_h = bcs[2][2] isa PoleBC
     pole_l == pole_h || error("PoleBC must be applied at both ends of θ")
     poles = pole_l
-    # A domain endpoint supplied in the solver's storage type can only
-    # represent π to that type's precision. Configuration checks should reject
-    # a different angular range, not the Float32 representation of
-    # the requested one.
-    angle_tol = max(1e-10, 8 * Float64(eps(T)) * π)
+    angle_tol = _angle_tolerance(T)
     if axis
         metric isa CylindricalMetric || error("AxisBC requires CylindricalMetric")
         stretch[1] === nothing ||
@@ -572,91 +481,58 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
     _check_singular_nodes(T, metric, n_global, L_domain, origin, stretch,
                           coord_shift, h, angle_tol)
-    _warn_collapsed_radius(metric, n_global, comm)
-    filter_weighting in (:none, :volume) ||
-        error("filter_weighting must be :none or :volume, got :$filter_weighting")
-    # --- Patch layout ----------------------------------------------------
-    npatch = prod(patch_grid)
-    regions = patch_slabs(n_global, periodic, patch_grid)
-    if npatch > 1
-        (axis || orig1 || poles) &&
-            error("patch decomposition across a coordinate fold is not " *
-                  "supported; a folded run takes a single patch")
-        any(any, symplane) &&
-            error("patch decomposition across a SymmetryPlaneBC is not " *
-                  "supported; a patched run takes SlipWallBC at that face")
-        filt isa CompactScheme ||
-            error("patch interfaces carry closure variants for a tridiagonal " *
-                  "filter only")
-        art.detector !== :d8 ||
-            error("patch interfaces support the :delta4 and :species_d8 " *
-                  "detectors only; the :d8 detector on every sensor takes a " *
-                  "single patch")
-        dims === nothing ||
-            error("an explicit process grid cannot combine with patch_grid; " *
-                  "each patch derives its own")
-        interface_rhs in (:extended, :onesided) ||
-            error("interface_rhs must be :extended or :onesided, " *
-                  "got :$interface_rhs")
-        ds = findfirst(>(1), patch_grid)
-        stretch[ds] === nothing ||
-            error("the patched dimension cannot be stretched")
-        for r in regions
-            r.extent[ds] >= max(9, n_halo + 2) ||
-                error("patch extent $(r.extent[ds]) along dim $ds is below " *
-                      "the scheme minimum; use fewer patches or more points")
-        end
+    _warn_collapsed_radius(metric, n_global, num.execution.comm)
+    return GeometrySetup{T}(axis, orig1, poles, symplane, periodic, active_g,
+                            fold_lo_dim, fold_hi_dim, Lt, h, coord_shift)
+end
+
+# The same-level patch slabs against the folds, the schemes and the process
+# grid.
+function _validate_patch_layout(inp::BuildInputs, geom::GeometrySetup, regions)
+    (; num, art, filt) = inp
+    (; axis, orig1, poles, symplane) = geom
+    (; dims, patch_grid) = num.execution
+    stretch, n_halo, interface_rhs = num.stretch, num.n_halo, num.patch_interfaces.rhs
+    (axis || orig1 || poles) &&
+        error("patch decomposition across a coordinate fold is not " *
+              "supported; a folded run takes a single patch")
+    any(any, symplane) &&
+        error("patch decomposition across a SymmetryPlaneBC is not " *
+              "supported; a patched run takes SlipWallBC at that face")
+    filt isa CompactScheme ||
+        error("patch interfaces carry closure variants for a tridiagonal " *
+              "filter only")
+    art.detector !== :d8 ||
+        error("patch interfaces support the :delta4 and :species_d8 " *
+              "detectors only; the :d8 detector on every sensor takes a " *
+              "single patch")
+    dims === nothing ||
+        error("an explicit process grid cannot combine with patch_grid; " *
+              "each patch derives its own")
+    interface_rhs in (:extended, :onesided) ||
+        error("interface_rhs must be :extended or :onesided, " *
+              "got :$interface_rhs")
+    ds = findfirst(>(1), patch_grid)
+    stretch[ds] === nothing ||
+        error("the patched dimension cannot be stretched")
+    for r in regions
+        r.extent[ds] >= max(9, n_halo + 2) ||
+            error("patch extent $(r.extent[ds]) along dim $ds is below " *
+                  "the scheme minimum; use fewer patches or more points")
     end
-    # --- Static refinement (levels_*.jl) ---------------------------------
-    # `refines[ℓ]` is level ℓ's region in level ℓ−1's node space.
-    refines = refine === nothing ? BlockRegion[] :
-              refine isa BlockRegion ? [refine] : refine
-    # Along a periodic dimension a region may start anywhere and run past the
-    # seam; it is stored with its offset in [0, P), P the period of its
-    # parent's node space (`_level_period`), which leaves any other region as
-    # it was given.
-    refines = [_canonical(rg, _level_period(n_global, periodic, ℓ - 1))
-               for (ℓ, rg) in enumerate(refines)]
-    # The hierarchy's depth, the root included. Levels beyond those `refine`
-    # gives start with no tiles and are created by the regrid.
-    nlev = something(max_levels, length(refines) + 1)
-    nlev >= length(refines) + 1 ||
-        error("max_levels = $nlev holds fewer levels than the $(length(refines)) " *
-              "refined region(s) of refine and the root")
-    if nlev > length(refines) + 1
-        regrid_interval > 0 && tiled ||
-            error("max_levels = $nlev asks for levels that refine does not give; " *
-                  "they start with no tiles, which requires tile > 0 and " *
-                  "regrid_interval > 0")
-    end
-    if nlev == 1
-        subcycle &&
-            error("subcycle requires a refined region (the refine keyword)")
-        regrid_interval == 0 ||
-            error("regrid_interval requires a refined region (the refine " *
-                  "keyword supplies the initial one)")
-    end
-    # --- Interface flux ---------------------------------------------------
-    # Without a patch or level interface `interface_flux` selects nothing, and
-    # the solver records `:closure`, so a single-patch run is the same whichever
-    # is passed. The configurations the ghost fluxes do not support are
-    # checked below, once the refinement checks have run.
-    interface_flux in (:closure, :ghost) ||
-        throw(ArgumentError("interface_flux must be :closure or :ghost, got " *
-                            ":$interface_flux"))
-    npatch > 1 || nlev > 1 || (interface_flux = :closure)
-    # The level interpolation order follows the interface flux actually taken.
-    level_interpolation_order =
-        something(level_interpolation_order,
-                  default_interpolation_order(deriv, interface_flux))
-    schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
-                             interface_conservative, level_interpolation_order, level_restriction, bcs)
-    # --- Azimuthal mode truncation (modes.jl) ----------------------------
-    # The ring projection is a Fourier series in θ over the whole circle on
-    # host storage, and the limit table assumes a uniform Δr.
-    isfinite(polar_truncation) && (polar_truncation == 0 || polar_truncation >= 1) ||
-        throw(ArgumentError("polar_truncation must be 0 (off) or a margin of at " *
-                            "least 1, got $polar_truncation"))
+    return nothing
+end
+
+# The azimuthal mode truncation (modes.jl). The ring projection is a Fourier
+# series in θ over the whole circle on host storage, and the limit table
+# assumes a uniform Δr.
+function _validate_polar_truncation(inp::BuildInputs{T}, geom::GeometrySetup,
+                                    npatch, nlev) where {T}
+    (; prob, num, n_global, L_domain) = inp
+    (; periodic) = geom
+    metric, stretch, polar_truncation = prob.metric, num.stretch, num.polar_truncation
+    backend = num.execution.backend
+    angle_tol = _angle_tolerance(T)
     if polar_truncation > 0
         metric isa CylindricalMetric ||
             error("polar_truncation applies to CylindricalMetric; the " *
@@ -671,6 +547,17 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
         backend isa CPUBackend ||
             error("polar_truncation runs on the host backend only")
     end
+    return nothing
+end
+
+# The regrid cadence, the tag criteria, the tile edge and the rebalancing
+# against one another and against the hierarchy's depth.
+function _validate_regrid_settings(inp::BuildInputs, nlev)
+    (; num, lv, tile, tiled) = inp
+    (; regrid_interval, tag_threshold, tag_buffer, tag_sensor_threshold,
+     tag_gradient_threshold, tag_vorticity_threshold, tag_predicate, untag_ratio,
+     tile_lifetime, rebalance, rebalance_persist) = lv
+    backend = num.execution.backend
     regrid_interval >= 0 || error("regrid_interval must be non-negative")
     tag_buffer >= 0 || error("tag_buffer must be non-negative")
     tag_threshold > 0 || error("tag_threshold must be positive")
@@ -713,139 +600,160 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
             error("regridding more than one refined level runs on the host " *
                   "backend only")
     end
-    if nlev > 1
-        MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-        MPI.Comm_size(comm) == 1 || level_restriction === :inject ||
-            error("level_restriction = :filter restricts through a " *
-                  "whole-patch line solve and is serial-only; use :inject " *
-                  "under MPI")
-        npatch == 1 ||
-            error("refine cannot combine with a same-level patch_grid yet")
-        # Each tile evaluates its geometry at its own nodes, which serves the
-        # axisymmetric cylindrical metric as it does the Cartesian one. A
-        # resolved θ or the spherical metric would carry angular scale factors
-        # into the level transfers and the ghost fluxes, which are not built.
-        metric isa CartesianMetric || (metric isa CylindricalMetric && !active_g[2]) ||
-            error("refinement requires CartesianMetric or CylindricalMetric with " *
-                  "θ collapsed (n_global[2] = 1)")
-        all(isnothing, stretch) ||
-            error("refinement requires an unstretched grid")
-        # The axis of an r-z run is a self-paired parity fold, which the first
-        # refined level may reach as it does a symmetry plane (below). The
-        # spherical origin and poles are rejected with their metric above.
-        (orig1 || poles) &&
-            error("refinement across a coordinate fold is forbidden")
-        level_restriction in (:inject, :filter) ||
-            error("level_restriction must be :inject or :filter, " *
-                  "got :$level_restriction")
-        # The Lagrange tables are built for even orders 2 to 10. Every stencil
-        # fits the gathered box, whose extent along a refined dimension is at
-        # least 4 + 2·LEVEL_BUFFER = 12 nodes; up to order 6 it is centered at
-        # every shell node, at order 8 the outermost ghost layer's stencil
-        # sits one node inward of centered, and at order 10 two nodes inward
-        # for the outermost layer and one for the next.
-        level_interpolation_order in (2, 4, 6, 8, 10) ||
-            error("level_interpolation_order must be 2, 4, 6, 8 or 10, " *
-                  "got $level_interpolation_order")
-        # The level shell is read from the fine box at an offset of
-        # 3·LEVEL_BUFFER nodes; a halo wider than that would index the box's
-        # own zero halo silently (`_write_fine_shell!`, `_impose_shell!`).
-        n_halo <= 3 * LEVEL_BUFFER ||
-            error("refinement supports n_halo ≤ $(3 * LEVEL_BUFFER), got $n_halo")
-        # Each region is nested by the margin inside the patches of the level
-        # above it, in that level's node space (the root's is the grid), at
-        # every face but one on the domain boundary, which a region may reach
-        # where the root's condition there qualifies
-        # (`_level_boundary_condition`). Below the first refined level a
-        # region reaching a symmetry plane or the r-z axis starts, or ends, at
-        # its parent's node half a parent spacing from the fold, outside the
-        # lattice coincident with the root's (`_level_span`).
-        margin = max(n_halo, LEVEL_BUFFER)
-        parent_regions = [BlockRegion((0, 0, 0), n_global)]
-        for (ℓ, rg) in enumerate(refines)
-            span = _level_span(n_global, active_g, ℓ - 1, bcs)
-            period = _level_period(n_global, periodic, ℓ - 1)
-            eligible = _level_boundary_eligible(bcs, active_g, periodic)
-            # Along a periodic dimension a region may run across the seam but
-            # not around it: one patch keeps the margin clear of its own other
-            # end, so its box and its covered window each meet a parent node
-            # once, and a tiled region spans the lattice's ring at most.
-            for d in 1:3
-                period[d] > 0 || continue
-                most = !tiled ? period[d] - 2 * margin : period[d] + 1
-                rg.extent[d] <= most ||
-                    error("level $ℓ region $rg spans $(rg.extent[d]) level-$(ℓ - 1) " *
-                          "nodes along periodic dimension $d, whose period is " *
-                          "$(period[d]) nodes; " *
-                          (!tiled ? "one refined patch spans at most $most, " *
-                                       "keeping $margin nodes clear at either end, " *
-                                       "and a tiled level (tile > 0) may close the ring" :
-                                       "a tiled region spans at most the ring, $most"))
-            end
-            for d in 1:3
-                if active_g[d]
-                    rg.extent[d] >= 4 ||
-                        error("level $ℓ region needs at least 4 parent nodes " *
-                              "along dimension $d (9 fine points for the C8 " *
-                              "filter)")
-                    for side in 1:2
-                        at_face = side == 1 ? rg.offset[d] + 1 == first(span[d]) :
-                                  rg.offset[d] + rg.extent[d] == last(span[d])
-                        at_face && !periodic[d] && !eligible[d][side] &&
-                            error("level $ℓ region $rg reaches the " *
-                                  "$(side == 1 ? "low" : "high") domain face of " *
-                                  "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
-                                  "a refined level cannot carry; a level reaches " *
-                                  "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC, " *
-                                  "NSCBCInflowBC, SymmetryPlaneBC and AxisBC " *
-                                  "faces only")
-                    end
-                else
-                    rg.offset[d] == 0 && rg.extent[d] == 1 ||
-                        error("level $ℓ region must span collapsed dimension " *
-                              "$d with offset 0 and extent 1")
-                end
-            end
-            bnd = _boundary_faces(rg, span, eligible)
-            folded = _level_fold_faces(bnd, bcs)
-            # The box stops at a wall face, where the interpolation takes
-            # one-sided stencils of the order's width over the box.
-            for d in 1:3
-                active_g[d] || continue
-                n = _box_extent(rg, _box_buffer(active_g, bnd, folded))[d]
-                n >= level_interpolation_order ||
-                    error("level $ℓ region $rg spans $n level-$(ℓ - 1) nodes " *
-                          "along dimension $d with its buffer, fewer than the " *
-                          "level interpolation order $level_interpolation_order; " *
-                          "widen the region")
-            end
-            if !_covered_by(_buffered(rg, active_g, margin, bnd), parent_regions, period)
-                p = only(parent_regions)
-                ranges = join(("offset $(p.offset[d] + margin):" *
-                               "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
-                               "along dimension $d" for d in 1:3 if active_g[d]), ", ")
-                # A region meant to reach a fold below the first level starts
-                # outside the coincident lattice; name the offset that does.
-                folds = join(("offset $(first(span[d]) - 1) reaches the " *
-                              "$(nameof(typeof(bcs[d][1]))) of dimension $d"
-                              for d in 1:3
-                              if active_g[d] && ℓ > 1 && _level_fold_condition(bcs[d][1])),
-                             ", ")
-                error("level $ℓ region $rg must be nested at least $margin " *
-                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
-                      "own (not imposed) nodes: with its extent that is $ranges, " *
-                      "counted on the level-$(ℓ - 1) lattice over the whole domain" *
-                      (isempty(folds) ? "" : "; $folds") * ". " *
-                      "AMR(initial = [shape, ...]) takes the levels as shapes in " *
-                      "physical coordinates instead")
-            end
-            # The next level reads this one's own nodes: a one-patch level's
-            # parent-fed boundary planes are imposed data and are eroded (the
-            # tiled cover is checked face by face at construction).
-            parent_regions = [_erode(_fine_region(rg, active_g, folded),
-                                     ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
+    return nothing
+end
+
+# A refined hierarchy against the metric, the restriction and interpolation
+# settings, and each region's nesting in the level above it.
+function _validate_refined_regions(inp::BuildInputs, geom::GeometrySetup, npatch,
+                                   refines, level_interpolation_order)
+    (; prob, num, lv, n_global, bcs, tiled) = inp
+    (; orig1, poles, periodic, active_g) = geom
+    metric, stretch, n_halo = prob.metric, num.stretch, num.n_halo
+    comm, level_restriction = num.execution.comm, lv.level_restriction
+    MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+    MPI.Comm_size(comm) == 1 || level_restriction === :inject ||
+        error("level_restriction = :filter restricts through a " *
+              "whole-patch line solve and is serial-only; use :inject " *
+              "under MPI")
+    npatch == 1 ||
+        error("refine cannot combine with a same-level patch_grid yet")
+    # Each tile evaluates its geometry at its own nodes, which serves the
+    # axisymmetric cylindrical metric as it does the Cartesian one. A
+    # resolved θ or the spherical metric would carry angular scale factors
+    # into the level transfers and the ghost fluxes, which are not built.
+    metric isa CartesianMetric || (metric isa CylindricalMetric && !active_g[2]) ||
+        error("refinement requires CartesianMetric or CylindricalMetric with " *
+              "θ collapsed (n_global[2] = 1)")
+    all(isnothing, stretch) ||
+        error("refinement requires an unstretched grid")
+    # The axis of an r-z run is a self-paired parity fold, which the first
+    # refined level may reach as it does a symmetry plane (below). The
+    # spherical origin and poles are rejected with their metric above.
+    (orig1 || poles) &&
+        error("refinement across a coordinate fold is forbidden")
+    level_restriction in (:inject, :filter) ||
+        error("level_restriction must be :inject or :filter, " *
+              "got :$level_restriction")
+    # The Lagrange tables are built for even orders 2 to 10. Every stencil
+    # fits the gathered box, whose extent along a refined dimension is at
+    # least 4 + 2·LEVEL_BUFFER = 12 nodes; up to order 6 it is centered at
+    # every shell node, at order 8 the outermost ghost layer's stencil
+    # sits one node inward of centered, and at order 10 two nodes inward
+    # for the outermost layer and one for the next.
+    level_interpolation_order in (2, 4, 6, 8, 10) ||
+        error("level_interpolation_order must be 2, 4, 6, 8 or 10, " *
+              "got $level_interpolation_order")
+    # The level shell is read from the fine box at an offset of
+    # 3·LEVEL_BUFFER nodes; a halo wider than that would index the box's
+    # own zero halo silently (`_write_fine_shell!`, `_impose_shell!`).
+    n_halo <= 3 * LEVEL_BUFFER ||
+        error("refinement supports n_halo ≤ $(3 * LEVEL_BUFFER), got $n_halo")
+    # Each region is nested by the margin inside the patches of the level
+    # above it, in that level's node space (the root's is the grid), at
+    # every face but one on the domain boundary, which a region may reach
+    # where the root's condition there qualifies
+    # (`_level_boundary_condition`). Below the first refined level a
+    # region reaching a symmetry plane or the r-z axis starts, or ends, at
+    # its parent's node half a parent spacing from the fold, outside the
+    # lattice coincident with the root's (`_level_span`).
+    margin = max(n_halo, LEVEL_BUFFER)
+    parent_regions = [BlockRegion((0, 0, 0), n_global)]
+    for (ℓ, rg) in enumerate(refines)
+        span = _level_span(n_global, active_g, ℓ - 1, bcs)
+        period = _level_period(n_global, periodic, ℓ - 1)
+        eligible = _level_boundary_eligible(bcs, active_g, periodic)
+        # Along a periodic dimension a region may run across the seam but
+        # not around it: one patch keeps the margin clear of its own other
+        # end, so its box and its covered window each meet a parent node
+        # once, and a tiled region spans the lattice's ring at most.
+        for d in 1:3
+            period[d] > 0 || continue
+            most = !tiled ? period[d] - 2 * margin : period[d] + 1
+            rg.extent[d] <= most ||
+                error("level $ℓ region $rg spans $(rg.extent[d]) level-$(ℓ - 1) " *
+                      "nodes along periodic dimension $d, whose period is " *
+                      "$(period[d]) nodes; " *
+                      (!tiled ? "one refined patch spans at most $most, " *
+                                   "keeping $margin nodes clear at either end, " *
+                                   "and a tiled level (tile > 0) may close the ring" :
+                                   "a tiled region spans at most the ring, $most"))
         end
+        for d in 1:3
+            if active_g[d]
+                rg.extent[d] >= 4 ||
+                    error("level $ℓ region needs at least 4 parent nodes " *
+                          "along dimension $d (9 fine points for the C8 " *
+                          "filter)")
+                for side in 1:2
+                    at_face = side == 1 ? rg.offset[d] + 1 == first(span[d]) :
+                              rg.offset[d] + rg.extent[d] == last(span[d])
+                    at_face && !periodic[d] && !eligible[d][side] &&
+                        error("level $ℓ region $rg reaches the " *
+                              "$(side == 1 ? "low" : "high") domain face of " *
+                              "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
+                              "a refined level cannot carry; a level reaches " *
+                              "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC, " *
+                              "NSCBCInflowBC, SymmetryPlaneBC and AxisBC " *
+                              "faces only")
+                end
+            else
+                rg.offset[d] == 0 && rg.extent[d] == 1 ||
+                    error("level $ℓ region must span collapsed dimension " *
+                          "$d with offset 0 and extent 1")
+            end
+        end
+        bnd = _boundary_faces(rg, span, eligible)
+        folded = _level_fold_faces(bnd, bcs)
+        # The box stops at a wall face, where the interpolation takes
+        # one-sided stencils of the order's width over the box.
+        for d in 1:3
+            active_g[d] || continue
+            n = _box_extent(rg, _box_buffer(active_g, bnd, folded))[d]
+            n >= level_interpolation_order ||
+                error("level $ℓ region $rg spans $n level-$(ℓ - 1) nodes " *
+                      "along dimension $d with its buffer, fewer than the " *
+                      "level interpolation order $level_interpolation_order; " *
+                      "widen the region")
+        end
+        if !_covered_by(_buffered(rg, active_g, margin, bnd), parent_regions, period)
+            p = only(parent_regions)
+            ranges = join(("offset $(p.offset[d] + margin):" *
+                           "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
+                           "along dimension $d" for d in 1:3 if active_g[d]), ", ")
+            # A region meant to reach a fold below the first level starts
+            # outside the coincident lattice; name the offset that does.
+            folds = join(("offset $(first(span[d]) - 1) reaches the " *
+                          "$(nameof(typeof(bcs[d][1]))) of dimension $d"
+                          for d in 1:3
+                          if active_g[d] && ℓ > 1 && _level_fold_condition(bcs[d][1])),
+                         ", ")
+            error("level $ℓ region $rg must be nested at least $margin " *
+                  "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
+                  "own (not imposed) nodes: with its extent that is $ranges, " *
+                  "counted on the level-$(ℓ - 1) lattice over the whole domain" *
+                  (isempty(folds) ? "" : "; $folds") * ". " *
+                  "AMR(initial = [shape, ...]) takes the levels as shapes in " *
+                  "physical coordinates instead")
+        end
+        # The next level reads this one's own nodes: a one-patch level's
+        # parent-fed boundary planes are imposed data and are eroded (the
+        # tiled cover is checked face by face at construction).
+        parent_regions = [_erode(_fine_region(rg, active_g, folded),
+                                 ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
     end
+    return nothing
+end
+
+# The interface divergence rows, the ghost-flux divergence and the device
+# residency against the layout.
+function _validate_interfaces(inp::BuildInputs, geom::GeometrySetup, npatch, nlev,
+                              interface_flux, transport)
+    (; prob, num, lv, eos, art, deriv, interface_divergence, tile, tiled) = inp
+    (; active_g) = geom
+    metric, stretch, backend = prob.metric, num.stretch, num.execution.backend
+    interface_rhs = num.patch_interfaces.rhs
+    (; refine, level_restriction, regrid_interval) = lv
     # --- Interface divergence rows ------------------------------------------
     # The source scheme only supplies the divergence's closure rows at patch
     # and level interface ends, so a run without an interface would ignore it.
@@ -910,6 +818,84 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
             error("level_restriction = :filter is host-only; use :inject " *
                   "on a DeviceBackend")
     end
+    return nothing
+end
+
+# Phase 3: the patch slabs and their faces, the refined regions, the interface
+# treatment, the sensor schemes and the equation set, with the checks of each.
+function _plan_layout_and_schemes(inp::BuildInputs{T}, geom::GeometrySetup{T}) where {T}
+    (; num, lv, n_global, eos, art, deriv, filt, interface_divergence, bcs, tiled,
+       equations) = inp
+    (; periodic) = geom
+    (; refine, max_levels, level_restriction, subcycle, regrid_interval) = lv
+    patch_grid, filter_weighting = num.execution.patch_grid, num.filter.weighting
+    interface_rhs = num.patch_interfaces.rhs
+    interface_conservative = num.patch_interfaces.conservative
+    filter_weighting in (:none, :volume) ||
+        error("filter_weighting must be :none or :volume, got :$filter_weighting")
+    # --- Patch layout ----------------------------------------------------
+    npatch = prod(patch_grid)
+    regions = patch_slabs(n_global, periodic, patch_grid)
+    npatch > 1 && _validate_patch_layout(inp, geom, regions)
+    # --- Static refinement (levels_*.jl) ---------------------------------
+    # `refines[ℓ]` is level ℓ's region in level ℓ−1's node space.
+    refines = refine === nothing ? BlockRegion[] :
+              refine isa BlockRegion ? [refine] : refine
+    # Along a periodic dimension a region may start anywhere and run past the
+    # seam; it is stored with its offset in [0, P), P the period of its
+    # parent's node space (`_level_period`), which leaves any other region as
+    # it was given.
+    refines = [_canonical(rg, _level_period(n_global, periodic, ℓ - 1))
+               for (ℓ, rg) in enumerate(refines)]
+    # The hierarchy's depth, the root included. Levels beyond those `refine`
+    # gives start with no tiles and are created by the regrid.
+    nlev = something(max_levels, length(refines) + 1)
+    nlev >= length(refines) + 1 ||
+        error("max_levels = $nlev holds fewer levels than the $(length(refines)) " *
+              "refined region(s) of refine and the root")
+    if nlev > length(refines) + 1
+        regrid_interval > 0 && tiled ||
+            error("max_levels = $nlev asks for levels that refine does not give; " *
+                  "they start with no tiles, which requires tile > 0 and " *
+                  "regrid_interval > 0")
+    end
+    if nlev == 1
+        subcycle &&
+            error("subcycle requires a refined region (the refine keyword)")
+        regrid_interval == 0 ||
+            error("regrid_interval requires a refined region (the refine " *
+                  "keyword supplies the initial one)")
+    end
+    # The explicit half carries the molecular transport without its
+    # conductivity; the implicit half reads the conductivity from the
+    # wrapped model (imex.jl).
+    transport = num.implicit === nothing ? inp.transport :
+                WithoutConduction(inp.transport)
+    interface_flux = _limited_interface_flux(inp)
+    # --- Interface flux ---------------------------------------------------
+    # Without a patch or level interface `interface_flux` selects nothing, and
+    # the solver records `:closure`, so a single-patch run is the same whichever
+    # is passed. The configurations the ghost fluxes do not support are
+    # checked below, once the refinement checks have run.
+    interface_flux in (:closure, :ghost) ||
+        throw(ArgumentError("interface_flux must be :closure or :ghost, got " *
+                            ":$interface_flux"))
+    npatch > 1 || nlev > 1 || (interface_flux = :closure)
+    # The level interpolation order follows the interface flux actually taken.
+    level_interpolation_order =
+        something(lv.level_interpolation_order,
+                  default_interpolation_order(deriv, interface_flux))
+    schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
+                             interface_conservative, level_interpolation_order, level_restriction, bcs)
+    isfinite(num.polar_truncation) &&
+        (num.polar_truncation == 0 || num.polar_truncation >= 1) ||
+        throw(ArgumentError("polar_truncation must be 0 (off) or a margin of at " *
+                            "least 1, got $(num.polar_truncation)"))
+    num.polar_truncation > 0 && _validate_polar_truncation(inp, geom, npatch, nlev)
+    _validate_regrid_settings(inp, nlev)
+    nlev > 1 && _validate_refined_regions(inp, geom, npatch, refines,
+                                          level_interpolation_order)
+    _validate_interfaces(inp, geom, npatch, nlev, interface_flux, transport)
     ds_split = npatch > 1 ? findfirst(>(1), patch_grid) : 0
     faces_all = [ntuple(3) do d
         d != ds_split && return (0, 0)
@@ -939,78 +925,57 @@ function _validate_geometry_and_folds!(::Type{T}, build::SolverBuild) where {T}
     # an absolute value, so it needs one sign; the detector also runs on the
     # velocity components and takes both.
     wall_face = _sensor_wall_faces(bcs)
-    swrow(d, side) = _sensor_wall_rows(smoo, wall_face[d][side], 1,
-                                       art.smoother === :gaussian)
-    rwrow(d, side, σw) = _sensor_wall_rows(ring, wall_face[d][side], σw,
-                                           ring_det)
-    equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
     equations.n_species == nspecies(eos) ||
         error("equation set carries $(equations.n_species) species; " *
               "EOS has $(nspecies(eos))")
-    n_species = equations.n_species
-    n_cons = equations.n_cons
-    build.interface_flux = interface_flux
-    build.transport = transport
-    build.axis = axis
-    build.orig1 = orig1
-    build.poles = poles
-    build.symplane = symplane
-    build.periodic = periodic
-    build.Lt = Lt
-    build.active_g = active_g
-    build.fold_lo_dim = fold_lo_dim
-    build.fold_hi_dim = fold_hi_dim
-    build.h = h
-    build.coord_shift = coord_shift
-    build.npatch = npatch
-    build.regions = regions
-    build.refines = refines
-    build.nlev = nlev
-    build.level_interpolation_order = level_interpolation_order
-    build.schemes = schemes
-    build.faces_all = faces_all
-    build.smoo = smoo
-    build.ring = ring
-    build.ring_det = ring_det
-    build.wall_face = wall_face
-    build.swrow = swrow
-    build.rwrow = rwrow
-    build.equations = equations
-    build.n_species = n_species
-    build.n_cons = n_cons
-    return build
+    return LayoutSetup{T}(npatch, regions, refines, nlev, transport, interface_flux,
+                          level_interpolation_order, schemes, faces_all, smoo, ring,
+                          ring_det, wall_face, equations.n_species, equations.n_cons)
 end
 
-# Phase 3: the solver of a same-level `patch_grid`, with its limiters.
-function _build_patch_grid(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, origin, eos, transport, art, metric, sources, stretch, deriv, filt, cfl,
-     filter_interval, filter_cfl, filter_weighting, control, n_halo, comm, patch_grid,
-     backend, interface_rhs, interface_divergence, interface_flux, positivity_limiter, bcs,
-     equations, periodic, Lt, h, coord_shift, npatch, regions, schemes, faces_all, smoo,
-     n_species, n_cons) = build
+# The reflecting-wall closure rows of the smoother and of the detector at a
+# face (`_sensor_wall_rows`), the detector's by the sign `σw` of the field.
+_smoother_wall_rows(lay::LayoutSetup, art, d, side) =
+    _sensor_wall_rows(lay.smoo, lay.wall_face[d][side], 1, art.smoother === :gaussian)
+_detector_wall_rows(lay::LayoutSetup, d, side, σw) =
+    _sensor_wall_rows(lay.ring, lay.wall_face[d][side], σw, lay.ring_det)
+
+# Phase 4 with a same-level `patch_grid`: its solver, with the limiters.
+function _build_patch_grid(inp::BuildInputs{T}, geom::GeometrySetup{T},
+                           lay::LayoutSetup{T}) where {T}
+    (; prob, num, n_global, origin, eos, art, deriv, filt, interface_divergence, bcs,
+       equations) = inp
+    (; periodic, Lt, h, coord_shift) = geom
+    (; regions, transport, interface_flux, schemes, faces_all, smoo, n_species,
+       n_cons) = lay
+    (; comm, patch_grid, backend) = num.execution
     solver = _build_patched_solver(T, n_global, periodic, regions, faces_all,
                                    patch_grid, bcs, eos, equations, transport,
-                                   art, metric, stretch, sources, origin, Lt,
-                                   coord_shift, h, deriv, filt, smoo, cfl,
-                                   filter_interval, filter_cfl, filter_weighting,
-                                   control, n_halo, comm, backend, interface_rhs,
+                                   art, prob.metric, num.stretch, prob.sources, origin,
+                                   Lt, coord_shift, h, deriv, filt, smoo, num.cfl,
+                                   num.filter.interval, num.filter.cfl,
+                                   num.filter.weighting, num.control, num.n_halo, comm,
+                                   backend, num.patch_interfaces.rhs,
                                    n_cons, n_species; interface_divergence,
                                    interface_flux, schemes)
-    return _attach_positivity_and_implicit!(T, solver, build)
+    return _attach_positivity_and_implicit!(solver, inp, lay)
 end
 
 # Phase 4: the root's decomposition, the replicated extent check, the fold
 # specs, the operator plans, the RHS workspace pool and the root `Patch`.
-function _build_root_plans_and_patch!(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, origin, art, stretch, deriv, filt, polar_truncation, dims, n_halo, comm,
-     backend, tile, bcs, equations, axis, orig1, poles, symplane, periodic, fold_lo_dim,
-     fold_hi_dim, h, coord_shift, regions, nlev, smoo, ring, ring_det, wall_face, swrow,
-     rwrow, n_species, n_cons) = build
+function _build_root_plans_and_patch(inp::BuildInputs{T}, geom::GeometrySetup{T},
+                                     lay::LayoutSetup{T}) where {T}
+    (; num, n_global, origin, art, deriv, filt, bcs, equations) = inp
+    (; axis, orig1, poles, symplane, periodic, fold_lo_dim, fold_hi_dim, h,
+       coord_shift) = geom
+    (; regions, nlev, smoo, ring, ring_det, wall_face, n_species, n_cons) = lay
+    (; dims, comm, backend) = num.execution
+    stretch, n_halo = num.stretch, num.n_halo
+    swrow(d, side) = _smoother_wall_rows(lay, art, d, side)
+    rwrow(d, side, σw) = _detector_wall_rows(lay, d, side, σw)
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
-    truncation = mode_truncation(T, polar_truncation, decomp,
+    truncation = mode_truncation(T, num.polar_truncation, decomp,
                                  T(origin[1]) + coord_shift[1], h[1], n_global[2],
                                  n_cons, equations.i_mom[1]:equations.i_mom[2])
     # The per-rank extent check in `plan_direction` would raise on some ranks
@@ -1185,22 +1150,17 @@ function _build_root_plans_and_patch!(::Type{T}, build::SolverBuild) where {T}
                   nlev > 1 ? f() : empty_field(backend, T),
                   _empty_level_scratch(empty_field(backend, T)),
                   ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
-    build.decomp = decomp
-    build.truncation = truncation
-    build.folds = folds
-    build.orig = orig
-    build.ws_pool = ws_pool
-    build.patch = patch
-    return build
+    return RootSetup{T}(decomp, truncation, folds, orig, ws_pool, patch)
 end
 
 # The implicit stage and the positivity limiter of an assembled solver, by
 # its layout: same-level patches, the root alone, or a refined hierarchy.
-function _attach_positivity_and_implicit!(::Type{T}, solver,
-                                          build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, metric, deriv, filt, n_halo, interface_rhs, interface_divergence,
-     interface_flux, implicit, positivity_limiter, bcs, tiled, npatch, nlev) = build
+function _attach_positivity_and_implicit!(solver, inp::BuildInputs{T},
+                                          lay::LayoutSetup{T}) where {T}
+    (; prob, num, n_global, deriv, filt, interface_divergence, bcs, tiled) = inp
+    (; npatch, nlev, interface_flux) = lay
+    metric, n_halo, implicit = prob.metric, num.n_halo, num.implicit
+    positivity_limiter, interface_rhs = num.positivity_limiter, num.patch_interfaces.rhs
     if npatch > 1
         # One limiter per patch this rank holds, in the order of its patches.
         if positivity_limiter
@@ -1234,41 +1194,47 @@ function _attach_positivity_and_implicit!(::Type{T}, solver,
     return solver
 end
 
-# Phase 6 without refinement: the solver of the root patch alone, with its
+# Phase 5 without refinement: the solver of the root patch alone, with its
 # implicit stage and limiter.
-function _single_patch_solver(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, eos, transport, art, metric, sources, stretch, cfl, filter_interval,
-     filter_cfl, filter_weighting, control, comm, interface_flux, implicit,
-     positivity_limiter, equations, Lt, h, coord_shift, regions, nlev, schemes, decomp,
-     truncation, orig, patch) = build
+function _single_patch_solver(inp::BuildInputs{T}, geom::GeometrySetup{T},
+                              lay::LayoutSetup{T}, root::RootSetup{T}) where {T}
+    (; prob, num, n_global, eos, art, equations) = inp
+    (; Lt, h, coord_shift) = geom
+    (; regions, transport, interface_flux, schemes) = lay
+    (; decomp, truncation, orig, patch) = root
+    metric, sources, stretch = prob.metric, prob.sources, num.stretch
     patches = [patch]
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),typeof(patch)}(
                   equations, eos, transport, art, sources,
                   GridGeometry{T,typeof(metric),typeof(stretch)}(
                       metric, stretch, Lt, orig, coord_shift, h, n_global),
-                  T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
+                  T(num.cfl), num.filter.interval, T(num.filter.cfl),
+                  num.filter.weighting, num.control,
                   ClockState{T}(zero(T), zero(T), 0, zero(T), zero(T),
                                 ntuple(_ -> zero(T), 3)),
                   patches, regions, decomp.comm,
-                  [Level{T}(0, root_level_comm(comm), [1],
+                  [Level{T}(0, root_level_comm(num.execution.comm), [1],
                             LevelTransfer{T}[])], false, nothing,
                   WallAccounting(0.0, 0.0, 0.0, 0.0), FloorTally(),
               interface_flux, schemes, truncation, nothing, nothing, nothing,
               false)
     init_geometry!(solver)
-    return _attach_positivity_and_implicit!(T, solver, build)
+    return _attach_positivity_and_implicit!(solver, inp, lay)
 end
 
 # Phase 5: each refined level's tile owners, communicators, patches,
 # transfers and exchange records, and the patch vector.
-function _build_refined_hierarchy!(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, transport, art, deriv, filt, n_halo, comm, backend, interface_rhs,
-     interface_divergence, interface_flux, refine, level_restriction,
-     level_interpolation_order, subcycle, tile, max_levels, bcs, tiled, periodic, active_g,
-     h, refines, nlev, smoo, ring, n_species, n_cons, decomp, folds, ws_pool, patch) = build
+function _build_refined_hierarchy(inp::BuildInputs{T}, geom::GeometrySetup{T},
+                                  lay::LayoutSetup{T}, root::RootSetup{T}) where {T}
+    (; num, lv, n_global, art, deriv, filt, interface_divergence, bcs, tile, tiled) = inp
+    (; periodic, active_g, h) = geom
+    (; transport, interface_flux, level_interpolation_order, refines, nlev, smoo,
+       n_species, n_cons) = lay
+    (; decomp, folds, ws_pool, patch) = root
+    (; comm, backend) = num.execution
+    n_halo, interface_rhs = num.n_halo, num.patch_interfaces.rhs
+    (; level_restriction, subcycle) = lv
     # --- Refined patches and their couplings (levels_*.jl) ----------------
     # Level ℓ covers `refines[ℓ]` of level ℓ − 1: one patch over the region
     # exactly with `tile = 0`, the lattice tiles meeting it otherwise.
@@ -1441,66 +1407,67 @@ function _build_refined_hierarchy!(::Type{T}, build::SolverBuild) where {T}
     # CPU backend and 1.7 s on the device backend each.
     patches = Patch[patch]
     append!(patches, fines)
-    build.levels = levels
-    build.level_tiles = level_tiles
-    build.patches = patches
-    build.margin = margin
-    return build
+    return levels, level_tiles, patches
 end
 
 # The `RegridSpec` of a regridding run, `nothing` otherwise.
-function _build_regrid_spec!(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_halo, backend, regrid_interval, tag_threshold, tag_buffer, tag_sensor_threshold,
+function _build_regrid_spec(inp::BuildInputs{T}, lay::LayoutSetup{T},
+                            root::RootSetup{T}, level_tiles) where {T}
+    (; num, lv, tile) = inp
+    (; regrid_interval, tag_threshold, tag_buffer, tag_sensor_threshold,
      tag_gradient_threshold, tag_vorticity_threshold, tag_predicate, untag_ratio,
-     tile_lifetime, tile, rebalance, rebalance_persist, level_boundaries,
-     subdivide_lattice, regions, smoo, decomp, level_tiles, margin) = build
+     tile_lifetime, rebalance, rebalance_persist, level_boundaries,
+     subdivide_lattice) = lv
+    (; smoo) = lay
+    (; decomp) = root
+    n_halo, backend = num.n_halo, num.execution.backend
+    margin = max(n_halo, LEVEL_BUFFER)
     # The tag sweep's scratch spans the root's padded block, whose extent
     # is fixed for the life of the solver (a regrid moves the refined level
     # only).
-    regrid = regrid_interval == 0 ? nothing :
-             RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
-                           margin, n_halo, smoo, backend, tile, 0,
-                           Float64(rebalance), rebalance_persist, 0, 1.0,
-                           0.0, 0.0, 0.0,
-                           T(tag_sensor_threshold), T(tag_gradient_threshold),
-                           T(tag_vorticity_threshold), tag_predicate,
-                           zeros(Int8, ntuple(d -> decomp.n_local[d] +
-                                                   2 * decomp.n_halo_d[d], 3)),
-                           T(untag_ratio), tile_lifetime, 0,
-                           [Dict(r => 0 for r in regions)
-                            for regions in level_tiles], level_boundaries,
-                           NTuple{3,Int}[], LatticeCosts(), subdivide_lattice)
-    build.regrid = regrid
-    return build
+    regrid_interval == 0 && return nothing
+    return RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
+                         margin, n_halo, smoo, backend, tile, 0,
+                         Float64(rebalance), rebalance_persist, 0, 1.0,
+                         0.0, 0.0, 0.0,
+                         T(tag_sensor_threshold), T(tag_gradient_threshold),
+                         T(tag_vorticity_threshold), tag_predicate,
+                         zeros(Int8, ntuple(d -> decomp.n_local[d] +
+                                                 2 * decomp.n_halo_d[d], 3)),
+                         T(untag_ratio), tile_lifetime, 0,
+                         [Dict(r => 0 for r in regions) for regions in level_tiles],
+                         level_boundaries, NTuple{3,Int}[], LatticeCosts(),
+                         subdivide_lattice)
 end
 
 # Phase 6 with refinement: the solver, the geometry of every patch, the
 # limiters and each parent patch's covered mask.
-function _refined_solver(::Type{T}, build::SolverBuild) where {T}
-    @nospecialize
-    (; n_global, eos, transport, art, metric, sources, stretch, deriv, filt, cfl,
-     filter_interval, filter_cfl, filter_weighting, control, n_halo, interface_rhs,
-     interface_divergence, interface_flux, positivity_limiter, subcycle, bcs, tiled,
-     equations, periodic, Lt, h, coord_shift, regions, schemes, decomp, orig, patch,
-     levels, patches, regrid) = build
+function _refined_solver(inp::BuildInputs{T}, geom::GeometrySetup{T},
+                         lay::LayoutSetup{T}, root::RootSetup{T}, levels, patches,
+                         regrid) where {T}
+    (; prob, num, lv, n_global, eos, art, equations) = inp
+    (; periodic, Lt, h, coord_shift) = geom
+    (; regions, transport, interface_flux, schemes) = lay
+    (; decomp, orig) = root
+    metric, sources, stretch = prob.metric, prob.sources, num.stretch
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, sources,
                   GridGeometry{T,typeof(metric),typeof(stretch)}(
                       metric, stretch, Lt, orig, coord_shift, h, n_global),
-                  T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
+                  T(num.cfl), num.filter.interval, T(num.filter.cfl),
+                  num.filter.weighting, num.control,
                   ClockState{T}(zero(T), zero(T), 0, zero(T), zero(T),
                                 ntuple(_ -> zero(T), 3)),
                   patches, regions, decomp.comm,
-                  levels, subcycle, regrid,
+                  levels, lv.subcycle, regrid,
                   WallAccounting(0.0, 0.0, 0.0, 0.0), FloorTally(),
                   interface_flux, schemes, ModeTruncation{T}(), nothing, nothing,
                   nothing, false)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
-    _attach_positivity_and_implicit!(T, solver, build)
+    _attach_positivity_and_implicit!(solver, inp, lay)
     # Each held patch's covered mask from the regions of the level below,
     # which every rank of the patch's level holds (`_fill_covered!`).
     for ℓ in 1:length(levels)-1
