@@ -138,7 +138,7 @@ end
         W1 = getfield(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                                   eos=POS_GAS, positivity_limiter=true),
-                      :positivity).weights[1]
+                      :positivity).weight_set.weights[1]
         @test W1[5] * 47 ≈ 0.2149 atol = 1e-4
     end
 
