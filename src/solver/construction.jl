@@ -1171,7 +1171,9 @@ function _attach_positivity_and_implicit!(solver, inp::BuildInputs{T},
         # The conduction stage reads the metric, so it is built last.
         implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
         positivity_limiter &&
-            (solver.positivity = PositivityLimiter(sole_patch(solver)))
+            (solver.positivity =
+                 PatchLimiters(PositivityLimiter[PositivityLimiter(sole_patch(solver))],
+                               Patch[_patch_of(solver)]))
     else
         # The patches' limiters are built as `run!` starts, and again for the
         # patches a regrid replaces (`_follow_patches!`).
@@ -1189,7 +1191,7 @@ function _attach_positivity_and_implicit!(solver, inp::BuildInputs{T},
         positivity_limiter && getfield(solver, :regrid) === nothing &&
             _check_limiter_tiles(solver)
     end
-    return solver
+    return _check_layout_type(solver)
 end
 
 # Phase 5 without refinement: the solver of the root patch alone, with its
@@ -1475,7 +1477,7 @@ function _refined_solver(inp::BuildInputs{T}, geom::GeometrySetup{T},
                            _level_period(n_global, periodic, ℓ - 1))
         end
     end
-    return solver
+    return _check_layout_type(solver)
 end
 
 
@@ -2160,8 +2162,11 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                     (slot(records[1]), slot(records[2]), slot(records[3]),
                      ntuple(d -> d == ds && npatch > 1, 3)))
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
+    # A `Vector{Patch}`, as a refined hierarchy holds: the abstract element
+    # type is what marks a solver's layout as a composite one (`_multipatch`).
+    patches = convert(Vector{Patch}, patches)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
-                    typeof(stretch),typeof(sources),eltype(patches)}(
+                    typeof(stretch),typeof(sources),Patch}(
                   equations, eos, transport, art, sources,
                   GridGeometry{T,typeof(metric),typeof(stretch)}(
                       metric, stretch, Lt, orig, coord_shift, h, n_global),
@@ -2176,5 +2181,5 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
-    return solver
+    return _check_layout_type(solver)
 end

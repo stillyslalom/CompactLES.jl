@@ -495,10 +495,11 @@ left the species band before the first regrid check, the check copied the
 excursion into new tiles, and the mass-fraction bound of the species
 diffusivity then set the level's step for the rest of the run.
 """
-function _widen_given_start!(solver, states, prob, num, amr::AMR)
+function _widen_given_start!(solver, state::SimulationState, prob, num, amr::AMR)
     @nospecialize prob
     spec = getfield(solver, :regrid)
-    workspace = Workspace(states)
+    states = state.patches
+    workspace = _patch_workspace(Workspace(state))
     _root_tag_coefficients!(solver, states, amr)
     widened = false
     if _tiled(spec.tile)
@@ -531,7 +532,7 @@ function _widen_given_start!(solver, states, prob, num, amr::AMR)
     end
     widened || return false
     initialize!(solver, states, prob.ic)
-    validate_state!(solver, states; control=num.control,
+    validate_state!(solver, state; control=num.control,
                     stage="the AMR initial state")
     spec.checks = 0
     for record in spec.created, region in keys(record)
@@ -602,18 +603,19 @@ function _setup_amr(prob, num, amr::AMR)
     if amr.initial isa BlockRegion || amr.initial isa Vector{BlockRegion}
         amr.initial isa Vector{BlockRegion} && isempty(amr.initial) &&
             throw(ArgumentError("AMR initial region vector cannot be empty"))
-        solver, states = _setup_levels(prob, num, LevelSetup(amr))
-        amr.regrid_interval > 0 || return solver, states
+        solver, state = _setup_levels(prob, num, LevelSetup(amr))
+        amr.regrid_interval > 0 || return solver, state
         # The constructor checks a static hierarchy under the limiter; the
         # tiles of a regridded one, from the regions given, are checked here.
         _check_limiter_tiles(solver)
-        _widen_given_start!(solver, states, prob, num, amr)
-        return solver, states
+        _widen_given_start!(solver, state, prob, num, amr)
+        return solver, state
     end
     seed = _amr_seed_region(num.n_global, num.n_halo)
-    solver, states = _setup_levels(
+    solver, state = _setup_levels(
         prob, num, LevelSetup(amr; refine=seed, bootstrap=true); seed_only=true)
-    workspace = Workspace(states)
+    states = state.patches
+    workspace = _patch_workspace(Workspace(state))
     _root_tag_coefficients!(solver, states, amr)
     candidate = tagged_region(solver, states[1])
     spec = getfield(solver, :regrid)
@@ -663,7 +665,7 @@ function _setup_amr(prob, num, amr::AMR)
     end
     spec.threshold = threshold
     initialize!(solver, states, prob.ic)
-    validate_state!(solver, states; control=num.control,
+    validate_state!(solver, state; control=num.control,
                     stage="the AMR initial state")
     # Bootstrap is layout construction, not a completed regrid check. Start
     # the user's hysteresis clock at zero for every actual initial tile.
@@ -672,5 +674,5 @@ function _setup_amr(prob, num, amr::AMR)
         record[region] = 0
     end
     amr.regrid_interval == 0 && setfield!(solver, :regrid, nothing)
-    return solver, states
+    return solver, state
 end

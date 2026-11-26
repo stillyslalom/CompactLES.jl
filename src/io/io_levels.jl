@@ -171,13 +171,13 @@ function _record_from_image(ints::AbstractVector{<:Integer},
                            last_step, checks, created, streak, Float64(floats[2]), edges)
 end
 
-# A checkpoint of a patch layout is written and read through the state vector
-# form, which serves the refinement hierarchy: one root patch and its levels.
-# The same-level slab layout (`patch_grid`) has no checkpoint yet.
+# A checkpoint of a patch layout serves the refinement hierarchy: one root
+# patch and its levels. The same-level slab layout (`patch_grid`) has no
+# checkpoint yet.
 function _check_hierarchy_layout(solver::Solver, name::AbstractString)
     length(getfield(solver, :patch_regions)) == 1 ||
         error("$name: a same-level patch layout (patch_grid) has no checkpoint; " *
-              "the state vector form serves the refinement hierarchy")
+              "a checkpoint serves the refinement hierarchy")
     return solver
 end
 
@@ -198,7 +198,7 @@ each level the same way, top-down, a level also when its parent was
 rebuilt; in a static hierarchy every level below the first must already
 match. Collective over the run.
 """
-function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
+function restore_hierarchy!(solver::Solver, states::AbstractVector,
                             rec::HierarchyRecord, source::AbstractString)
     levels = getfield(solver, :levels)
     spec = getfield(solver, :regrid)
@@ -302,7 +302,7 @@ end
 # the covered mask and the geometry follow. `states` is resized with the
 # patch vector. Collective over the run: `regions` and `owners` are the same
 # on every rank.
-function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _replace_level!(solver::Solver{T}, states::AbstractVector,
                          regions::Vector{BlockRegion},
                          stored_owners::Union{Nothing,Vector{UnitRange{Int}}}) where {T}
     spec = getfield(solver, :regrid)
@@ -431,7 +431,7 @@ end
 # reads their state from the checkpoint). Rank 0, which belongs to every level
 # holding a tile, takes each decision and broadcasts it. Collective over the
 # run.
-function _restore_levels!(solver::Solver, states::Vector{<:ConservedState},
+function _restore_levels!(solver::Solver, states::AbstractVector,
                           rec::HierarchyRecord, same_np::Bool,
                           source::AbstractString)
     levels = getfield(solver, :levels)

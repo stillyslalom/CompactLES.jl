@@ -27,9 +27,6 @@ struct SchemeSettings
     bcs::FaceConditions
 end
 
-# What `Solver.positivity` holds when the limiter is on: a `PositivityLimiter`
-# on one patch, a `PatchLimiters` on several (positivity_setup.jl).
-abstract type LimiterState end
 
 # The domain's geometry as the solver was configured: the metric, the
 # per-dimension stretch, the computational extents, the root spacing and the
@@ -166,11 +163,11 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # The implicit half of the additive Runge–Kutta integrator (imex.jl), or
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
-    # The positivity limiter (positivity_setup.jl), a `PatchLimiters` holding one per
-    # patch of a patched or refined solver, or `nothing` without it. Read by
+    # The positivity limiters (positivity_types.jl), one per patch this rank
+    # holds, or `nothing` without the limiter. Read by
     # `run!` alone, which steps a limited solver through `_limited_run_step!`
     # behind a function barrier, so the field is abstractly typed.
-    positivity::Union{Nothing,LimiterState}
+    positivity::Union{Nothing,PatchLimiters}
     # The `Problem` and `Numerics` that `setup` built this solver from, as
     # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by
     # `_build_solver` directly. Read only by the phase change, `setup(solver, Q; ...)`
@@ -221,7 +218,7 @@ end
 @inline _root_spacing(s::Solver) = getfield(getfield(s, :grid), :h)
 
 @noinline function _patch_prop_error(name::Symbol)
-    diagnostics = "Pass the state vector to a diagnostic that takes it " *
+    diagnostics = "Pass the state to a diagnostic that takes it " *
                   "(line_profile, line_sample, field_slice, field_array, " *
                   "mix_width, save_vtk)"
     _is_workspace_prop(name) &&
@@ -258,31 +255,34 @@ end
 
 @noinline _sole_patch_error() =
     error("this routine evaluates one patch and this solver holds several " *
-          "patches (a refined or patched run). Pass the state vector to a " *
-          "routine that takes it, or iterate `for (ps, Q) in " *
-          "eachpatch(solver, states)` and pass `ps`")
+          "patches (a refined or patched run). Pass the state to a routine " *
+          "that takes the solver's, or iterate `for (ps, Q) in " *
+          "eachpatch(solver, state)` and pass `ps`")
 
 # `f(solver::Solver, args...)` for each named routine of one patch, calling
 # its `PatchSolver` method on the sole patch. The compute tree is then
 # compiled for `PatchSolver` alone, whichever of the two a caller holds, and
 # a single-patch run shares it with a refined run whose solver and root patch
-# have the same types. A more specific `Solver` method of the same function,
-# such as a state-vector form, takes precedence over the forward.
+# have the same types. A `SimulationState` among the arguments is passed as
+# its sole patch's state. A more specific `Solver` method of the same
+# function, such as one that also serves a composite layout, takes precedence
+# over the forward.
 macro sole_patch_forward(names...)
     defs = [:(@inline $(esc(f))(s::Solver, args...; kwargs...) =
-                  $(esc(f))(sole_patch(s), args...; kwargs...)) for f in names]
+                  $(esc(f))(sole_patch(s), map(_patch_arg, args)...; kwargs...))
+            for f in names]
     return Expr(:block, defs...)
 end
 
 @sole_patch_forward(
     xcoord, padded_index, interior_index, boundary_plane, point_spacing,
     quad_weight, cell_measure, volume_integral, plane_profile,
-    initialize!, primitives!, refresh_primitives!, apply_bcs!,
+    primitives!, apply_bcs!,
     compute_artificial!, compute_primitives_and_gradients!,
     compute_rhs!, assemble_fluxes!, filter_state!, filter_weight,
     vel_parity, cons_parity, global_axis, art_arrays, art_block,
     set_art_block!, scalar_field, save_vtk, vtk_field_entries,
-    _validate_transport_state!, _local_volume_integral, _local_max_rate_launch,
+    _local_volume_integral, _local_max_rate_launch,
     _edge_factor, _bulk_gradients!, _species_gradients!, _prepare_fields!,
     _check_output, _output_global, _output_piece_extent, _output_ranges,
     _local_state_report, _initialize!, _initialize_interior!)
@@ -305,6 +305,7 @@ patch order, with `states` aligned with `solver.patches`."
 eachpatch(solver::Solver, states) =
     ((PatchSolver(solver, p), states[i]) for (i, p) in
      enumerate(getfield(solver, :patches)))
+eachpatch(solver::Solver, state::SimulationState) = eachpatch(solver, state.patches)
 
 """
     xcoord(solver, d, i)
@@ -453,41 +454,27 @@ boundary_plane(solver::PatchSolver, d::Int, side::Int) = wallplane(solver.decomp
 """
     allocate_state(solver)
 
-Zero-filled conserved storage for `solver`: a [`ConservedState`](@ref) matching
-its sole patch, or, for a patch-decomposed solver, a `Vector` of them aligned
-with `solver.patches`. The vector form is selected by the *global* layout, not
-by the local patch count: a rank of a partitioned slab run holds exactly one
-patch, and a rank outside a refined level's rank subset holds only the root,
-but the multi-patch drivers dispatch on the vector form, and a single-array
-state on such a rank silently skips the interface and level synchronization.
+Zero-filled conserved storage for `solver`, a [`SimulationState`](@ref)
+holding one [`ConservedState`](@ref) per patch this rank holds, aligned with
+`solver.patches`. On a single-patch solver it indexes as that patch's array.
+The form follows the solver's layout and not the local patch count: a rank
+of a partitioned slab run holds exactly one patch, and a rank outside a
+refined level's rank subset holds only the root, and the state of either is
+the composite one, which the interface and level synchronization act on.
 """
-allocate_state(solver::Solver) = Base.inferencebarrier(_allocate_state(solver))
-
-# The form of the state follows the run-time layout, so the inferred result is a
-# union of the single-patch state and two vector forms. A function that holds
-# a concretely typed solver and passes the state on to `run!` or
-# `compute_rhs!` would then infer the whole step tree once per member, the two
-# vector forms included, although only one of them ever reaches the call. For
-# one cylindrical solver whose tree the package image holds, a function that
-# allocates, initializes and runs compiled for 13.7 s; behind the barrier the
-# calls dispatch at run time to the image's specialization and it compiles for
-# 2.6 s. The cost is one dynamic dispatch per call that receives the state.
-function _allocate_state(solver::Solver)
+function allocate_state(solver::Solver{T}) where {T}
     n_cons = solver.equations.n_cons
-    _multipatch(solver) || return _state_like(solver.rho, n_cons)
+    _multipatch(solver) ||
+        return SimulationState([_state_like(solver.rho, n_cons)], false)
     patches = getfield(solver, :patches)
     levels = getfield(solver, :levels)
-    spec = getfield(solver, :regrid)
-    # A stacked level's tiles share one stacked state, each tile holding the
-    # view over its own block, as its fields are; the step drivers advance
-    # the stack through `_stack_state`. The vector's element type then covers
-    # the root's dense state and the tiles' views, and is widened as soon as
-    # a regrid could stack a tile on this rank, so a rank joining the level
-    # later can take one.
-    stackable = any(lev -> !isempty(lev.stacks), levels) ||
-                (spec !== nothing && _stacked_level(spec.backend, spec.tile))
-    stackable || return [_state_like(p.rho, n_cons) for p in patches]
-    states = Vector{ConservedState{typeof(solver.cfl)}}(undef, length(patches))
+    # The element type of a composite state's vector is the abstract
+    # `ConservedState{T}` on every backend: a stacked level's tiles share one
+    # stacked state, each tile holding the view over its own block, as its
+    # fields are (the step drivers advance the stack through `_stack_state`),
+    # and a regrid may hand this rank such a tile later. The result type then
+    # depends on the solver's type alone.
+    states = Vector{ConservedState{T}}(undef, length(patches))
     for lev in levels
         for st in lev.stacks
             _stacked_states!(states, st, n_cons)
@@ -498,7 +485,7 @@ function _allocate_state(solver::Solver)
             states[li] = _state_like(patches[li].rho, n_cons)
         end
     end
-    return states
+    return SimulationState(states, true)
 end
 
 # Fill the members' slots of `states` with views of one fresh zero state over
@@ -518,10 +505,20 @@ _tile_state(raw::ConservedState, slot::Int, stride::Int) =
 
 # Whether the solver's layout is a multi-patch one, asked of the layout rather
 # than of `npatches`: both a slab partition and a refined level's rank subset
-# leave some rank holding one patch of a layout that has several.
-_multipatch(solver::Solver) =
-    length(getfield(solver, :patch_regions)) > 1 ||
-    length(getfield(solver, :levels)) > 1
+# leave some rank holding one patch of a layout that has several. The patch
+# vector of such a solver has the abstract element type `Patch` and that of a
+# single-patch solver its patch's concrete type (`_check_layout_type` holds
+# the constructors to it), so the answer is a constant of the solver's type
+# and a routine that branches on it compiles one side.
+@inline _multipatch(::Solver{T,Eq,E,Tr,M,St,Src,P}) where {T,Eq,E,Tr,M,St,Src,P} =
+    !isconcretetype(P)
+function _check_layout_type(solver::Solver)
+    several = length(getfield(solver, :patch_regions)) > 1 ||
+              length(getfield(solver, :levels)) > 1
+    several == _multipatch(solver) ||
+        error("internal: the solver's patch vector type does not match its layout")
+    return solver
+end
 allocate_state(ps::PatchSolver) = _state_like(ps.rho, ps.equations.n_cons)
 
 # Zero-filled conserved storage matching one patch's field storage, so a

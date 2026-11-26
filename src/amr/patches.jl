@@ -198,7 +198,7 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     child_mask_record::ChildMaskRecord
     # Who holds the flux rows and `tmp_b` as scratch past an evaluation:
     # `:free`, or the positivity limiter's stage or filter pass
-    # (`borrow_stage_buffers`, positivity_setup.jl). A right-hand side on a
+    # (`borrow_stage_buffers`, positivity_types.jl). A right-hand side on a
     # patch of this workspace checks it on entry.
     scratch_lease::Base.RefValue{Symbol}
 end
@@ -970,7 +970,7 @@ function _check_scratch_writer(solver, group::Symbol, name::Symbol)
     throw(ArgumentError(
         "scalar_field: `$name` is read from RHS scratch that this patch shares " *
         "with other patches of the same extent, and another patch wrote it last. " *
-        "Use field_array(solver, states, :$name), which recomputes it for each " *
+        "Use field_array(solver, state, :$name), which recomputes it for each " *
         "patch."))
 end
 
@@ -1637,6 +1637,7 @@ communicator for that level's records, which only the level's owners enter;
 the root's is `solver.comm`.
 """
 function sync_patches!(solver, states)
+    states = _patch_states(states)
     for lev in getfield(solver, :levels)
         # The records of a level are addressed in that level's own
         # communicator, so only its owners may enter them; a rank without

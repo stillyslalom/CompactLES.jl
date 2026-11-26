@@ -124,7 +124,7 @@ end
 # each step 60% slower for the rest of the run. Any array the next phase
 # reaches as well is kept.
 function _release_previous_phase!(prev::Solver, Q, next::Solver, Q_next)
-    _cpu_storage(Q_next isa ConservedState ? Q_next : first(Q_next)) && return prev
+    _cpu_storage(Q_next) && return prev
     keep = _device_arrays(next, Q_next)
     for a in _device_arrays(prev, Q)
         a in keep || KernelAbstractions.unsafe_free!(a)
@@ -214,32 +214,21 @@ function _check_phase(prob0::Problem, num0::Numerics, prob::Problem, num::Numeri
 end
 
 function _carry_phase!(next::Solver, Q_next, prev::Solver, Q)
-    _multipatch(prev) &&
-        throw(ArgumentError("setup(solver, Q): this solver holds a patch layout; " *
-                            "pass the state vector allocate_state returned"))
-    buf = _write_checkpoint(IOBuffer(), prev, Q)
+    rec = nothing
+    if _multipatch(prev)
+        _check_hierarchy_layout(prev, "setup(solver, Q)")
+        rec = hierarchy_record(prev)
+    end
+    buf = _write_checkpoint(IOBuffer(), prev, Q, rec)
     seekstart(buf)
     _read_checkpoint!(buf, next, Q_next, PHASE_SOURCE, CONFIG_ALLOWABLE_GROUPS;
                       phase=true)
+    # As `load_checkpoint!` leaves a loaded hierarchy; see the note there.
+    _presync!(next, Q_next, false)
     refresh_primitives!(next, Q_next)
     _prime_phase!(next, Q_next, prev)
     _carry_accounts!(next, prev)
     return Q_next
-end
-
-function _carry_phase!(next::Solver, states_next::Vector{<:ConservedState},
-                       prev::Solver, states::Vector{<:ConservedState})
-    _check_hierarchy_layout(prev, "setup(solver, Q)")
-    buf = _write_checkpoint(IOBuffer(), prev, states, hierarchy_record(prev))
-    seekstart(buf)
-    _read_checkpoint!(buf, next, states_next, PHASE_SOURCE, CONFIG_ALLOWABLE_GROUPS;
-                      phase=true)
-    # As `load_checkpoint!` leaves a loaded hierarchy; see the note there.
-    _presync!(next, states_next, false)
-    refresh_primitives!(next, states_next)
-    _prime_phase!(next, states_next, prev)
-    _carry_accounts!(next, prev)
-    return states_next
 end
 
 # The artificial coefficients of a phase that switches the properties on,

@@ -119,7 +119,7 @@ end
     num = Numerics(n_global=(36, 24, 1), art=ArtificialProperties(enabled=false),
                    filter=nothing, amr=AMR(initial=BlockRegion((10, 6, 0), (10, 8, 1))))
     solver, states = setup(prob, num)
-    @test states isa Vector
+    @test states isa CompactLES.SimulationState
     fig, ax, plt = profileplot(solver, states, :rho)
     @test plt isa Makie.Lines
     slice = field_slice(solver, states, :rho)

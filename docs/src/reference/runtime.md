@@ -12,6 +12,7 @@ StepControl
 SolverFailure
 FloorTally
 Workspace
+SimulationState
 ConservedState
 compute_rhs!
 CompactLES.compute_primitives_and_gradients!

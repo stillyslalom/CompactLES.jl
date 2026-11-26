@@ -193,9 +193,12 @@ exchange afterwards; [`run!`](@ref) and [`step!`](@ref) do so themselves.
 initialize!(solver::PatchSolver, Q, ic) =
     _initialize!(solver, solver.eos, Q, _bind_initial(ic, solver))
 
-initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
-    (foreach(((ps, Q),) -> _initialize!(ps, ps.eos, Q, _bind_initial(ic, ps)),
-             eachpatch(solver, states)); states)
+function initialize!(solver::Solver, state, ic)
+    for (ps, Q) in eachpatch(solver, _patch_states(state))
+        initialize!(ps, Q, ic)
+    end
+    return state
+end
 
 # An initial condition that needs the run's EOS or its resolved directions
 # (a `Layers`, regions.jl) is completed here; a plain function is used as is.
@@ -281,9 +284,8 @@ end
         -> StateReport
 
 Inspect the interior of the conserved state and return the reduced
-[`StateReport`](@ref) of what it contains. `Q` may be a single conserved array or
-the vector of patch states of a multi-patch solver, in which case every patch
-this rank holds is inspected. A point with a mass fraction below
+[`StateReport`](@ref) of what it contains; every patch this rank holds is
+inspected. A point with a mass fraction below
 `-species_band` or above `1 + species_band` is counted as a negative species
 (the second implies a negative partner); the policy functions pass the band of the
 [`StepControl`](@ref) whose verdict they take.
@@ -304,14 +306,7 @@ state_report(solver::Solver, Q; species_band::Real=solver.control.species_band) 
 # The keyword form forwards to positional ones, which the validation inside
 # `run!` calls directly, so no keyword sorter is compiled per solver type.
 function _state_report(solver::Solver, Q, species_band::Real)
-    _cpu_storage(Q) || return StateReport()
-    return _reduce_state_report(solver,
-                                _local_state_report(sole_patch(solver), Q,
-                                                    species_band))
-end
-
-function _state_report(solver::Solver, states::Vector{<:ConservedState},
-                       species_band::Real)
+    states = _patch_states(Q)
     isempty(states) || _cpu_storage(states[1]) || return StateReport()
     acc = _empty_local_report()
     for (ps, Q) in eachpatch(solver, states)
@@ -1269,10 +1264,11 @@ function _setup_levels(prob::Problem, num::Numerics, lv::LevelSetup;
         # belong to the selected hierarchy. Validate the coarse state before
         # any sensor divides by its density or recovers thermodynamics.
         root = PatchSolver(solver, first(getfield(solver, :patches)))
-        initialize!(root, Q[1], prob.ic)
-        report = _cpu_storage(Q[1]) ?
+        Q_root = Q.patches[1]
+        initialize!(root, Q_root, prob.ic)
+        report = _cpu_storage(Q_root) ?
                  _reduce_state_report(solver,
-                                      _local_state_report(root, Q[1],
+                                      _local_state_report(root, Q_root,
                                                           num.control.species_band)) :
                  StateReport()
         failure = check_validity(num.control, report, "the initial coarse state",

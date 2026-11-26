@@ -36,11 +36,10 @@ function _validate_transport_state!(solver::PatchSolver, Q; current::Bool=false)
     return nothing
 end
 
-function _validate_transport_state!(solver::Solver, states::Vector{<:ConservedState};
-                                    current::Bool=false)
+function _validate_transport_state!(solver::Solver, states; current::Bool=false)
     transport_has_domain(solver.transport) || return nothing
     status = UInt8(0)
-    for (ps, Q) in eachpatch(solver, states)
+    for (ps, Q) in eachpatch(solver, _patch_states(states))
         current || refresh_primitives!(ps, Q)
         status = max(status, _local_transport_status(ps))
     end

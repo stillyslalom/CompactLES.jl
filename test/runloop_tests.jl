@@ -66,8 +66,7 @@ function rl_history(build, observe!; steps, refined=false)
     return (solver=solver, state=state, dts=dts, regions=regions)
 end
 
-rl_states(Q) = [parent(Q)]
-rl_states(states::Vector{<:CL.ConservedState}) = [parent(q) for q in states]
+rl_states(Q) = [parent(q) for q in Q.patches]
 
 # The comparison every observation set below makes: same steps, same clock,
 # same state, same refinement history.
@@ -213,16 +212,16 @@ end
     # which is what makes the decision a function of that state.
     root = CL.PatchSolver(solver, solver.patches[1])
     stale = copy(root.rho)
-    CL._tag_coefficients!(solver, states)
-    region = CL.tagged_region(solver, states[1])
+    CL._tag_coefficients!(solver, states.patches)
+    region = CL.tagged_region(solver, states.patches[1])
     @test region !== nothing
     @test root.rho != stale
     # A refresh from the state under test, and an observational call that
     # performs one, therefore leave the decision alone.
     refresh_primitives!(solver, states)
-    @test CL.tagged_region(solver, states[1]) == region
+    @test CL.tagged_region(solver, states.patches[1]) == region
     dissipation_rate(solver, states)
-    @test CL.tagged_region(solver, states[1]) == region
+    @test CL.tagged_region(solver, states.patches[1]) == region
 end
 
 # --- The clock ---------------------------------------------------------------

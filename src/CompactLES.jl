@@ -61,6 +61,7 @@ include("amr/levels_types.jl")
 include("amr/levels_coupling.jl")
 include("amr/levels_transfer.jl")
 include("amr/regrid_types.jl")
+include("solver/positivity_types.jl")
 include("solver/solver.jl")
 include("solver/construction.jl")
 include("solver/rhs.jl")
@@ -172,7 +173,8 @@ export TurbulentInflow
         MM_NS_MG, ablation_rate, drive_temperature, drive_modes, drive_factor,
         compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, max_rate,
         FloorTally, step!, sync_patches!, sync_levels!, eachpatch, npatches,
-        ConservedState, CPUBackend, interior_index, padded_index, xcoord, global_xcoord,
+        ConservedState, SimulationState, CPUBackend, interior_index, padded_index,
+        xcoord, global_xcoord,
         DEFAULT_VTK_FIELDS, StateReport, FieldSnapshot,
         makie_available, hdf5_available, hdf5_parallel,
         ClosureRow, BandedClosureRow, CompactScheme, BandedCompactScheme,

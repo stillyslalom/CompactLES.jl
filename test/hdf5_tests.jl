@@ -448,9 +448,9 @@ end
     @test r.t == s.t
     @test level_regions(r, 1) == level_regions(s, 1)
     d = 0.0
-    for i in eachindex(states)
+    for i in eachindex(states.patches)
         inner = CL.interior(s.patches[i].decomp)
-        d = max(d, maximum(abs.(parent(sr[i])[inner, :] .- parent(states[i])[inner, :])))
+        d = max(d, maximum(abs.(parent(sr.patches[i])[inner, :] .- parent(states.patches[i])[inner, :])))
     end
     @test MPI.Allreduce(d, max, comm) == 0.0
 
@@ -494,12 +494,12 @@ end
         @test level_regions(r, 1) == want
         run!(r, rs; tfinal=1.0, nmax=80)
         @test r.t == s.t && level_regions(r, 1) == level_regions(s, 1)
-        d = length(rs) == length(states) ? 0.0 : Inf
+        d = length(rs.patches) == length(states.patches) ? 0.0 : Inf
         if isfinite(d)
-            for i in eachindex(states)
+            for i in eachindex(states.patches)
                 inner = CL.interior(s.patches[i].decomp)
-                d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
-                                        parent(states[i])[inner, :])))
+                d = max(d, maximum(abs.(parent(rs.patches[i])[inner, :] .-
+                                        parent(states.patches[i])[inner, :])))
             end
         end
         @test MPI.Allreduce(d, max, comm) == 0.0
@@ -569,7 +569,7 @@ end
     load_checkpoint_hdf5!(sr, sr_states, stem)
     @test sr.step == 10
     @test length(level_regions(sr, 1)) == 12
-    @test length(sr_states) == length(sr.patches)
+    @test length(sr_states.patches) == length(sr.patches)
     run!(sr, sr_states; tfinal=1.0, nmax=20)
     @test abs(sr.t - t_sub) < 1e-14
     @test abs(wave_error(sr, sr_states) - e_sub) < 1e-12
@@ -621,9 +621,9 @@ end
     load_checkpoint_hdf5!(r, rq, stem)
     @test level_regions(r, 1) == regs
     run!(r, rq; tfinal=1.0, nmax=12)
-    @test r.t == s.t && length(rq) == length(q) &&
-          all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
-              parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+    @test r.t == s.t && length(rq.patches) == length(q.patches) &&
+          all(parent(rq.patches[k])[CL.interior(s.patches[k].decomp), :] ==
+              parent(q.patches[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q.patches))
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)

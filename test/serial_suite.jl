@@ -164,18 +164,18 @@ end
     num = Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false))
     solver, Q = setup(prob, num)
 
-    @test Q isa ConservedState
+    @test Q isa CompactLES.SimulationState
     @test parent(Q) isa Array{Float64,4}
     @test size(Q) == (20, 20, 20, 5)
     Q[1, 1, 1, 1] = 2.0
     @test parent(Q)[1, 1, 1, 1] == 2.0
     @test parent(view(Q, :, :, :, 1)) === parent(Q)
-    @test copy(Q) isa ConservedState
-    @test zero(Q) isa ConservedState
+    @test copy(Q) isa CompactLES.SimulationState
+    @test zero(Q) isa CompactLES.SimulationState
 
     q_display = sprint(show, MIME("text/plain"), Q)
     pair_display = sprint(show, MIME("text/plain"), (solver, Q))
-    @test q_display == "ConservedState{Float64}(20 × 20 × 20 × 5)"
+    @test q_display == "SimulationState{Float64} 20×20×20×5"
     @test length(pair_display) < 200
     @test occursin("Solver(grid=12 × 12 × 12", pair_display)
     @test occursin(q_display, pair_display)
@@ -338,11 +338,11 @@ end
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.5, 0, 0), p=1, rho=1 + 0.1sin(x)))
-    @test all(Q -> eltype(Q) === T, states)
+    @test all(Q -> eltype(Q) === T, states.patches)
     @test compute_dt(solver, states) isa T
     run!(solver, states; tfinal=T(0.01), nmax=10)
     @test solver.t isa T
-    @test all(Q -> all(isfinite, parent(Q)), states)
+    @test all(Q -> all(isfinite, parent(Q)), states.patches)
 end
 
 @testset "Float32 varying-cp mixture and open/viscous boundaries" begin
@@ -452,7 +452,7 @@ end
     run!(sr, states; tfinal=one(T), nmax=2)
     @test CL.refined_region(sr).offset[1] != initial_offset
     @test sr.t isa T
-    @test all(Q -> eltype(Q) === T && all(isfinite, parent(Q)), states)
+    @test all(Q -> eltype(Q) === T && all(isfinite, parent(Q)), states.patches)
     for (ps, Q) in CL.eachpatch(sr, states)
         @test minimum(Q[padded_index(ps, i, 1, 1), 1]
                       for i in 1:ps.decomp.n_local[1]) > T(0.05)
@@ -2951,7 +2951,7 @@ end
         end)
         drift = Ref(0.0)
         function watch(sol, Qs)
-            for (ps, Q) in CL.eachpatch(sol, Qs isa Vector ? Qs : [Qs])
+            for (ps, Q) in CL.eachpatch(sol, Qs.patches)
                 eq = ps.equations
                 for i in 1:ps.decomp.n_local[1]
                     I = padded_index(ps, i, 1, 1)
@@ -2966,7 +2966,7 @@ end
             end
         end
         run!(s, states; tfinal=1.0, nmax=40, callback=watch)
-        sv = states isa Vector ? states : [states]
+        sv = states.patches
         Dmax = [maximum(ps.D_art[1]) for (ps, _) in CL.eachpatch(s, sv)]
         rho = Dict{Int,Float64}()          # root nodes, by global index
         for (ps, Q) in CL.eachpatch(s, sv)

@@ -296,7 +296,7 @@ function _copy_tile!(pnew::Patch, Qnew, pold::Patch, Qold)
     return pnew
 end
 
-function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _regrid_tiles!(solver::Solver{T}, states::AbstractVector,
                         workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
     schemes = getfield(solver, :schemes)
@@ -963,7 +963,7 @@ them (those levels are rebuilt next). `resplit` says whether level ℓ − 1's
 communicator was split afresh in this pass; the return value says the same
 of level ℓ's. Collective over the run's communicator.
 """
-function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _swap_level!(solver::Solver{T}, states::AbstractVector,
                       workspace::Union{Nothing,Workspace}, ℓ::Int,
                       decision::LevelDecision, resplit::Bool, init::Bool) where {T}
     spec = getfield(solver, :regrid)
@@ -1197,7 +1197,7 @@ restriction, for the AMR frontend's initial layout, whose refined state is
 not yet the solution. Returns whether any level changed; the value is the
 same on every rank.
 """
-function _regrid_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
+function _regrid_hierarchy!(solver::Solver, states::AbstractVector,
                             workspace::Union{Nothing,Workspace}, save;
                             bootstrap::Bool=false)
     spec = getfield(solver, :regrid)
@@ -1222,9 +1222,9 @@ function _regrid_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
     return changed
 end
 
-# The `run!` hook: cadence check, then `regrid!`. The single-array state form
+# The `run!` hook: cadence check, then `regrid!`. A single-patch layout
 # never regrids; a multi-patch solver without a RegridSpec returns at the
-# first test. Returns whether `regrid!` ran, which is the same on every rank;
+# second test. Returns whether `regrid!` ran, which is the same on every rank;
 # a check that changes no level can still write the state (the hierarchy
 # regrid's restriction, the coefficient priming's boundary conditions).
 #
@@ -1233,14 +1233,13 @@ end
 # from its parent and no step has produced it, so it is a state entering a
 # step whatever the cadence says. A rejection raises rather than rolling
 # back: the savepoint predates the layout and cannot be restored onto it.
-_maybe_regrid!(solver::Solver, Q, workspace::Workspace, save,
-               control=solver.control, floors=(0.0, 0.0)) = false
-function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
-                        workspace::Workspace, save,
+function _maybe_regrid!(solver::Solver, Q, workspace::Workspace, save,
                         control::StepControl=solver.control,
                         floors::Tuple{Float64,Float64}=(0.0, 0.0))
+    _multipatch(solver) || return false
     spec = getfield(solver, :regrid)
     spec === nothing && return false
+    states, workspace = _patch_states(Q), _patch_workspace(workspace)
     solver.step - spec.last_step >= spec.interval || return false
     spec.last_step = solver.step
     spec.checks += 1
@@ -1256,7 +1255,7 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     changed = _regrid_impl!(solver, states, workspace, save)
     _regrid_prime!(solver, states, workspace, nothing, changed)
     control.validity_interval > 0 &&
-        validate_state!(solver, states; control=control,
+        validate_state!(solver, Q; control=control,
                         stage="the state after a regrid check", floors=floors)
     changed && _rebank!(solver, states, save)
     spec.wall_regrid += (time_ns() - t0) / 1e9 - (solver.wall_wait - wait0)

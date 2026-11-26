@@ -174,7 +174,7 @@ end
     initialize!(solver, valid, (x, y, z) -> good_prim())
     valid_work = Workspace(valid)
     @test step!(solver, valid, valid_work.dQ, valid_work.du, 1e-8) === valid
-    @test all(all(isfinite, parent(Q)) for Q in valid)
+    @test all(all(isfinite, parent(Q)) for Q in valid.patches)
 end
 
 MPI.Barrier(COMM)

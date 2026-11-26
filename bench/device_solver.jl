@@ -291,7 +291,7 @@ function main(opt)
                           interface_flux=:ghost, subcycle=true)))
         s1, q1 = refined_wave(CPUBackend(); kw...)
         s2, q2 = refined_wave(DeviceBackend(ka_backend); kw...)
-        dmax = maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
+        dmax = maximum(maximum(abs.(Array(parent(q2.patches[i])) .- parent(q1.patches[i])))
                        for i in 1:2)
         @printf("%-34s steps %3d/%3d  max|dev-cpu| = %g%s\n", label,
                 s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
@@ -337,8 +337,8 @@ function main(opt)
                            ("tiled level at the r-z folds", rz_folds))
         s1, q1 = build(CPUBackend())
         s2, q2 = build(DeviceBackend(ka_backend))
-        dmax = maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
-                       for i in eachindex(q1))
+        dmax = maximum(maximum(abs.(Array(parent(q2.patches[i])) .- parent(q1.patches[i])))
+                       for i in eachindex(q1.patches))
         @printf("%-34s steps %3d/%3d  max|dev-cpu| = %g%s\n", label,
                 s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
     end
@@ -354,8 +354,8 @@ function main(opt)
     # holds; the per-tile launch floor this batching amortizes is what the
     # 1-D tiled case measured before it (0.11 s against 1.1 ms per step).
     function states_diff(q1, q2)
-        return maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
-                       for i in eachindex(q1))
+        return maximum(maximum(abs.(Array(parent(q2.patches[i])) .- parent(q1.patches[i])))
+                       for i in eachindex(q1.patches))
     end
     function stack_note(s)
         levs = getfield(s, :levels)
@@ -416,7 +416,7 @@ function main(opt)
         s2, q2 = build(DeviceBackend(ka_backend))
         dmax = states_diff(q1, q2)
         @printf("%-34s steps %3d/%3d  tiles %d/%d  max|dev-cpu| = %g%s%s\n", label,
-                s1.step, s2.step, length(q1), length(q2), dmax,
+                s1.step, s2.step, length(q1.patches), length(q2.patches), dmax,
                 dmax == 0 ? "  (bitwise)" : "", stack_note(s2))
         # Warm timing: fresh solvers, the first pass having compiled.
         sc, _ = build(CPUBackend())

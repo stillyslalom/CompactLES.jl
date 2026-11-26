@@ -111,7 +111,7 @@ end
         for deriv in (lele_d1_6(), lele_d1_8(), lele_d1_6(closures=:brady_livescu))
             s = flat_solver(n_global=(56, 16, 52), L_domain=(1.0, 0.3, 1.1), bcs=bcs,
                             deriv=deriv, eos=POS_GAS, positivity_limiter=true)
-            lim = getfield(s, :positivity)
+            lim = only(getfield(s, :positivity).limiters)
             dec = s.decomp
             o = dec.n_halo_d
             f = similar(s.tmp_a)
@@ -193,7 +193,7 @@ end
         @test counts.stage_limited > 0 && counts.filter_limited > 0
         # The limiter acts ahead of the fronts; the profile moves little.
         @test sum(abs, ρ1 .- ρ0) / sum(abs, ρ0) < 0.02
-        lim = getfield(s1, :positivity)
+        lim = only(getfield(s1, :positivity).limiters)
         @test lim.eps_rho ≈ 0.01 && lim.eps_e ≈ 0.01 * 0.01 / 0.4
     end
 
@@ -229,7 +229,7 @@ end
         for metric in (SphericalMetric(), CylindricalMetric()),
             deriv in (lele_d1_6(), lele_d1_8(), lele_d1_10())
             s, _ = pos_radial(metric; N, deriv, positivity_limiter=true)
-            lim = getfield(s, :positivity)
+            lim = only(getfield(s, :positivity).limiters)
             o = s.decomp.n_halo_d[1]
             idx(i) = CL.padded_index(s, i, 1, 1)
             r = [CL.xcoord(s, 1, i) for i in 1:N]
@@ -300,7 +300,7 @@ end
                           art=ArtificialProperties(enabled=true),
                           control=StepControl(validity=:permissive),
                           positivity_limiter=true)
-        lim = getfield(s, :positivity)
+        lim = only(getfield(s, :positivity).limiters)
         o = s.decomp.n_halo_d[1]
         total(c) = sum(lim.weight_set.weights[1][o+i] / s.inv_J[CL.padded_index(s, i, 1, 1)] *
                        Q[CL.padded_index(s, i, 1, 1), c] for i in 1:96)
@@ -368,7 +368,7 @@ end
                                             p=1.0))
         s, Q = setup(prob, Numerics(n_global=(64, 1, 1), positivity_limiter=true))
         run!(s, Q; tfinal=1.0, nmax=2)
-        lim = getfield(s, :positivity)
+        lim = only(getfield(s, :positivity).limiters)
         ρmin = minimum(Q[CL.padded_index(s, i, 1, 1), 1] for i in 1:64)
         @test lim.eps_rho == 0.01 * ρmin || lim.eps_rho ≈ 0.01 * ρmin
         # A continued run takes the bound again from the state it starts from.
@@ -401,7 +401,7 @@ end
         total(c) = sum(Q[idx(i, j), c] for i in 1:N, j in 1:N)
         mass0, energy0 = total(1), total(5)
         run!(s, Q; tfinal=1.0, nmax=20)
-        lim = getfield(s, :positivity)
+        lim = only(getfield(s, :positivity).limiters)
         @test lim.active
         @test lim.eps_e ≈ 0.01 * emin
         report = state_report(s, Q)
@@ -435,7 +435,7 @@ end
             @test counts.stage_faces > 0 && counts.filter_faces > 0
             @test counts.stage_limited == 0 && counts.filter_limited == 0
             @test s0.step == s1.step && s0.t == s1.t
-            @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+            @test all(parent(Q0.patches[i]) == parent(Q1.patches[i]) for i in eachindex(Q0.patches))
         end
     end
 
@@ -460,8 +460,8 @@ end
             CL.sync_patches!(s, Q)
             CL._positivity_setup!(s, Q)
             lims = CL._follow_patches!(s, getfield(s, :positivity))
-            dQs = CL.Workspace(Q).dQ
-            CL._level_rhs!(s, only(getfield(s, :levels)), Q,
+            dQs = CL.Workspace(Q).dQ.patches
+            CL._level_rhs!(s, only(getfield(s, :levels)), Q.patches,
                            CL._limiter_stage_rhs(lims, dQs, 1, dt), false)
             ends = 0.0
             inner = 0.0
@@ -488,7 +488,7 @@ end
     # (x, ρ) at every node of a line, a shared interface node once.
     function pos_line(s, Q)
         pts = Dict{Float64,Float64}()
-        for (ps, q) in (Q isa Vector ? CL.eachpatch(s, Q) : ((s, Q),)),
+        for (ps, q) in CL.eachpatch(s, Q),
             i in 1:ps.decomp.n_local[1]
             pts[CL.xcoord(ps, 1, i)] = q[CL.padded_index(ps, i, 1, 1), 1]
         end
@@ -687,7 +687,7 @@ end
             @test counts.stage_faces > 0 && counts.filter_faces > 0
             @test counts.stage_limited == 0 && counts.filter_limited == 0
             @test s0.step == s1.step && s0.t == s1.t
-            @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+            @test all(parent(Q0.patches[i]) == parent(Q1.patches[i]) for i in eachindex(Q0.patches))
         end
     end
 
@@ -782,12 +782,12 @@ end
                 (s, Q)
             end
             (s0, Q0), (s1, Q1) = runs
-            @test length(Q1) == 5
+            @test length(Q1.patches) == 5
             counts = CL.positivity_counts(s1)
             @test counts.stage_faces > 0 && counts.filter_faces > 0
             @test counts.stage_limited == 0 && counts.filter_limited == 0
             @test s0.step == s1.step && s0.t == s1.t
-            @test all(parent(Q0[i]) == parent(Q1[i]) for i in eachindex(Q0))
+            @test all(parent(Q0.patches[i]) == parent(Q1.patches[i]) for i in eachindex(Q0.patches))
         end
     end
 
@@ -856,7 +856,7 @@ end
                                         amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)),
                                                 tile=8, level_interpolation_order=8)))
             @test s.interface_flux === flux
-            CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
+            CL._fill_tiles_from_parent!(s, Q.patches, getfield(s, :levels)[2])
             report = state_report(s, Q)
             report.inadmissible + report.negative_density
         end

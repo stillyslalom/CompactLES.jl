@@ -7,9 +7,9 @@ CurrentModule = CompactLES
 All diagnostics account for metric quadrature. Scalar results and profiles are
 reduced over `solver.decomp.comm` and must be called on every rank.
 
-For a patched or refined solver, pass the state vector returned by
-[`allocate_state`](@ref), rather than its root entry. The vector forms assemble
-composite quadrature: a coarse node a child covers entirely contributes
+Each diagnostic takes the [`SimulationState`](@ref) that
+[`allocate_state`](@ref) and [`setup`](@ref) return. On a patched or refined
+solver it assembles composite quadrature: a coarse node a child covers entirely contributes
 nothing, a coarse node on a child's face contributes its whole cell, and the
 child's nodes count from the third in from that face, so the two grids' cells
 meet half a coarse cell inside the child and nothing is counted twice. The

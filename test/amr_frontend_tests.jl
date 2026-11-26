@@ -28,7 +28,7 @@ end
         @test abs(center - 0.65) < 6 / n
         @test nlevels(solver) == 2
         @test getfield(solver, :regrid) === nothing
-        @test 1 <= length(states) <= 2  # fine patch exists only on its owner ranks
+        @test 1 <= length(states.patches) <= 2  # fine patch exists only on its owner ranks
     end
 end
 
@@ -39,10 +39,10 @@ end
                  art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04)))
     root = CompactLES.PatchSolver(solver, getfield(solver, :patches)[1])
-    @test states[1][padded_index(root, 1, 1, 1), 1] ≈ 1 + root.h[1]
-    if length(states) > 1
+    @test states.patches[1][padded_index(root, 1, 1, 1), 1] ≈ 1 + root.h[1]
+    if length(states.patches) > 1
         fine = CompactLES.PatchSolver(solver, getfield(solver, :patches)[2])
-        @test states[2][padded_index(fine, 1, 1, 1), 1] ≈ 1 + fine.h[1]
+        @test states.patches[2][padded_index(fine, 1, 1, 1), 1] ≈ 1 + fine.h[1]
         @test fine.h[1] ≈ root.h[1] / 3
     end
 
@@ -73,7 +73,7 @@ end
         Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tile=8)))
     @test nlevels(unrefined) == 2 && isempty(level_regions(unrefined, 1))
-    @test length(Qu) == 1
+    @test length(Qu.patches) == 1
     @test_throws ArgumentError setup(uniform,
         Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tile=8, regrid_interval=0)))
@@ -130,7 +130,7 @@ end
     regions = level_regions(solver, 1)
     @test !isempty(regions)
     @test all(r -> r.offset[1] > 48, regions)
-    @test 1 <= length(states) <= 1 + length(regions)
+    @test 1 <= length(states.patches) <= 1 + length(regions)
 
     bump = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=1.0 + 0.3exp(-((x - 0.72) / 0.025)^2),
@@ -198,7 +198,7 @@ end
         tile == 0 && @test length(regions) == 1
         spec = getfield(solver, :regrid)
         @test spec.checks == 0 && all(==(0), values(spec.created[1]))
-        for (p, Q) in zip(getfield(solver, :patches), states)
+        for (p, Q) in zip(getfield(solver, :patches), states.patches)
             ps = CompactLES.PatchSolver(solver, p)
             @test Q[padded_index(ps, 1, 1, 1), 1] ≈
                   profile(CompactLES.xcoord(ps, 1, 1)) + ps.h[1]

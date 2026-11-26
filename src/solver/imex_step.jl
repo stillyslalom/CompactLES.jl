@@ -33,14 +33,14 @@ function _implicit_step_limit(solver::ImexSolver, dt)
     return min(dt, oftype(dt, integ.dt_limit), oftype(dt, integ.dt_cap))
 end
 
-function step!(solver::ImexSolver, Q::ConservedState, dQ, du, dt, prepared::Bool)
+function _step_patch!(solver::ImexSolver, Q, dQ, du, dt, prepared::Bool)
     failure = _imex_advance!(solver, Q, dt, prepared, solver.control)
     failure === nothing || throw(failure)
     return Q
 end
 
 _run_step!(solver::ImexSolver, Q, workspace, dt, prepared, control) =
-    _imex_advance!(solver, Q, dt, prepared, control)
+    _imex_advance!(solver, sole_state(Q), dt, prepared, control)
 
 # Whether `flag` holds on every rank of `comm`.
 _on_every_rank(flag::Bool, comm) = MPI.Allreduce(Int(flag), min, comm) == 1

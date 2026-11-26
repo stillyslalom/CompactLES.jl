@@ -158,15 +158,15 @@ end
     r, rs = setup(tube(opened), num)
     load_checkpoint!(r, rs, joinpath(dir, "stop"); allow=(:boundaries,))
     rm(dir; recursive=true)
-    @test level_regions(p, 1) == regs && length(ps) == length(states)
+    @test level_regions(p, 1) == regs && length(ps.patches) == length(states.patches)
     @test getfield(p, :regrid).created == getfield(s, :regrid).created
-    @test all(ph_same(ps[i], states[i], p.patches[i].decomp) for i in eachindex(ps))
+    @test all(ph_same(ps.patches[i], states.patches[i], p.patches[i].decomp) for i in eachindex(ps.patches))
     run!(p, ps; tfinal=1.0, nmax=80)
     run!(r, rs; tfinal=1.0, nmax=80)
     @test (p.t, p.step, p.dt_prev) == (r.t, r.step, r.dt_prev)
     @test level_regions(p, 1) == level_regions(r, 1)
     @test getfield(p, :regrid).created == getfield(r, :regrid).created
-    @test length(ps) == length(rs) &&
-          all(ph_same(ps[i], rs[i], p.patches[i].decomp) for i in eachindex(ps))
-    @test all(all(isfinite, parent(Q)) for Q in ps)
+    @test length(ps.patches) == length(rs.patches) &&
+          all(ph_same(ps.patches[i], rs.patches[i], p.patches[i].decomp) for i in eachindex(ps.patches))
+    @test all(all(isfinite, parent(Q)) for Q in ps.patches)
 end

@@ -173,9 +173,6 @@ function truncate_modes!(solver, Q::ConservedState)
     return Q
 end
 
-truncate_modes!(solver, states::Vector{<:ConservedState}) =
-    (_truncating(solver.truncation) &&
-     error("polar_truncation takes a single-patch solver"); states)
 
 # This rank's θ block of each active ring, interior only, into `buf` at its
 # global θ offset, and back.

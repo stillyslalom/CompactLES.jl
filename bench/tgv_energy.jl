@@ -623,7 +623,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     probe = filter_interval > 0 && filter_probe
     art_warm = _art_snapshot(solver, Q)
     tstage_warm = solver.tstage
-    Qwarm = refine == 0 ? copy(Q) : [copy(q) for q in Q]
+    Qwarm = copy(Q)
     warmspace = Workspace(Qwarm)
     dtwarm = compute_dt(solver, Qwarm)
     step!(solver, Qwarm, warmspace, dtwarm)

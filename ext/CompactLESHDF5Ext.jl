@@ -12,7 +12,8 @@ using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
 using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
 using CompactLES: HierarchyRecord, LevelRecord, hierarchy_record, restore_hierarchy!
 using CompactLES: ConfigurationRecord, configuration_record, configuration_digests
-using CompactLES: _verify_configuration, xcoord, ConservedState
+using CompactLES: _verify_configuration, xcoord, ConservedState, SimulationState,
+                  sole_state
 using MPI
 using HDF5
 
@@ -228,10 +229,11 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
 # `global_axis` and `axis_matches` are taken from there, not restated here, so
 # that the two paths cannot drift apart.
 
-function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractString)
+function CompactLES.save_checkpoint_hdf5(solver::Solver, state::SimulationState,
+                                         prefix::AbstractString)
     CompactLES._multipatch(solver) &&
-        error("save_checkpoint_hdf5: this solver holds a patch layout; pass the " *
-              "state vector allocate_state returned")
+        return _save_hierarchy_hdf5(solver, state.patches, prefix)
+    Q = sole_state(state)
     comm = solver.comm
     rank = MPI.Comm_rank(comm)
     path = string(prefix, ".h5")
@@ -261,9 +263,7 @@ end
 # space and written in per-rank hyperslabs. Every rank walks every tile of
 # the record, since under the parallel backend a dataset's creation is
 # collective, and writes a block only where it holds one.
-function CompactLES.save_checkpoint_hdf5(solver::Solver,
-                                         states::Vector{<:ConservedState},
-                                         prefix::AbstractString)
+function _save_hierarchy_hdf5(solver::Solver, states, prefix::AbstractString)
     CompactLES._check_hierarchy_layout(solver, "save_checkpoint_hdf5")
     patches = getfield(solver, :patches)
     root = PatchSolver(solver, patches[1])
@@ -454,11 +454,11 @@ function _read_record(file)
                            Float64(read(rg["imbalance"])), edges)
 end
 
-function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractString;
-                                          allow=())
+function CompactLES.load_checkpoint_hdf5!(solver::Solver, state::SimulationState,
+                                          prefix::AbstractString; allow=())
     CompactLES._multipatch(solver) &&
-        error("load_checkpoint_hdf5!: this solver holds a patch layout; pass the " *
-              "state vector allocate_state returned")
+        return (_load_hierarchy_hdf5!(solver, state.patches, prefix, allow); state)
+    Q = sole_state(state)
     path = string(prefix, ".h5")
     # Read is not a write, so every rank may open the file at once even without
     # a parallel build.
@@ -467,16 +467,14 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         _read_state!(file, "state", solver, Q, n_art)
     end
     refresh_primitives!(solver, Q)
-    return Q
+    return state
 end
 
 # The refined-hierarchy form: the header checks and the root's block, then
 # the hierarchy is brought to the recorded one (`restore_hierarchy!`, which
 # rebuilds level 1 on this run's rank count) and every tile this rank then
 # holds reads its block from the tile's dataset.
-function CompactLES.load_checkpoint_hdf5!(solver::Solver,
-                                          states::Vector{<:ConservedState},
-                                          prefix::AbstractString; allow=())
+function _load_hierarchy_hdf5!(solver::Solver, states, prefix::AbstractString, allow)
     CompactLES._check_hierarchy_layout(solver, "load_checkpoint_hdf5!")
     patches = getfield(solver, :patches)
     path = string(prefix, ".h5")
@@ -617,25 +615,21 @@ _patch_layout_error(name) =
           "FieldWriter(format = :vtk) write it as one piece per patch under a " *
           "multiblock index")
 
-CompactLES.save_hdf5(solver::Solver, states::Vector{<:ConservedState},
-                     prefix::AbstractString; kwargs...) = _patch_layout_error("save_hdf5")
-
 function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                               fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
                               slice=nothing)
+    CompactLES._multipatch(solver) && _patch_layout_error("save_hdf5")
     write_field_frame(solver, Q, prefix; fields=fields, stride=stride, slice=slice)
     return prefix
 end
 
 # The frame writer behind `save_hdf5` and `FieldWriter(format = :hdf5)`, which
 # returns the frame's `FrameGrid` for the collection.
-write_field_frame(solver::Solver, states::Vector{<:ConservedState},
-                  prefix::AbstractString; kwargs...) =
-    _patch_layout_error("FieldWriter(format = :hdf5)")
-
-function write_field_frame(solver::Solver, Q, prefix::AbstractString;
+function write_field_frame(solver::Solver, state, prefix::AbstractString;
                            fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
                            slice=nothing)
+    CompactLES._multipatch(solver) && _patch_layout_error("FieldWriter(format = :hdf5)")
+    Q = CompactLES._patch_arg(state)
     decomp = solver.decomp
     comm = decomp.comm
     rank = MPI.Comm_rank(comm)

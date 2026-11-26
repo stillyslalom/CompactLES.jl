@@ -92,6 +92,7 @@ end
 
 _ledger_held(solver) = length(getfield(solver, :patches))
 _ledger_state(states::Vector, pi) = states[pi]
+_ledger_state(state::SimulationState, pi) = state.patches[pi]
 _ledger_state(Q, pi) = Q
 _ledger_version(solver) = (spec = getfield(solver, :regrid);
                            spec === nothing ? 0 : spec.checks)
@@ -111,7 +112,7 @@ end
 """
     _ledger_begin!(solver, Q)
 
-Start attributing the composite budget of `Q` (a state or a state vector) to
+Start attributing the composite budget of the state `Q` to
 the mechanisms that change it, from this state. Rank-local; every rank of
 `solver.comm` calls it before the run and `_ledger_end!` after. Host storage
 only: the budget is a host sweep.

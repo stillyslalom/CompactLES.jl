@@ -25,7 +25,7 @@ using CompactLES: compute_rhs!, max_rate, ConservedState, CPUBackend
     @test s.filter_plans[3] isa DevicePlan
     @test all(p -> p === nothing || p.closed isa DevicePlan, s.smooth_plans)
     Q = allocate_state(s)
-    @test Q isa ConservedState
+    @test Q isa CompactLES.SimulationState
     @test size(Q) == (size(s.rho)..., s.equations.n_cons)
 
     # Fold plans convert too, and the pair scratch is backend-allocated.
@@ -83,7 +83,7 @@ end
             slabs(DeviceBackend(cpu_ka); kw...)
         end
         @test s1.step == s2.step
-        @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
+        @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in 1:2)
     end
 end
 
@@ -289,7 +289,7 @@ end
             wave(DeviceBackend(cpu_ka); kw...)
         end
         @test s1.step == s2.step
-        @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
+        @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in 1:2)
     end
     # :filter restriction is host-only and refused at setup on device.
     @test_throws ErrorException flat_solver(n_global=(96, 1, 1),
@@ -331,7 +331,7 @@ end
             blast(DeviceBackend(cpu_ka); nmax, kw...)
         end
         @test s1.step == s2.step == nmax
-        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+        @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
     end
 end
 
@@ -390,7 +390,7 @@ end
             build(DeviceBackend(cpu_ka))
         end
         @test s1.step == s2.step
-        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+        @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
         lt = getfield(s2, :levels)[2].transfers[1]
         @test lt.folded[1][1]
     end
@@ -453,7 +453,7 @@ end
         # Under the default tags the level holds a tile a regrid created.
         isempty(kw) && @test any(>(0), values(getfield(s1, :regrid).created[1]))
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
-        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+        @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
         # The device level's tiles take stacked storage: one stack (every
         # tile of this case has the lattice extent), whose tiles meet a tile
         # or the parent at their faces in more than one combination, the
@@ -483,13 +483,14 @@ end
             tile = getfield(s2, :patches)[li]
             @test parent(tile.rho) === parent(st.patch.rho)
             @test parent(tile.rhs_workspace.tmp_a) === parent(st.patch.rhs_workspace.tmp_a)
-            @test parent(parent(q2[li])) === parent(parent(q2[st.members[1]]))
-            @test parentindices(parent(q2[li]))[3] ==
+            @test parent(parent(q2.patches[li])) === parent(parent(q2.patches[st.members[1]]))
+            @test parentindices(parent(q2.patches[li]))[3] ==
                   ((slot - 1) * st.patch.rho.stride + 1):(slot * st.patch.rho.stride)
         end
-        @test parent(CL._stack_state(st, q2)) isa CL.StackedArray
+        @test parent(CL._stack_state(st, q2.patches)) isa CL.StackedArray
         # A state vector assembled from separate arrays is refused.
-        loose = [i == 1 ? q2[1] : ConservedState(copy(parent(q2[i]))) for i in eachindex(q2)]
+        loose = [i == 1 ? q2.patches[1] : ConservedState(copy(parent(q2.patches[i])))
+                 for i in eachindex(q2.patches)]
         @test_throws ErrorException CL._stack_state(st, loose)
         # The host backend stacks nothing.
         @test all(isempty(lev.stacks) for lev in getfield(s1, :levels))
@@ -535,7 +536,7 @@ end
     @test lev.stacks[1].patch.rho.stride > 1
     @test length(lev.stacks[1].patch.plans.filter_plans[3].rows.nclo) == 3
     @test s1.step == s2.step
-    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
 end
 
 @testset "device-resident tiled level: the bulk species channel" begin
@@ -577,7 +578,7 @@ end
     @test !isempty(lev.stacks[1].patch.rhs_workspace.grad_Q)
     @test length(lev.stacks[1].patch.plans.filter_plans[1].rows.nclo) == 3
     @test s1.step == s2.step
-    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
     @test all(maximum(Array(p.D_art[1])) > 0 for p in getfield(s2, :patches))
 end
 
@@ -776,8 +777,8 @@ end
         end
         a = q1 isa AbstractVector ? q1 : [q1]
         b = q2 isa AbstractVector ? q2 : [q2]
-        return s1.step == s2.step == nmax && all(isfinite, parent(b[1])) &&
-               all(parent(a[i]) == parent(b[i]) for i in eachindex(a))
+        return s1.step == s2.step == nmax && all(isfinite, parent(b.patches[1])) &&
+               all(parent(a.patches[i]) == parent(b.patches[i]) for i in eachindex(a.patches))
     end
     @test compare(wall_case; nmax=6)
     @test compare(level_case; nmax=4)
@@ -889,7 +890,7 @@ end
             @test counts.stage_limited > 0 && counts.filter_limited > 0
             @test s1.step == s2.step == nmax && s1.t == s2.t
             @test CL.positivity_counts(s2) == counts
-            @test all(parent(a[i]) == parent(b[i]) for i in eachindex(a))
+            @test all(parent(a.patches[i]) == parent(b.patches[i]) for i in eachindex(a.patches))
         end
     end
 end
@@ -925,7 +926,7 @@ end
     report = state_report(s1, q1)
     @test s1.interface_flux === s2.interface_flux === :ghost
     @test report.inadmissible == 0 && report.negative_density == 0
-    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    @test all(parent(q1.patches[i]) == parent(q2.patches[i]) for i in eachindex(q1.patches))
 end
 
 @testset "mole fractions on device storage match the host" begin
@@ -1012,7 +1013,7 @@ end
     # so a body still indexes Q[I, c] on either path.
     Q = allocate_state(s)
     dQ = adapt(cpu_ka, Q)
-    @test dQ isa ConservedState
+    @test dQ isa CompactLES.SimulationState
     @test parent(dQ) === parent(Q)
 end
 

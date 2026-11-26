@@ -502,7 +502,7 @@ function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing
     initialize!(s, Q, (x, y, z) -> Prim(rho=(1 + pulse(x))^(1 / GAMMA),
                                         p=1 + pulse(x), u=(pulse(x) / c0, 0, 0)))
     run!(s, Q; tfinal=pi / c0)
-    states = Q isa Vector ? Q : [Q]
+    states = Q.patches
     ps = CL.PatchSolver(s, getfield(s, :patches)[1])
     refresh_primitives!(ps, states[1])
     return [((ps.p[padded_index(ps, i, 1, 1)] - 1) - c0 * ps.u[padded_index(ps, i, 1, 1)]) / 2 / amp
@@ -710,7 +710,7 @@ entropy wave k=3, 2 levels, subcycle=$subcycle, $label, unfiltered")
             run1 = evolve!(build, Np, cfl, TFINAL_ENTROPY)
             run1 === nothing && (push!(ds, NaN); continue)
             solver, states = run1
-            d = [maximum(abs.(parent(states[k])[:, :, :, 1] .-
+            d = [maximum(abs.(parent(states.patches[k])[:, :, :, 1] .-
                               parent(ref_states[k])[:, :, :, 1])) for k in 1:2]
             push!(ds, maximum(d))
             @printf("  %.4f  %5d  %.3e / %.3e

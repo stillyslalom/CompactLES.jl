@@ -807,7 +807,7 @@ savepoint writes: after a rollback nothing is banked at or below the step
 that failed (`Savepoint.guard`), so a regrid landing inside that window
 cannot re-arm the retry loop that guard exists to break.
 """
-function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _regrid_impl!(solver::Solver{T}, states::AbstractVector,
                        workspace::Workspace, save; bootstrap::Bool=false) where {T}
     spec = getfield(solver, :regrid)
     levels = getfield(solver, :levels)
@@ -830,7 +830,7 @@ end
 # The refined box of a two-level hierarchy rebuilt over `newregion`, a region
 # every rank holds alike: the body of the box regrid, which the setup of a
 # run started from a given region calls as well (`_widen_given_start!`).
-function _move_box!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _move_box!(solver::Solver{T}, states::AbstractVector,
                     workspace::Workspace, newregion::BlockRegion) where {T}
     spec = getfield(solver, :regrid)
     schemes = getfield(solver, :schemes)
@@ -941,8 +941,8 @@ CFL estimate; the refresh cadence is therefore every regrid check, independent
 of whether tagging or load balancing changed the layout. The savepoint is
 rebuilt only after an actual layout change. Returns whether it changed.
 """
-function regrid!(solver::Solver, states::Vector{<:ConservedState},
-                 workspace::Workspace, save)
+function regrid!(solver::Solver, Q, workspace::Workspace, save)
+    states, workspace = _patch_states(Q), _patch_workspace(workspace)
     _tag_coefficients!(solver, states)
     changed = _regrid_impl!(solver, states, workspace, save)
     # The coefficient refresh is a regrid-check cadence, not a layout-change
@@ -962,7 +962,7 @@ end
 # coefficients before the next step reads them (`_regrid_prime!`). A no-op
 # with the criterion off; collective otherwise, the record alike on every
 # rank.
-function _tag_coefficients!(solver::Solver, states::Vector{<:ConservedState})
+function _tag_coefficients!(solver::Solver, states::AbstractVector)
     spec = getfield(solver, :regrid)
     (spec.sensor_threshold > 0 && solver.art.enabled) || return nothing
     solver.tstage = solver.t

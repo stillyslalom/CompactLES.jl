@@ -85,8 +85,7 @@ const INITIAL_SAMPLING_BUDGET = 1e-3
 const MOLECULAR_COMPARISON_BUDGET = 1e-2
 const WIDTH_COMPARISON_BUDGET = 0.01 * 8pi
 
-_states(Q::Vector) = Q
-_states(Q) = [Q]
+_states(Q) = Q.patches
 
 """One collective, composite conserved snapshot plus the established mixing measures."""
 function snapshot(solver, Q)
@@ -94,7 +93,7 @@ function snapshot(solver, Q)
     # is called by every world rank, including ranks which own only the root.
     b = CL._conserved_budget(solver, Q)
     S = _states(Q)
-    mixq = Q isa Vector ? S : Q
+    mixq = Q
     return (; conserved=b,
             width=mix_width(solver, mixq; dim=1),
             molecular=molecular_mixing(solver, mixq; dim=1),
@@ -276,7 +275,7 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
         # normal collective check.  Advance it explicitly because automatic
         # regrids are suppressed to isolate each immediate transfer jump.
         solver.regrid.checks += 1
-        changed = CL.regrid!(solver, _states(Q), ws, nothing)
+        changed = CL.regrid!(solver, Q, ws, nothing)
         after = snapshot(solver, Q)
         push!(history, after)
         if changed

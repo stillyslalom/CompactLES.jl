@@ -87,11 +87,8 @@ global index space. [`load_checkpoint_hdf5!`](@ref) therefore restores it onto
 **any** rank count and process grid, so a run may be moved between machines or
 resumed at a different scale.
 
-    save_checkpoint_hdf5(solver, states::Vector, prefix)
-
-The refined-hierarchy form, for the state vector [`allocate_state`](@ref)
-returns from a refined solver. Beside the root's state under `state`, the
-file carries the hierarchy record under `hierarchy` (per refined level a
+On a refined hierarchy, beside the root's state under `state`, the file
+carries the hierarchy record under `hierarchy` (per refined level a
 table of tile regions in the parent level's node space and a table of the
 stored owner ranges; the regrid state: the tile edge, the interval, the
 threshold and the buffer for provenance, and the last check's step, the
@@ -176,13 +173,11 @@ The configuration record is then compared, and `allow` accepts a
 `:numerics`, `:transport`, `:boundaries` or `:sources` difference, as
 [`load_checkpoint!`](@ref) describes.
 
-    load_checkpoint_hdf5!(solver, states::Vector, prefix; allow = ())
-
-The refined-hierarchy form, for a file written from a state vector. After
-the header checks and the root's block, the hierarchy is brought to the
-recorded one: level 1 is rebuilt from the recorded tile layout when it
-differs from the solver's, so the solver may be built with any initial
-`refine` region, and `states` is resized in place to match `solver.patches`
+For a file written from a refined hierarchy, after the header checks and the
+root's block, the hierarchy is brought to the recorded one: level 1 is
+rebuilt from the recorded tile layout when it differs from the solver's, so
+the solver may be built with any initial `refine` region, and `Q.patches` is
+resized in place to match `solver.patches`
 (build a [`Workspace`](@ref) after this call, not before). On the rank count
 that wrote the file the stored ownership is restored as well, and the run
 continues bit for bit; on another rank count the level is partitioned afresh

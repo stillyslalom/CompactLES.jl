@@ -64,10 +64,10 @@ time axis.
 
 ## Write a refined run
 
-A refined (or patch-partitioned) solver holds its state as the vector
-[`allocate_state`](@ref) returns. `save_vtk` and [`FieldWriter`](@ref) take
-that vector and write one `.vtr` piece per patch under a `.vtm` multiblock
-index; open the `.vtm`. Coarse nodes a finer level covers are blanked, so
+The state of a refined (or patch-partitioned) solver holds one array per
+patch, `states.patches`. `save_vtk` and [`FieldWriter`](@ref) take the state
+and write one `.vtr` piece per patch under a `.vtm` multiblock index; open
+the `.vtm`. Coarse nodes a finer level covers are blanked, so
 the composite shows the finest data everywhere. `slice` names a plane of the
 root lattice, which each patch maps to its own coincident node:
 
@@ -154,7 +154,7 @@ are not recorded; restore them in the restarting script, and give the writer a
 
 ## Restart a refined run
 
-Both checkpoint forms take the state vector and record the hierarchy: the
+Both checkpoint forms record the hierarchy of a refined solver: the
 tile layout and stored ownership of every level, the tag history a
 regridding run needs, and every tile's state.
 
@@ -169,7 +169,7 @@ run!(solver, states; tfinal = 2.0)
 ```
 
 The load rebuilds the recorded tile layout in place of the initial one and
-resizes `states` with it, so build any [`Workspace`](@ref) after the load.
+resizes `states.patches` with it, so build any [`Workspace`](@ref) after the load.
 On the rank count that wrote the file the stored ownership is restored and
 the run continues bit for bit, later regrids included; on another rank
 count the level is partitioned afresh and the continuation agrees to

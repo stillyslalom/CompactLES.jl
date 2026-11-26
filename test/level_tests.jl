@@ -158,7 +158,7 @@ _two_level_mass(solver, states) = volume_integral(solver, states, :rho)
     ps = PatchSolver(solver, solver.patches[1])
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
-    noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+    noise = maximum(abs(states.patches[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "Sod through refinement boundary" noise
     @test noise < 1e-7
     # Positivity holds through both crossings (interior only; physical-edge
@@ -188,7 +188,7 @@ _two_level_mass(solver, states) = volume_integral(solver, states, :rho)
     m8 = _two_level_mass(s8, q8)
     run!(s8, q8; tfinal=0.1, nmax=20000)
     p8 = PatchSolver(s8, s8.patches[1])
-    @test maximum(abs(q8[1][padded_index(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
+    @test maximum(abs(q8.patches[1][padded_index(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
     run!(s8, q8; tfinal=0.2, nmax=40000)
     @test s8.t ≈ 0.2
     for (psq, Q) in CL.eachpatch(s8, q8)
@@ -274,7 +274,7 @@ end
         errs = map((p - 1, p)) do deg
             states = allocate_state(s)
             f(x) = (3 * (x - π))^deg
-            for (k, Q) in enumerate(states)
+            for (k, Q) in enumerate(states.patches)
                 ps = PatchSolver(s, s.patches[k])
                 pad = ps.decomp.n_halo_d[1]
                 for I in CartesianIndices(size(Q)[1:3])
@@ -285,9 +285,9 @@ end
             prolong_level_ghosts!(s, states)
             ps = PatchSolver(s, s.patches[2])
             pad = ps.decomp.n_halo_d[1]
-            slots = CartesianIndices(size(states[2])[1:3])
-            maximum(abs(states[2][I, 1] - f(xcoord(ps, 1, I[1] - pad))) for I in slots) /
-                maximum(abs(states[2][I, 1]) for I in slots)
+            slots = CartesianIndices(size(states.patches[2])[1:3])
+            maximum(abs(states.patches[2][I, 1] - f(xcoord(ps, 1, I[1] - pad))) for I in slots) /
+                maximum(abs(states.patches[2][I, 1]) for I in slots)
         end
         @test errs[1] < 1e-13
         @test errs[2] > 1e-10
@@ -816,7 +816,7 @@ end
     lt = lev.transfers[lev.tiles[1]]
     dp = getfield(solver, :patches)[li].decomp
     n_cons = solver.equations.n_cons
-    Q_old = states[li]
+    Q_old = states.patches[li]
     Q_new = ConservedState(fill(-1.0, size(parent(Q_old))))
     Nf = CL.fine_extent(lt.region, lt.active)
     blocks = lev.coupling.fine_blocks[lev.tiles[1]]
@@ -830,7 +830,7 @@ end
     @test all(parent(Q_new)[untouched] .== -1.0)
     Qref = ConservedState(fill(-1.0, size(parent(Q_old))))
     gathered = CL._gather_tile(Float64, lt.region, lt.active, n_cons, lt, solver,
-                               states)
+                               states.patches)
     CL._carry_over!(Qref, dp, lt.region, gathered, Nf, lt.region, lt.active, n_cons)
     @test parent(Qref) == parent(Q_new)
 end
@@ -871,7 +871,7 @@ end
         ps = PatchSolver(solver, solver.patches[1])
         pad = ps.decomp.n_halo_d[1]
         m1 = solver.equations.i_mom[1]
-        noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+        noise = maximum(abs(states.patches[1][i + pad, 1, 1, m1]) for i in 172:N)
         @info "subcycled Sod through refinement boundary, $label" noise
         # Measured 1.5e-8 against the global-dt gate's 1.4e-8; C10 9.7e-9.
         @test noise < 1e-7
@@ -943,8 +943,8 @@ end
     padf = sa.patches[2].decomp.n_halo_d[1]
     e_amr = 0.0
     for i in 1:N
-        v = lo <= i <= hi ? states[2][3 * (i - lo) + 1 + padf, 1, 1, 1] :
-                            states[1][i + padc, 1, 1, 1]
+        v = lo <= i <= hi ? states.patches[2][3 * (i - lo) + 1 + padf, 1, 1, 1] :
+                            states.patches[1][i + padc, 1, 1, 1]
         e_amr = max(e_amr, abs(v - rho_ref[3i - 2]))
     end
     @test nlevels(sa) == 2
@@ -1044,11 +1044,11 @@ end
     # Momentum ahead of the shock on the two-level gate's schedule (t = 0.1,
     # x > 0.85) is refinement-boundary noise; measured 3.1e-8 against the
     # two-level figure's 1.4e-8, so the inner boundary pair about doubles it.
-    noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+    noise = maximum(abs(states.patches[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "three-level Sod noise ahead of the shock" noise
     @test noise < 1e-7
     run!(solver, states; tfinal=0.2, nmax=40000)
-    @test all(all(isfinite, parent(Q)) for Q in states)
+    @test all(all(isfinite, parent(Q)) for Q in states.patches)
     for (psq, Q) in CL.eachpatch(solver, states)
         n = psq.decomp.n_local[1]
         @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
@@ -1183,12 +1183,12 @@ end
     @test all(i -> regs[i+1].offset[1] > regs[i].offset[1], 1:length(regs)-1)
     @test regs[1].offset[1] < shock_node <= regs[end].offset[1] + 9
     @test Set(keys(getfield(sa, :regrid).created[1])) == Set(regs)
-    @test all(all(isfinite, parent(Q)) for Q in states)
+    @test all(all(isfinite, parent(Q)) for Q in states.patches)
     for (psq, Q) in CL.eachpatch(sa, states)
         n = psq.decomp.n_local[1]
         @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
-    @test length(sa.patches) == length(states) == length(regs) + 1
+    @test length(sa.patches) == length(states.patches) == length(regs) + 1
 end
 
 @testset "regridding rebuilds the d8 detector and a pentadiagonal filter" begin
@@ -1238,7 +1238,7 @@ end
                         filt=filt, refine=BlockRegion((6, 5, 0), (9, 8, 1)))
         states = allocate_state(s)
         ps = CL.PatchSolver(s, s.patches[1])
-        Q = states[1]
+        Q = states.patches[1]
         n = ps.decomp.n_local
         o = ps.decomp.n_halo_d
         rng = Random.MersenneTwister(7)
@@ -1275,7 +1275,7 @@ end
                     refine=BlockRegion((0, 0, 0), (13, 1, 1)))
     states = allocate_state(s)
     ps = CL.PatchSolver(s, s.patches[1])
-    Q = states[1]
+    Q = states.patches[1]
     o = ps.decomp.n_halo_d
     n = ps.decomp.n_local[1]
     rows = o[1]+1:o[1]+n
@@ -1335,7 +1335,7 @@ end
     slab(x, y, z) = Prim(rho=0.36 < x < 0.64 ? 2.0 : 1.0, u=(1.0, 0.0, 0.0), p=1.0)
     initialize!(s, states, slab)
     ps = CL.PatchSolver(s, s.patches[1])
-    Q = states[1]
+    Q = states.patches[1]
     o = ps.decomp.n_halo_d
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3], :]
@@ -1384,7 +1384,7 @@ end
         Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.0, 0.0), p=1.0)
     end)
     ps = CL.PatchSolver(s, s.patches[1])
-    Q = states[1]
+    Q = states.patches[1]
     o = ps.decomp.n_halo_d
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3]]
@@ -1427,7 +1427,7 @@ end
     states = allocate_state(s)
     initialize!(s, states, slabs)
     ps = CL.PatchSolver(s, s.patches[1])
-    Q = states[1]
+    Q = states.patches[1]
     o = ps.decomp.n_halo_d
     rows = o[1]+1:o[1]+ps.decomp.n_local[1]
     line(A) = A[rows, 1 + o[2], 1 + o[3]]
@@ -1457,7 +1457,7 @@ end
     rstates = allocate_state(r)
     initialize!(r, rstates, slabs)
     rline(A) = A[rows, 1 + o[2], 1 + o[3]]
-    CL._tag_coefficients!(r, rstates)
+    CL._tag_coefficients!(r, rstates.patches)
     @test rline(r.patches[1].D_art[1])[inside] == whole.D[inside]
     CL._regrid_prime!(r, rstates, CL.Workspace(rstates), nothing, false)
     @test all(iszero, rline(r.patches[1].D_art[1])[inside])
@@ -1486,7 +1486,7 @@ end
             states = allocate_state(s)
             initialize!(s, states, disc)
             run!(s, states; tfinal=1e6, nmax=20)
-            r = [CL._patch_rate!(s, p, states[i])[1] for (i, p) in enumerate(s.patches)]
+            r = [CL._patch_rate!(s, p, states.patches[i])[1] for (i, p) in enumerate(s.patches)]
             (root=r[1], level=r[2], t=s.t)
         end
     end
@@ -1524,7 +1524,7 @@ end
                             refine=BlockRegion((16, 0, 0), (33, 1, 1)))
             states = allocate_state(s)
             initialize!(s, states, layer)
-            root, Q = s.patches[1], states[1]
+            root, Q = s.patches[1], states.patches[1]
             o = root.decomp.n_halo_d
             nodes = [CartesianIndex(i + o[1], 1 + o[2], 1 + o[3]) for i in 1:n
                      if root.amr.covered[i + o[1], 1 + o[2], 1 + o[3]] == 0x00]
@@ -1562,7 +1562,7 @@ end
     solver = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
                          refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
     states = allocate_state(solver)
-    for (i, Q) in enumerate(states)
+    for (i, Q) in enumerate(states.patches)
         fill!(parent(Q), i - 1.0)              # tiles 2..5 carry 1..4
     end
     lev = solver.levels[2]
@@ -1572,7 +1572,7 @@ end
     # each 19 fine nodes; the common corner is A(19,19), B(1,19), C(19,1),
     # D(1,1).
     at(p, i, j) = (ps = PatchSolver(solver, solver.patches[p]);
-                   pad = ps.decomp.n_halo_d; states[p][i + pad[1], j + pad[2], 1 + pad[3], 1])
+                   pad = ps.decomp.n_halo_d; states.patches[p][i + pad[1], j + pad[2], 1 + pad[3], 1])
     @test at(2, 19, 19) == at(3, 1, 19) == at(4, 19, 1) == at(5, 1, 1) == 2.5
     # Two-tile planes away from the corner take the pair mean.
     @test at(2, 19, 10) == at(3, 1, 10) == 1.5
@@ -1585,9 +1585,9 @@ end
     @test at(5, 0, 10) == 3.0 && at(5, 10, 0) == 2.0
     @test at(2, 0, 10) == 1.0
     # Idempotent: a second pass changes nothing.
-    snapshot = [copy(parent(Q)) for Q in states]
+    snapshot = [copy(parent(Q)) for Q in states.patches]
     CL._sync_level_records!(solver, states, lev)
-    @test all(parent(states[i]) == snapshot[i] for i in eachindex(states))
+    @test all(parent(states.patches[i]) == snapshot[i] for i in eachindex(states.patches))
 end
 
 @testset "tiled level: one RHS workspace per padded extent" begin
@@ -1694,8 +1694,8 @@ end
     @test own[2][nodes...] != stale[nodes...]
     # Recomputed for the first tile, the read is that tile's and passes.
     fresh = CL.preserving_artificial(solver) do
-        CL.compute_primitives_and_gradients!(ps_first, states[2])
-        CL.compute_artificial!(ps_first, states[2])
+        CL.compute_primitives_and_gradients!(ps_first, states.patches[2])
+        CL.compute_artificial!(ps_first, states.patches[2])
         Array(CL.scalar_field(ps_first, :strain_mag))
     end
     @test fresh[nodes...] == own[2][nodes...]
@@ -1737,7 +1737,7 @@ end
             # The interiors: a halo may hold values no pass reads.
             inner(p, x) = parent(x)[ntuple(d -> p.decomp.n_halo_d[d] .+
                                               (1:p.decomp.n_local[d]), 3)..., :]
-            [inner(p, x) for (p, x) in zip(s.patches, q)], s, sets
+            [inner(p, x) for (p, x) in zip(s.patches, q.patches)], s, sets
         end
     end
     for subcycle in (false, true)
@@ -1940,7 +1940,7 @@ end
         ps = PatchSolver(sa, sa.patches[i + 1])
         qs = PatchSolver(sa, sa.patches[j + 1])
         nr = ps.decomp.n_local[1]
-        @test states[i + 1][padded_index(ps, nr, 1, 1), 1] == states[j + 1][padded_index(qs, 1, 1, 1), 1]
+        @test states.patches[i + 1][padded_index(ps, nr, 1, 1), 1] == states.patches[j + 1][padded_index(qs, 1, 1, 1), 1]
     end
 end
 
@@ -1987,7 +1987,7 @@ end
         sg = mk(regrid_interval=5, tag_gradient_threshold=thr)
         states = allocate_state(sg)
         initialize!(sg, states, icY)
-        r = CL.tagged_region(sg, states[1])
+        r = CL.tagged_region(sg, states.patches[1])
         if hit
             @test r !== nothing
             @test r.offset[1] < node(0.75) <= r.offset[1] + r.extent[1]
@@ -2010,7 +2010,7 @@ end
                          regrid_interval=5, tag_vorticity_threshold=thr)
         states = allocate_state(sv)
         initialize!(sv, states, icω)
-        r = CL.tagged_region(sv, states[1])
+        r = CL.tagged_region(sv, states.patches[1])
         if hit
             @test r !== nothing
             for d in 1:2
@@ -2037,7 +2037,7 @@ end
     run!(ss, states; tfinal=1.0, nmax=10)
     spec = getfield(ss, :regrid)
     spec.sensor_threshold = 1.0         # on, so that the check's pass runs
-    CL._tag_coefficients!(ss, states)
+    CL._tag_coefficients!(ss, states.patches)
     spec.sensor_threshold = 0.0
     root = PatchSolver(ss, ss.patches[1])
     qmax = 0.0
@@ -2050,11 +2050,11 @@ end
     end
     @info "artificial diffusivity number at the Sod shock" qmax
     @test qmax > 0
-    @test CL.tagged_region(ss, states[1]) === nothing
+    @test CL.tagged_region(ss, states.patches[1]) === nothing
     spec.sensor_threshold = 2 * qmax
-    @test CL.tagged_region(ss, states[1]) === nothing
+    @test CL.tagged_region(ss, states.patches[1]) === nothing
     spec.sensor_threshold = qmax / 2
-    r = CL.tagged_region(ss, states[1])
+    r = CL.tagged_region(ss, states.patches[1])
     @test r !== nothing
     shock = node(0.5 + 1.75 * ss.t)
     @test r.offset[1] < shock <= r.offset[1] + r.extent[1]
@@ -2069,12 +2069,12 @@ end
     states = allocate_state(sp)
     initialize!(sp, states, (x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0,
                                              u=(0, 0, 0)))
-    r = CL.tagged_region(sp, states[1])
+    r = CL.tagged_region(sp, states.patches[1])
     # The first node past x = 0.8, in the solver's own arithmetic.
     g1 = findfirst(g -> (g - 1) * (1.0 / (N - 1)) > 0.8, 1:N)
     @test r == BlockRegion((g1 - 1 - 4, 0, 0), (N - (g1 - 1 - 4), 1, 1))
     initialize!(sp, states, icS)
-    r = CL.tagged_region(sp, states[1])
+    r = CL.tagged_region(sp, states.patches[1])
     @test r.offset[1] < node(0.5) && r.offset[1] + r.extent[1] == N
 end
 
@@ -2212,7 +2212,7 @@ end
         @test has(initial, anchor)
         amp[] = a_mid
         initialize!(sc, states, icf)
-        @test CL.tagged_region(sc, states[1]) === nothing
+        @test CL.tagged_region(sc, states.patches[1]) === nothing
         sc.step += 1
         CL._maybe_regrid!(sc, states, ws, nothing)
         @test level_regions(sc, 1) == initial
@@ -2242,7 +2242,7 @@ end
     states = allocate_state(s)
     initialize!(s, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     margin = getfield(s, :regrid).margin
-    r = CL.tagged_region(s, states[1])
+    r = CL.tagged_region(s, states.patches[1])
     @test r == BlockRegion((N - margin - 4, 0, 0), (4, 1, 1))
     ws = CL.Workspace(states)
     s.step += 1
@@ -2250,7 +2250,7 @@ end
     @test level_regions(s, 1) == [r]
     @test all(Q -> all(isfinite, parent(Q)), states)
     ps = PatchSolver(s, s.patches[2])
-    @test all(abs(states[2][padded_index(ps, i, 1, 1), 1] - 1) < 1e-12
+    @test all(abs(states.patches[2][padded_index(ps, i, 1, 1), 1] - 1) < 1e-12
               for i in 1:ps.decomp.n_local[1])
     # The substep counts of the recursive driver: one-based at every
     # level, level 2 taking 1 .. 9 under the first root step.
@@ -2468,8 +2468,8 @@ end
         ratio = v ./ v0
         @test maximum(abs.(ratio .- round.(ratio))) < 1e-14
         @test maximum(ratio) ≈ 1 + top && minimum(ratio) ≈ 1
-        @test_throws ArgumentError line_sample(s, states[1], :rho)
-        @test_throws ArgumentError field_slice(s, states[1], :rho)
+        @test_throws ArgumentError line_sample(s, states.patches[1], :rho)
+        @test_throws ArgumentError field_slice(s, states.patches[1], :rho)
         @test_throws ArgumentError line_sample(s, states, :rho; index=(1, N + 1))
         @test_throws ArgumentError field_slice(s, states, :rho; index=0)
     end
@@ -2527,7 +2527,7 @@ end
     # Kinetic energy per unit volume: the composite quadrature of ½ρ|u|²
     # over the held patches, and the same sums without the masks.
     function energies(s, states)
-        fs = map(CL.eachpatch(s, states isa Vector ? states : [states])) do (ps, Q)
+        fs = map(CL.eachpatch(s, states.patches)) do (ps, Q)
             f = zeros(size(ps.rho))
             m = s.equations.i_mom
             d = ps.decomp
@@ -2610,7 +2610,7 @@ end
     same(a, b, decomp) = (inner = CL.interior(decomp);
                           parent(a)[inner, :] == parent(b)[inner, :])
     empty_level(s, states) = isempty(level_regions(s, 1)) && nlevels(s) == 2 &&
-        length(states) == length(s.patches) == 1 &&
+        length(states.patches) == length(s.patches) == 1 &&
         !getfield(s, :levels)[2].level_comm.owned &&
         all(==(0), getfield(s, :patches)[1].amr.covered)
     s, states = setup(prob, num)
@@ -2624,19 +2624,19 @@ end
     save_checkpoint(s, states, joinpath(dir, "before"))
     run!(s, states; tfinal=1.0, nmax=50)
     regs50 = level_regions(s, 1)
-    @test !isempty(regs50) && length(states) == length(s.patches) == 1 + length(regs50)
+    @test !isempty(regs50) && length(states.patches) == length(s.patches) == 1 + length(regs50)
     save_checkpoint(s, states, joinpath(dir, "after"))
     run!(s, states; tfinal=1.0, nmax=110)
     regs = level_regions(s, 1)
     # The shock is the first root node below the mean of the two densities.
     root = CL.PatchSolver(s, s.patches[1])
-    shock = findfirst(i -> states[1][padded_index(root, i, 1, 1), 1] < 1.43, 1:121)
+    shock = findfirst(i -> states.patches[1][padded_index(root, i, 1, 1), 1] < 1.43, 1:121)
     @info("unrefined start", tiles50=Tuple(r.offset[1] for r in regs50),
           tiles80=Tuple(r.offset[1] for r in regs), shock)
     @test length(regs) > length(regs50)
     @test regs[end].offset[1] > regs50[end].offset[1]
     @test any(r -> r.offset[1] < shock <= r.offset[1] + r.extent[1], regs)
-    @test all(all(isfinite, parent(Q)) for Q in states)
+    @test all(all(isfinite, parent(Q)) for Q in states.patches)
     for stem in ("before", "after")
         r, rs = setup(prob, num)
         load_checkpoint!(r, rs, joinpath(dir, stem))
@@ -2644,8 +2644,8 @@ end
         run!(r, rs; tfinal=1.0, nmax=110)
         @test r.t == s.t && level_regions(r, 1) == regs
         @test getfield(r, :regrid).created == getfield(s, :regrid).created
-        @test length(rs) == length(states) &&
-              all(same(rs[i], states[i], s.patches[i].decomp) for i in eachindex(states))
+        @test length(rs.patches) == length(states.patches) &&
+              all(same(rs.patches[i], states.patches[i], s.patches[i].decomp) for i in eachindex(states.patches))
     end
     rm(dir; recursive=true)
     # A check at which nothing tags removes every tile; the next tag, from
@@ -2658,7 +2658,7 @@ end
     @test isempty(getfield(s, :regrid).created[1])
     run!(s, states; tfinal=1.0, nmax=s.step + 10)
     @test !isempty(level_regions(s, 1))
-    @test all(all(isfinite, parent(Q)) for Q in states)
+    @test all(all(isfinite, parent(Q)) for Q in states.patches)
 end
 
 # --- Regridding several levels -------------------------------------------------
@@ -2687,11 +2687,11 @@ end
     tiled = Dict{Int,Int8}()
     for li in getfield(s, :levels)[2].patches
         p = s.patches[li]
-        CL._tag_sweep!(marks(tiled), s, p, states[li], zeros(Int8, size(p.amr.covered)),
+        CL._tag_sweep!(marks(tiled), s, p, states.patches[li], zeros(Int8, size(p.amr.covered)),
                        false)
     end
     uniform = Dict{Int,Int8}()
-    CL._tag_sweep!(marks(uniform), u, Qu[1])
+    CL._tag_sweep!(marks(uniform), u, Qu.patches[1])
     # Level-1 nodes 73 .. 169 are the tiles'; two nodes in from each end the
     # δ⁴ taps stay off the imposed shell. The shared faces are 97, 121, 145.
     inner = 75:167
@@ -2779,14 +2779,14 @@ end
     # first regrid check after a restart tags on those rings.
     loaded_solver, loaded = setup(prob, num(N; amr))
     load_checkpoint!(loaded_solver, loaded, joinpath(dir, "deep"))
-    @test length(loaded) == length(states) &&
-          all(parent(loaded[i]) == parent(states[i]) for i in eachindex(states))
+    @test length(loaded.patches) == length(states.patches) &&
+          all(parent(loaded.patches[i]) == parent(states.patches[i]) for i in eachindex(states.patches))
     run!(s, states; tfinal=0.25, nmax=10000)
     @test shock_in_finest(s, states)
     regs2 = level_regions(s, 2)
     @test maximum(r -> r.offset[1], regs2) > maximum(r -> r.offset[1], initial2)
-    @test length(states) == length(s.patches)
-    @test all(all(isfinite, parent(Q)) for Q in states)
+    @test length(states.patches) == length(s.patches)
+    @test all(all(isfinite, parent(Q)) for Q in states.patches)
     _, rho = line_sample(s, states, :rho)
     r, Qr = setup(prob, num(N))
     run!(r, Qr; tfinal=0.25, nmax=10000)
@@ -2810,8 +2810,8 @@ end
     spec, rspec = getfield(s, :regrid), getfield(rs_solver, :regrid)
     @test rspec.created == spec.created
     same(i) = (inner = CL.interior(s.patches[i].decomp);
-               parent(rs[i])[inner, :] == parent(states[i])[inner, :])
-    @test length(rs) == length(states) && all(same, eachindex(states))
+               parent(rs.patches[i])[inner, :] == parent(states.patches[i])[inner, :])
+    @test length(rs.patches) == length(states.patches) && all(same, eachindex(states.patches))
     rm(dir; recursive=true)
 end
 
@@ -2866,7 +2866,7 @@ end
         out = map((written, nothing)) do extra
             s, q = build()
             runner(s, q, extra)
-            (s.t, s.step, s.cfl, s.floor_tally.cells, [copy(parent(Q)) for Q in q])
+            (s.t, s.step, s.cfl, s.floor_tally.cells, [copy(parent(Q)) for Q in q.patches])
         end
         return isequal(out[1], out[2]), out[2]
     end
@@ -2879,7 +2879,7 @@ end
     bump = Callback(EveryStep(3), (s, q) -> (foreach(Q -> parent(Q) .*= 1 + 1e-6,
                                                      q[2:end]); false))
     spoil(done) = Callback(EveryStep(), (s, q) -> (s.step == 5 && !done[] &&
-        (done[] = true; q[1][padded_index(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
+        (done[] = true; q.patches[1][padded_index(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
         false))
     cases = [
         "static" => (nest, steps(8)),
@@ -2971,7 +2971,7 @@ const WALL_LEVEL_TOL = 1e-7
         pf = PatchSolver(f, f.patches[1])
         ps = PatchSolver(s, s.patches[2])
         off = ps.patch.region.offset[1]
-        e = maximum(abs(q[2][padded_index(ps, i, 1, 1), c] -
+        e = maximum(abs(q.patches[2][padded_index(ps, i, 1, 1), c] -
                         fq[padded_index(pf, off + i, 1, 1), c])
                     for i in 1:ps.decomp.n_local[1], c in 1:3)
         @info "wall level against the uniform run" side e
@@ -3077,7 +3077,7 @@ const PLANE_LEVEL_TOL = 1e-10
         off = fine.patch.region.offset[1] + 1
         @test maximum(abs(xcoord(fine, 1, i) - xcoord(pf, 1, off + i))
                       for i in 1:fine.decomp.n_local[1]) < 1e-15
-        e = maximum(abs(q[2][padded_index(fine, i, 1, 1), c] -
+        e = maximum(abs(q.patches[2][padded_index(fine, i, 1, 1), c] -
                         fq[padded_index(pf, off + i, 1, 1), c])
                     for i in 1:fine.decomp.n_local[1], c in 1:3)
         @info "plane level against the uniform run" side e
@@ -3126,12 +3126,12 @@ const PLANE_LEVEL_TOL = 1e-10
         @test s.step == r.step == 2N
         fine, image = PatchSolver(s, s.patches[2]), PatchSolver(r, r.patches[2])
         nl = fine.decomp.n_local
-        e = maximum(abs(q[2][padded_index(fine, i, j, 1), c] -
+        e = maximum(abs(q.patches[2][padded_index(fine, i, j, 1), c] -
                         rq[2][padded_index(image, 3m - 1 + i, 3m - 1 + j, 1), c])
                     for i in 1:nl[1], j in 1:nl[2], c in 1:4)
         root, rimage = PatchSolver(s, s.patches[1]), PatchSolver(r, r.patches[1])
-        e = max(e, maximum(abs(q[1][padded_index(root, i, j, 1), c] -
-                               rq[1][padded_index(rimage, i, j, 1), c])
+        e = max(e, maximum(abs(q.patches[1][padded_index(root, i, j, 1), c] -
+                               rq.patches[1][padded_index(rimage, i, j, 1), c])
                            for i in 1:N, j in 1:N, c in 1:4))
         @info "corner level against its periodic image" mode e
         @test e < 1e-13
@@ -3199,7 +3199,7 @@ const RZ_LEVEL_TOL = 1e-6
                transport=ConstantTransport(mu0=1e-3))
         q = allocate_state(s)
         initialize!(s, q, (r, θ, z) -> Prim(rho=1.3, u=(0.0, 0.0, 0.3), p=0.9))
-        q0 = [copy(parent(x)) for x in q]
+        q0 = [copy(parent(x)) for x in q.patches]
         run!(s, q; tfinal=1.0, nmax=10)
         drift = 0.0
         for (i, p) in enumerate(getfield(s, :patches))
@@ -3207,7 +3207,7 @@ const RZ_LEVEL_TOL = 1e-6
             nl = pp.decomp.n_local
             for c in 1:5, k in 1:nl[3], j in 1:nl[2], ii in 1:nl[1]
                 I = padded_index(pp, ii, j, k)
-                drift = max(drift, abs(q[i][I, c] - q0[i][I, c]))
+                drift = max(drift, abs(q.patches[i][I, c] - q0[i][I, c]))
             end
         end
         @test s.step == 10
@@ -3236,7 +3236,7 @@ const RZ_LEVEL_TOL = 1e-6
     ps = PatchSolver(s, s.patches[2])
     pf = PatchSolver(f, f.patches[1])
     off = ps.patch.region.offset[1]
-    e = maximum(abs(q[2][padded_index(ps, i, 1, 1), c] -
+    e = maximum(abs(q.patches[2][padded_index(ps, i, 1, 1), c] -
                     fq[padded_index(pf, off + i, 1, 1), c])
                 for i in 1:ps.decomp.n_local[1], c in 1:4)
     @info "r-z level against the uniform run" e
@@ -3339,7 +3339,7 @@ const NSCBC_REFLECTION_TOL = 1e-6
         pf = PatchSolver(f, f.patches[1])
         ps = PatchSolver(s, s.patches[2])
         off = ps.patch.region.offset[1]
-        e = maximum(abs(q[2][padded_index(ps, i, 1, 1), k] -
+        e = maximum(abs(q.patches[2][padded_index(ps, i, 1, 1), k] -
                         fq[padded_index(pf, off + i, 1, 1), k])
                     for i in 1:ps.decomp.n_local[1], k in 1:5)
         @info "NSCBC level against the uniform run" face e
@@ -3405,7 +3405,7 @@ const RADIAL_NSCBC_LEVEL_TOL = 5e-6
     pf = PatchSolver(f, f.patches[1])
     ps = PatchSolver(s, s.patches[2])
     off = ps.patch.region.offset[1]
-    e = maximum(abs(q[2][padded_index(ps, i, 1, 1), k] -
+    e = maximum(abs(q.patches[2][padded_index(ps, i, 1, 1), k] -
                     fq[padded_index(pf, off + i, 1, 1), k])
                 for i in 1:ps.decomp.n_local[1], k in 1:5)
     @info "radial NSCBC level against the uniform run" e
@@ -3509,7 +3509,7 @@ const AXIS_FILTER_TOL = 2e-5
         @test box[B + 1 - j + pad, 1, 1, 1] == box[B + j + pad, 1, 1, 1]
         @test box[B + 1 - j + pad, 1, 1, 2] == -box[B + j + pad, 1, 1, 2]
     end
-    e = maximum(abs(q[2][padded_index(fine, i, 1, 1), c] -
+    e = maximum(abs(q.patches[2][padded_index(fine, i, 1, 1), c] -
                     fq[padded_index(pf, i, 1, 1), c])
                 for i in 1:fine.decomp.n_local[1], c in 1:5)
     @info "axis level against the uniform run" e
@@ -3595,7 +3595,7 @@ const AXIS_FILTER_TOL = 2e-5
     fine = PatchSolver(s, s.patches[2])
     pf = PatchSolver(f, f.patches[1])
     nl = fine.decomp.n_local
-    e = maximum(abs(q[2][padded_index(fine, i, 1, k), c] -
+    e = maximum(abs(q.patches[2][padded_index(fine, i, 1, k), c] -
                     fq[padded_index(pf, i, 1, k), c])
                 for i in 1:nl[1], k in 1:nl[3], c in 1:5)
     @info "corner level against the uniform run" e
@@ -3658,9 +3658,9 @@ const PLACED_NSCBC_TOL = 5e-6
         for k in 2:length(s.patches)
             local ps = PatchSolver(s, s.patches[k])
             local off = ps.patch.region.offset[1]
-            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+            e = max(e, maximum(abs(q.patches[k][padded_index(ps, i, 1, 1), c] -
                                    fq[padded_index(pf, off + i, 1, 1), c])
-                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+                               for i in 1:ps.decomp.n_local[1], c in axes(q.patches[k], 4)))
         end
         return e
     end
@@ -3681,10 +3681,10 @@ const PLACED_NSCBC_TOL = 5e-6
     # --- The tag clamp of a box, off and on ----------------------------------
     cut[] = 0.85
     s, q = placed(lb=false)
-    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q.patches[1])
     @test r.offset[1] + r.extent[1] == N - margin
     s, q = placed()
-    r = @test_logs CL.tagged_region(s, q[1])
+    r = @test_logs CL.tagged_region(s, q.patches[1])
     @test r == BlockRegion((39, 0, 0), (10, 1, 1))
     # A narrow tag at the face widens until the box, which takes no buffer
     # beyond the face, spans the interpolation order.
@@ -3694,7 +3694,7 @@ const PLACED_NSCBC_TOL = 5e-6
     # A buffered end inside the margin band moves onto the face, where a
     # parent-fed face would have no room for its box.
     cut[], upper[] = 0.8, 0.93
-    @test CL.tagged_region(s, q[1]) == BlockRegion((37, 0, 0), (12, 1, 1))
+    @test CL.tagged_region(s, q.patches[1]) == BlockRegion((37, 0, 0), (12, 1, 1))
     upper[] = 2.0
 
     # --- A box regridded onto the wall, against the uniform fine run ---------
@@ -3713,7 +3713,7 @@ const PLACED_NSCBC_TOL = 5e-6
     @test e < PLACED_WALL_TOL
     # The box grows along the wall: the carry keeps the wall plane, the
     # level's own solution, bit for bit with the rest of the overlap.
-    old = copy(parent(q[2]))
+    old = copy(parent(q.patches[2]))
     pold = PatchSolver(s, s.patches[2])
     nold = pold.decomp.n_local[1]
     cut[] = 0.7
@@ -3721,7 +3721,7 @@ const PLACED_NSCBC_TOL = 5e-6
     pnew = PatchSolver(s, s.patches[2])
     shift = pnew.decomp.n_local[1] - nold
     @test shift > 0 && reaches(level_regions(s, 1)[1])
-    @test all(q[2][padded_index(pnew, i + shift, 1, 1), c] ==
+    @test all(q.patches[2][padded_index(pnew, i + shift, 1, 1), c] ==
               old[padded_index(pold, i, 1, 1), c] for i in 2:nold, c in axes(old, 4))
 
     # --- Tiles, off and on, and a restart --------------------------------------
@@ -3749,9 +3749,9 @@ const PLACED_NSCBC_TOL = 5e-6
     load_checkpoint!(r, rq, joinpath(dir, "walltiles"))
     @test level_regions(r, 1) == regs
     steps!(r, rq, 49, 96)
-    @test r.t == s.t && length(rq) == length(q) &&
-          all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
-              parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+    @test r.t == s.t && length(rq.patches) == length(q.patches) &&
+          all(parent(rq.patches[k])[CL.interior(s.patches[k].decomp), :] ==
+              parent(q.patches[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q.patches))
     rm(dir; recursive=true)
 
     # --- Three regridded levels reach the wall, and the tag sweep of a tile
@@ -3767,7 +3767,7 @@ const PLACED_NSCBC_TOL = 5e-6
                                                    lt.region.extent[1] == N2)
                         for lt in getfield(s, :levels)[3].transfers)
         steps!(s, q, 1, 4)
-        @test all(all(isfinite, parent(Q)) for Q in q)
+        @test all(all(isfinite, parent(Q)) for Q in q.patches)
     end
     # A uniform state tags nothing on a wall tile: the δ⁴ taps stop at the
     # wall, where the tile's ghost layers hold no data of its own.
@@ -3780,7 +3780,7 @@ const PLACED_NSCBC_TOL = 5e-6
                                   getfield(s, :levels)[2].transfers) if lt.boundary[1][2])
     p = s.patches[k]
     marks = Ref(0)
-    CL._tag_sweep!((g1, g2, g3, level) -> (marks[] += 1), s, p, q[k],
+    CL._tag_sweep!((g1, g2, g3, level) -> (marks[] += 1), s, p, q.patches[k],
                    zeros(Int8, size(p.amr.covered)), false)
     @test marks[] == 0
 
@@ -3893,7 +3893,7 @@ end
     # margin, and each path reports it by one warning instead of failing setup.
     kept = ((SlipWallBC(), ExtrapolationBC()), per, per)
     s, q = tagged(kept, high)
-    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+    r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q.patches[1])
     @test r.offset[1] + r.extent[1] == N - margin
     s, q = tagged(kept, high; tile=8)
     getfield(s, :regrid).checks += 1
@@ -3910,7 +3910,7 @@ end
     plane = ((SymmetryPlaneBC(), SlipWallBC()), per, per)
     for mode in (:inject, :filter)
         s, q = tagged(plane, low; level_restriction=mode)
-        @test CL.tagged_region(s, q[1]).offset[1] == 0
+        @test CL.tagged_region(s, q.patches[1]).offset[1] == 0
     end
 end
 
@@ -3967,9 +3967,9 @@ const FOLD_NEST_TOL = 5e-12
         for k in getfield(s, :levels)[ℓ + 1].patches
             local ps = PatchSolver(s, s.patches[k])
             local off = ps.patch.region.offset[1] + (3^ℓ - 1) ÷ 2
-            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+            e = max(e, maximum(abs(q.patches[k][padded_index(ps, i, 1, 1), c] -
                                    fq[padded_index(pf, off + i, 1, 1), c])
-                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+                               for i in 1:ps.decomp.n_local[1], c in axes(q.patches[k], 4)))
         end
         return e
     end
@@ -3977,9 +3977,9 @@ const FOLD_NEST_TOL = 5e-12
         run!(s, q; tfinal=0.2k / 96)
     end
     interior_equal(r, rq, s, q) =
-        r.t == s.t && length(rq) == length(q) &&
-        all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
-            parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+        r.t == s.t && length(rq.patches) == length(q.patches) &&
+        all(parent(rq.patches[k])[CL.interior(s.patches[k].decomp), :] ==
+            parent(q.patches[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q.patches))
     margin = CL.LEVEL_BUFFER
 
     for fold in (plane, axis)
@@ -3987,10 +3987,10 @@ const FOLD_NEST_TOL = 5e-12
         # --- A box follows the tags onto the fold, off and on ------------------
         cut[] = 0.15
         s, q = placed(fold; lb=false)
-        r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+        r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q.patches[1])
         @test r.offset[1] == margin
         s, q = placed(fold)
-        @test CL.tagged_region(s, q[1]).offset[1] == 0
+        @test CL.tagged_region(s, q.patches[1]).offset[1] == 0
         @test regrid_now!(s, q)
         lt = getfield(s, :levels)[2].transfers[1]
         @test lt.region.offset[1] == 0 && lt.folded[1] == (true, false)
@@ -4008,14 +4008,14 @@ const FOLD_NEST_TOL = 5e-12
         # The box grows away from the fold: the carry keeps the node beyond
         # the coincident lattice and the fold's plane, bit for bit with the
         # rest of the overlap.
-        old = copy(parent(q[2]))
+        old = copy(parent(q.patches[2]))
         pold = PatchSolver(s, s.patches[2])
         nold = pold.decomp.n_local[1]
         cut[] = 0.3
         @test regrid_now!(s, q)
         pnew = PatchSolver(s, s.patches[2])
         @test pnew.decomp.n_local[1] > nold && level_regions(s, 1)[1].offset[1] == 0
-        @test all(q[2][padded_index(pnew, i, 1, 1), c] == old[padded_index(pold, i, 1, 1), c]
+        @test all(q.patches[2][padded_index(pnew, i, 1, 1), c] == old[padded_index(pold, i, 1, 1), c]
                   for i in 1:nold-1, c in axes(old, 4))
 
         # --- Tiles on the fold, and a restart ------------------------------------
@@ -4058,7 +4058,7 @@ const FOLD_NEST_TOL = 5e-12
         dir = mktempdir()
         save_checkpoint(s, q, joinpath(dir, "foldnest"))
         steps!(s, q, 5, 8)
-        @test all(all(isfinite, parent(Q)) for Q in q)
+        @test all(all(isfinite, parent(Q)) for Q in q.patches)
         r, rq = placed(fold; tile=8, max_levels=3, region=nothing)
         load_checkpoint!(r, rq, joinpath(dir, "foldnest"))
         @test level_regions(r, 2) == r2
@@ -4161,7 +4161,7 @@ end
             off = ps.patch.region.offset[1] + (3^ℓ - 1) ÷ 2
             @test maximum(abs(xcoord(ps, 1, i) - xcoord(pf, 1, off + i))
                           for i in 1:ps.decomp.n_local[1]) < 1e-14
-            e = max(e, maximum(abs(q[kk][padded_index(ps, i, 1, 1), c] -
+            e = max(e, maximum(abs(q.patches[kk][padded_index(ps, i, 1, 1), c] -
                                    fq[padded_index(pf, off + i, 1, 1), c])
                                for i in 1:ps.decomp.n_local[1], c in 1:3))
         end
@@ -4227,10 +4227,10 @@ const SEAM_REGRID_TOL = 5e-9
             local sh = ntuple(d -> act[d] ? 3^p.level * S[d] : 0, 3)
             local pad = p.decomp.n_halo_d
             if p.level == 0
-                for I in CL.interior(p.decomp), c in axes(qa[1], 4)
+                for I in CL.interior(p.decomp), c in axes(qa.patches[1], 4)
                     local g = Tuple(I) .- pad
                     local J = CartesianIndex(mod1.(g .+ sh, P) .+ pad)
-                    e = max(e, abs(qa[1][I, c] - qb[1][J, c]))
+                    e = max(e, abs(qa.patches[1][I, c] - qb.patches[1][J, c]))
                 end
                 continue
             end
@@ -4239,7 +4239,7 @@ const SEAM_REGRID_TOL = 5e-9
                     all(mod.(pb.region.offset .- p.region.offset .- sh, P) .== 0)
             end
             local ia = CL.interior(p.decomp)
-            e = max(e, maximum(abs.(parent(qa[k])[ia, :] .- parent(qb[kb])[ia, :])))
+            e = max(e, maximum(abs.(parent(qa.patches[k])[ia, :] .- parent(qb.patches[kb])[ia, :])))
         end
         return e
     end
@@ -4428,9 +4428,9 @@ const SEAM_REGRID_TOL = 5e-9
         for k in 2:length(s.patches)
             local ps = PatchSolver(s, s.patches[k])
             local off = ps.patch.region.offset[1]
-            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+            e = max(e, maximum(abs(q.patches[k][padded_index(ps, i, 1, 1), c] -
                                    fq[padded_index(pf, mod1(off + i, 3N), 1, 1), c])
-                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+                               for i in 1:ps.decomp.n_local[1], c in axes(q.patches[k], 4)))
         end
         return e
     end
@@ -4462,9 +4462,9 @@ const SEAM_REGRID_TOL = 5e-9
             run!(r, rq; tfinal=0.4k / 96)
         end
         @test level_regions(r, 1) == level_regions(s, 1)
-        @test r.t == s.t && length(rq) == length(q) &&
-              all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
-                  parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+        @test r.t == s.t && length(rq.patches) == length(q.patches) &&
+              all(parent(rq.patches[k])[CL.interior(s.patches[k].decomp), :] ==
+                  parent(q.patches[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q.patches))
         rm(dir; recursive=true)
     end
     # Three regridded levels: the second is tagged on the first's tiles, on
@@ -4481,7 +4481,7 @@ const SEAM_REGRID_TOL = 5e-9
         run!(s3, q3; tfinal=0.4k / 96)
         crossed |= any(r -> r.offset[1] + r.extent[1] > 3N, level_regions(s3, 2))
     end
-    @test crossed && all(all(isfinite, parent(Q)) for Q in q3)
+    @test crossed && all(all(isfinite, parent(Q)) for Q in q3.patches)
 
     # --- The frontend's shapes ---------------------------------------------------
     # A shape at the seam, given in the domain's coordinates as its two

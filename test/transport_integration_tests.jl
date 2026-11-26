@@ -82,9 +82,7 @@ end
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(rho=1.0, T_ion=500 + 100cospi(2x), u=(0.0, sinpi(2x), 0.0)))
-        if Q isa Vector
-            sync_patches!(s, Q)
-        end
+        CompactLES._multipatch(s) && sync_patches!(s, Q)
         measured = dissipation_rate(s, Q)
         # Independent fine periodic quadrature of the analytic integrand.
         reference = sum(argon_mu(500 + 100cospi(2i/4096)) *

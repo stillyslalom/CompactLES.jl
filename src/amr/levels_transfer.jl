@@ -1002,6 +1002,7 @@ operation's role; the operator is `interpolate!`, per the header note on why
 the deconvolving `prolong!` is not used here.
 """
 function prolong_level_ghosts!(solver, states)
+    states = _patch_states(states)
     levels = getfield(solver, :levels)
     for ℓ in 2:length(levels)
         # Outside the parent's subset there is no parent state to send and,
@@ -1091,6 +1092,7 @@ immediately. Every rank owning the parent enters, those outside the refined
 level's own subset included: they hold covered nodes but no fine state.
 """
 function restrict_level!(solver, states)
+    states = _patch_states(states)
     RESTRICTION_COUNT[] += 1
     levels = getfield(solver, :levels)
     for ℓ in length(levels):-1:2

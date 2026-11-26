@@ -32,6 +32,8 @@ using Adapt
 # KA kernel path. Each method resolves statically for a concrete storage type.
 @inline _cpu_storage(::Array) = true
 @inline _cpu_storage(Q::ConservedState) = _cpu_storage(parent(Q))
+# The storage is one choice for the whole solver, so the first patch answers.
+@inline _cpu_storage(state::SimulationState) = _cpu_storage(@inbounds state.patches[1])
 @inline _cpu_storage(f::SubArray) = _cpu_storage(parent(f))
 @inline _cpu_storage(::AbstractArray) = false
 

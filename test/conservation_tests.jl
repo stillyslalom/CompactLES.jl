@@ -45,7 +45,7 @@ const CL = CompactLES
 
         # Independent scalar quadratures guard the packed channel mapping.
         eq = solver.equations
-        components(c) = [Array(view(Q, :, :, :, c)) for Q in states]
+        components(c) = [Array(view(Q, :, :, :, c)) for Q in states.patches]
         @test budget.species_masses ≈
               [volume_integral(solver, components(sp)) for sp in 1:eq.n_species]
         momentum_check = ntuple(c -> volume_integral(solver, components(eq.i_mom[c])), 3)
@@ -70,7 +70,7 @@ const CL = CompactLES
                 (x, y, z) -> Prim(Y=(0.3, 0.7), u=velocity, p=2.0,
                                   rho=1.0 + 0.2sin(2π * x)))
     rho_fields = [Array(view(Q, :, :, :, 1)) + Array(view(Q, :, :, :, 2))
-                  for Q in periodic_states]
+                  for Q in periodic_states.patches]
     coords = profile_coordinate(periodic, 1)
     @test length(coords) == 192
     @test coords[1] ≈ 0.0 atol=1e-15
@@ -282,7 +282,7 @@ end
         CL.sync_patches!(s, Q)
         lev = s.levels[2]
         tiles_mass() = sum(CL._local_volume_integral(CL.PatchSolver(s, s.patches[i]),
-                                                     Q[i][:, :, :, 1], false)
+                                                     Q.patches[i][:, :, :, 1], false)
                            for i in lev.patches)
         before = tiles_mass()
         CL.filter_state!(s, Q)

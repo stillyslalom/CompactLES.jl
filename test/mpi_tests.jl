@@ -480,11 +480,11 @@ function test_offrank_folds()
         end
         ncons = s.equations.n_cons
         check("RHS with the detector through the axis, $label",
-              detector_diff(s, ref, states[1][2], states[2][2], ncons), 1e-10)
-        run!(s, states[1][1]; tfinal=1e9, nmax=3)
-        run!(ref, states[2][1]; tfinal=1e9, nmax=3)
+              detector_diff(s, ref, states.patches[1][2], states.patches[2][2], ncons), 1e-10)
+        run!(s, states.patches[1][1]; tfinal=1e9, nmax=3)
+        run!(ref, states.patches[2][1]; tfinal=1e9, nmax=3)
         check("three steps through the axis, $label",
-              detector_diff(s, ref, states[1][1], states[2][1], ncons), 1e-10)
+              detector_diff(s, ref, states.patches[1][1], states.patches[2][1], ncons), 1e-10)
     end
 end
 
@@ -1775,7 +1775,7 @@ function test_hierarchy_checkpoint()
     check("restart: stored ownership restored",
           restarted.levels[2].owners == owners ? 0.0 : 1.0, 0.5)
     check("restart: state vector aligned with the patches",
-          abs(length(rstates) - length(restarted.patches)), 0.5)
+          abs(length(rstates.patches) - length(restarted.patches)), 0.5)
     run!(restarted, rstates; tfinal=0.03, nmax=41)
     check("restart: time reached matches the uninterrupted run",
           gmax(abs(restarted.t - solver.t)), 1e-300)
@@ -1786,10 +1786,10 @@ function test_hierarchy_checkpoint()
           rspec.created == spec.created && rspec.checks == spec.checks ? 0.0 : 1.0,
           0.5)
     d = 0.0
-    for i in eachindex(states)
+    for i in eachindex(states.patches)
         inner = CL.interior(solver.patches[i].decomp)
-        d = max(d, maximum(abs.(parent(rstates[i])[inner, :] .-
-                                parent(states[i])[inner, :])))
+        d = max(d, maximum(abs.(parent(rstates.patches[i])[inner, :] .-
+                                parent(states.patches[i])[inner, :])))
     end
     check("restart: every block continues bitwise", gmax(d), 1e-300)
     # A different initial region is rebuilt to the recorded one too.
@@ -1940,11 +1940,11 @@ function test_hierarchy_phase_change()
           level_regions(p, 1) == level_regions(r, 1) &&
           p.levels[2].owners == r.levels[2].owners ? 0.0 : 1.0, 0.5)
     check("hierarchy phase: clock matches the restart", gmax(abs(p.t - r.t)), 1e-300)
-    d = length(ps) == length(rs) ? 0.0 : Inf
-    for i in eachindex(ps)
+    d = length(ps.patches) == length(rs.patches) ? 0.0 : Inf
+    for i in eachindex(ps.patches)
         d == Inf && break
         inner = CL.interior(p.patches[i].decomp)
-        d = max(d, maximum(abs.(parent(ps[i])[inner, :] .- parent(rs[i])[inner, :])))
+        d = max(d, maximum(abs.(parent(ps.patches[i])[inner, :] .- parent(rs.patches[i])[inner, :])))
     end
     check("hierarchy phase: every block matches the restart", gmax(d), 1e-300)
     MPI.Barrier(comm)
@@ -1973,7 +1973,7 @@ function test_unrefined_start()
                    amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
                            subdivide_lattice=false, tag_buffer=2, subcycle=true))
     empty_everywhere(s, states) =
-        gmax(!(isempty(level_regions(s, 1)) && length(states) == 1 &&
+        gmax(!(isempty(level_regions(s, 1)) && length(states.patches) == 1 &&
                !s.levels[2].level_comm.owned &&
                all(==(0), s.patches[1].amr.covered)))
     solver, states = setup(prob, num)
@@ -1988,7 +1988,7 @@ function test_unrefined_start()
     check("unrefined start: tiles created by step 50 as serial (4, 8)",
           [r.offset[1] for r in regs50] == [4, 8] ? 0.0 : 1.0, 0.5)
     check("unrefined start: state vector aligned with the patches",
-          gmax(length(states) != length(solver.patches)), 0.5)
+          gmax(length(states.patches) != length(solver.patches)), 0.5)
     save_checkpoint(solver, states, "mpi_unref_after")
     run!(solver, states; tfinal=1.0, nmax=110)
     regs = level_regions(solver, 1)
@@ -1996,13 +1996,13 @@ function test_unrefined_start()
           [r.offset[1] for r in regs] == [4, 8, 16] ? 0.0 : 1.0, 0.5)
     ps = PatchSolver(solver, solver.patches[1])
     off = ps.decomp.offset[1]
-    local_shock = something(findfirst(i -> states[1][padded_index(ps, i, 1, 1), 1] < 1.43,
+    local_shock = something(findfirst(i -> states.patches[1][padded_index(ps, i, 1, 1), 1] < 1.43,
                                       1:ps.decomp.n_local[1]), typemax(Int) - off)
     shock = Int(MPI.Allreduce(local_shock + off, MPI.MIN, comm))
     check("unrefined start: the shock lies in a tile",
           any(r -> r.offset[1] < shock <= r.offset[1] + r.extent[1], regs) ? 0.0 : 1.0,
           0.5)
-    idle = gsum(length(states) == 1)
+    idle = gsum(length(states.patches) == 1)
     np > 2 * length(regs) &&
         check("unrefined start: some rank holds no tile", idle > 0 ? 0.0 : 1.0, 0.5)
     MPI.Barrier(comm)
@@ -2019,12 +2019,12 @@ function test_unrefined_start()
                  getfield(r, :regrid).created == getfield(solver, :regrid).created
         check("unrefined start: restart $stem tracks the tile set",
               tracks ? 0.0 : 1.0, 0.5)
-        d = length(rs) == length(states) ? 0.0 : Inf
+        d = length(rs.patches) == length(states.patches) ? 0.0 : Inf
         if isfinite(d)
-            for i in eachindex(states)
+            for i in eachindex(states.patches)
                 inner = CL.interior(solver.patches[i].decomp)
-                d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
-                                        parent(states[i])[inner, :])))
+                d = max(d, maximum(abs.(parent(rs.patches[i])[inner, :] .-
+                                        parent(states.patches[i])[inner, :])))
             end
         end
         check("unrefined start: restart $stem continues bitwise", gmax(d), 1e-300)
@@ -2039,7 +2039,7 @@ function test_unrefined_start()
     check("unrefined start: the re-formed shock creates tiles again",
           isempty(level_regions(solver, 1)) ? 1.0 : 0.0, 0.5)
     check("unrefined start: finite composite state",
-          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+          gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_unref"), readdir()))
     MPI.Barrier(comm)
@@ -2087,7 +2087,7 @@ function test_deep_regrid()
     check("deep regrid: level 2 holds tiles",
           1.0 - gmax(!isempty(level_regions(solver, 2))), 0.5)
     check("deep regrid: state vector aligned with the patches",
-          gmax(length(states) != length(solver.patches)), 0.5)
+          gmax(length(states.patches) != length(solver.patches)), 0.5)
     _, rho = line_sample(solver, states, :rho)
     _, rho_ref = line_sample(ref, rstates, :rho)
     check("deep regrid: composite density matches serial",
@@ -2100,17 +2100,17 @@ function test_deep_regrid()
           gmax(layout(r) != layout(solver) ||
                getfield(r, :regrid).created !=
                getfield(solver, :regrid).created), 0.5)
-    d = length(rs) == length(states) && r.step == solver.step ? 0.0 : Inf
+    d = length(rs.patches) == length(states.patches) && r.step == solver.step ? 0.0 : Inf
     if isfinite(d)
-        for i in eachindex(states)
+        for i in eachindex(states.patches)
             inner = CL.interior(solver.patches[i].decomp)
-            d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
-                                    parent(states[i])[inner, :])))
+            d = max(d, maximum(abs.(parent(rs.patches[i])[inner, :] .-
+                                    parent(states.patches[i])[inner, :])))
         end
     end
     check("deep regrid: restart continues bitwise", gmax(d), 1e-300)
     check("deep regrid: finite composite state",
-          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+          gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_deep"), readdir()))
     MPI.Barrier(comm)
@@ -2205,7 +2205,7 @@ function subdivision_carry()
     A = nothing
     if rank == owner
         li = lev.patches[1]
-        A = Array(parent(states[li]))
+        A = Array(parent(states.patches[li]))
         dims .= [size(A)..., solver.patches[li].decomp.n_halo_d...]
     end
     MPI.Bcast!(dims, comm; root=owner)
@@ -2228,7 +2228,7 @@ function subdivision_carry()
     for (li, ti) in zip(lev.patches, lev.tiles)
         nf = CL._fine_region(lev.transfers[ti])
         pad = solver.patches[li].decomp.n_halo_d
-        Q = Array(parent(states[li]))
+        Q = Array(parent(states.patches[li]))
         for j in 1:nf.extent[2], i in 1:nf.extent[1]
             g = (nf.offset[1] + i, nf.offset[2] + j)
             all(d -> own.offset[d] < g[d] <= own.offset[d] + own.extent[d], 1:2) ||
@@ -2249,7 +2249,7 @@ function subdivision_carry()
     check("lattice subdivision: the lattice holds while the tiles do",
           abs(length(solver.levels[2].transfers) - np), 0.5)
     check("lattice subdivision: finite state after the run",
-          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+          gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
 end
 
 # Three regridded levels following the shock of the deep-regrid phase, with
@@ -2279,7 +2279,7 @@ function subdivision_deep()
     check("lattice subdivision, three levels: each tile whole on one rank",
           gmax(!whole), 0.5)
     check("lattice subdivision, three levels: finite composite state",
-          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+          gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
     if np == 8
         check("lattice subdivision, three levels: a level subdivided at eight ranks",
               MPI.bcast(any(!=((8, 8, 8)), edges), comm; root=0) ? 0.0 : 1.0, 0.5)
@@ -2291,11 +2291,11 @@ function subdivision_deep()
     rspec = getfield(r, :regrid)
     check("lattice subdivision, three levels: the restart takes the lattices",
           gmax([CL._level_edges(rspec, l) for l in 1:2] != edges), 0.5)
-    d = length(rs) == length(states) && r.step == solver.step ? 0.0 : Inf
+    d = length(rs.patches) == length(states.patches) && r.step == solver.step ? 0.0 : Inf
     if isfinite(d)
-        for i in eachindex(states)
+        for i in eachindex(states.patches)
             inner = CL.interior(solver.patches[i].decomp)
-            d = max(d, maximum(abs.(parent(rs[i])[inner, :] .- parent(states[i])[inner, :])))
+            d = max(d, maximum(abs.(parent(rs.patches[i])[inner, :] .- parent(states.patches[i])[inner, :])))
         end
     end
     check("lattice subdivision, three levels: restart continues bitwise", gmax(d), 1e-300)
@@ -2342,7 +2342,7 @@ function subdivision_measured(label="lattice subdivision, measured")
     whole = all(all(length(o) == 1 for o in lev.owners) for lev in solver.levels[2:end])
     check("$label: each tile whole on one rank", gmax(!whole), 0.5)
     check("$label: finite composite state",
-          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+          gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
 end
 
 function test_lattice_subdivision()
@@ -2404,7 +2404,7 @@ function test_lattice_nodes()
         check("lattice over nodes: the tiles on the first node",
               all(o -> last(o) < group, lev.owners) ? 0.0 : 1.0, 0.5)
         check("lattice over nodes: finite state",
-              gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+              gmax(!all(all(isfinite, parent(Q)) for Q in states.patches)), 0.5)
         # A level of four tiles per rank placed afresh: each node's tiles a
         # run of the curve, the ranks of every run on its node.
         act = (true, true, false)
@@ -2448,11 +2448,11 @@ function test_placed_levels()
         e
     end
     function leveldiff(s, qs, ref, qref)
-        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        e = blockdiff(s.patches[1], qs.patches[1], ref.patches[1], qref.patches[1])
         lev, rlev = s.levels[2], ref.levels[2]
         for (k, ti) in zip(lev.patches, lev.tiles)
             rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
-            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+            e = max(e, blockdiff(s.patches[k], qs.patches[k], ref.patches[rk], qref.patches[rk]))
         end
         e
     end
@@ -2517,11 +2517,11 @@ function test_seam_levels()
         e
     end
     function leveldiff(s, qs, ref, qref)
-        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        e = blockdiff(s.patches[1], qs.patches[1], ref.patches[1], qref.patches[1])
         lev, rlev = s.levels[2], ref.levels[2]
         for (k, ti) in zip(lev.patches, lev.tiles)
             rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
-            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+            e = max(e, blockdiff(s.patches[k], qs.patches[k], ref.patches[rk], qref.patches[rk]))
         end
         e
     end
@@ -3310,10 +3310,10 @@ function test_staged_exchange()
             build(DeviceBackend(cpu))
         end
         d = 0.0
-        for i in eachindex(q5)
-            d = max(d, maximum(abs.(parent(q5[i]) .- parent(q6[i]))))
+        for i in eachindex(q5.patches)
+            d = max(d, maximum(abs.(parent(q5.patches[i]) .- parent(q6.patches[i]))))
         end
-        check("staged $label: patch count matches", abs(length(q5) - length(q6)), 0.5)
+        check("staged $label: patch count matches", abs(length(q5.patches) - length(q6.patches)), 0.5)
         check("staged $label: step count matches", abs(s5.step - s6.step), 0.5)
         check("staged $label: bitwise", gmax(d), 1e-300)
     end
@@ -3461,7 +3461,7 @@ function test_refined_decomposed()
     decomp0 = lt0.fine_index == 0 ? nothing : solver.patches[lt0.fine_index].decomp
     run!(solver, states; tfinal=0.03, nmax=61)
     region = CL.refined_region(solver)
-    fin = all(all(isfinite, parent(Q)) for Q in states)
+    fin = all(all(isfinite, parent(Q)) for Q in states.patches)
     check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
     check("regridded Sod: region offset tracks as serial (157)",
           abs(gmax(region.offset[1]) - 157), 0.5)
@@ -3552,7 +3552,7 @@ function test_partitioned_coupling()
     # The same run advanced, two regrid-free subcycled steps, reproduces
     # the serial composite mass to round-off.
     run!(solver, states; tfinal=1.0, nmax=2)
-    mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states])
+    mass = volume_integral(solver, [view(parent(Q), :, :, :, 1) for Q in states.patches])
     check("partitioned coupling: composite mass after two steps as serial",
           abs(mass - 1.9874998034111817) / 2, 1e-14)
 
@@ -3568,7 +3568,7 @@ function test_partitioned_coupling()
     check("partitioned coupling: one tile over every rank up to eight",
           abs(length(wave.levels[2].owners[1]) - min(np, 8)), 0.5)
     run!(wave, Qw; tfinal=1.0, nmax=3)
-    sq = volume_integral(wave, [view(parent(Q), :, :, :, 1) .^ 2 for Q in Qw])
+    sq = volume_integral(wave, [view(parent(Q), :, :, :, 1) .^ 2 for Q in Qw.patches])
     check("partitioned coupling: a tile over more ranks than components as serial",
           abs(sq - 6.40884901332379) / 6.4, 1e-14)
 end
@@ -3639,7 +3639,7 @@ function test_tiled_level()
         states = allocate_state(solver)
         lev = solver.levels[2]
         for (li, ti) in zip(lev.patches, lev.tiles)
-            fill!(parent(states[li]), Float64(ti))
+            fill!(parent(states.patches[li]), Float64(ti))
         end
         CL._sync_level_records!(solver, states, lev)
         # Tiles A (12,12), B (24,12), C (12,24), D (24,24) of 37 fine nodes,
@@ -3654,7 +3654,7 @@ function test_tiled_level()
                          ((i, dp.offset[1], dp.n_local[1]),
                           (j, dp.offset[2], dp.n_local[2])))
             inside || return nothing
-            return states[p][i - dp.offset[1] + pad[1], j - dp.offset[2] + pad[2],
+            return states.patches[p][i - dp.offset[1] + pad[1], j - dp.offset[2] + pad[2],
                              1 + pad[3], 1]
         end
         dev(t, i, j, want) = (v = owned(t, i, j); v === nothing ? 0.0 : abs(v - want))
@@ -3749,7 +3749,7 @@ function test_tiled_level()
         run!(solver, states; tfinal=0.03, nmax=41)
         regs = level_regions(solver, 1)
         offs = [r.offset[1] for r in regs]
-        fin = all(all(isfinite, parent(Q)) for Q in states)
+        fin = all(all(isfinite, parent(Q)) for Q in states.patches)
         check("tiled regrid under ownership: finite composite state",
               fin ? 0.0 : 1.0, 0.5)
         check("tiled regrid under ownership: tile count tracks as serial (3)",
@@ -4006,7 +4006,7 @@ function test_level_subset()
     run!(solver, states; tfinal=0.03, nmax=41)
     region = CL.refined_region(solver)
     owners1 = MPI.Allreduce(Int(solver.levels[2].level_comm.owned), +, comm)
-    fin = all(all(isfinite, parent(Q)) for Q in states)
+    fin = all(all(isfinite, parent(Q)) for Q in states.patches)
     check("regrid: setup subset is two ranks", abs(owners0 - min(np, 2)), 0.5)
     check("regrid: subset recomputed for the grown region",
           abs(owners1 - min(np, 7)), 0.5)
@@ -4230,11 +4230,11 @@ function test_nscbc_level()
     # The root block and each level block the rank holds, the serial patch
     # of a level block found by its tile index.
     function leveldiff(s, qs, ref, qref)
-        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        e = blockdiff(s.patches[1], qs.patches[1], ref.patches[1], qref.patches[1])
         lev, rlev = s.levels[2], ref.levels[2]
         for (k, ti) in zip(lev.patches, lev.tiles)
             rk = rlev.patches[findfirst(==(ti), rlev.tiles)]
-            e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+            e = max(e, blockdiff(s.patches[k], qs.patches[k], ref.patches[rk], qref.patches[rk]))
         end
         e
     end
@@ -4533,7 +4533,7 @@ function test_mode_truncation()
             Qs
         end
         check("three truncated steps match serial, $label",
-              blockdiff(s, states[1], ref, states[2]), 1e-12)
+              blockdiff(s, states.patches[1], ref, states.patches[2]), 1e-12)
         check("simulation time matches serial, $label",
               gmax(abs(s.t - ref.t) / ref.t), 1e-12)
     end
@@ -4898,7 +4898,7 @@ function test_plane_level()
             p.level == 1 || continue
             r = findfirst(q -> q.level == 1 && q.region == p.region, ref.patches)
             ps, pr = PatchSolver(s, p), PatchSolver(ref, ref.patches[r])
-            e = max(e, blockdiff(ps, Q[k], pr, Qref[r]))
+            e = max(e, blockdiff(ps, Q.patches[k], pr, Qref.patches[r]))
         end
         # A tile folds exactly where it reaches the plane, which puts its
         # first node, one beyond the coincident lattice, at offset −1.
@@ -4909,8 +4909,8 @@ function test_plane_level()
                          s.patches)), 0.5)
         check("tile $tile: fine state against serial", gmax(e), 1e-11)
         check("tile $tile: root state against serial",
-              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q[1],
-                             PatchSolver(ref, ref.patches[1]), Qref[1])), 1e-11)
+              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q.patches[1],
+                             PatchSolver(ref, ref.patches[1]), Qref.patches[1])), 1e-11)
         check("tile $tile: composite volume exact", abs(domain_volume(s) - 1), 1e-13)
     end
 end
@@ -4967,7 +4967,7 @@ function test_axis_level()
             p.level == 1 || continue
             r = findfirst(q -> q.level == 1 && q.region == p.region, ref.patches)
             ps, pr = PatchSolver(s, p), PatchSolver(ref, ref.patches[r])
-            e = max(e, blockdiff(ps, Q[k], pr, Qref[r]))
+            e = max(e, blockdiff(ps, Q.patches[k], pr, Qref.patches[r]))
         end
         # A tile folds on a dimension exactly where it reaches the axis or
         # the plane, which puts its first node there at offset −1.
@@ -4978,8 +4978,8 @@ function test_axis_level()
                          s.patches)), 0.5)
         check("tile $tile: fine state against serial", gmax(e), 1e-11)
         check("tile $tile: root state against serial",
-              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q[1],
-                             PatchSolver(ref, ref.patches[1]), Qref[1])), 1e-11)
+              gmax(blockdiff(PatchSolver(s, s.patches[1]), Q.patches[1],
+                             PatchSolver(ref, ref.patches[1]), Qref.patches[1])), 1e-11)
         check("tile $tile: composite volume against serial",
               abs(domain_volume(s) - domain_volume(ref)), 1e-14)
     end
@@ -5009,14 +5009,14 @@ function test_fold_regrid()
         e
     end
     function leveldiff(s, qs, ref, qref)
-        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        e = blockdiff(s.patches[1], qs.patches[1], ref.patches[1], qref.patches[1])
         for ℓ in 2:length(s.levels)
             lev, rlev = s.levels[ℓ], ref.levels[ℓ]
             for (k, ti) in zip(lev.patches, lev.tiles)
                 region = lev.transfers[ti].region
                 rt = findfirst(lt -> lt.region == region, rlev.transfers)
                 rk = rlev.patches[findfirst(==(rt), rlev.tiles)]
-                e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+                e = max(e, blockdiff(s.patches[k], qs.patches[k], ref.patches[rk], qref.patches[rk]))
             end
         end
         e

@@ -504,7 +504,7 @@ function fold_window_error(solver, states, uniform, ustates; comp=1, W=SMOOTH_W)
     e = 0.0
     for k in 1:nl[3], i in 1:nl[1]
         (i <= W || k <= W) || continue
-        e = max(e, abs(states[2][padded_index(ps, i, 1, k), comp] -
+        e = max(e, abs(states.patches[2][padded_index(ps, i, 1, k), comp] -
                        ustates[padded_index(pu, i, 1, k), comp]))
     end
     return e
@@ -649,8 +649,8 @@ alone when it is nonzero.
 """
 function state_difference(solver, a, b; patch=0)
     patches = getfield(solver, :patches)
-    as = a isa Vector ? a : [a]
-    bs = b isa Vector ? b : [b]
+    as = a.patches
+    bs = b.patches
     e = 0.0
     for (pi, p) in enumerate(patches)
         patch == 0 || pi == patch || continue
@@ -828,8 +828,8 @@ function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W,
                          patches=nothing)
     selected = patches
     patches = getfield(solver, :patches)
-    multi = states isa Vector
-    per_patch = multi ? states : [states]
+    multi = CompactLES._multipatch(solver)
+    per_patch = states.patches
     wall = interface = covered = interior = 0.0
     at = (0, 0)
     sq = Vector{Array{Float64,3}}(undef, length(patches))
@@ -879,17 +879,16 @@ states as they stand, patches synchronized first, against `exact(x)`, with
 the regional split of `regional_errors`.
 """
 function rhs_errors(solver, states, exact; comp=1, W=SMOOTH_W)
-    if states isa Vector
-        dQs = [zero(Q) for Q in states]
+    dQ = zero(states)
+    if CompactLES._multipatch(solver)
         CompactLES._presync!(solver, states)
         for lev in getfield(solver, :levels)
-            CompactLES._level_rhs!(solver, lev, states, dQs, false)
+            CompactLES._level_rhs!(solver, lev, states.patches, dQ.patches, false)
         end
-        return regional_errors(solver, dQs, exact; comp=comp, W=W)
+    else
+        apply_bcs!(solver, states)
+        compute_rhs!(solver, states, dQ)
     end
-    dQ = zero(states)
-    apply_bcs!(solver, states)
-    compute_rhs!(solver, states, dQ)
     return regional_errors(solver, dQ, exact; comp=comp, W=W)
 end
 
@@ -954,7 +953,7 @@ function regional_errors2d(solver, states, reference; comp=1, W=SMOOTH_W)
     sq = Vector{Array{Float64,3}}(undef, length(patches))
     for (pi, p) in enumerate(patches)
         ps = CompactLES.PatchSolver(solver, p)
-        Q = states[pi]
+        Q = states.patches[pi]
         n = ps.decomp.n_local
         e2 = zeros(size(Q, 1), size(Q, 2), size(Q, 3))
         for j in 1:n[2], i in 1:n[1]

@@ -47,7 +47,7 @@ function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:exte
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=tfinal)
     err = 0.0
-    states = Q isa Vector ? Q : [Q]
+    states = Q.patches
     for (ps, Qp) in CL.eachpatch(solver, states)
         nx = ps.decomp.n_local[1]
         for i in 1:nx
@@ -99,7 +99,7 @@ function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extende
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=0.5)
-    states = Q isa Vector ? Q : [Q]
+    states = Q.patches
     rho = Dict{Int,Float64}()          # by root node
     for (ps, Qp) in CL.eachpatch(solver, states)
         for i in 1:ps.decomp.n_local[1]
@@ -150,7 +150,7 @@ end
     run!(solver, states; tfinal=π / sqrt(1.4))
     reflected = 0.0
     ps = PatchSolver(solver, solver.patches[1])
-    CL.refresh_primitives!(ps, states[1])
+    CL.refresh_primitives!(ps, states.patches[1])
     nx = ps.decomp.n_local[1]
     for i in 1:nx
         x = xcoord(ps, 1, i)
@@ -174,7 +174,7 @@ end
     run!(solver10, states10; tfinal=π / sqrt(1.4))
     reflected10 = 0.0
     ps10 = PatchSolver(solver10, solver10.patches[1])
-    CL.refresh_primitives!(ps10, states10[1])
+    CL.refresh_primitives!(ps10, states10.patches[1])
     for i in 1:ps10.decomp.n_local[1]
         xcoord(ps10, 1, i) < π - 1.0 || continue
         reflected10 = max(reflected10, abs(ps10.p[padded_index(ps10, i, 1, 1)] - 1.0))
@@ -193,7 +193,7 @@ end
                              patch_grid=pg)
         Q = allocate_state(solver)
         initialize!(solver, Q, ic)
-        states = Q isa Vector ? Q : [Q]
+        states = Q.patches
         rho0 = volume_integral(solver, [Array(view(s, :, :, :, 1)) for s in states])
         run!(solver, Q; tfinal=2.0)
         rho1 = volume_integral(solver, [Array(view(s, :, :, :, 1)) for s in states])
@@ -255,10 +255,10 @@ end
         patched = mk((2, 1, 1), det)
         Qp = allocate_state(patched)
         initialize!(patched, Qp, ic)
-        dQ = [zero(q) for q in Qp]
+        dQ = zero(Qp)
         CL._presync!(patched, Qp)
         for lev in getfield(patched, :levels)
-            CL._level_rhs!(patched, lev, Qp, dQ, false)
+            CL._level_rhs!(patched, lev, Qp.patches, dQ.patches, false)
         end
         Du = single.D_art[1]
         h = 2π / N
@@ -301,12 +301,12 @@ function _patched_rhs(; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.5 + 0.1 * sin(2x), 0, 0),
                                         p=1.0 + 0.05 * cos(x), rho=1.0 + 0.2 * sin(x)))
-    dQ = [zero(q) for q in Q]
+    dQ = zero(Q)
     CL._presync!(s, Q)
     for lev in getfield(s, :levels)
-        CL._level_rhs!(s, lev, Q, dQ, false)
+        CL._level_rhs!(s, lev, Q.patches, dQ.patches, false)
     end
-    return [parent(d) for d in dQ]
+    return [parent(d) for d in dQ.patches]
 end
 
 @testset "interface divergence rows follow their source scheme" begin
@@ -383,10 +383,10 @@ function _polynomial_rhs_error(; kw...)
                     art=ArtificialProperties(enabled=false), filter_interval=0; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=ρ(x), u=(u(x), 0, 0), p=p(x)))
-    dQ = [zero(q) for q in Q]
+    dQ = zero(Q)
     CL._presync!(s, Q)
     for lev in getfield(s, :levels)
-        CL._level_rhs!(s, lev, Q, dQ, false)
+        CL._level_rhs!(s, lev, Q.patches, dQ.patches, false)
     end
     eq = s.equations
     err = 0.0
@@ -452,10 +452,10 @@ function _viscous_interface_error(N; kw...)
     s = mk(; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, ic)
-    dQ = [zero(q) for q in Q]
+    dQ = zero(Q)
     CL._presync!(s, Q)
     for lev in getfield(s, :levels)
-        CL._level_rhs!(s, lev, Q, dQ, false)
+        CL._level_rhs!(s, lev, Q.patches, dQ.patches, false)
     end
     err = 0.0
     for (ps, d) in CL.eachpatch(s, dQ)

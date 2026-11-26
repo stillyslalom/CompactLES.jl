@@ -75,28 +75,13 @@ struct Workspace{A}
 end
 
 Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
-Workspace(states::Vector{<:ConservedState}) =
-    Workspace(_zero_states(states), _zero_states(states))
-Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
+# The stage arrays of a composite run as the per-patch vectors its drivers
+# index. They are the vectors the workspace's states hold, so a regrid that
+# replaces a level's entries is seen through both.
+@inline _patch_workspace(w::Workspace{<:SimulationState}) =
+    Workspace(w.dQ.patches, w.du.patches)
+@inline _patch_workspace(w::Workspace) = w
 
-# Zero states shaped like `states`, the stacking included: the tiles of a
-# stacked level (levels_coupling.jl) are views of one array, and their stage arrays
-# must be views of one array too, so a stack's members take views of one
-# fresh zero over the same parent.
-function _zero_states(states::Vector{<:ConservedState})
-    out = similar(states)
-    zeros_of = IdDict{Any,Any}()
-    for (i, Q) in enumerate(states)
-        data = parent(Q)
-        if data isa SubArray
-            z = get!(() -> zero(parent(data)), zeros_of, parent(data))
-            out[i] = ConservedState(view(z, parentindices(data)...))
-        else
-            out[i] = zero(Q)
-        end
-    end
-    return out
-end
 """
     step!(solver, Q, dQ, du, dt, prepared=false)
     step!(solver, Q, workspace, dt, prepared=false)
@@ -142,7 +127,18 @@ run before the next iteration's measurement. A direct caller should leave the
 default in place unless it has done the same. The argument is positional for
 the reason given under [`compute_rhs!`](@ref).
 """
-function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
+function step!(solver::Solver, Q::SimulationState, dQ::SimulationState,
+               du::SimulationState, dt, prepared::Bool=false)
+    if _multipatch(solver)
+        _step_patches!(solver, Q.patches, dQ.patches, du.patches, dt, prepared)
+    else
+        _step_patch!(solver, sole_state(Q), sole_state(dQ), sole_state(du), dt,
+                     prepared)
+    end
+    return Q
+end
+
+function _step_patch!(solver::Solver, Q, dQ, du, dt, prepared::Bool)
     ps = sole_patch(solver)
     decomp = ps.decomp
     for stage in 1:5
@@ -193,21 +189,15 @@ function _rk_update!(decomp::Decomp, n_cons::Int, Q, dQ, du, A, B, dt)
     return Q
 end
 
-"""
-    step!(solver, states, dQs, dus, dt, prepared=false)
-
-Multi-patch form of [`step!`](@ref): `states`, `dQs` and `dus` are vectors
-aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
-update in the global patch order, then makes the interfaces consistent with
-[`sync_patches!`](@ref), the shared-plane averaging and ghost refill after
-every stage. Every rank in `solver.comm` must call this function. A solver built
-with `subcycle = true` delegates to `subcycled_step!` instead.
-"""
-function step!(solver::Solver, states::Vector{<:ConservedState},
-               dQs::Vector{<:ConservedState}, dus::Vector{<:ConservedState},
-               dt, prepared::Bool=false)
+# The step of a patched or refined solver: `states`, `dQs` and `dus` are the
+# vectors aligned with `solver.patches`. Each stage evaluates every local
+# patch's RHS and update in the global patch order, then makes the interfaces
+# consistent with `sync_patches!`, the shared-plane averaging and ghost refill
+# after every stage. A solver built with `subcycle = true` takes the
+# Berger–Oliger schedule instead.
+function _step_patches!(solver::Solver, states, dQs, dus, dt, prepared::Bool)
     getfield(solver, :subcycle) &&
-        return subcycled_step!(solver, states, dQs, dus, dt, prepared)
+        return _subcycled_step!(solver, states, dQs, dus, dt, prepared)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     _reflux_begin_step!(solver, states)
@@ -576,10 +566,13 @@ rank must take the same substep sequence because the Hermite box saves gather
 over the parent communicator and each shell imposition performs the
 component-distributed chain's ring `Allgatherv`.
 """
-function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
-                         dQs::Vector{<:ConservedState},
-                         dus::Vector{<:ConservedState}, dt,
-                         prepared::Bool=false)
+function subcycled_step!(solver::Solver, Q::SimulationState, dQ::SimulationState,
+                         du::SimulationState, dt, prepared::Bool=false)
+    _subcycled_step!(solver, Q.patches, dQ.patches, du.patches, dt, prepared)
+    return Q
+end
+
+function _subcycled_step!(solver::Solver, states, dQs, dus, dt, prepared::Bool)
     status, guard = _subcycled_step_status!(solver, states, dQs, dus, dt,
                                              prepared, solver.control)
     status == SUBSTEP_CFL && throw(_substep_cfl_failure(solver, guard, dt,
@@ -728,8 +721,9 @@ function _run_step!(solver, Q, workspace, dt, prepared, control)
 end
 
 function _subcycled_run_step!(solver, Q, workspace, dt, prepared, control)
-    status, guard = _subcycled_step_status!(solver, Q, workspace.dQ, workspace.du,
-                                             dt, prepared, control)
+    status, guard = _subcycled_step_status!(solver, Q.patches, workspace.dQ.patches,
+                                             workspace.du.patches, dt, prepared,
+                                             control)
     status == 0 && return nothing
     status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
     status == SUBSTEP_INVALID && return _substep_invalid_failure(solver, guard, dt)
@@ -912,8 +906,6 @@ before its first step to fill the arrays; the comment on that priming in
 `runloop.jl` records what sizing the first step without them cost.
 """
 compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
-compute_dt(solver::Solver, states::Vector{<:ConservedState}) =
-    solver.cfl / max_rate(solver, states)[1]
 
 """
     max_rate(solver, Q) -> (rate, rho_min, direction_rates)
@@ -953,7 +945,9 @@ placeholders where ρ ≤ 0; the resulting CFL rate can remain finite after the
 state has lost positivity. Without this check, failure is not detected until
 the diffusive term subsequently drives `dt` toward zero.
 """
-function max_rate(solver::Solver, Q)
+function max_rate(solver::Solver, state::SimulationState)
+    _multipatch(solver) && return _composite_max_rate(solver, state.patches)
+    Q = sole_state(state)
     ps = sole_patch(solver)
     exchange_state!(Q, ps.decomp)   # keep halos consistent for primitives!
     primitives!(ps, Q)
@@ -967,20 +961,16 @@ function max_rate(solver::Solver, Q)
     return (red[1], -red[2], (red[3], red[4], red[5]))
 end
 
-"""
-    max_rate(solver, states::Vector) -> (rate, rho_min, direction_rates)
-
-Multi-patch form: the per-patch exchange, primitives pass and interior sweep
-run patch by patch, and the quantities reduce over `solver.comm`, the whole
-rank set, exactly once, hoisted outside the patch loop as the collective
-discipline requires.
-
-Every node of every patch enters at the solver's CFL number, a parent's nodes
-under a child level included: the parent's sensors are dropped at the nodes
-the child's restriction overwrites (`compute_artificial!`), so those nodes
-carry little more than their hyperbolic rate.
-"""
-function max_rate(solver::Solver, states::Vector{<:ConservedState})
+# The rate of a patched or refined solver: the per-patch exchange, primitives
+# pass and interior sweep run patch by patch, and the quantities reduce over
+# `solver.comm`, the whole rank set, exactly once, hoisted outside the patch
+# loop as the collective discipline requires.
+#
+# Every node of every patch enters at the solver's CFL number, a parent's nodes
+# under a child level included: the parent's sensors are dropped at the nodes
+# the child's restriction overwrites (`compute_artificial!`), so those nodes
+# carry little more than their hyperbolic rate.
+function _composite_max_rate(solver::Solver, states)
     _validate_transport_state!(solver, states)
     T = typeof(solver.cfl)
     rate = zero(T)
@@ -1302,6 +1292,7 @@ timestep restriction from one imposed by azimuthal spacing near a coordinate
 singularity; see the CFL discussion in the README.
 """
 function dt_report(solver::Solver, Q)
+    Q = _patch_arg(Q)
     _cpu_storage(Q) ||
         error("dt_report is a host sweep; copy the state to a CPU solver " *
               "for this diagnostic on a DeviceBackend")
@@ -1372,25 +1363,15 @@ Every rank in `solver.comm` must enter the single `Allreduce`. `run!` calls this
 function once before its loop, not once per step, so a second `run!` on the same
 solver re-derives the floors from that call's initial state.
 """
-function positivity_floors(solver::Solver, Q, control::StepControl)
-    control.floor_ratio > 0 || return (0.0, 0.0)
-    _cpu_storage(Q) ||
-        error("StepControl.floor_ratio: the positivity failsafe is a host " *
-              "sweep and is not yet supported on a DeviceBackend")
-    ρ_min, e_min = _local_positivity_mins(sole_patch(solver), Q)
-    t0 = time_ns()
-    red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
-    _wait!(solver, t0)
-    (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
-    return (control.floor_ratio * red[1], control.floor_ratio * red[2])
-end
-
-function positivity_floors(solver::Solver, states::Vector{<:ConservedState},
+function positivity_floors(solver::Solver, state::SimulationState,
                            control::StepControl)
     control.floor_ratio > 0 || return (0.0, 0.0)
     ρ_min = Inf
     e_min = Inf
-    for (ps, Q) in eachpatch(solver, states)
+    for (ps, Q) in eachpatch(solver, state)
+        _multipatch(solver) || _cpu_storage(Q) ||
+            error("StepControl.floor_ratio: the positivity failsafe is a host " *
+                  "sweep and is not yet supported on a DeviceBackend")
         r, e = _local_positivity_mins(ps, Q)
         ρ_min = min(ρ_min, r)
         e_min = min(e_min, e)
@@ -1482,21 +1463,12 @@ The repair writes the interior only. Halos are left as the step left them, and
 nothing downstream depends on that: [`max_rate`](@ref) exchanges before reading
 anything at the top of the next iteration.
 """
-function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
-                                 scope::Symbol;
-                                 species_band::Real=solver.control.species_band)
-    species = zeros(solver.equations.n_species)
-    tally = _local_positivity_repair!(sole_patch(solver), Q, rho_floor, e_floor, scope,
-                                      species_band, species)
-    return _reduce_floor_tally(solver, tally, species)
-end
-
-function apply_positivity_floor!(solver::Solver, states::Vector{<:ConservedState},
+function apply_positivity_floor!(solver::Solver, state::SimulationState,
                                  rho_floor, e_floor, scope::Symbol;
                                  species_band::Real=solver.control.species_band)
     acc = (0.0, 0.0, 0.0, 0.0, 0.0)
     species = zeros(solver.equations.n_species)
-    for (ps, Q) in eachpatch(solver, states)
+    for (ps, Q) in eachpatch(solver, state)
         acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope,
                                                species_band, species)
     end
@@ -1648,14 +1620,24 @@ function record_floor!(solver::Solver, tally)
     return ft
 end
 
-# Multi-patch counterparts of the per-step state operations `run!` composes.
-# Each loops this rank's patches in the global order; none reduces.
-apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
-    (foreach(((ps, Q),) -> apply_bcs!(ps, Q), eachpatch(solver, states)); states)
+# The per-step state operations `run!` composes, over this rank's patches in
+# the global order; none reduces.
+function apply_bcs!(solver::Solver, state::SimulationState)
+    for (ps, Q) in eachpatch(solver, state)
+        apply_bcs!(ps, Q)
+    end
+    return state
+end
 
 # Under subcycling the fine level filters itself inside `subcycled_step!` at
 # its own step cadence, so the per-coarse-step pass here covers level 0 only.
-function filter_state!(solver::Solver, states::Vector{<:ConservedState})
+function filter_state!(solver::Solver, state::SimulationState)
+    _multipatch(solver) ||
+        return (filter_state!(sole_patch(solver), sole_state(state)); state)
+    _filter_patches!(solver, state.patches)
+    return state
+end
+function _filter_patches!(solver::Solver, states)
     subcycle = getfield(solver, :subcycle)
     for lev in getfield(solver, :levels)
         # A subcycled refined level filters at its own cadence inside the
@@ -1669,25 +1651,29 @@ function filter_state!(solver::Solver, states::Vector{<:ConservedState})
     return states
 end
 
+function truncate_modes!(solver::Solver, state::SimulationState)
+    _truncating(solver.truncation) || return state
+    _multipatch(solver) && error("polar_truncation takes a single-patch solver")
+    truncate_modes!(sole_patch(solver), sole_state(state))
+    return state
+end
+
 _zero_state!(Q) = fill!(Q, 0)
-_zero_state!(states::Vector{<:ConservedState}) =
-    (foreach(Q -> fill!(Q, 0), states); states)
 _reset_workspace!(w::Workspace) = (_zero_state!(w.dQ); _zero_state!(w.du); w)
 
-# Savepoint copies for either state representation. A stacked tile's state
-# is a view; its copy is a dense array of the same storage, and the restore
-# assigns back into the view by broadcast, the form every backend runs as a
-# kernel (a `copyto!` between a device view and a dense device array is not
-# a contract every backend keeps). Dense host states keep `copyto!`.
-_snapshot(Q) = copy(Q)
-_snapshot(states::Vector{<:ConservedState}) = [_dense_copy(Q) for Q in states]
+# Savepoint copies, one per patch. A stacked tile's state is a view; its copy
+# is a dense array of the same storage, and the restore assigns back into
+# the view by broadcast, the form every backend runs as a kernel (a `copyto!`
+# between a device view and a dense device array is not a contract every
+# backend keeps). Dense host states keep `copyto!`, through `_assign!`.
+_snapshot(state) = [_dense_copy(Q) for Q in _patch_states(state)]
 _dense_copy(Q::ConservedState) = ConservedState(_dense_copy(parent(Q)))
 _dense_copy(a::AbstractArray) = copy(a)
 _dense_copy(v::SubArray) = (d = similar(parent(v), size(v)); d .= v; d)
-_restore_state!(dst, src) = copyto!(dst, src)
-function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedState})
-    for i in eachindex(dst)
-        _assign!(parent(dst[i]), parent(src[i]))
+function _restore_state!(dst, src)
+    to, from = _patch_states(dst), _patch_states(src)
+    for i in eachindex(to)
+        _assign!(parent(to[i]), parent(from[i]))
     end
     return dst
 end

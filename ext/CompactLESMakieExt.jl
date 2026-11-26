@@ -60,7 +60,7 @@ end
 # patch shares the root's spacing.
 function _heatmap_blocks(solver::Solver, Q, name::Symbol, normal::Int, index::Int,
                          species::Int)
-    if Q isa Vector{<:ConservedState} && nlevels(solver) > 1
+    if nlevels(solver) > 1
         stacked = name in (:Y, :X, :D_art)
         stacked || name in CompactLES.SCALAR_FIELD_NAMES ||
             throw(ArgumentError("fieldheatmap: unknown field $name"))

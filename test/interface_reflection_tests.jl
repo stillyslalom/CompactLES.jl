@@ -22,7 +22,7 @@ using CompactLES: padded_index, xcoord
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=pi / c0)
-        states = Q isa Vector ? Q : [Q]
+        states = Q.patches
         ps = CL.PatchSolver(s, s.patches[1])
         refresh_primitives!(ps, states[1])
         # This window is uncovered root grid, upstream of the first face.
@@ -89,7 +89,7 @@ end
         e = 0.0
         for (li, p) in enumerate(s.patches)
             ps = CL.PatchSolver(s, p)
-            line = _interface_sensor_line(ps, Q[li])
+            line = _interface_sensor_line(ps, Q.patches[li])
             n = ps.decomp.n_local[1]
             nref = p.level == 0 ? N : 3N
             r = reference[p.level == 0 ? 1 : 2]

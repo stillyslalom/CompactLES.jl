@@ -275,7 +275,7 @@ refined(config) = config in ("box", "tiles", "box_global", "tiles_global")
 # ---------------------------------------------------------------------------
 # Runs
 
-statevec(states) = states isa Vector ? states : [states]
+statevec(states) = states.patches
 patches_of(solver) = getfield(solver, :patches)
 
 function fresh(spec, config)
@@ -352,8 +352,8 @@ end
 # Composite error against the fine run
 
 function fields_of(solver, states, name, species)
-    states isa Vector && return field_array(solver, states, name; species=species)
-    return [field_array(solver, states, name; species=species)]
+    f = field_array(solver, states, name; species=species)
+    return f isa Vector ? f : [f]
 end
 
 # The fine run's node index coinciding with each local node of `ps` along `d`,

@@ -363,7 +363,7 @@ function noh_axis_level(; N=Dict(NOH_N)[2], m=N ÷ 3, refined=true, subcycle=fal
     xs, ρ = Float64[], Float64[]
     for (k, patch) in enumerate(Iterators.reverse(getfield(solver, :patches)))
         ps = CL.PatchSolver(solver, patch)
-        Q = states isa Vector ? states[end - k + 1] : states
+        Q = states.patches[end - k + 1]
         CL.exchange_state!(Q, ps.decomp)
         CL.primitives!(ps, Q)
         edge = isempty(xs) ? -Inf : xs[end]

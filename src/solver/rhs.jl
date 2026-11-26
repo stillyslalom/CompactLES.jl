@@ -2545,15 +2545,10 @@ boundary conditions and refreshes the primitives from `Q` before the next step.
 refresh_primitives!(solver::PatchSolver, Q) =
     (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
 
-"""
-    refresh_primitives!(solver, states::Vector)
-
-The multi-patch form: every patch this rank holds, in patch order, from
-the state vector aligned with `solver.patches`. Each patch's exchange is
-collective over that patch's own communicator, whose ranks all hold it.
-"""
-function refresh_primitives!(solver::Solver, states::Vector{<:ConservedState})
-    for (ps, Q) in eachpatch(solver, states)
+# Every patch this rank holds, in patch order. Each patch's exchange is
+# collective over that patch's own communicator, whose ranks all hold it.
+function refresh_primitives!(solver::Solver, states)
+    for (ps, Q) in eachpatch(solver, _patch_states(states))
         refresh_primitives!(ps, Q)
     end
     return solver

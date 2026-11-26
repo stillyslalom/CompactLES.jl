@@ -125,7 +125,7 @@ end
     @test solver.step == ref.step == 1
     @test solver.t == ref.t && hits[] == 1
     @test solver.cfl == ref.cfl == 0.05
-    @test all(parent(Q[i]) == parent(Qref[i]) for i in eachindex(Q))
+    @test all(parent(Q.patches[i]) == parent(Qref.patches[i]) for i in eachindex(Q.patches))
     @test all(all(a == b for (a, b) in zip(CL._art_arrays(p), CL._art_arrays(ref.patches[i])))
               for (i, p) in enumerate(solver.patches))
 
@@ -230,7 +230,7 @@ end
     corrupt = Callback(EveryStep(), function (s, states)
         if s.step == 5 && MPI.Comm_rank(COMM) == 0
             o = s.patches[1].decomp.n_halo_d
-            states[1][3 + o[1], 1 + o[2], 1 + o[3], 1] = -1.0
+            states.patches[1][3 + o[1], 1 + o[2], 1 + o[3], 1] = -1.0
         end
         return false
     end)

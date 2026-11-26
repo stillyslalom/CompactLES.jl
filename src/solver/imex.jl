@@ -247,12 +247,13 @@ function ImexIntegrator(solver, settings::ImplicitConduction)
     T = eltype(solver.inv_J)
     stage = DiffusionStage(solver; parity=1)
     decomp = solver.decomp
-    Q = allocate_state(solver)
+    ps = sole_patch(solver)
+    Q = allocate_state(ps)
     f() = field(decomp)
     ImexIntegrator{T,typeof(Q)}(settings, T.(ARK436_EXPLICIT), T.(ARK436_IMPLICIT),
                                 T.(ARK436_WEIGHTS), T.(ARK436_EMBEDDED),
                                 T.(ARK436_NODES), T(ARK436_IMPLICIT[2, 2]), stage, Q,
-                                [allocate_state(solver) for _ in 1:ARK436_STAGES],
+                                [allocate_state(ps) for _ in 1:ARK436_STAGES],
                                 [f() for _ in 1:ARK436_STAGES],
                                 f(), f(), f(), f(), f(), f(), f(), f(),
                                 T(Inf), T(Inf), zero(T), 0, 0, 0, 0, 0)

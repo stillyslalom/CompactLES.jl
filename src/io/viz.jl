@@ -41,8 +41,20 @@ overwrites `solver.grad_u` and the sensor and `tmp_a`/`tmp_b` scratch, which
 restored to the values the integrator left, so calling this between steps does
 not change the next timestep or a regrid decision. The returned array is a
 fresh copy that remains valid past the next step.
+
+On a refined or patched solver the result is a `Vector` of such arrays, one
+refreshed copy of the named field per patch this rank holds, aligned with
+`solver.patches`. This is the form the composite diagnostics take
+([`plane_profile`](@ref), [`volume_integral`](@ref)), and
+[`line_profile`](@ref), [`line_sample`](@ref) and [`field_slice`](@ref) call
+it. On a refined level of several tiles the artificial coefficients and
+`:sensor` are those the level's right-hand side computes over the whole level,
+which differ from a tile's own within a few nodes of a face shared with
+another tile.
 """
 function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
+    _composite(solver) &&
+        return _composite_field_array(solver, _patch_states(Q), name, species)
     return preserving_artificial(solver, _wants_artificial(name)) do
         if _wants_gradients(name) || _wants_artificial(name)
             # This refreshes primitives into the halos as part of the gradient
@@ -58,23 +70,7 @@ function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
     end
 end
 
-"""
-    field_array(solver, states::Vector, name::Symbol; species = 1) -> Vector{Array}
-
-The multi-patch form, for the state vector of a refined or patched run: one
-refreshed copy of the named field per patch this rank holds, aligned with
-`solver.patches`. This is the form the composite diagnostics take
-([`plane_profile`](@ref), [`volume_integral`](@ref)), and the state-vector forms
-of [`line_profile`](@ref), [`line_sample`](@ref) and [`field_slice`](@ref) call
-it. Every rank must call it. The primitives are refreshed from `states`, and the
-artificial coefficient arrays are restored as in the single-state form.
-On a refined level of several tiles the artificial coefficients and
-`:sensor` are those the level's right-hand side computes over the whole level,
-which differ from a tile's own within a few nodes of a face shared with
-another tile.
-"""
-function field_array(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
-                     species::Int=1)
+function _composite_field_array(solver::Solver, states, name::Symbol, species::Int)
     patches = getfield(solver, :patches)
     return preserving_artificial(solver, _wants_artificial(name)) do
         held = _wants_artificial(name) ? _output_level_artificial!(solver, states) :
@@ -97,10 +93,10 @@ end
 """
     volume_integral(solver, Q, name::Symbol; species = 1) -> Float64
 
-∫ f dV of the named field, for a single state or the state vector of a
-refined run, through [`field_array`](@ref). Every rank must call it.
+∫ f dV of the named field of the state `Q`, on any layout, through
+[`field_array`](@ref). Every rank must call it.
 """
-volume_integral(solver::Solver, Q::Union{ConservedState,Vector{<:ConservedState}},
+volume_integral(solver::Solver, Q::Union{ConservedState,SimulationState},
                 name::Symbol; species::Int=1) =
     volume_integral(solver, field_array(solver, Q, name; species=species))
 
@@ -124,6 +120,11 @@ point and the profile coincides with `line_sample` through `(i, 1, 1)`. For a
 line integral in place of an average, weight by [`profile_spacing`](@ref).
 
 Every rank must call this function; see [`field_array`](@ref).
+
+On a refined or patched run the profile is the composite one, at the root's
+stations: each plane average combines the uncovered root nodes with the
+coinciding nodes of every finer patch, as the composite
+[`plane_profile`](@ref) does.
 """
 function line_profile(solver::Solver, Q, name::Symbol; dim::Int=1, species::Int=1)
     1 <= dim <= 3 || throw(ArgumentError("line_profile: dim must be 1, 2, or 3"))
@@ -131,20 +132,6 @@ function line_profile(solver::Solver, Q, name::Symbol; dim::Int=1, species::Int=
     coord = profile_coordinate(solver, dim)
     value = plane_profile(solver, f, dim)
     return coord, value
-end
-
-"""
-    line_profile(solver, states::Vector, name; dim = 1, species = 1) -> (coord, value)
-
-The composite profile of a refined or patched run, at the root's stations:
-each plane average combines the uncovered root nodes with the coinciding
-nodes of every finer patch, as the composite [`plane_profile`](@ref) does.
-"""
-function line_profile(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
-                      dim::Int=1, species::Int=1)
-    1 <= dim <= 3 || throw(ArgumentError("line_profile: dim must be 1, 2, or 3"))
-    fs = field_array(solver, states, name; species=species)
-    return profile_coordinate(solver, dim), plane_profile(solver, fs, dim)
 end
 
 """
@@ -168,8 +155,16 @@ snapped to the nearest node of that dimension; passing both throws.
 The value is the field at the node, in the solver's element type, and the
 coordinate comes from [`global_xcoord`](@ref). Every rank must call this
 function, including one whose block holds no part of the line; see
-[`field_array`](@ref). A refined or patched solver takes the state vector
-instead of `Q`, and this form throws `ArgumentError` on one.
+[`field_array`](@ref).
+
+On a refined or patched run the line runs through the root grid's nodes:
+`index` and `at` are root global indices and coordinates, and `coord` is the
+root coordinate. Each value is the field on the finest level that holds the
+root node, where a patch holds the nodes of its own boundary planes. Where
+several patches of that level hold the node, on a shared plane or a periodic
+seam, the value is their mean. The fine nodes between root nodes are not
+sampled. Every rank of `solver.comm` must call this function, including a
+rank that holds no patch of a refined level.
 """
 function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
                      index::Union{Nothing,NTuple{2,Int}}=nothing,
@@ -177,7 +172,9 @@ function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
     1 <= dim <= 3 || throw(ArgumentError("line_sample: dim must be 1, 2, or 3"))
     index === nothing || at === nothing ||
         throw(ArgumentError("line_sample: give index or at, not both"))
-    _composite(solver) && throw(_state_vector_error("line_sample"))
+    _composite(solver) &&
+        return _composite_line_sample(solver, _patch_states(Q), name, dim, index, at,
+                                      species)
     decomp = solver.decomp
     a, b = _plane_dims(dim)
     if at !== nothing
@@ -211,25 +208,8 @@ function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
     return coord, line
 end
 
-"""
-    line_sample(solver, states::Vector, name; dim = 1, index = (1, 1), at = nothing,
-                species = 1) -> (coord, value)
-
-The composite form, for the state vector of a refined or patched run. The line
-runs through the root grid's nodes: `index` and `at` are root global indices
-and coordinates, and `coord` is the root coordinate. Each value is the field
-on the finest level that holds the root node, where a patch holds the nodes of
-its own boundary planes. Where several patches of that level hold the node, on
-a shared plane or a periodic seam, the value is their mean. The fine nodes
-between root nodes are not sampled. Every rank of `solver.comm` must
-call this function, including a rank that holds no patch of a refined level.
-"""
-function line_sample(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
-                     dim::Int=1, index::Union{Nothing,NTuple{2,Int}}=nothing,
-                     at::Union{Nothing,NTuple{2,Real}}=nothing, species::Int=1)
-    1 <= dim <= 3 || throw(ArgumentError("line_sample: dim must be 1, 2, or 3"))
-    index === nothing || at === nothing ||
-        throw(ArgumentError("line_sample: give index or at, not both"))
+function _composite_line_sample(solver::Solver, states, name::Symbol, dim::Int,
+                                index, at, species::Int)
     n_global = solver.n_global
     a, b = _plane_dims(dim)
     if at !== nothing
@@ -243,7 +223,7 @@ function line_sample(solver::Solver, states::Vector{<:ConservedState}, name::Sym
             throw(ArgumentError("line_sample: index $g out of range " *
                                 "1:$(n_global[d]) along dimension $d"))
     end
-    fs = field_array(solver, states, name; species=species)
+    fs = _composite_field_array(solver, states, name, species)
     fixed = ntuple(d -> d == a ? ga : d == b ? gb : 0, 3)
     acc = MPI.Allreduce(_composite_samples(solver, fs, fixed), +, solver.comm)
     T = eltype(_root_spacing(solver))
@@ -271,10 +251,6 @@ function _nearest_index(xs::AbstractVector, x::Real)
     end
     return best
 end
-
-_state_vector_error(name) =
-    ArgumentError("$name: this solver holds several patches or levels; pass the " *
-                  "state vector allocate_state returns")
 
 # --- Composite point samples -------------------------------------------------
 #
@@ -371,14 +347,19 @@ onto a Cartesian grid for a heatmap.
 that range throws `ArgumentError`, as does a `normal` outside `1:3`.
 
 Every rank must call this function, including a rank whose block holds no part
-of the requested plane; see [`field_array`](@ref). A refined or patched solver
-takes the state vector instead of `Q`, and this form throws `ArgumentError` on
-one.
+of the requested plane; see [`field_array`](@ref).
+
+On a refined or patched run the plane is the root grid's plane at root global
+index `index`, and each value is taken as in the composite
+[`line_sample`](@ref): the field on the finest level that holds the root node,
+averaged where several patches of that level hold it.
 """
 function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=1,
                      species::Int=1)
     1 <= normal <= 3 || throw(ArgumentError("field_slice: normal must be 1, 2, or 3"))
-    _composite(solver) && throw(_state_vector_error("field_slice"))
+    _composite(solver) &&
+        return _composite_field_slice(solver, _patch_states(Q), name, normal, index,
+                                      species)
     decomp = solver.decomp
     ng = decomp.n_global[normal]
     1 <= index <= ng ||
@@ -411,26 +392,14 @@ function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=
     return x1, x2, plane
 end
 
-"""
-    field_slice(solver, states::Vector, name; normal = 3, index = 1, species = 1)
-        -> (x1, x2, values) or nothing
-
-The composite form, for the state vector of a refined or patched run. The
-plane is the root grid's plane at root global index `index`, and each value is
-taken as in the composite [`line_sample`](@ref): the field on the finest level
-that holds the root node, averaged where several patches of that level hold
-it. The result is on rank 0 and `nothing` on every other rank. Every rank of
-`solver.comm` must call this function.
-"""
-function field_slice(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
-                     normal::Int=3, index::Int=1, species::Int=1)
-    1 <= normal <= 3 || throw(ArgumentError("field_slice: normal must be 1, 2, or 3"))
+function _composite_field_slice(solver::Solver, states, name::Symbol, normal::Int,
+                                index::Int, species::Int)
     n_global = solver.n_global
     ng = n_global[normal]
     1 <= index <= ng ||
         throw(ArgumentError("field_slice: index $index out of range 1:$ng along " *
                             "dimension $normal"))
-    fs = field_array(solver, states, name; species=species)
+    fs = _composite_field_array(solver, states, name, species)
     fixed = ntuple(d -> d == normal ? index : 0, 3)
     acc = MPI.Reduce(_composite_samples(solver, fs, fixed), +, solver.comm; root=0)
     a, b = _plane_dims(normal)
@@ -553,10 +522,8 @@ end
 
 """
     field_snapshot(solver, Q; fields = DEFAULT_VTK_FIELDS, normal = nothing,
-                   index = 1, window = nothing) -> FieldSnapshot or nothing
-    field_snapshot(solver, states::Vector; fields = DEFAULT_VTK_FIELDS,
-                   normal = nothing, index = 1, window = nothing)
-        -> Vector{FieldSnapshot} or nothing
+                   index = 1, window = nothing)
+        -> FieldSnapshot, Vector{FieldSnapshot} or nothing
 
 Every interior node of the named fields, without halo padding, gathered with the
 grid coordinates into a [`FieldSnapshot`](@ref) on rank 0, in the solver's
@@ -573,9 +540,8 @@ coefficient adds `compute_artificial!`, and the artificial coefficient arrays
 are restored afterwards, so a snapshot between steps does not change the next
 timestep.
 
-The first form takes a single-patch solver and its state and returns the whole
-grid. The second takes the state vector of a refined or patch-partitioned
-solver and returns one snapshot per patch, ordered by level and then by node
+A single-patch solver returns the whole grid as one snapshot. A refined or
+patch-partitioned solver returns one snapshot per patch, ordered by level and then by node
 offset; each carries its level, its offset in that level's index space, and
 the nodes a finer level covers. Abutting root patches share their interface
 plane, which appears in both. On a refined level of several tiles the
@@ -624,11 +590,10 @@ in the order given.
 function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS,
                         normal::Union{Nothing,Int}=nothing, index::Int=1,
                         window=nothing)
-    patches = getfield(solver, :patches)
-    length(patches) == 1 && nlevels(solver) == 1 &&
-        only(patches).region.extent == solver.n_global ||
-        throw(ArgumentError("field_snapshot: this solver holds several patches; " *
-                            "pass the state vector allocate_state returns"))
+    _composite(solver) &&
+        return _snapshot(solver, _patch_states(Q), fields,
+                         _snapshot_plane(solver, normal, index),
+                         _snapshot_window(solver, window))
     plane = _snapshot_plane(solver, normal, index)
     win = _snapshot_window(solver, window)
     # Decided on the global coordinates, which every rank holds, so every rank
@@ -639,16 +604,8 @@ function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS,
     all(d -> any(g -> taken(d, g), 1:solver.n_global[d]), 1:3) ||
         throw(ArgumentError("field_snapshot: the window $window holds no node of " *
                             "the grid" * (plane === nothing ? "" : " on the plane")))
-    snaps = _snapshot(solver, [Q], fields, plane, win)
+    snaps = _snapshot(solver, _patch_states(Q), fields, plane, win)
     return snaps === nothing ? nothing : only(snaps)
-end
-
-function field_snapshot(solver::Solver, states::Vector{<:ConservedState};
-                        fields=DEFAULT_VTK_FIELDS,
-                        normal::Union{Nothing,Int}=nothing, index::Int=1,
-                        window=nothing)
-    return _snapshot(solver, states, fields, _snapshot_plane(solver, normal, index),
-                     _snapshot_window(solver, window))
 end
 
 const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :X, :D_art)
@@ -1323,8 +1280,8 @@ builds a figure with axis labels drawn from the metric (`r`/`θ`/`z` for
 cylindrical, `r`/`θ`/`φ` for spherical, `x`/`y`/`z` for Cartesian);
 `profileplot!` draws into an existing axis. On `profileplot`, `figure` and `axis`
 are keyword collections forwarded to Makie's `Figure` and `Axis`. Extra keyword
-arguments pass through to Makie's `lines!`. For a refined or patched run, pass
-the state vector as `Q`; the profile is then the composite `line_profile`.
+arguments pass through to Makie's `lines!`. For a refined or patched run the
+profile is the composite `line_profile`.
 
 Requires a Makie backend (see [`makie_available`](@ref)). Extraction through
 [`field_array`](@ref) requires every rank to call this function. The profile is
@@ -1353,8 +1310,8 @@ it, which ends on a wall rather than half a spacing past it. On
 collections forwarded to Makie's `Figure` and `Axis`, and `colorbar = false`
 omits the colorbar. Extra keyword arguments pass through to Makie's `heatmap!`.
 
-For a patched run, pass the state vector as `Q`; the plane is then the
-composite `field_slice` on the root grid's nodes. For a refined run, each
+For a patched run the plane is the composite `field_slice` on the root grid's
+nodes. For a refined run, each
 level is drawn at its own spacing, from the plane-restricted
 [`field_snapshot`](@ref), as one heatmap over the box enclosing the level's
 patches: coarse levels first, with the nodes a finer level covers and the nodes

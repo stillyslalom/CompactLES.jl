@@ -677,23 +677,18 @@ run_callbacks!(cb, solver, Q) = (cb(solver, Q); (false, true))
 # allocates: a returned float or tuple would be boxed, so the next instant is
 # written into a cell of the clock's type and the two flags of the per-step
 # pass return as a small integer (`stop + 2 ran`), which Julia keeps
-# preallocated; and a `ConservedState`, an immutable wrapper that would be
-# boxed at each call, crosses as its array and is rewrapped on arrival.
-@inline _crossing(Q::ConservedState) = (parent(Q), Val(true))
-@inline _crossing(Q) = (Q, Val(false))
-@inline _arrived(A, ::Val{true}) = ConservedState(A)
-@inline _arrived(Q, ::Val{false}) = Q
+# preallocated; and the state is a `SimulationState`, a mutable holder
+# allocated once, which crosses as a reference.
 
 function _next_instant!(cell::Base.RefValue, callback, solver)
     cell[] = oftype(cell[], callback_next_time(callback, solver))
     return nothing
 end
 
-_start_callbacks(callback, solver, qx, wrapped::Val) =
-    run_start_callbacks!(callback, solver, _arrived(qx, wrapped))
+_start_callbacks(callback, solver, Q) = run_start_callbacks!(callback, solver, Q)
 
-function _step_callbacks(callback, solver, qx, wrapped::Val)
-    stop, ran = run_callbacks!(callback, solver, _arrived(qx, wrapped))
+function _step_callbacks(callback, solver, Q)
+    stop, ran = run_callbacks!(callback, solver, Q)
     return Int(stop) + 2 * Int(ran)
 end
 

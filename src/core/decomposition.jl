@@ -96,6 +96,105 @@ Base.copyto!(dest::ConservedState, src::ConservedState) =
 # element-by-element loop is a scalar-indexing error on device storage.
 Base.fill!(Q::ConservedState, x) = (fill!(parent(Q), x); Q)
 
+"""
+    SimulationState
+
+The conserved state of a run on every layout, as [`allocate_state`](@ref) and
+[`setup`](@ref) return it: one [`ConservedState`](@ref) per patch this rank
+holds, in `state.patches`, aligned with `solver.patches`.
+
+On a single-patch solver the state is also the four-dimensional array of its
+one patch: `state[i, j, k, c]`, `state[I, c]`, `size`, `axes`, `view`, `fill!`,
+`copyto!` and `parent` act on that patch, so a script written against the
+array reads unchanged. On a patched or refined solver there is no one array,
+and those operations throw; index a patch explicitly, `state.patches[li]`, or
+iterate `eachpatch(solver, state)`. The layout decides the form, not the
+number of patches a rank holds: a rank of a partitioned run holds one patch
+of a layout that has several.
+
+`copy` and `zero` return a `SimulationState` of the same layout.
+"""
+mutable struct SimulationState{T,S<:ConservedState{T}} <: AbstractArray{T,4}
+    # Mutable so that the state is one heap object from its allocation on: the
+    # run loop hands it to the callbacks through dynamic calls, where an
+    # immutable holder would be boxed at each one.
+    const patches::Vector{S}
+    const composite::Bool
+end
+
+SimulationState(Q::ConservedState) = SimulationState([Q], false)
+
+@noinline _composite_state_error() =
+    throw(ArgumentError("this state belongs to a patched or refined solver and " *
+                        "is not one array; index a patch as `state.patches[li]` " *
+                        "or iterate `eachpatch(solver, state)`"))
+
+"The one patch state of a single-patch [`SimulationState`](@ref)."
+@inline function sole_state(state::SimulationState)
+    state.composite && _composite_state_error()
+    return @inbounds state.patches[1]
+end
+# The per-patch states of any holder: a run's state, the plain vector the
+# composite drivers and a savepoint carry, or one patch's state on its own.
+@inline _patch_states(state::SimulationState) = state.patches
+@inline _patch_states(states::AbstractVector) = states
+@inline _patch_states(Q::ConservedState) = (Q,)
+# A routine of one patch takes its `ConservedState`; a caller holding the
+# run's state passes it through this.
+@inline _patch_arg(x) = x
+@inline _patch_arg(state::SimulationState) = sole_state(state)
+
+Base.parent(state::SimulationState) = parent(sole_state(state))
+Base.size(state::SimulationState) = size(sole_state(state))
+Base.axes(state::SimulationState) = axes(sole_state(state))
+Base.IndexStyle(::Type{<:SimulationState{T,S}}) where {T,S} =
+    isconcretetype(S) ? IndexStyle(S) : IndexCartesian()
+Base.@propagate_inbounds Base.getindex(state::SimulationState, I...) =
+    getindex(sole_state(state), I...)
+Base.@propagate_inbounds Base.setindex!(state::SimulationState, value, I...) =
+    setindex!(sole_state(state), value, I...)
+Base.view(state::SimulationState, I...) = view(sole_state(state), I...)
+Base.fill!(state::SimulationState, x) =
+    (foreach(Q -> fill!(Q, x), state.patches); state)
+function Base.copyto!(dest::SimulationState, src::SimulationState)
+    length(dest.patches) == length(src.patches) ||
+        throw(DimensionMismatch("the two states hold different numbers of patches"))
+    foreach(copyto!, dest.patches, src.patches)
+    return dest
+end
+Base.copy(state::SimulationState) =
+    SimulationState(_like_states(copy, state.patches), state.composite)
+Base.zero(state::SimulationState) =
+    SimulationState(_like_states(zero, state.patches), state.composite)
+
+# `f` of every patch state, the stacking kept: the tiles of a stacked level
+# (levels_coupling.jl) are views of one array, and a copy or a zero of them,
+# the stage arrays of a step among those, must be views of one array too, so
+# a stack's members take views of one `f` of the shared parent.
+function _like_states(f::F, states::Vector{<:ConservedState}) where {F}
+    out = similar(states)
+    shared = IdDict{Any,Any}()
+    for (i, Q) in enumerate(states)
+        data = parent(Q)
+        if data isa SubArray
+            z = get!(() -> f(parent(data)), shared, parent(data))
+            out[i] = ConservedState(view(z, parentindices(data)...))
+        else
+            out[i] = f(Q)
+        end
+    end
+    return out
+end
+
+# A composite state has no size, so the array display is replaced.
+function Base.show(io::IO, state::SimulationState{T}) where {T}
+    state.composite ?
+        print(io, "SimulationState{", T, "} over ", length(state.patches),
+              " local patch", length(state.patches) == 1 ? "" : "es") :
+        print(io, "SimulationState{", T, "} ", join(size(state), "×"))
+end
+Base.show(io::IO, ::MIME"text/plain", state::SimulationState) = show(io, state)
+
 "Balanced split of N points over P ranks; rank r (0-based) gets its
 (count, 0-based offset). The first `N % P` ranks take one point more than the
 rest, so counts differ by at most one and the offsets are contiguous."

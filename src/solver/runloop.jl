@@ -32,14 +32,20 @@ function _prime_art!(solver::Solver, Q, workspace)
     _prime_rhs!(solver, Q, workspace)
     return solver
 end
-_prime_rhs!(solver::Solver, Q, workspace) =
-    (apply_bcs!(solver, Q); compute_rhs!(solver, Q, workspace.dQ, false); Q)
-function _prime_rhs!(solver::Solver, states::Vector{<:ConservedState}, workspace)
+# `Q` and the workspace are the run's state and stage arrays, or the per-patch
+# vectors a composite driver holds.
+function _prime_rhs!(solver::Solver, Q, workspace)
+    if !_multipatch(solver)
+        apply_bcs!(solver, Q)
+        compute_rhs!(solver, Q, workspace.dQ, false)
+        return Q
+    end
+    states, dQs = _patch_states(Q), _patch_states(workspace.dQ)
     for lev in getfield(solver, :levels)
-        status = _level_rhs!(solver, lev, states, workspace.dQ, false)
+        status = _level_rhs!(solver, lev, states, dQs, false)
         _check_transport_status(solver, status)
     end
-    return states
+    return Q
 end
 
 # The coefficients `_prime_rhs!` leaves, without the rest of the right-hand
@@ -49,7 +55,7 @@ end
 # divergences, the ghost fluxes and the junction captures they would write are
 # overwritten by the next step's first evaluation before anything reads them,
 # and `max_rate` reads the coefficients, the state and the primitives alone.
-function _prime_level_coefficients!(solver::Solver, states::Vector{<:ConservedState},
+function _prime_level_coefficients!(solver::Solver, states::AbstractVector,
                                     mask_child::Bool=true)
     for lev in getfield(solver, :levels)
         status = _prepare_level_transport!(solver, lev, states, false, true,
@@ -168,8 +174,8 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
     return attempts
 end
 
-# Interface and level consistency before the pre-step reads. The single-patch
-# path has neither and skips this entirely. `restrict = false` omits the
+# Interface and level consistency before the pre-step reads. A single-patch
+# layout has neither and skips this entirely. `restrict = false` omits the
 # restriction and keeps the shell imposition; `run!` passes it when the
 # levels are as its previous post-step synchronization left them. The
 # injection writes parent nodes at least `RESTRICT_MARGIN` from a parent-fed
@@ -177,8 +183,9 @@ end
 # writes none of those, and the shared-plane averaging leaves them unchanged,
 # since the planes were averaged after the last stage or filter pass, so a
 # repeated restriction would write every node's own value.
-_presync!(solver, Q, restrict::Bool=true) = Q
-function _presync!(solver, states::Vector{<:ConservedState}, restrict::Bool=true)
+function _presync!(solver, Q, restrict::Bool=true)
+    _multipatch(solver) || return Q
+    states = _patch_states(Q)
     _ledger_open!(solver, states)
     sync_patches!(solver, states)
     _ledger!(solver, states, :same_level)
@@ -189,14 +196,15 @@ function _presync!(solver, states::Vector{<:ConservedState}, restrict::Bool=true
     end
     prolong_level_ghosts!(solver, states)
     _ledger!(solver, states, :shell)
-    return states
+    return Q
 end
 
 # Per-step level maintenance, after the state filter: restrict the fine state
 # onto the covered coarse region, then re-impose the fine shell from the
 # restricted coarse state. No-ops without refinement.
-_post_step!(solver, Q) = Q
-function _post_step!(solver, states::Vector{<:ConservedState})
+function _post_step!(solver, Q)
+    _multipatch(solver) || return Q
+    states = _patch_states(Q)
     _ledger_open!(solver, states)
     restrict_level!(solver, states)
     _ledger!(solver, states, :restrict)
@@ -209,7 +217,7 @@ function _post_step!(solver, states::Vector{<:ConservedState})
     _ledger!(solver, states, :reflux)
     prolong_level_ghosts!(solver, states)
     _ledger!(solver, states, :shell)
-    return states
+    return Q
 end
 
 """
@@ -346,10 +354,10 @@ end
 # solver type and not again for each script's callbacks, whose types are its
 # own closures. It reaches them through two dynamic calls per step, which
 # allocate nothing (see `_step_callbacks`).
-function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
+function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
+               nmax::Int,
                @nospecialize(callback), control::StepControl)
     rank = MPI.Comm_rank(solver.comm)
-    qx, wrapped = _crossing(Q)
     instant = Ref(solver.t)
     # The endpoint is carried in the solver's own time type from here on. A
     # `tfinal` the clock cannot represent is not reachable by any sequence of
@@ -401,7 +409,7 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
     # coefficients primed, so an output of either at t = 0 reads what the first
     # step starts from. A restarted solver (step > 0) has written its initial
     # frames already.
-    solver.step == 0 && _start_callbacks(callback, solver, qx, wrapped)::Bool &&
+    solver.step == 0 && _start_callbacks(callback, solver, Q)::Bool &&
         (stopped = true)
     # Whether the levels are as the previous iteration's post-step
     # synchronization left them, so that the pre-step restriction would repeat
@@ -610,7 +618,7 @@ function _run!(solver::Solver, Q, workspace::Workspace, tfinal, nmax::Int,
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
         _ledger_open!(solver, Q)
-        flags = _step_callbacks(callback, solver, qx, wrapped)::Int
+        flags = _step_callbacks(callback, solver, Q)::Int
         _ledger!(solver, Q, :callback)
         flags & 1 != 0 && (stopped = true)
         flags & 2 != 0 && (levels_synced = false)

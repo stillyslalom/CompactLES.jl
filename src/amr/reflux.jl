@@ -914,8 +914,7 @@ At the start of a root step: rebuild the captures if the layout changed,
 empty every register, and take Ω of the state the step starts from.
 Rank-local.
 """
-_reflux_begin_step!(solver, Q) = nothing
-function _reflux_begin_step!(solver::Solver, states::Vector{<:ConservedState})
+function _reflux_begin_step!(solver::Solver, states::AbstractVector)
     _reflux_current!(solver)
     held = _reflux_carry(solver)
     # A retry of the step starts from what was held back before the attempt.
@@ -957,8 +956,7 @@ summed over the level's communicator, divided by the face node's composite
 weight, added to the parent's state, and the registers emptied. Collective
 over the parent level's subset; a rank outside it returns.
 """
-_reflux_apply!(solver, Q, ℓp::Int) = nothing
-function _reflux_apply!(solver::Solver{T}, states::Vector{<:ConservedState},
+function _reflux_apply!(solver::Solver{T}, states::AbstractVector,
                         ℓp::Int) where {T}
     levels = getfield(solver, :levels)
     ℓp < length(levels) || return nothing

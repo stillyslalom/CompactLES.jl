@@ -128,8 +128,7 @@ cell_measure(solver::PatchSolver) = prod(ntuple(d -> solver.decomp.active[d] ?
 # forms: several patches on this rank, or a refined level somewhere in the
 # run, which a rank holding only the root must still enter the reductions
 # of. A `PatchSolver` is one patch by construction.
-_composite(solver::Solver) = nlevels(solver) > 1 ||
-                             length(getfield(solver, :patch_regions)) > 1
+_composite(solver::Solver) = _multipatch(solver)
 _composite(::PatchSolver) = false
 
 """
@@ -213,10 +212,10 @@ end
 # establishes which history or drift representation belongs in the API;
 # unlike separate `volume_integral` calls, every channel here uses the same
 # state, mask and reduction.
-function _conserved_budget(solver::Solver, Q::ConservedState)
-    _composite(solver) && throw(ArgumentError(
-        "a multi-patch or refined solver requires the state-vector form"))
-    return _conserved_budget(sole_patch(solver), Q)
+function _conserved_budget(solver::Solver, Q; junctions::Bool=true)
+    _composite(solver) &&
+        return _composite_budget(solver, _patch_states(Q), junctions)
+    return _conserved_budget(sole_patch(solver), _patch_arg(Q))
 end
 function _conserved_budget(solver::PatchSolver, Q::ConservedState)
     local_budget = _local_conserved_budget(solver, Q, false)
@@ -228,8 +227,7 @@ end
 # conserves: the cells of `volume_integral` and, under `junctions`, the
 # correction Ω beside each coarse-fine face (src/amr/reflux.jl), which makes the
 # rule's rate high-order there and is not exact for a linear field on its own.
-function _conserved_budget(solver::Solver, states::Vector{<:ConservedState};
-                           junctions::Bool=true)
+function _composite_budget(solver::Solver, states, junctions::Bool)
     length(states) == npatches(solver) || throw(ArgumentError(
         "state vector has $(length(states)) entries for $(npatches(solver)) local patches"))
     # The junctions' corrections of the quadrature are the captures'.
@@ -618,8 +616,13 @@ function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
 when invoked from a `run!` callback.
+
+On a refined or patched solver the plane averages are the composite ones at the
+root's stations. Every rank in `solver.comm` must call this function.
 """
 function mix_width(solver::Solver, Q; dim::Int=1, species=(1, 2))
+    _composite(solver) &&
+        return _composite_mix_width(solver, _patch_states(Q); dim, species)
     a, b = species
     refresh_primitives!(solver, Q)
     Ya = plane_profile(solver, solver.Y[a], dim)
@@ -628,14 +631,7 @@ function mix_width(solver::Solver, Q; dim::Int=1, species=(1, 2))
     return sum(4 .* Ya .* Yb .* dx)
 end
 
-"""
-    mix_width(solver, states::Vector; dim=1, species=(1, 2)) -> Float64
-
-The composite form for a multi-patch or refined solver, `states` aligned
-with `solver.patches`: the plane averages are the composite ones at the
-root's stations. Every rank in `solver.comm` must call this function.
-"""
-function mix_width(solver::Solver, states::Vector{<:ConservedState};
+function _composite_mix_width(solver::Solver, states;
                    dim::Int=1, species=(1, 2))
     a, b = species
     refresh_primitives!(solver, states)
@@ -656,8 +652,15 @@ nowhere. Every rank in `solver.comm` must call this function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
 when invoked from a `run!` callback, and overwrites `solver.tmp_a` as scratch.
+
+On a refined or patched solver the product
+Y_a Y_b is formed in each patch's `tmp_a` and consumed before the next
+patch's, since equal-extent tiles share that scratch. Every rank in
+`solver.comm` must call this function.
 """
 function molecular_mixing(solver::Solver, Q; dim::Int=1, species=(1, 2))
+    _composite(solver) &&
+        return _composite_molecular_mixing(solver, _patch_states(Q); dim, species)
     a, b = species
     refresh_primitives!(solver, Q)
     prod_ab = solver.tmp_a
@@ -672,15 +675,7 @@ function molecular_mixing(solver::Solver, Q; dim::Int=1, species=(1, 2))
     return den > 0 ? sum(num .* dx) / den : 0.0
 end
 
-"""
-    molecular_mixing(solver, states::Vector; dim=1, species=(1, 2)) -> Float64
-
-The composite form, `states` aligned with `solver.patches`. The product
-Y_a Y_b is formed in each patch's `tmp_a` and consumed before the next
-patch's, since equal-extent tiles share that scratch. Every rank in
-`solver.comm` must call this function.
-"""
-function molecular_mixing(solver::Solver, states::Vector{<:ConservedState};
+function _composite_molecular_mixing(solver::Solver, states;
                           dim::Int=1, species=(1, 2))
     a, b = species
     refresh_primitives!(solver, states)
@@ -766,8 +761,15 @@ communicators must call this function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, and
 overwrites `solver.tmp_a` as scratch.
+
+On a refined or patched solver the Favre
+means are the composite plane averages at the root's stations, and a finer
+patch's node reads the mean of the root station its plane coincides with.
+Each patch fills its `tmp_a` in turn. Every rank in `solver.comm` must call this
+function.
 """
 function tke_profile(solver::Solver, Q; dim::Int=1)
+    _composite(solver) && return _composite_tke_profile(solver, _patch_states(Q); dim)
     refresh_primitives!(solver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -797,16 +799,7 @@ function tke_profile(solver::Solver, Q; dim::Int=1)
     return plane_profile(solver, tmp, dim) ./ (2 .* ρbar)
 end
 
-"""
-    tke_profile(solver, states::Vector; dim=1) -> Vector{Float64}
-
-The composite form, `states` aligned with `solver.patches`: the Favre
-means are the composite plane averages at the root's stations, and a finer
-patch's node reads the mean of the root station its plane coincides with.
-Each patch fills its `tmp_a` in turn. Every rank in `solver.comm` must call this
-function.
-"""
-function tke_profile(solver::Solver, states::Vector{<:ConservedState}; dim::Int=1)
+function _composite_tke_profile(solver::Solver, states; dim::Int=1)
     refresh_primitives!(solver, states)
     ρbar = _composite_profile((ps, i) -> ps.rho, solver, dim)
     favre = ntuple(3) do c
@@ -854,7 +847,8 @@ end
 Average of [`tke_profile`](@ref) along `dim` weighted by `profile_spacing`, so
 one number for the whole layer. Every rank participating in `tke_profile` must
 call this function. It inherits that function's primitive refresh and use of
-`solver.tmp_a` as scratch. With a state vector it is the composite form.
+`solver.tmp_a` as scratch. On a refined or patched solver it is the composite
+form.
 """
 function turbulent_kinetic_energy(solver::Solver, Q; dim::Int=1)
     k = tke_profile(solver, Q; dim=dim)
@@ -879,8 +873,22 @@ scratch fields, and the integrand is then accumulated into `solver.tmp_b`;
 coefficient arrays are restored to the values the integrator left, so calling
 this between steps does not change the next timestep or a regrid decision.
 Every rank in `solver.comm` must call this function.
+
+On a refined or patched solver each held patch
+takes its gradient and artificial passes in turn (its shared scratch is
+consumed before the next patch's), the integrand is accumulated under the
+covered masks, and both integrals reduce once over `solver.comm`. The
+gradients read each patch's ghost and shell nodes, so the state must be as
+`run!` leaves it after a step, shells imposed and shared planes exchanged
+([`sync_patches!`](@ref), [`sync_levels!`](@ref)); a state that has only been
+initialized needs those first. Every patch's artificial coefficient arrays are
+restored to the values the integrator left. On a refined level of several
+tiles μ\\* and β\\* are those the level's right-hand side computes over the
+whole level, which differ from a tile's own within a few nodes of a face
+shared with another tile.
 """
 function dissipation_rate(solver::Solver, Q)
+    _composite(solver) && return _composite_dissipation_rate(solver, _patch_states(Q))
     _validate_transport_state!(solver, Q)
     red = preserving_artificial(solver) do
         compute_primitives_and_gradients!(solver, Q)
@@ -915,23 +923,7 @@ function dissipation_rate(solver::Solver, Q)
     return red[1] / red[2]
 end
 
-"""
-    dissipation_rate(solver, states::Vector) -> Float64
-
-The composite form, `states` aligned with `solver.patches`: each held patch
-takes its gradient and artificial passes in turn (its shared scratch is
-consumed before the next patch's), the integrand is accumulated under the
-covered masks, and both integrals reduce once over `solver.comm`. The
-gradients read each patch's ghost and shell nodes, so the state must be as
-`run!` leaves it after a step, shells imposed and shared planes exchanged
-([`sync_patches!`](@ref), [`sync_levels!`](@ref)); a state that has only been
-initialized needs those first. Every patch's artificial coefficient arrays are
-restored to the values the integrator left. On a refined level of several
-tiles μ\\* and β\\* are those the level's right-hand side computes over the
-whole level, which differ from a tile's own within a few nodes of a face
-shared with another tile.
-"""
-function dissipation_rate(solver::Solver, states::Vector{<:ConservedState})
+function _composite_dissipation_rate(solver::Solver, states)
     _validate_transport_state!(solver, states)
     acc = zeros(2)
     preserving_artificial(solver) do

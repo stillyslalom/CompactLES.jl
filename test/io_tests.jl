@@ -83,7 +83,7 @@ end
     # With the marker, the `.tmp` is the newer set's file, which the load
     # renames over the old one before it reads.
     s.step = 43
-    open(io -> CL._write_checkpoint(io, s, Q), stem * ".r0000.ckpt.tmp", "w")
+    open(io -> CL._write_checkpoint(io, s, Q, nothing), stem * ".r0000.ckpt.tmp", "w")
     write(CL._ckpt_marker(stem), "1")
     load_checkpoint!(s3, allocate_state(s3), stem)
     @test s3.step == 43
@@ -190,17 +190,17 @@ end
         rspec = getfield(r, :regrid)
         @test r.step == 23 && r.t == t_save
         @test level_regions(r, 1) == regs
-        @test length(sr) == length(r.patches) == length(regs) + 1
+        @test length(sr.patches) == length(r.patches) == length(regs) + 1
         @test rspec.created == created
         @test rspec.checks == checks && rspec.last_step == last_step
         run!(r, sr; tfinal=1.0, nmax=130)
         @test r.t == s.t && r.step == s.step == 130
         @test level_regions(r, 1) == level_regions(s, 1)
         @test getfield(r, :regrid).created == spec.created
-        @test all(same(sr[i], states[i], s.patches[i].decomp)
-                  for i in eachindex(states))
+        @test all(same(sr.patches[i], states.patches[i], s.patches[i].decomp)
+                  for i in eachindex(states.patches))
         @test all(r.patches[i].beta_art == s.patches[i].beta_art
-                  for i in eachindex(states))
+                  for i in eachindex(states.patches))
     end
 
     # A file of one hierarchy refused by a solver of another: unrefined, a
@@ -239,7 +239,7 @@ end
     @test nlevels(q3) == 3 && q3.step == 5
     run!(q3, sq3; tfinal=1.0, nmax=10)
     @test q3.t == s3.t
-    @test all(same(sq3[i], st3[i], s3.patches[i].decomp) for i in eachindex(st3))
+    @test all(same(sq3.patches[i], st3.patches[i], s3.patches[i].decomp) for i in eachindex(st3.patches))
     wrong = mk3([r1, BlockRegion((3 * 40 + e1 ÷ 4 + 2, 0, 0), (e1 ÷ 2 - 4, 1, 1))])
     @test_throws "level 2 layout mismatch" load_checkpoint!(
         wrong, allocate_state(wrong), joinpath(dir, "three"))
@@ -284,9 +284,9 @@ end
         run!(r, sr; tfinal=1.0, nmax=40)
         @test r.t == s.t && level_regions(r, 1) == level_regions(s, 1)
         @test rows_ok(r)
-        @test all(eachindex(states)) do i
+        @test all(eachindex(states.patches)) do i
             inner = CL.interior(s.patches[i].decomp)
-            parent(sr[i])[inner, :] == parent(states[i])[inner, :]
+            parent(sr.patches[i])[inner, :] == parent(states.patches[i])[inner, :]
         end
     end
     rm(dir; recursive=true)
@@ -819,7 +819,6 @@ end
     @test maximum(maximum(abs, s[:rho] .- [wave(x, y) for x in s.coords[1],
                                            y in s.coords[2], z in s.coords[3]])
                   for s in snaps) < 1e-14
-    @test_throws ArgumentError field_snapshot(amr, states[1])
 
     # A curvilinear block keeps its metric coordinates, and the Cartesian
     # positions follow from them.

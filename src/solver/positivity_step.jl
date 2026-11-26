@@ -16,8 +16,7 @@
 # state. Only a state without a positive density or internal energy anywhere
 # gives no scale, and the run then proceeds unlimited with a warning, as the
 # failsafe does.
-_positivity_setup!(solver, Q) = false
-function _positivity_setup!(solver, Q::Union{ConservedState,Vector{<:ConservedState}})
+function _positivity_setup!(solver, Q::SimulationState)
     lim = getfield(solver, :positivity)
     lim === nothing && return false
     # The limiter is off by default, so its bounds and the limiter
@@ -27,12 +26,11 @@ function _positivity_setup!(solver, Q::Union{ConservedState,Vector{<:ConservedSt
     return _positivity_bounds!(lim, _cold(solver), Q)::Bool
 end
 
-_positivity_bounds!(lim::PositivityLimiter, solver, Q) =
-    _set_limiter_bounds!((lim,), solver, _limiter_minima(solver, Q))
-
-# The patches' minima, over every patch this rank holds, reduced once.
+# The patches' minima, over every patch this rank holds, reduced once. A
+# single-patch solver's one limiter is built with the solver and follows no
+# regrid.
 function _positivity_bounds!(pl::PatchLimiters, solver, states)
-    lims = _follow_patches!(solver, pl)
+    lims = _multipatch(solver) ? _follow_patches!(solver, pl) : pl.limiters
     ρmin = Inf
     emin = Inf
     for (ps, Q) in eachpatch(solver, states)
@@ -157,8 +155,7 @@ function positivity_counts(solver)
     lim = getfield(solver, :positivity)
     lim === nothing && throw(ArgumentError(
         "positivity_counts: the solver was built without positivity_limiter"))
-    local_counts = lim isa PositivityLimiter ? lim.counters.counts :
-                   foldl((s, l) -> s .+ l.counters.counts,
+    local_counts = foldl((s, l) -> s .+ l.counters.counts,
                          lim.limiters; init=copy(lim.retired))
     c = MPI.Allreduce(local_counts, +, solver.comm)
     return (stage_faces=c[1], stage_limited=c[2], filter_faces=c[3],
@@ -170,9 +167,8 @@ end
 # `step!` with the stage limiter between each stage's right-hand side and its
 # low-storage update; with no face limited it makes the calls of `step!` in
 # the same order and the same arithmetic.
-function _limited_run_step!(solver, Q, workspace, dt, prepared::Bool, control)
-    lim = getfield(solver, :positivity)
-    dQ, du = workspace.dQ, workspace.du
+function _limited_patch_step!(solver, Q, dQ, du, dt, prepared::Bool)
+    lim = only(getfield(solver, :positivity).limiters)
     ps = sole_patch(solver)
     decomp = ps.decomp
     for stage in 1:5
@@ -212,15 +208,19 @@ end
 # overwrites after the stage, is left alone as a Dirichlet node is. Returns a
 # `SolverFailure` where the subcycled schedule rejects a substep, and
 # `nothing` otherwise.
-function _limited_run_step!(solver, states::Vector{<:ConservedState}, workspace, dt,
+function _limited_run_step!(solver, state::SimulationState, workspace, dt,
                             prepared::Bool, control)
+    dQs, dus = workspace.dQ.patches, workspace.du.patches
+    _multipatch(solver) ||
+        return _limited_patch_step!(solver, sole_state(state), dQs[1], dus[1], dt,
+                                    prepared)
+    states = state.patches
     lims = _follow_patches!(solver, getfield(solver, :positivity))
     getfield(solver, :subcycle) &&
-        return _limited_subcycled_step!(solver, states, workspace, dt, prepared, control,
+        return _limited_subcycled_step!(solver, states, dQs, dus, dt, prepared, control,
                                         lims)
     patches = getfield(solver, :patches)
     levels = getfield(solver, :levels)
-    dQs, dus = workspace.dQ, workspace.du
     for stage in 1:5
         solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
@@ -257,9 +257,9 @@ end
 
 # `_subcycled_run_step!` with the stage limiter on every level's stages and the
 # filter limiter on every refined level's passes (`_advance_level!`).
-function _limited_subcycled_step!(solver, states, workspace, dt, prepared::Bool,
+function _limited_subcycled_step!(solver, states, dQs, dus, dt, prepared::Bool,
                                   control, lims)
-    status, guard = _subcycled_step_status!(solver, states, workspace.dQ, workspace.du,
+    status, guard = _subcycled_step_status!(solver, states, dQs, dus,
                                              dt, prepared, control, lims)
     status == 0 && return nothing
     status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
@@ -1441,8 +1441,6 @@ end
 # each directional pass; with no face limited the same passes and the same
 # arithmetic. A fold's face takes its limit from node 1 alone: the filter's
 # face flux there vanishes for an even field and not for an odd one.
-_limited_filter_state!(solver, Q::ConservedState) =
-    _limited_filter_pass!(getfield(solver, :positivity), sole_patch(solver), Q)
 
 # The multi-patch `filter_state!`, each patch's passes limited. The filter's
 # rows at a node two same-level patches share conserve, and the averaging that
@@ -1451,7 +1449,11 @@ _limited_filter_state!(solver, Q::ConservedState) =
 # patch's node at a coarse-fine face, where the filter's row is the identity.
 # A subcycled refined level filters inside `_advance_level!`
 # (`_limited_level_filter!`).
-function _limited_filter_state!(solver, states::Vector{<:ConservedState})
+function _limited_filter_state!(solver, state::SimulationState)
+    _multipatch(solver) ||
+        return _limited_filter_pass!(only(getfield(solver, :positivity).limiters),
+                                     sole_patch(solver), sole_state(state))
+    states = state.patches
     lims = _follow_patches!(solver, getfield(solver, :positivity))
     subcycle = getfield(solver, :subcycle)
     for lev in getfield(solver, :levels)

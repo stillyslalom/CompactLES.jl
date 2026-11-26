@@ -663,12 +663,24 @@ Callback schedules and a [`FieldWriter`](@ref)'s frame index are the caller's
 responsibility: both live outside the solver, and nothing here records or
 restores them. Give a restarted writer a `start_index` to continue the frame
 sequence without overwriting it.
+
+On a refined hierarchy the root's block is followed by the hierarchy record
+(the tile layout and stored ownership of every refined level, and the regrid
+state: the last check's step, the check count, each tile's creation check and
+the rebalance streak) and by this rank's block of every tile it holds, each
+with the tile's level and index. The file is per rank, so
+[`load_checkpoint!`](@ref) restores it onto the rank count that wrote it and,
+with the stored ownership, onto the same decompositions;
+[`save_checkpoint_hdf5`](@ref) is the rank-count-independent form. A
+same-level `patch_grid` layout has no checkpoint.
 """
-function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
-    _multipatch(solver) &&
-        error("save_checkpoint: this solver holds a patch layout; pass the state " *
-              "vector allocate_state returned")
-    _commit_checkpoint(io -> _write_checkpoint(io, solver, Q), prefix, solver.comm)
+function save_checkpoint(solver::Solver, Q::SimulationState, prefix::AbstractString)
+    rec = nothing
+    if _multipatch(solver)
+        _check_hierarchy_layout(solver, "save_checkpoint")
+        rec = hierarchy_record(solver)
+    end
+    _commit_checkpoint(io -> _write_checkpoint(io, solver, Q, rec), prefix, solver.comm)
     return prefix
 end
 
@@ -766,42 +778,18 @@ end
 
 # This rank's checkpoint image, onto any stream: the file of `save_checkpoint`,
 # or the buffer through which a phase change carries the run (phases.jl).
-function _write_checkpoint(io, solver::Solver, Q)
-    root = sole_patch(solver)
-    _write_ckpt_header(io, solver, root, Q)
-    _write_ckpt_block(io, root, Q)
-    return io
-end
-
-"""
-    save_checkpoint(solver, states::Vector, prefix)
-
-The refined-hierarchy form: the root's block as above, then the hierarchy
-record (the tile layout and stored ownership of every refined level, and
-the regrid state: the last check's step, the check count, each tile's
-creation check and the rebalance streak), then this rank's block of every
-tile it holds, each with the tile's level and index. The set is committed
-as above. The file is per rank, so [`load_checkpoint!`](@ref) restores it
-onto the rank count that wrote it and, with the stored ownership, onto the
-same decompositions; [`save_checkpoint_hdf5`](@ref) is the
-rank-count-independent form. A same-level `patch_grid` layout has no
-checkpoint.
-"""
-function save_checkpoint(solver::Solver, states::Vector{<:ConservedState},
-                         prefix::AbstractString)
-    _check_hierarchy_layout(solver, "save_checkpoint")
-    rec = hierarchy_record(solver)
-    _commit_checkpoint(io -> _write_checkpoint(io, solver, states, rec), prefix,
-                       solver.comm)
-    return prefix
-end
-
-# `rec` is `hierarchy_record(solver)`, formed by the caller: it is collective.
-function _write_checkpoint(io, solver::Solver, states::Vector{<:ConservedState}, rec)
+# This rank's checkpoint image, onto any stream: the file of `save_checkpoint`,
+# or the buffer through which a phase change carries the run (phases.jl).
+# `rec` is `hierarchy_record(solver)`, formed by the caller since it is
+# collective, or `nothing` for a single-patch solver, whose image ends with
+# the root's block.
+function _write_checkpoint(io, solver::Solver, Q, rec)
+    states = _patch_states(Q)
     patches = getfield(solver, :patches)
     root = PatchSolver(solver, patches[1])
     _write_ckpt_header(io, solver, root, states[1])
     _write_ckpt_block(io, root, states[1])
+    rec === nothing && return io
     ints, floats = _record_image(rec)
     write(io, Int64(length(ints)))
     write(io, ints)
@@ -913,14 +901,32 @@ restart the header was extended to refuse.
 
 [`load_checkpoint_hdf5!`](@ref) is the decomposition-independent alternative,
 and checks the same fields.
+
+A file written from a refined hierarchy records the rank count that wrote it,
+which must be this run's. After the root's block and header checks, the
+hierarchy is brought to the recorded one through `restore_hierarchy!`: level 1
+is rebuilt from the recorded tile layout with the recorded ownership when it
+differs from the solver's, so the solver may be built with any initial
+`refine` region, and `Q.patches` is resized in place to match
+`solver.patches` (build a [`Workspace`](@ref) after this call, not before).
+The `RegridSpec` takes the recorded regrid state. Every tile block is then
+read into the patch that holds it, the refined tiles' ghost rings are rebuilt
+from the loaded interiors, and the primitives of every patch are refreshed.
+The tile edge must be the recorded one. A regridded hierarchy of more than two
+levels rebuilds every level from the record; a static one must have been built
+with the recorded regions.
 """
-function load_checkpoint!(solver::Solver, Q, prefix::AbstractString; allow=())
-    _multipatch(solver) &&
-        error("load_checkpoint!: this solver holds a patch layout; pass the state " *
-              "vector allocate_state returned")
+function load_checkpoint!(solver::Solver, Q::SimulationState, prefix::AbstractString;
+                          allow=())
+    _multipatch(solver) && _check_hierarchy_layout(solver, "load_checkpoint!")
     _finish_commit!(prefix, solver.comm)
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(io -> _read_checkpoint!(io, solver, Q, path, allow), path, "r")
+    # A block is a patch's interior. The ghost rings of the refined tiles are
+    # rebuilt here as the post-step synchronization left them, since the
+    # first regrid check after the load tags on those rings, before the step
+    # refreshes them; left unfilled they move the tagged tiles.
+    _presync!(solver, Q, false)
     refresh_primitives!(solver, Q)
     return Q
 end
@@ -928,56 +934,15 @@ end
 # The reverse of `_write_checkpoint`. `phase` marks the buffer of a phase
 # change (phases.jl), whose differences in the allowed groups are its purpose
 # and are not reported, and whose boundary conditions are its own.
-function _read_checkpoint!(io, solver::Solver, Q, source::AbstractString, allow;
+function _read_checkpoint!(io, solver::Solver, Q, path::AbstractString, allow;
                            phase::Bool=false)
-    root = sole_patch(solver)
-    _read_ckpt_header!(io, solver, root, Q, source, allow, phase)
-    _read_ckpt_block!(io, root, Q, source, phase)
-    return Q
-end
-
-"""
-    load_checkpoint!(solver, states::Vector, prefix; allow = ())
-
-The refined-hierarchy form of the restore, for a file
-[`save_checkpoint`](@ref) wrote from a state vector. The file is per rank
-and records the rank count that wrote it, which must be this run's. After
-the root's block and header checks, the hierarchy is brought to the
-recorded one through `restore_hierarchy!`: level 1 is rebuilt from the
-recorded tile layout with the recorded ownership when it differs from the
-solver's, so the solver may be built with any initial `refine` region, and
-`states` is resized in place to match `solver.patches` (build a
-[`Workspace`](@ref) after this call, not before). The `RegridSpec` takes the
-recorded regrid state. Every tile block is then read into the patch that
-holds it, the refined tiles' ghost rings are rebuilt from the loaded
-interiors, and the primitives of every patch are refreshed. Collective.
-
-The tile edge must be the recorded one. A regridded hierarchy of more than
-two levels rebuilds every level from the record; a static one must have been
-built with the recorded regions.
-"""
-function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
-                          prefix::AbstractString; allow=())
-    _check_hierarchy_layout(solver, "load_checkpoint!")
-    _finish_commit!(prefix, solver.comm)
-    path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
-    open(io -> _read_checkpoint!(io, solver, states, path, allow), path, "r")
-    # A block is a patch's interior. The ghost rings of the refined tiles are
-    # rebuilt here as the post-step synchronization left them, since the
-    # first regrid check after the load tags on those rings, before the step
-    # refreshes them; left unfilled they move the tagged tiles.
-    _presync!(solver, states, false)
-    refresh_primitives!(solver, states)
-    return states
-end
-
-function _read_checkpoint!(io, solver::Solver, states::Vector{<:ConservedState},
-                           path::AbstractString, allow; phase::Bool=false)
+    states = _patch_states(Q)
     patches = getfield(solver, :patches)
     np = MPI.Comm_size(solver.comm)
     root = PatchSolver(solver, patches[1])
     _read_ckpt_header!(io, solver, root, states[1], path, allow, phase)
     _read_ckpt_block!(io, root, states[1], path, phase)
+    _multipatch(solver) || return Q
     ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
     floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
     rec = _record_from_image(ints, floats)
@@ -1004,7 +969,7 @@ function _read_checkpoint!(io, solver::Solver, states::Vector{<:ConservedState},
                   "$path is not this rank's")
         _read_ckpt_block!(io, ps, states[li], path, phase)
     end
-    return states
+    return Q
 end
 
 # The header checks, each against the root patch `root`, then the mutable run
@@ -2210,10 +2175,9 @@ function _vtk_ghost_points(ps::PatchSolver, ranges)
 end
 
 """
-    save_vtk(solver, states::Vector, prefix; fields, stride, slice)
+    save_vtk(solver, Q, prefix; fields, stride, slice)
 
-The patch-layout form, for the state vector [`allocate_state`](@ref)
-returns from a refined (or patch-partitioned) solver: one `.vtr` piece per
+The output of a refined (or patch-partitioned) solver: one `.vtr` piece per
 patch this rank holds, `prefix.L<level>.T<tile>.r<rank>.vtr`, listed by
 rank 0 under the multiblock index `prefix.vtm`, one block per level. Open
 the `.vtm`. A coarse node a child level covers entirely is blanked through
@@ -2236,9 +2200,13 @@ is the root's divided by 3^`level` along every resolved dimension. A piece's
 rank's piece of that patch; the `.vtm`, an index over several grids, carries
 none.
 """
-function save_vtk(solver::Solver, states::Vector{<:ConservedState},
+function save_vtk(solver::Solver, state::SimulationState,
                   prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
                   slice=nothing)
+    _multipatch(solver) ||
+        return save_vtk(sole_patch(solver), sole_state(state), prefix; fields, stride,
+                        slice)
+    states = state.patches
     st = _normalize_stride(stride)
     if slice !== nothing
         sd, sg = Int(slice[1]), Int(slice[2])
@@ -2406,7 +2374,7 @@ record of the times of the earlier ones.
 XDMF temporal collection with every frame's grid written inline. Open the
 collection in ParaView or VisIt. It is replaced in one rename after each frame,
 so an interrupted run leaves the collection of its last completed frame. This
-format requires `using HDF5` and does not take a refined solver's state vector.
+format requires `using HDF5` and does not take a refined solver.
 """
 mutable struct FieldWriter{F,S}
     prefix::String
