@@ -174,7 +174,7 @@ function test_positivity_limiter()
         worst = 0.0
         for (ps, q) in CL.eachpatch(s, Q)
             pref = getfield(tref, :patches)[ps.patch.id]
-            qref = Qtref[ps.patch.id]
+            qref = Qtref.patches[ps.patch.id]
             off = ps.decomp.offset
             for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
                 k in 1:s.equations.n_cons
@@ -184,7 +184,7 @@ function test_positivity_limiter()
                 worst = max(worst, abs(a - b))
             end
         end
-        scale = maximum(q -> maximum(abs, parent(q)), Qtref)
+        scale = maximum(q -> maximum(abs, parent(q)), Qtref.patches)
         tag = "patches, :$flux"
         # The limited blast amplifies round-off under either flux once the
         # limiter acts: on one rank, one unit in the last place of one node's
@@ -265,8 +265,9 @@ function test_positivity_limiter()
     for flux in (:closure, :ghost)
         s1, Q1 = patched2(CPUBackend(), flux)
         s2, Q2 = staged(() -> patched2(DeviceBackend(cpu), flux))
-        worst = isempty(Q1) ? 0.0 :
-                maximum(maximum(abs.(parent(Q1[i]) .- parent(Q2[i]))) for i in eachindex(Q1))
+        worst = isempty(Q1.patches) ? 0.0 :
+                maximum(maximum(abs.(parent(Q1.patches[i]) .- parent(Q2.patches[i])))
+                        for i in eachindex(Q1.patches))
         check("device patches, :$flux: bitwise against the host", gmax(worst), 1e-300)
         check("device patches, :$flux: counts and steps agree",
               CL.positivity_counts(s1) == CL.positivity_counts(s2) && s1.step == s2.step ?
@@ -315,11 +316,11 @@ function test_positivity_limiter()
             for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
                 n in 1:s.equations.n_cons
                 a = q[padded_index(ps, i, j, 1), n]
-                b = Qrref[k][padded_index(pr, i + off[1], j + off[2], 1), n]
+                b = Qrref.patches[k][padded_index(pr, i + off[1], j + off[2], 1), n]
                 worst = max(worst, abs(a - b))
             end
         end
-        scale = maximum(q -> maximum(abs, parent(q)), Qrref)
+        scale = maximum(q -> maximum(abs, parent(q)), Qrref.patches)
         tag = (sub ? "subcycled tiles" : "tiles") * ", :$flux"
         check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
         check("$tag: clock against one rank", abs(s.t - rref.t) / rref.t, 1e-8)
@@ -378,11 +379,11 @@ function test_positivity_limiter()
             n = ps.decomp.n_local
             for kk in 1:n[3], i in 1:n[1], m in 1:s.equations.n_cons
                 a = q[padded_index(ps, i, 1, kk), m]
-                b = Qzref[k][padded_index(pr, i + off[1], 1, kk + off[3]), m]
+                b = Qzref.patches[k][padded_index(pr, i + off[1], 1, kk + off[3]), m]
                 worst = max(worst, abs(a - b))
             end
         end
-        scale = maximum(q -> maximum(abs, parent(q)), Qzref)
+        scale = maximum(q -> maximum(abs, parent(q)), Qzref.patches)
         tag = (sub ? "subcycled r-z tiles" : "r-z tiles") * ", :$flux"
         check("$tag: state against one rank (relative)", gmax(worst) / scale, 1e-8)
         check("$tag: clock against one rank", abs(s.t - zref.t) / zref.t, 1e-8)
@@ -432,11 +433,11 @@ function test_positivity_limiter()
         for j in 1:ps.decomp.n_local[2], i in 1:ps.decomp.n_local[1],
             n in 1:s.equations.n_cons
             a = q[padded_index(ps, i, j, 1), n]
-            b = Qbref[k][padded_index(pr, i + off[1], j + off[2], 1), n]
+            b = Qbref.patches[k][padded_index(pr, i + off[1], j + off[2], 1), n]
             worst = max(worst, abs(a - b))
         end
     end
-    scale = maximum(q -> maximum(abs, parent(q)), Qbref)
+    scale = maximum(q -> maximum(abs, parent(q)), Qbref.patches)
     check("decomposed box: state against one rank (relative)", gmax(worst) / scale, 1e-8)
     check("decomposed box: clock against one rank", abs(s.t - bref.t) / bref.t, 1e-8)
 end

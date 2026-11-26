@@ -480,11 +480,11 @@ function test_offrank_folds()
         end
         ncons = s.equations.n_cons
         check("RHS with the detector through the axis, $label",
-              detector_diff(s, ref, states.patches[1][2], states.patches[2][2], ncons), 1e-10)
-        run!(s, states.patches[1][1]; tfinal=1e9, nmax=3)
-        run!(ref, states.patches[2][1]; tfinal=1e9, nmax=3)
+              detector_diff(s, ref, states[1][2], states[2][2], ncons), 1e-10)
+        run!(s, states[1][1]; tfinal=1e9, nmax=3)
+        run!(ref, states[2][1]; tfinal=1e9, nmax=3)
         check("three steps through the axis, $label",
-              detector_diff(s, ref, states.patches[1][1], states.patches[2][1], ncons), 1e-10)
+              detector_diff(s, ref, states[1][1], states[2][1], ncons), 1e-10)
     end
 end
 
@@ -1720,7 +1720,7 @@ function test_wall_limit()
     # The newer set at step 6, committed by hand and interrupted after the
     # even ranks' renames: the odd ranks still hold step 3 beside a `.tmp`.
     path = CL._ckpt_name(stem, rank)
-    open(io -> CL._write_checkpoint(io, s, Q), path * ".tmp", "w")
+    open(io -> CL._write_checkpoint(io, s, Q, nothing), path * ".tmp", "w")
     MPI.Barrier(comm)
     rank == 0 && write(CL._ckpt_marker(stem), string(np))
     MPI.Barrier(comm)
@@ -2576,7 +2576,7 @@ function test_seam_levels()
     check("seam levels, rebalanced tiles: migrated state equals the carry bitwise",
           gsum(audit.mismatches), 0.5)
     check("seam levels, rebalanced tiles: the state stays finite",
-          gmax(any(Q -> !all(isfinite, parent(Q)), q)), 0.5)
+          gmax(any(Q -> !all(isfinite, parent(Q)), q.patches)), 0.5)
 end
 
 # ---------------------------------------------------------------------------
@@ -4533,7 +4533,7 @@ function test_mode_truncation()
             Qs
         end
         check("three truncated steps match serial, $label",
-              blockdiff(s, states.patches[1], ref, states.patches[2]), 1e-12)
+              blockdiff(s, states[1], ref, states[2]), 1e-12)
         check("simulation time matches serial, $label",
               gmax(abs(s.t - ref.t) / ref.t), 1e-12)
     end

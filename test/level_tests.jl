@@ -3568,7 +3568,7 @@ const AXIS_FILTER_TOL = 2e-5
         nl = pp.decomp.n_local
         for c in 1:5, k in 1:nl[3], ii in 1:nl[1]
             I = padded_index(pp, ii, 1, k)
-            drift = max(drift, abs(rq[i][I, c] - q0[i][I, c]))
+            drift = max(drift, abs(rq.patches[i][I, c] - q0[i][I, c]))
         end
     end
     @test rest.step == 10

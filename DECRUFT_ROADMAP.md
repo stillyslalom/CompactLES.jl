@@ -31,10 +31,9 @@ Further rulings made during execution:
   `REFLUX` is `PatchInterfaces(conservative = true)`;
   `LIMITED_GHOST_INTERFACES` is `PatchInterfaces(limited_ghost = false)`,
   documented with its rank-dependence caveat.
-- **Phase 2C deferred to Phase 6.** `BUDGET_LEDGER` stays a global until the
-  step drivers are merged; the observer parameter then goes onto the one
-  merged driver. The ledger keeps its per-stage attribution and its
-  boundary-flux closure: the hooks are not coarsened to phase boundaries.
+- **Phase 2C done with Phase 6.** The observer parameter is on the merged
+  driver. The ledger keeps its per-stage attribution and its boundary-flux
+  closure: the hooks are not coarsened to phase boundaries.
 - **`test/flat_solver.jl`, a proposed exception to D3 awaiting the
   maintainer's confirmation.** The suites' flat keyword adapter stays, in
   `test/` only: the tests, the test image and the benchmark scripts include
@@ -61,14 +60,15 @@ Further rulings made during execution:
 | 1 | Done. |
 | 2A | Done: settled toggles deleted, three promoted, the rest gathered in `src/instrumentation.jl` with `with_knob`. About thirty direct assignments to a knob remain in the tests where the surrounding code was irregular. |
 | 2B | Done: `RegridSpec.whole_sensors` replaced by a trailing `mask_child` argument. |
-| 2C | Deferred to Phase 6. |
+| 2C | Done in Phase 6. |
 | Checkpoint 1 | Reviewed; the Phase 2 end gate passed at `891a7ee`. |
 | 3 | Done: the four large files split, `RefluxCapture` and the regrid records moved ahead of their users, `src/` grouped into `core`, `physics`, `amr`, `solver` and `io`. The phase gate passed at `31e4b8b`. |
 | 4 | Done: `RegridSpec` reads the schemes from the solver, the root's slab records live in its `Level`, the flat `Solver(; ...)` constructor is removed and `_Solver` runs as named phases over a `SolverBuild` record. The flat keyword vocabulary survives only in `test/flat_solver.jl`, an adapter for the suites, and the test configurations precompile under the `precompile_tests` preference. The phase gate passed at `517267c`. |
 | Checkpoint 2 | Reviewed together with Phase 5; the review's corrections are Phase 5B. |
 | 5 | Done: the compute path takes a `PatchSolver` alone, built by `sole_patch` at the entry points, and `SolverLike` is removed. `Patch` holds `PatchPlans` and `PatchAMR`; `Solver` holds `GridGeometry`, `ClockState` and `WallAccounting`; the limiter holds four groups and leases the workspace scratch it borrows. The phase gate passed at `f2b754f`. Departures from the text: `PatchAMR` is always present, so a configuration keeps one patch type; `positivity` is `Union{Nothing,LimiterState}`, with the single-patch `PatchLimiters` left to Phase 6; the forwarding `getproperty` methods remain. The precompile cost did not fall, and no workload entry or `_cold` barrier was removed. |
 | 5B | The review's four corrections. `SolverBuild` is replaced by the immutable records `BuildInputs`, `GeometrySetup`, `LayoutSetup` and `RootSetup`, and the validation phase is split. `Patch` and `PositivityLimiter` carry no property forwarding: their groups are read explicitly, a `PatchSolver` refuses a grouped name, and the single-patch `Solver` alone keeps flat names. The test suites' precompile workload is the package `test/TestPrecompile`, and nothing under `src/` refers to `test/`. Full gate at `2467ce2`. |
-| 6 to 9 | Not started. |
+| 6 | `allocate_state` and `setup` return a `SimulationState` on every layout, with array access forwarded to the sole patch; a composite solver's patch vector has the abstract element type, so the layout is a constant of the solver's type and `allocate_state` has no inference barrier. Each routine that had a state method and a state-vector method has one. `Solver.positivity` is `Union{Nothing,PatchLimiters}` and `LimiterState` is removed. The five step drivers are one stage loop, `_rk_stages!`, over a unit and a `StandardStepPolicy` or `LimitedStepPolicy`. The budget ledger is the `observer` argument of `run!`, with its per-stage hooks kept. Departures from the text: the composite drivers below the entry points keep the per-patch vectors, and a diagnostic of a field still takes one array or a vector of them. |
+| 7 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
 parallel HDF5 against a system MPI, and the Makie suite has not been run.
