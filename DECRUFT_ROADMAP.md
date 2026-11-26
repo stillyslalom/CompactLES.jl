@@ -34,17 +34,11 @@ Further rulings made during execution:
 - **Phase 2C done with Phase 6.** The observer parameter is on the merged
   driver. The ledger keeps its per-stage attribution and its boundary-flux
   closure: the hooks are not coarsened to phase boundaries.
-- **`test/flat_solver.jl` is retired in Phase 7, as a fourth item.** D3
-  takes no exception for the suites' flat keyword adapter. The benchmark
-  scripts move to `setup` first, then the test files one at a time, with
-  `test/convergence.jl`, `test/smooth_cases.jl` and
-  `test/precompile_workload.jl` last; a test that needs a solver without a
-  state builds it with `_build_solver`. The adapter and the `extent`
-  keyword of `_Solver` are deleted together. An extent recovered from
-  endpoints with a nonzero origin can differ from the given one in the last
-  place, so convergence is compared after each of those files, and a moved
-  digit is either removed by endpoints that subtract exactly or re-recorded
-  with the reason.
+- **`test/flat_solver.jl` retired in Phase 7, as a fourth item.** D3 takes no
+  exception for the suites' flat keyword adapter. The suites, the benchmark
+  scripts and the probes build their solvers from `Problem` and `Numerics`
+  through `test/build_solver.jl`, which builds without a state; the adapter
+  and the `extent` keyword of `_Solver` are deleted.
 - **CLAUDE.md's vocabulary.** No internal name is added to its Naming
   section before Phase 9, which removes the section.
 - **Gate cadence.** The full gate runs once per phase, at its boundary.
@@ -73,7 +67,8 @@ Further rulings made during execution:
 | 5 | Done: the compute path takes a `PatchSolver` alone, built by `sole_patch` at the entry points, and `SolverLike` is removed. `Patch` holds `PatchPlans` and `PatchAMR`; `Solver` holds `GridGeometry`, `ClockState` and `WallAccounting`; the limiter holds four groups and leases the workspace scratch it borrows. The phase gate passed at `f2b754f`. Departures from the text: `PatchAMR` is always present, so a configuration keeps one patch type; `positivity` is `Union{Nothing,LimiterState}`, with the single-patch `PatchLimiters` left to Phase 6; the forwarding `getproperty` methods remain. The precompile cost did not fall, and no workload entry or `_cold` barrier was removed. |
 | 5B | The review's four corrections. `SolverBuild` is replaced by the immutable records `BuildInputs`, `GeometrySetup`, `LayoutSetup` and `RootSetup`, and the validation phase is split. `Patch` and `PositivityLimiter` carry no property forwarding: their groups are read explicitly, a `PatchSolver` refuses a grouped name, and the single-patch `Solver` alone keeps flat names. The test suites' precompile workload is the package `test/TestPrecompile`, and nothing under `src/` refers to `test/`. Full gate at `2467ce2`. |
 | 6 | `allocate_state` and `setup` return a `SimulationState` on every layout, with array access forwarded to the sole patch; a composite solver's patch vector has the abstract element type, so the layout is a constant of the solver's type and `allocate_state` has no inference barrier. Each routine that had a state method and a state-vector method has one. `Solver.positivity` is `Union{Nothing,PatchLimiters}` and `LimiterState` is removed. The five step drivers are one stage loop, `_rk_stages!`, over a unit and a `StandardStepPolicy` or `LimitedStepPolicy`. The budget ledger is the `observer` argument of `run!`, with its per-stage hooks kept. Departures from the text: the composite drivers below the entry points keep the per-patch vectors, and a diagnostic of a field still takes one array or a vector of them. The phase gate passed at `886c50a`. The precompile time did not change, and no workload entry or `_cold` barrier was removed: each remaining barrier guards a run-time setting or a tile of abstract type, neither of which this phase changed. |
-| 7 to 9 | Not started. |
+| 7 | The artificial coefficients of one patch and of a tiled level run through the same stages, differing only in the exchanges between them and in where the sensors wait. The per-rank and the HDF5 checkpoint encode one `CheckpointHeader`, checked by `_verify_header`, and the VTK and HDF5 field writers share `_field_frame`. The host staging of device storage is one section of `core/halo.jl`. `test/flat_solver.jl` is retired. Departures from the text: the branches choosing a host loop or a device kernel stay, since each is two implementations rather than a duplicated check; the benchmark scripts and probes build through `build_solver`, not `setup`; and one error magnitude of `test/convergence.jl` moves in its fourth digit, a domain with an origin now recovering its extent from the endpoints. |
+| 8 to 9 | Not started. |
 
 Known gaps in coverage from the working environment: no hardware GPU, no
 parallel HDF5 against a system MPI, and the Makie suite has not been run.
