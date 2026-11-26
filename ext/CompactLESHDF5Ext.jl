@@ -6,14 +6,14 @@ module CompactLESHDF5Ext
 
 using CompactLES
 using CompactLES: BlockRegion, Decomp, PatchSolver, Solver, owned_region, region_ranges
-using CompactLES: axis_matches, global_axis, type_name
+using CompactLES: CheckpointHeader, checkpoint_header, _verify_header, _apply_run_state!
+using CompactLES: sole_patch
 using CompactLES: ensure_output_dir
 using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
-using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
+using CompactLES: refresh_primitives!
 using CompactLES: HierarchyRecord, LevelRecord, hierarchy_record, restore_hierarchy!
-using CompactLES: ConfigurationRecord, configuration_record, configuration_digests
-using CompactLES: _verify_configuration, xcoord, ConservedState, SimulationState,
-                  sole_state
+using CompactLES: ConfigurationRecord, configuration_digests
+using CompactLES: ConservedState, SimulationState, sole_state
 using MPI
 using HDF5
 
@@ -225,9 +225,9 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
 # `load_checkpoint_hdf5!` checks all of it.
 #
 # The reasoning for each field is at the top of `src/io/io.jl`, whose per-rank
-# checkpoint records the same set for the same reasons, and `type_name`,
-# `global_axis` and `axis_matches` are taken from there, not restated here, so
-# that the two paths cannot drift apart.
+# checkpoint records the same set for the same reasons. Both files encode one
+# `CheckpointHeader`, gathered by `checkpoint_header` and checked by
+# `_verify_header`, so that the two paths cannot drift apart.
 
 function CompactLES.save_checkpoint_hdf5(solver::Solver, state::SimulationState,
                                          prefix::AbstractString)
@@ -239,7 +239,8 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, state::SimulationState,
     path = string(prefix, ".h5")
     ensure_output_dir(prefix, comm)
     with_shared_file(string(path, ".tmp"), "w", comm) do file
-        (has_parallel() || rank == 0) && _write_ckpt_meta!(file, solver, solver, Q, rank)
+        (has_parallel() || rank == 0) &&
+            _write_ckpt_meta!(file, solver, sole_patch(solver), Q, rank)
         _write_state!(file, "state", solver, Q, solver.decomp.n_global, comm,
                       solver.equations.n_cons, n_art_fields(solver), eltype(Q))
     end
@@ -296,37 +297,37 @@ function _save_hierarchy_hdf5(solver::Solver, states, prefix::AbstractString)
     return prefix
 end
 
-# The header, describing the root patch `root`'s state (the solver itself
-# when it holds one patch) and the mutable run state; the reasoning per field
-# is at the top of src/io/io.jl.
+# The header (`CheckpointHeader`, src/io/io.jl) as named datasets: the
+# per-rank file's fields but the decomposition, and the coefficient field
+# count, which the blocks of every patch share; the reasoning per field is at
+# the top of src/io/io.jl.
 function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
-    decomp = root.decomp
+    h = checkpoint_header(solver, root, Q; block=false, n_art=true)
     g = create_group(file, "meta")
     write_meta!(g, "format", CKPT_FORMAT, rank)
-    write_meta!(g, "t", Float64(solver.t), rank)
-    write_meta!(g, "step", Int64(solver.step), rank)
-    write_meta!(g, "n_global", Int64[decomp.n_global...], rank)
-    write_meta!(g, "n_cons", Int64(solver.equations.n_cons), rank)
-    write_meta!(g, "n_species", Int64(solver.equations.n_species), rank)
-    write_meta!(g, "n_levels", Int64(nlevels(solver)), rank)
-    write_meta!(g, "n_art", Int64(n_art_fields(root)), rank)
-    write_strings!(g, "component_names", solver.equations.component_names, rank)
-    write_strings!(g, "metric", [type_name(solver.metric)], rank)
-    write_strings!(g, "eos", [type_name(solver.eos)], rank)
-    write_strings!(g, "eltype", [string(eltype(Q))], rank)
+    write_meta!(g, "t", h.t, rank)
+    write_meta!(g, "step", Int64(h.step), rank)
+    write_meta!(g, "n_global", Int64[h.n_global...], rank)
+    write_meta!(g, "n_cons", Int64(h.n_cons), rank)
+    write_meta!(g, "n_species", Int64(h.n_species), rank)
+    write_meta!(g, "n_levels", Int64(h.n_levels), rank)
+    write_meta!(g, "n_art", Int64(h.n_art), rank)
+    write_strings!(g, "component_names", h.component_names, rank)
+    write_strings!(g, "metric", [h.metric], rank)
+    write_strings!(g, "eos", [h.eos], rank)
+    write_strings!(g, "eltype", [h.eltype], rank)
     # The mutable run state, for the reasons src/io/io.jl gives: a retry
     # lowers `cfl`, and the growth cap and `filter_weight` read `dt_prev`
     # and `rate_prev`.
-    write_meta!(g, "cfl", Float64(solver.cfl), rank)
-    write_meta!(g, "dt_prev", Float64(solver.dt_prev), rank)
-    write_meta!(g, "rate_prev", Float64(solver.rate_prev), rank)
-    write_meta!(g, "filter_rate_prev", collect(Float64, solver.filter_rate_prev),
-                rank)
+    write_meta!(g, "cfl", h.cfl, rank)
+    write_meta!(g, "dt_prev", h.dt_prev, rank)
+    write_meta!(g, "rate_prev", h.rate_prev, rank)
+    write_meta!(g, "filter_rate_prev", Float64[h.filter_rate_prev...], rank)
     cg = create_group(file, "grid")
     for d in 1:3
-        write_meta!(cg, "xyz"[d:d], global_axis(root, d), rank)
+        write_meta!(cg, "xyz"[d:d], h.axes[d], rank)
     end
-    _write_configuration!(file, configuration_record(solver), rank)
+    _write_configuration!(file, h.configuration, rank)
     return file
 end
 
@@ -463,7 +464,7 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, state::SimulationState
     # Read is not a write, so every rank may open the file at once even without
     # a parallel build.
     h5open(path, "r") do file
-        n_art = _read_ckpt_meta!(file, solver, solver, Q, path, allow)
+        n_art = _read_ckpt_meta!(file, solver, sole_patch(solver), Q, path, allow)
         _read_state!(file, "state", solver, Q, n_art)
     end
     refresh_primitives!(solver, Q)
@@ -494,65 +495,29 @@ function _load_hierarchy_hdf5!(solver::Solver, states, prefix::AbstractString, a
     return states
 end
 
-# The header checks against the root patch `root`, then the mutable run
-# state onto `solver`; returns the coefficient field count the blocks carry.
+# The header as `_write_ckpt_meta!` laid it out, checked against the root
+# patch `root` (`_verify_header`), then the mutable run state onto `solver`;
+# returns the coefficient field count the blocks carry.
 function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, allow)
-    decomp = root.decomp
-    n_cons = solver.equations.n_cons
     fmt = Int(read(file["meta/format"]))
     fmt == CKPT_FORMAT ||
         error("checkpoint format mismatch in $path: file is format $fmt, " *
               "and this build reads and writes format $CKPT_FORMAT")
-    ng = read(file["meta/n_global"])
-    Tuple(Int.(ng)) == Tuple(decomp.n_global) ||
-        error("global grid mismatch: file has $(Tuple(Int.(ng))), " *
-              "solver has $(Tuple(decomp.n_global))")
-    Int(read(file["meta/n_cons"])) == n_cons ||
-        error("conserved layout mismatch: file has " *
-              "$(Int(read(file["meta/n_cons"]))), solver has $n_cons")
-    # `n_cons` alone does not identify the conserved layout: two species
-    # sets of the same size agree on it and mean different things.
-    nsp = Int(read(file["meta/n_species"]))
-    nsp == solver.equations.n_species ||
-        error("species count mismatch: file has $nsp, solver has " *
-              "$(solver.equations.n_species)")
-    _check_level_count(Int(read(file["meta/n_levels"])), solver, path)
-    n_art = _check_art_count(Int(read(file["meta/n_art"])), root, path)
-    names = String.(read(file["meta/component_names"]))
-    names == solver.equations.component_names ||
-        error("conserved component mismatch: file has $names, solver has " *
-              "$(solver.equations.component_names)")
-    stored_metric = String(first(read(file["meta/metric"])))
-    stored_metric == type_name(solver.metric) ||
-        error("metric mismatch: file has $stored_metric, solver has " *
-              "$(type_name(solver.metric))")
-    stored_eos = String(first(read(file["meta/eos"])))
-    stored_eos == type_name(solver.eos) ||
-        error("equation of state mismatch: file has $stored_eos, solver " *
-              "has $(type_name(solver.eos))")
-    stored_eltype = String(first(read(file["meta/eltype"])))
-    stored_eltype == string(eltype(Q)) ||
-        error("element type mismatch: file holds $stored_eltype, this " *
-              "state array holds $(eltype(Q))")
-    # The coordinates carry the domain extent, the origin and any `Stretch`,
-    # none of which `n_global` constrains.
-    for d in 1:3
-        axis_matches(read(file["grid/" * "xyz"[d:d]]), global_axis(root, d)) ||
-            error("grid coordinate mismatch on dimension $d: the stored " *
-                  "coordinates differ from this solver's, so the domain " *
-                  "extent, the origin or a Stretch mapping is not the one " *
-                  "the checkpoint was written on")
-    end
-    # The comparison precedes every write to the solver.
-    _verify_configuration(_read_configuration(file), solver, allow, path)
-    solver.t = read(file["meta/t"])
-    solver.step = Int(read(file["meta/step"]))
-    solver.cfl = read(file["meta/cfl"])
-    solver.dt_prev = read(file["meta/dt_prev"])
-    solver.rate_prev = read(file["meta/rate_prev"])
-    fr = read(file["meta/filter_rate_prev"])
-    solver.filter_rate_prev = ntuple(d -> oftype(solver.dt_prev, fr[d]), 3)
-    return n_art
+    meta(name) = read(file["meta/" * name])
+    fr = meta("filter_rate_prev")
+    h = CheckpointHeader(Int(meta("n_cons")), Int(meta("n_species")),
+                         Int(meta("n_levels")), Tuple(Int.(meta("n_global"))), nothing,
+                         Int(meta("n_art")), String.(meta("component_names")),
+                         String(first(meta("metric"))), String(first(meta("eos"))),
+                         String(first(meta("eltype"))),
+                         ntuple(d -> read(file["grid/" * "xyz"[d:d]]), 3),
+                         _read_configuration(file), Float64(meta("t")),
+                         Int(meta("step")), Float64(meta("cfl")),
+                         Float64(meta("dt_prev")), Float64(meta("rate_prev")),
+                         ntuple(d -> Float64(fr[d]), 3))
+    _verify_header(h, solver, root, Q, path, allow)
+    _apply_run_state!(solver, h)
+    return h.n_art
 end
 
 # One patch's blocks under group `name`, as `_write_state!` laid them out.
@@ -630,26 +595,19 @@ function write_field_frame(solver::Solver, state, prefix::AbstractString;
                            slice=nothing)
     CompactLES._multipatch(solver) && _patch_layout_error("FieldWriter(format = :hdf5)")
     Q = CompactLES._patch_arg(state)
+    ps = sole_patch(solver)
     decomp = solver.decomp
     comm = decomp.comm
     rank = MPI.Comm_rank(comm)
-    st = CompactLES._normalize_stride(stride)
-    ranges = CompactLES._output_ranges(solver, st, slice)
-    CompactLES._check_output(solver, st, slice, ranges)
-    curvilinear = CompactLES._curvilinear(solver)
 
     # The artificial coefficients are restored after the extraction, so a dump
     # requesting them leaves the integrator's next timestep unchanged.
-    entries = CompactLES.preserving_artificial(solver,
+    frame = CompactLES.preserving_artificial(solver,
             any(CompactLES._wants_artificial, fields)) do
-        es = Tuple{String,Int,Vector{Float32}}[]
-        CompactLES._prepare_fields!(solver, Q, fields)
-        for name in fields
-            append!(es, CompactLES.vtk_field_entries(solver, Q, name,
-                                                     curvilinear, ranges))
-        end
-        return es
+        CompactLES._field_frame(ps, Q, fields, stride, slice)
     end
+    st, ranges = frame.stride, frame.ranges
+    curvilinear, entries = frame.curvilinear, frame.entries
 
     nglobal = CompactLES._output_global(solver, st, slice)
     nlocal = ntuple(d -> length(ranges[d]), 3)
@@ -700,17 +658,7 @@ function write_field_frame(solver::Solver, state, prefix::AbstractString;
                 if mine
                     # One position per point, component first, so the sidecar
                     # can point XDMF's XYZ geometry straight at it.
-                    pts = Array{Float64}(undef, 3, nlocal...)
-                    for (kk, k) in enumerate(ranges[3]),
-                        (jj, j) in enumerate(ranges[2]),
-                        (ii, i) in enumerate(ranges[1])
-                        x, y, z = CompactLES._cartesian_position(solver.metric,
-                            xcoord(solver, 1, i), xcoord(solver, 2, j),
-                            xcoord(solver, 3, k))
-                        pts[1, ii, jj, kk] = x
-                        pts[2, ii, jj, kk] = y
-                        pts[3, ii, jj, kk] = z
-                    end
+                    pts = CompactLES._cartesian_points(ps, ranges)
                 end
                 write_block!(dset, (1:3, region_ranges(region)...), pts)
             finally

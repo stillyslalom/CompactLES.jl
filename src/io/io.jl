@@ -787,7 +787,8 @@ function _write_checkpoint(io, solver::Solver, Q, rec)
     states = _patch_states(Q)
     patches = getfield(solver, :patches)
     root = PatchSolver(solver, patches[1])
-    _write_ckpt_header(io, solver, root, states[1])
+    _write_ckpt_header(io, checkpoint_header(solver, root, states[1]; block=true,
+                                             n_art=false))
     _write_ckpt_block(io, root, states[1])
     rec === nothing && return io
     ints, floats = _record_image(rec)
@@ -807,42 +808,177 @@ function _write_checkpoint(io, solver::Solver, Q, rec)
     return io
 end
 
-# The header, describing the state of the root patch `root` (the solver
-# itself when it holds one patch) well enough for the reader to reject a
-# solver it does not belong to, and the mutable run state.
-function _write_ckpt_header(io, solver::Solver, root::PatchSolver, Q)
+# --- The header, in either format -----------------------------------------------
+#
+# What a checkpoint records beside its state blocks: the fields the reader
+# compares against the solver it restores onto, and the mutable run state it
+# then assigns. The per-rank file (below) and the shared HDF5 file
+# (ext/CompactLESHDF5Ext.jl) encode the same record, gathered by
+# `checkpoint_header` and checked by `_verify_header`, so the two readers
+# refuse the same restarts with the same messages. `block` holds the per-rank
+# file's decomposition, the local extent and the process-grid coordinates,
+# which the decomposition-independent shared file does not record, and
+# `n_art` the coefficient field count that the shared file records once and
+# the per-rank file with each block.
+struct CheckpointHeader
+    n_cons::Int
+    n_species::Int
+    n_levels::Int
+    n_global::NTuple{3,Int}
+    block::Union{Nothing,NTuple{2,NTuple{3,Int}}}
+    n_art::Union{Nothing,Int}
+    component_names::Vector{String}
+    metric::String
+    eos::String
+    eltype::String
+    axes::NTuple{3,Vector{Float64}}
+    configuration::ConfigurationRecord
+    t::Float64
+    step::Int
+    cfl::Float64
+    dt_prev::Float64
+    rate_prev::Float64
+    filter_rate_prev::NTuple{3,Float64}
+end
+
+# The header of `solver`, describing the state `Q` of the root patch `root`
+# (the solver's sole patch when it holds one). `block` and `n_art` select the
+# per-rank and the shared file's optional fields.
+function checkpoint_header(solver::Solver, root::PatchSolver, Q; block::Bool,
+                           n_art::Bool)
     decomp = root.decomp
+    eq = solver.equations
+    return CheckpointHeader(
+        eq.n_cons, eq.n_species, nlevels(solver), Tuple(decomp.n_global),
+        block ? (Tuple(decomp.n_local), Tuple(decomp.coords)) : nothing,
+        n_art ? n_art_fields(root) : nothing,
+        eq.component_names, type_name(solver.metric), type_name(solver.eos),
+        string(eltype(Q)), ntuple(d -> global_axis(root, d), 3),
+        configuration_record(solver), Float64(solver.t), solver.step,
+        Float64(solver.cfl), Float64(solver.dt_prev), Float64(solver.rate_prev),
+        ntuple(d -> Float64(solver.filter_rate_prev[d]), 3))
+end
+
+# The checks of a header read from `path` against `solver`, its root patch
+# `root` and the state `Q` it will be read into, each throwing on a mismatch.
+# `report` is `_verify_configuration`'s: false for the buffer of a phase change
+# (phases.jl), whose differences in the allowed groups are its purpose.
+function _verify_header(h::CheckpointHeader, solver::Solver, root::PatchSolver, Q,
+                        path::AbstractString, allow, report::Bool=true)
+    decomp = root.decomp
+    eq = solver.equations
+    h.n_cons == eq.n_cons ||
+        error("conserved layout mismatch: file has $(h.n_cons), solver has $(eq.n_cons)")
+    # `n_cons` alone does not identify the conserved layout: two species
+    # sets of the same size agree on it and mean different things.
+    h.n_species == eq.n_species ||
+        error("species count mismatch: file has $(h.n_species), solver has " *
+              "$(eq.n_species)")
+    _check_level_count(h.n_levels, solver, path)
+    h.n_global == Tuple(decomp.n_global) ||
+        error("global grid mismatch: file has $(h.n_global), solver has " *
+              "$(Tuple(decomp.n_global))")
+    if h.block !== nothing
+        n_local, coords = h.block
+        n_local == Tuple(decomp.n_local) ||
+            error("decomposition mismatch: file has a block of $n_local, this " *
+                  "rank holds $(Tuple(decomp.n_local))")
+        coords == Tuple(decomp.coords) ||
+            error("rank layout mismatch: file was written at process-grid " *
+                  "coordinates $coords, this rank is at $(Tuple(decomp.coords))")
+    end
+    h.n_art === nothing || _check_art_count(h.n_art, root, path)
+    h.component_names == eq.component_names ||
+        error("conserved component mismatch: file has $(h.component_names), " *
+              "solver has $(eq.component_names)")
+    h.metric == type_name(solver.metric) ||
+        error("metric mismatch: file has $(h.metric), solver has " *
+              "$(type_name(solver.metric))")
+    h.eos == type_name(solver.eos) ||
+        error("equation of state mismatch: file has $(h.eos), solver has " *
+              "$(type_name(solver.eos))")
+    # The per-rank payload is raw binary, so its element type fixes both the
+    # length of the block and the decoding of its bytes; a Float32 file read
+    # as Float64 runs off the end, a read error, not wrong numbers.
+    h.eltype == string(eltype(Q)) ||
+        error("element type mismatch: file holds $(h.eltype), this state array " *
+              "holds $(eltype(Q))")
+    # The coordinates carry the domain extent, the origin and any `Stretch`,
+    # none of which the extents above constrain.
+    for d in 1:3
+        axis_matches(h.axes[d], global_axis(root, d)) ||
+            error("grid coordinate mismatch on dimension $d: the stored " *
+                  "coordinates differ from this solver's, so the domain " *
+                  "extent, the origin or a Stretch mapping is not the one " *
+                  "the checkpoint was written on")
+    end
+    _verify_configuration(h.configuration, solver, allow, path, report)
+    return h
+end
+
+# The run state a header carries, onto `solver`, after `_verify_header`: the
+# comparison precedes every write to the solver.
+function _apply_run_state!(solver::Solver, h::CheckpointHeader)
+    solver.t = h.t
+    solver.step = h.step
+    solver.cfl = h.cfl
+    solver.dt_prev = h.dt_prev
+    solver.rate_prev = h.rate_prev
+    solver.filter_rate_prev = ntuple(d -> oftype(solver.dt_prev, h.filter_rate_prev[d]),
+                                     3)
+    return solver
+end
+
+# The per-rank file's encoding of the header, in the order of `CKPT_VERSION`.
+function _write_ckpt_header(io, h::CheckpointHeader)
+    n_local, coords = h.block
     write(io, UInt64(CKPT_MAGIC))
     write(io, Int64(CKPT_VERSION))
-    write(io, Int64(solver.equations.n_cons))
-    write(io, Int64(solver.equations.n_species))
-    write(io, Int64(nlevels(solver)))
-    for d in 1:3
-        write(io, Int64(decomp.n_global[d]))
-    end
-    for d in 1:3
-        write(io, Int64(decomp.n_local[d]))
-    end
-    for d in 1:3
-        write(io, Int64(decomp.coords[d]))
-    end
-    _write_strings(io, solver.equations.component_names)
-    _write_string(io, type_name(solver.metric))
-    _write_string(io, type_name(solver.eos))
-    _write_string(io, string(eltype(Q)))
-    for d in 1:3
-        write(io, global_axis(root, d))
-    end
-    _write_configuration(io, configuration_record(solver))
-    write(io, Float64(solver.t))
-    write(io, Int64(solver.step))
-    write(io, Float64(solver.cfl))
-    write(io, Float64(solver.dt_prev))
-    write(io, Float64(solver.rate_prev))
-    for d in 1:3
-        write(io, Float64(solver.filter_rate_prev[d]))
-    end
+    write(io, Int64(h.n_cons))
+    write(io, Int64(h.n_species))
+    write(io, Int64(h.n_levels))
+    write(io, Int64[h.n_global...])
+    write(io, Int64[n_local...])
+    write(io, Int64[coords...])
+    _write_strings(io, h.component_names)
+    _write_string(io, h.metric)
+    _write_string(io, h.eos)
+    _write_string(io, h.eltype)
+    foreach(a -> write(io, a), h.axes)
+    _write_configuration(io, h.configuration)
+    write(io, h.t)
+    write(io, Int64(h.step))
+    write(io, h.cfl)
+    write(io, h.dt_prev)
+    write(io, h.rate_prev)
+    write(io, Float64[h.filter_rate_prev...])
     return io
+end
+
+# Its decoding. The magic number and the version are tested as they are read,
+# since the rest of a file of another version is laid out otherwise; every
+# other field is checked by `_verify_header` once the whole header is in.
+function _read_ckpt_header(io, path::AbstractString)
+    read(io, UInt64) == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
+    version = Int(read(io, Int64))
+    version == CKPT_VERSION ||
+        error("checkpoint version mismatch in $path: the file is version " *
+              "$version, and this build reads and writes version $CKPT_VERSION")
+    ints(n) = ntuple(_ -> Int(read(io, Int64)), n)
+    n_cons, n_species, n_levels = ints(3)
+    n_global = ints(3)
+    block = (ints(3), ints(3))
+    names = _read_strings(io)
+    metric, eos, eltype = _read_string(io), _read_string(io), _read_string(io)
+    axes = ntuple(d -> read!(io, Vector{Float64}(undef, n_global[d])), 3)
+    configuration = _read_configuration(io)
+    t = read(io, Float64)
+    step = Int(read(io, Int64))
+    cfl, dt_prev, rate_prev = read(io, Float64), read(io, Float64), read(io, Float64)
+    filter_rate_prev = ntuple(_ -> read(io, Float64), 3)
+    return CheckpointHeader(n_cons, n_species, n_levels, n_global, block, nothing,
+                            names, metric, eos, eltype, axes, configuration, t, step,
+                            cfl, dt_prev, rate_prev, filter_rate_prev)
 end
 
 # One patch's interior block of `Q`, then its artificial coefficient block
@@ -940,7 +1076,9 @@ function _read_checkpoint!(io, solver::Solver, Q, path::AbstractString, allow;
     patches = getfield(solver, :patches)
     np = MPI.Comm_size(solver.comm)
     root = PatchSolver(solver, patches[1])
-    _read_ckpt_header!(io, solver, root, states[1], path, allow, phase)
+    header = _read_ckpt_header(io, path)
+    _verify_header(header, solver, root, states[1], path, allow, !phase)
+    _apply_run_state!(solver, header)
     _read_ckpt_block!(io, root, states[1], path, phase)
     _multipatch(solver) || return Q
     ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
@@ -970,79 +1108,6 @@ function _read_checkpoint!(io, solver::Solver, Q, path::AbstractString, allow;
         _read_ckpt_block!(io, ps, states[li], path, phase)
     end
     return Q
-end
-
-# The header checks, each against the root patch `root`, then the mutable run
-# state onto `solver`.
-function _read_ckpt_header!(io, solver::Solver, root::PatchSolver, Q,
-                            path::AbstractString, allow, phase::Bool=false)
-    decomp = root.decomp
-    n_cons = solver.equations.n_cons
-    magic = read(io, UInt64)
-    magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
-    version = Int(read(io, Int64))
-    version == CKPT_VERSION ||
-        error("checkpoint version mismatch in $path: the file is version " *
-              "$version, and this build reads and writes version $CKPT_VERSION")
-    file_n_cons = Int(read(io, Int64))
-    file_n_cons == n_cons ||
-        error("conserved layout mismatch: file has $file_n_cons, solver " *
-              "has $n_cons")
-    # `n_cons` alone does not identify the conserved layout: two species
-    # sets of the same size agree on it and mean different things.
-    n_species = Int(read(io, Int64))
-    n_species == solver.equations.n_species ||
-        error("species count mismatch: file has $n_species, solver has " *
-              "$(solver.equations.n_species)")
-    _check_level_count(Int(read(io, Int64)), solver, path)
-    for d in 1:3
-        Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
-    end
-    for d in 1:3
-        Int(read(io, Int64)) == decomp.n_local[d] || error("decomposition mismatch")
-    end
-    for d in 1:3
-        Int(read(io, Int64)) == decomp.coords[d] || error("rank layout mismatch")
-    end
-    names = _read_strings(io)
-    names == solver.equations.component_names ||
-        error("conserved component mismatch: file has $names, solver has " *
-              "$(solver.equations.component_names)")
-    stored_metric = _read_string(io)
-    stored_metric == type_name(solver.metric) ||
-        error("metric mismatch: file has $stored_metric, solver has " *
-              "$(type_name(solver.metric))")
-    stored_eos = _read_string(io)
-    stored_eos == type_name(solver.eos) ||
-        error("equation of state mismatch: file has $stored_eos, solver " *
-              "has $(type_name(solver.eos))")
-    # The payload is raw binary, so its element type fixes both the length
-    # of the block and the decoding of its bytes; a Float32 file read as
-    # Float64 runs off the end, a read error, not wrong numbers.
-    stored_eltype = _read_string(io)
-    stored_eltype == string(eltype(Q)) ||
-        error("element type mismatch: file holds $stored_eltype, this " *
-              "state array holds $(eltype(Q))")
-    # The coordinates carry the domain extent, the origin and any `Stretch`,
-    # none of which the extents above constrain.
-    for d in 1:3
-        stored = read!(io, Vector{Float64}(undef, decomp.n_global[d]))
-        axis_matches(stored, global_axis(root, d)) ||
-            error("grid coordinate mismatch on dimension $d: the stored " *
-                  "coordinates differ from this solver's, so the domain " *
-                  "extent, the origin or a Stretch mapping is not the one " *
-                  "the checkpoint was written on")
-    end
-    # The comparison precedes every write to the solver.
-    _verify_configuration(_read_configuration(io), solver, allow, path, !phase)
-    solver.t = read(io, Float64)
-    solver.step = Int(read(io, Int64))
-    solver.cfl = read(io, Float64)
-    solver.dt_prev = read(io, Float64)
-    solver.rate_prev = read(io, Float64)
-    solver.filter_rate_prev =
-        ntuple(_ -> oftype(solver.dt_prev, read(io, Float64)), 3)
-    return io
 end
 
 # One patch's blocks, as `_write_ckpt_block` laid them out. A phase change may
@@ -1949,27 +2014,77 @@ order.
 """
 function save_vtk(solver::PatchSolver, Q, prefix::AbstractString;
                   fields=DEFAULT_VTK_FIELDS, stride=1, slice=nothing)
-    st = _normalize_stride(stride)
-    ranges = _output_ranges(solver, st, slice)
-    _check_output(solver, st, slice, ranges)
     return preserving_artificial(solver, any(_wants_artificial, fields)) do
-        _prepare_fields!(solver, Q, fields)
-        curvilinear = _curvilinear(solver)
-        entries = Tuple{String,Int,Vector{Float32}}[]
-        # Field extraction still runs on a rank holding no part of the plane: the
-        # derived fields perform distributed solves, so every rank must reach them
-        # in the same order. Only the write below is skipped.
-        for name in fields
-            append!(entries, vtk_field_entries(solver, Q, name, curvilinear, ranges))
-        end
-        seams = _output_seams(solver, slice, ranges)
-        entries = _close_seams(solver, entries, ranges, seams)
-        written = _seam_ranges(ranges, st, seams)
+        frame = _field_frame(solver, Q, fields, stride, slice)
+        entries, written, _ = _seamed_frame(solver, frame)
+        st = frame.stride
         record = output_record(_owner(solver), st, _output_global(solver, st, slice))
-        return curvilinear ?
+        return frame.curvilinear ?
             _save_vts(solver, entries, prefix, st, slice, written, record) :
             _save_vtr(solver, entries, prefix, st, slice, written, record)
     end
+end
+
+# --- The frame, in either format ------------------------------------------------
+#
+# A field dump of one patch extracts the same frame whichever format encodes
+# it: the interior nodes this rank holds of the grid the stride and the slice
+# select, and each requested field over them as Float32 entries
+# (`vtk_field_entries`), after the derived-field pass the names call for.
+# `_field_frame` builds it for the VTK writers below and for the HDF5 writer
+# (ext/CompactLESHDF5Ext.jl); the VTK pieces then close the seams between
+# ranks (`_seamed_frame`), and the HDF5 writer places each rank's block as a
+# hyperslab of one dataset.
+struct FieldFrame{R}
+    stride::NTuple{3,Int}
+    slice::Any
+    ranges::R
+    curvilinear::Bool
+    entries::Vector{Tuple{String,Int,Vector{Float32}}}
+end
+
+# The frame of `fields` of the patch `ps` in state `Q`. `sensor` is that of
+# `_prepare_fields!`. Collective: field extraction still runs on a rank
+# holding no part of the plane, since the derived fields perform distributed
+# solves, so every rank must reach them in the same order; only the write is
+# skipped there. The coefficient arrays are overwritten where a field asks
+# for them, so the caller holds this inside `preserving_artificial`.
+function _field_frame(ps::PatchSolver, Q, fields, stride, slice;
+                      curvilinear::Bool=_curvilinear(ps), sensor=nothing)
+    st = _normalize_stride(stride)
+    ranges = _output_ranges(ps, st, slice)
+    _check_output(ps, st, slice, ranges)
+    _prepare_fields!(ps, Q, fields, sensor)
+    entries = Tuple{String,Int,Vector{Float32}}[]
+    for name in fields
+        append!(entries, vtk_field_entries(ps, Q, name, curvilinear, ranges))
+    end
+    return FieldFrame(st, slice, ranges, curvilinear, entries)
+end
+
+# The frame's entries extended by the first plane of each high neighbor
+# (`_close_seams`), the ranges they then cover, and the seams themselves, for
+# a VTK piece, whose extent must meet its neighbor's.
+function _seamed_frame(ps::PatchSolver, frame::FieldFrame)
+    seams = _output_seams(ps, frame.slice, frame.ranges)
+    entries = _close_seams(ps, frame.entries, frame.ranges, seams)
+    return entries, _seam_ranges(frame.ranges, frame.stride, seams), seams
+end
+
+# The Cartesian position of each node of `ranges`, component first and then
+# i, j, k: the point layout both a structured VTK piece and an XDMF XYZ
+# geometry read.
+function _cartesian_points(solver::PatchSolver, ranges)
+    points = Array{Float64}(undef, 3, length.(ranges)...)
+    for (kk, k) in enumerate(ranges[3]), (jj, j) in enumerate(ranges[2]),
+        (ii, i) in enumerate(ranges[1])
+        x, y, z = _cartesian_position(solver.metric, xcoord(solver, 1, i),
+                                      xcoord(solver, 2, j), xcoord(solver, 3, k))
+        points[1, ii, jj, kk] = x
+        points[2, ii, jj, kk] = y
+        points[3, ii, jj, kk] = z
+    end
+    return points
 end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
@@ -2036,16 +2151,7 @@ function _save_vts(solver::PatchSolver, entries, prefix::AbstractString, stride,
     _has_output(ranges) || return _write_parallel_container(
         solver, entries, prefix, lo, hi, true, stride, slice, record)
 
-    points = Vector{Float64}(undef, 3 * prod(length.(ranges)))
-    idx = 1
-    for k in ranges[3], j in ranges[2], i in ranges[1]
-        x, y, z = _cartesian_position(solver.metric, xcoord(solver, 1, i),
-                                      xcoord(solver, 2, j), xcoord(solver, 3, k))
-        points[idx] = x; points[idx+1] = y; points[idx+2] = z
-        idx += 3
-    end
-
-    blocks = Any[points]
+    blocks = Any[_cartesian_points(solver, ranges)]
     append!(blocks, (data for (_, _, data) in entries))
     offs = _appended_offsets(sizeof.(blocks))
 
@@ -2253,20 +2359,14 @@ function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
         # are skipped together.
         pslice === nothing ||
             1 <= pslice[2] <= ps.decomp.n_global[pslice[1]] || continue
-        ranges = _output_ranges(ps, st, pslice)
-        _check_output(ps, st, pslice, ranges)
-        _prepare_fields!(ps, states[li], fields, get(held, li, nothing))
-        entries = Tuple{String,Int,Vector{Float32}}[]
-        for name in fields
-            append!(entries, vtk_field_entries(ps, states[li], name, false, ranges))
-        end
+        frame = _field_frame(ps, states[li], fields, st, pslice; curvilinear=false,
+                             sensor=get(held, li, nothing))
+        ranges = frame.ranges
         _has_output(ranges) || continue
-        seams = _output_seams(ps, pslice, ranges)
-        entries = _close_seams(ps, entries, ranges, seams)
+        entries, written, seams = _seamed_frame(ps, frame)
         ghost = ℓ < length(levels) - 1 ? _vtk_ghost_points(ps, ranges) : nothing
         ghost === nothing ||
             (ghost = only(_close_seams(ps.decomp, [ghost], (1,), length.(ranges), seams)))
-        written = _seam_ranges(ranges, st, seams)
         lo, hi = _output_piece_extent(ps, st, pslice, written)
         record = output_record(solver, st, _output_global(ps, st, pslice); level=ℓ)
         _write_vtr_piece(_patch_piece_name(prefix, ℓ, ti, rank), ps, entries, lo,
