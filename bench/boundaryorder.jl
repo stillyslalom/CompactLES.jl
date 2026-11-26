@@ -62,7 +62,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "../test/build_solver.jl"))
 using CompactLES, Printf
 using CompactLES: padded_index, xcoord
 const CL = CompactLES
@@ -491,13 +491,18 @@ const IDIV_FILTERS = ((" unfiltered", (filter_interval=0,)),
 # the faces; the left-running characteristic left behind on uncovered root
 # nodes upstream of the first face, against the run without the interface.
 function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing,
-                         subcycle=false, opts...)
+                         subcycle=false, interface_flux=IFLUX.interface_flux,
+                         interface_divergence=source)
     amp = 1e-3; c0 = sqrt(GAMMA)
     pulse(x) = amp * exp(-40 * (x - pi / 2)^2)
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
-                    art=ArtificialProperties(enabled=false), filter_interval=0,
-                    patch_grid=patch_grid, refine=refine, subcycle=subcycle;
-                    merge((interface_divergence=source, IFLUX...), opts)...)
+    s = build_solver(
+        Problem(domain=((0.0, 2pi), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0),
+                 patch_interfaces=PatchInterfaces(flux=interface_flux,
+                                                  divergence=interface_divergence),
+                 execution=Execution(patch_grid=patch_grid),
+                 amr=AMR(initial=refine, subcycle=subcycle, regrid_interval=0)))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=(1 + pulse(x))^(1 / GAMMA),
                                         p=1 + pulse(x), u=(pulse(x) / c0, 0, 0)))

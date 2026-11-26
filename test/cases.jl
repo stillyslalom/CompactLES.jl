@@ -13,7 +13,7 @@
 #
 # Include after CompactLES and Printf; `references.jl` supplies noh_exact.
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: padded_index, xcoord
 
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -882,13 +882,13 @@ function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
     n = mirror ? 2(N - 1) : N
     L = mirror ? T(2) : one(T)
     bcs = mirror ? per : (SlipWallBC(), SlipWallBC())
-    solver = flat_solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
-                         bcs=(bcs, per, per),
-                         eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
-                         transport=ConstantTransport{T}(mu0=zero(T)),
-                         art=ArtificialProperties{T}(enabled=art), deriv=deriv, filt=filt,
-                         cfl=T(cfl), filter_interval=filter_interval,
-                         filter_cfl=filter_cfl, control=control)
+    solver = build_solver(
+        Problem(domain=((0.0, L), (0.0, h), (0.0, h)), bcs=(bcs, per, per),
+                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
+                transport=ConstantTransport{T}(mu0=zero(T)), ic=nothing),
+        Numerics(n_global=(n, 1, 1), art=ArtificialProperties{T}(enabled=art), deriv=deriv,
+                 cfl=T(cfl), control=control,
+                 filter=StateFilter(filt, interval=filter_interval, cfl=filter_cfl)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         x <= 1 ? pulse_prim(T, x, amp, 1) : pulse_prim(T, 2 - x, amp, -1))

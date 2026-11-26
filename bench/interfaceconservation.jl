@@ -57,7 +57,7 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "../test/build_solver.jl"))
 using CompactLES
 using Printf
 const CL = CompactLES
@@ -180,30 +180,34 @@ end
 function build(mode, N, ny; subcycle=false, regrid=false)
     eos = IdealMixture([IdealSpecies{Float64}("species-a", 1.0, 1.4),
                         IdealSpecies{Float64}("species-b", 1.0, 1.4)])
-    kw = if mode === :uniform
-        (;)
+    execution, amr = if mode === :uniform
+        Execution(), nothing
     elseif mode === :samelevel
-        (patch_grid=(2, 1, 1),)
+        Execution(patch_grid=(2, 1, 1)), nothing
     else
-        (refine=regions(N, ny, mode === :depth2 ? 2 : 3), subcycle=subcycle,
-         # Kept out of the ordinary stepping loop; `regrid_history!` performs
-         # one collective regrid between its before/after snapshots.
-         regrid_interval=regrid ? 1_000_000 : 0, tag_threshold=1e6,
-         # Species-gradient tagging follows the translating composition sheet;
-         # density is intentionally uniform in this thermodynamic control.
-         tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3,
-         level_interpolation_order=args.interpolation_order == 0 ? nothing :
-                                   args.interpolation_order)
+        Execution(),
+        AMR(initial=regions(N, ny, mode === :depth2 ? 2 : 3), subcycle=subcycle,
+            # Kept out of the ordinary stepping loop; `regrid_history!` performs
+            # one collective regrid between its before/after snapshots.
+            regrid_interval=regrid ? 1_000_000 : 0, tag_threshold=1e6,
+            # Species-gradient tagging follows the translating composition sheet;
+            # density is intentionally uniform in this thermodynamic control.
+            tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3,
+            level_interpolation_order=args.interpolation_order == 0 ? nothing :
+                                      args.interpolation_order)
     end
     source = mode === :uniform || args.idiv == "default" ? nothing :
              lele_d1_6(closures=Symbol(args.idiv))
-    return flat_solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
-                       eos=eos, cfl=0.45, interface_divergence=source,
-                       transport=ConstantTransport(mu0=Float64(args.mu)),
-                       interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
-                       art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
-                       control=StepControl(validity=:permissive),
-                       filter_interval=args.filter_interval; kw...)
+    iflux = mode === :uniform ? :closure : Symbol(args.iflux)
+    return build_solver(
+        Problem(domain=((0.0, 8pi), (0.0, 2pi), (0.0, 1.0)), bcs=periodic, eos=eos,
+                transport=ConstantTransport(mu0=Float64(args.mu)), ic=nothing),
+        Numerics(n_global=(N, ny, 1), cfl=0.45,
+                 art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
+                 control=StepControl(validity=:permissive),
+                 filter=StateFilter(interval=args.filter_interval),
+                 patch_interfaces=PatchInterfaces(flux=iflux, divergence=source),
+                 execution=execution, amr=amr))
 end
 
 function evolve(mode, N, ny, tfinal, nmax, subcycle)

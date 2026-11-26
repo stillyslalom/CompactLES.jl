@@ -3,10 +3,11 @@
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
 
-_f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enabled=art))
+_f32_numerics(; art=false) =
+    (execution=Execution(storage=Float32), art=ArtificialProperties(enabled=art))
 
 @testset "Float32 freestream/GCL matrix" begin
     T = Float32
@@ -64,15 +65,19 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enable
     ]
     residuals = T[]
     for cs in cases
-        kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain,
-                     metric=cs.metric, bcs=cs.bcs,
-                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                     filter_interval=0, typed...), cs.extra)
+        o = merge((; origin=(zero(T), zero(T), zero(T)),
+                    stretch=(nothing, nothing, nothing)), cs.extra)
+        domain = ntuple(d -> (Float64(o.origin[d]),
+                              Float64(o.origin[d]) + Float64(cs.L_domain[d])), 3)
+        build() = build_solver(Problem(; domain, metric=cs.metric, bcs=cs.bcs,
+                                       eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
+                                       ic=nothing),
+                               Numerics(; n_global=cs.n_global, stretch=o.stretch,
+                                        filter=StateFilter(interval=0), typed...))
         # A collapsed r omits the rest of the radial divergence's area term,
         # and setup warns.
         solver = cs.n_global[1] == 1 ?
-                 (@test_logs (:warn, r"r is collapsed") flat_solver(; kw...)) :
-                 flat_solver(; kw...)
+                 (@test_logs (:warn, r"r is collapsed") build()) : build()
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) ->
             Prim(u=(0, 0, 0), p=1, rho=1))
@@ -103,18 +108,19 @@ end
 function _f32_closed_derivative_error(N; spherical=false, T=Float32,
                                       deriv=lele_d1_6(T))
     per = (PeriodicBC(), PeriodicBC())
-    numerics = (precision=T, art=ArtificialProperties(enabled=false), deriv=deriv)
+    numerics = Numerics(n_global=(N, 12, 12), art=ArtificialProperties(enabled=false),
+                        deriv=deriv, execution=Execution(storage=T))
+    gas = IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4))
     solver = if spherical
-        flat_solver(; n_global=(N, 12, 12),
-                    L_domain=(one(T), T(π), T(2π)),
-                    metric=SphericalMetric(),
-                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
+        build_solver(Problem(domain=((0.0, 1.0), (0.0, Float64(T(π))),
+                                     (0.0, Float64(T(2π)))),
+                             metric=SphericalMetric(),
+                             bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+                             eos=gas, ic=nothing), numerics)
     else
-        flat_solver(; n_global=(N, 12, 12),
-                    L_domain=(one(T), one(T), one(T)),
-                    bcs=((SlipWallBC(), SlipWallBC()), per, per),
-                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
+        build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                             bcs=((SlipWallBC(), SlipWallBC()), per, per), eos=gas,
+                             ic=nothing), numerics)
     end
     f = CL.field(solver.decomp)
     df = similar(f)
@@ -184,12 +190,12 @@ end
     N = 200
     hx = one(T) / T(N - 1)
     per = (PeriodicBC(), PeriodicBC())
-    solver = flat_solver(; n_global=(N, 1, 1),
-                         L_domain=(one(T), hx, hx),
-                         bcs=((SlipWallBC(), SlipWallBC()), per, per),
-                         eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
-                         cfl=T(0.4), filter_interval=1,
-                         _f32_numerics(art=true)...)
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, Float64(hx)), (0.0, Float64(hx))),
+                                  bcs=((SlipWallBC(), SlipWallBC()), per, per),
+                                  eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
+                                  ic=nothing),
+                          Numerics(; n_global=(N, 1, 1), cfl=T(0.4),
+                                   filter=StateFilter(interval=1), _f32_numerics(art=true)...))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> begin
         θ = tanh_blend(x, T(0.5), T(2) * hx)
@@ -231,14 +237,12 @@ end
 function _tgv_short_history(::Type{T}) where {T<:AbstractFloat}
     N = 16
     per = (PeriodicBC(), PeriodicBC())
-    solver = flat_solver(; n_global=(N, N, N),
-                         L_domain=(T(2π), T(2π), T(2π)),
-                         bcs=(per, per, per),
-                         eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
-                         transport=ConstantTransport{T}(mu0=one(T) / T(1600)),
-                         art=ArtificialProperties{T}(enabled=false),
-                         deriv=lele_d1_6(T),
-                         filt=compact_filter(T(0.45), T), cfl=T(0.6))
+    solver = build_solver(
+        Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))), bcs=(per, per, per),
+                eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
+                transport=ConstantTransport{T}(mu0=one(T) / T(1600)), ic=nothing),
+        Numerics(n_global=(N, N, N), art=ArtificialProperties{T}(enabled=false),
+                 deriv=lele_d1_6(T), cfl=T(0.6), filter=compact_filter(T(0.45), T)))
     Q = allocate_state(solver)
     p0 = T(100) / T(1.4)
     initialize!(solver, Q, (x, y, z) ->
@@ -289,11 +293,20 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
     bcs = ((SlipWallBC(), SlipWallBC()), per, per)
-    small(; kw...) = flat_solver(; n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                 bcs=bcs, kw...)
-    function sod(; kw...)
-        s = flat_solver(; n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                        cfl=0.4, kw...)
+    small(; precision=nothing, eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+          transport=ConstantTransport(), art=ArtificialProperties(), deriv=lele_d1_6()) =
+        build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs,
+                             transport=transport, eos=eos, ic=nothing),
+                     Numerics(n_global=(16, 1, 1), art=art, deriv=deriv,
+                              execution=Execution(storage=something(precision, Array))))
+    function sod(; precision=nothing, eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                   transport=ConstantTransport(), art=ArtificialProperties(),
+                   deriv=lele_d1_6(), filt=compact_filter())
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, eos=eos,
+                    transport=transport, ic=nothing),
+            Numerics(n_global=(64, 1, 1), cfl=0.4, art=art, deriv=deriv, filter=filt,
+                     execution=Execution(storage=something(precision, Array))))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                                                  Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -318,11 +331,6 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     @test s1.filter_plans[1] isa DirPlan{T}
     @test s1.step == s2.step > 1
     @test parent(Q1) == parent(Q2)
-
-    # Components left out are built at the precision of those given.
-    s = small(transport=ConstantTransport{T}())
-    @test s.eos isa IdealMixture{T} && s.art isa ArtificialProperties{T}
-    @test s.deriv_plans[1] isa DirPlan{T}
 
     # Without `precision`, a mixture is rejected and each component named.
     err = try

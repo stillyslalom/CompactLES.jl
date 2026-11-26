@@ -284,11 +284,8 @@ end
 
 # `prob` is a `Problem`, `num` a `Numerics` with its step control filled in and
 # `lv` a `LevelSetup` (amr_frontend.jl). `equations` is the `EquationSet`
-# owning the conserved layout, built from the EOS when not given. `extent`
-# gives the domain's three extents where the caller holds them apart from the
-# endpoints, as the test suites' keyword adapter does.
-function _Solver(::Type{T}, prob, num, lv; equations=nothing,
-                 extent=nothing) where {T}
+# owning the conserved layout, built from the EOS when not given.
+function _Solver(::Type{T}, prob, num, lv; equations=nothing) where {T}
     # One compiled body for every configuration of a precision. Specialized,
     # the constructor was compiled again for each combination of the types of
     # its arguments, the user's tuple of boundary conditions among them, at
@@ -297,7 +294,7 @@ function _Solver(::Type{T}, prob, num, lv; equations=nothing,
     # are compiled for the concrete types they are called with. The phases
     # below take records whose only type parameter is the precision.
     @nospecialize
-    inp = _build_inputs(T, prob, num, lv, equations, extent)
+    inp = _build_inputs(T, prob, num, lv, equations)
     _validate_config(inp)
     geom = _derive_geometry_and_folds(inp)
     lay = _plan_layout_and_schemes(inp, geom)
@@ -311,11 +308,10 @@ end
 
 # The inputs in the form the phases read, the components that carry a scalar
 # type converted to `T`.
-function _build_inputs(::Type{T}, prob, num, lv, equations, extent) where {T}
+function _build_inputs(::Type{T}, prob, num, lv, equations) where {T}
     @nospecialize
     origin = ntuple(d -> prob.domain[d][1], 3)
-    L_domain = extent === nothing ?
-               ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3) : extent
+    L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
     eos = _to_precision(T, prob.eos)::EOS
     divergence = num.patch_interfaces.divergence
     tile = _tile_edges(lv.tile)

@@ -25,7 +25,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
-    @isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+    @isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
     using CompactLES
     using Test
     using Printf
@@ -109,8 +109,10 @@ end
         bcs = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
                (NoSlipWallBC(), NoSlipWallBC()))
         for deriv in (lele_d1_6(), lele_d1_8(), lele_d1_6(closures=:brady_livescu))
-            s = flat_solver(n_global=(56, 16, 52), L_domain=(1.0, 0.3, 1.1), bcs=bcs,
-                            deriv=deriv, eos=POS_GAS, positivity_limiter=true)
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 0.3), (0.0, 1.1)), bcs=bcs, eos=POS_GAS,
+                        ic=nothing),
+                Numerics(n_global=(56, 16, 52), deriv=deriv, positivity_limiter=true))
             lim = only(getfield(s, :positivity).limiters)
             dec = s.decomp
             o = dec.n_halo_d
@@ -135,9 +137,11 @@ end
         end
         # The wall node's weight under the default closure rows, which sets
         # the first-order bound there.
-        W1 = getfield(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                                  eos=POS_GAS, positivity_limiter=true),
+        W1 = getfield(build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=POS_GAS,
+                    ic=nothing),
+            Numerics(n_global=(48, 1, 1), positivity_limiter=true)),
                       :positivity).limiters[1].weight_set.weights[1]
         @test W1[5] * 47 ≈ 0.2149 atol = 1e-4
     end
@@ -729,13 +733,18 @@ end
         # without the fallback), and those nodes take the multilinear
         # interpolant of the parent's endpoint states instead.
         for flux in (:closure, :ghost)
-            s = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                            per3[3]), eos=POS_GAS, art=ArtificialProperties(enabled=true),
-                            cfl=0.4, control=StepControl(validity=:permissive),
-                            positivity_limiter=true, interface_flux=flux,
-                            interface_limited_ghost=true, tile=8, subcycle=true,
-                            refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+            s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                                     per3[3]),
+                                     eos=POS_GAS, ic=nothing),
+                             Numerics(n_global=(48, 48, 1),
+                                      art=ArtificialProperties(enabled=true), cfl=0.4,
+                                      control=StepControl(validity=:permissive),
+                                      positivity_limiter=true,
+                                      patch_interfaces=PatchInterfaces(flux=flux,
+                                                                       limited_ghost=true),
+                                      amr=AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
+                                              regrid_interval=0, subcycle=true, tile=8)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +

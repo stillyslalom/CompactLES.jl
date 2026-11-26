@@ -2,7 +2,7 @@ module TransportIntegrationTests
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES, Test
 using CompactLES: compute_rhs!, apply_bcs!, sync_patches!, padded_index, xcoord
 const CL = CompactLES
@@ -20,9 +20,11 @@ argon_kappa(T) = 1e-4 * exp(0.60968928log(T) - 70.892249/T +
     for isothermal in (false, true), ka in (false, true)
         walls = isothermal ? (NoSlipWallBC(Twall=300), NoSlipWallBC(Twall=600)) :
                              (NoSlipWallBC(), NoSlipWallBC())
-        s = flat_solver(n_global=(32, 1, 1), L_domain=(0.01, 1.0, 1.0),
-                        bcs=(walls, PER, PER), eos=eos, transport=tr,
-                        art=ArtificialProperties(enabled=false), filter_interval=0)
+        s = build_solver(
+            Problem(domain=((0.0, 0.01), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, PER, PER),
+                    eos=eos, transport=tr, ic=nothing),
+            Numerics(n_global=(32, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=300 + 30000x))
         CL.with_knob(CL.FORCE_KA => ka) do
@@ -48,11 +50,12 @@ end
     for metric in (CylindricalMetric(), SphericalMetric()), ka in (false, true)
         spherical = metric isa SphericalMetric
         tangent = spherical ? 3 : 2
-        s = flat_solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        origin=(1.0, pi/2, 0.0),
-                        bcs=((ExtrapolationBC(), ExtrapolationBC()), PER, PER),
-                        eos=eos, transport=tr, metric=metric,
-                        art=ArtificialProperties(enabled=false), filter_interval=0)
+        s = build_solver(
+            Problem(domain=((1.0, 1.0 + 1.0), (pi/2, pi/2 + 1.0), (0.0, 0.0 + 1.0)),
+                    bcs=((ExtrapolationBC(), ExtrapolationBC()), PER, PER), eos=eos,
+                    transport=tr, metric=metric, ic=nothing),
+            Numerics(n_global=(32, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0)))
         Q = allocate_state(s)
         initialize!(s, Q, (r, theta, phi) ->
             Prim(rho=1.0, T_ion=300 + 100r,
@@ -75,10 +78,12 @@ end
     tr = CeaTransport(eos)
     # A periodic transverse shear has tau:grad(u) = mu(T)*(du_y/dx)^2.
     for patch_grid in ((1, 1, 1), (2, 1, 1))
-        s = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(PER, PER, PER), eos=eos, transport=tr,
-                        patch_grid=patch_grid, art=ArtificialProperties(enabled=false),
-                        filter_interval=0)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(PER, PER, PER),
+                    eos=eos, transport=tr, ic=nothing),
+            Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     execution=Execution(patch_grid=patch_grid)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(rho=1.0, T_ion=500 + 100cospi(2x), u=(0.0, sinpi(2x), 0.0)))

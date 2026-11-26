@@ -8,14 +8,14 @@
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES
 using Test
 
 module NeutralTransportDomainTests
 
 using ..MPI
-import ..flat_solver
+import ..build_solver
 using ..CompactLES
 using ..CompactLES: compute_rhs!, max_rate, step!, padded_index
 using ..Test
@@ -54,11 +54,13 @@ end
 good_prim() = Prim(Y=(0.2, 0.3, 0.5), rho=1.0, T_ion=300.0)
 bad_prim() = Prim(Y=(0.2, 0.3, 0.5), rho=1.0, T_ion=340.0)
 
-function base_solver(; kwargs...)
+function base_solver(; )
     eos, transport = polynomial_transport()
-    return flat_solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                       eos=eos, transport=transport, dims=(NP, 1, 1),
-                       art=ArtificialProperties(enabled=false), filter_interval=0; kwargs...)
+    return build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos,
+                transport=transport, ic=nothing),
+        Numerics(n_global=(72, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0), execution=Execution(dims=(NP, 1, 1))))
 end
 
 function poison!(ps, Q)
@@ -132,9 +134,11 @@ end
 
 @testset "patch-disparate ownership rejects collectively" begin
     eos, transport = polynomial_transport()
-    solver = flat_solver(n_global=(144, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                         eos=eos, transport=transport, patch_grid=(2, 1, 1),
-                         art=ArtificialProperties(enabled=false), filter_interval=0)
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos,
+                transport=transport, ic=nothing),
+        Numerics(n_global=(144, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0), execution=Execution(patch_grid=(2, 1, 1))))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     for (ps, Q) in CL.eachpatch(solver, states)
@@ -147,10 +151,13 @@ end
 
 @testset "subcycle fine-only owner rejects collectively" begin
     eos, transport = polynomial_transport()
-    solver = flat_solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                         eos=eos, transport=transport,
-                         refine=BlockRegion((32, 0, 0), (4, 1, 1)), subcycle=true,
-                         art=ArtificialProperties(enabled=false), filter_interval=0)
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos,
+                transport=transport, ic=nothing),
+        Numerics(n_global=(72, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0),
+                 amr=AMR(initial=BlockRegion((32, 0, 0), (4, 1, 1)), regrid_interval=0,
+                         subcycle=true)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     poisoned = false

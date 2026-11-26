@@ -10,7 +10,7 @@
 if !@isdefined(CL)
     using MPI
     MPI.Init(threadlevel=:funneled)
-    @isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+    @isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
     using CompactLES
     using Test
     using Printf
@@ -158,8 +158,9 @@ end
 
     # (f) Setup rejections.
     per = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    build(art; eos=sh_eos(5.0)) = flat_solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                              bcs=per, eos=eos, art=art)
+    build(art; eos=sh_eos(5.0)) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per, eos=eos, ic=nothing),
+        Numerics(n_global=(32, 1, 1), art=art))
     @test_throws ArgumentError build(ArtificialProperties(C_sharpen=-1.0))
     @test_throws ArgumentError build(ArtificialProperties(C_sharpen=0.5, sharpen_width=0.0))
     @test_throws ArgumentError build(ArtificialProperties(C_sharpen=0.5, species_flux=:bulk))

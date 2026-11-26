@@ -13,7 +13,7 @@
 # created: at np = 1 every decomposition borrows `COMM_WORLD` or `COMM_SELF`
 # and owns none, so this suite sees only the second case. The MPI suite checks
 # the first on the regridded Sod case.
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: npatches, ConservedState, interior_index, padded_index, xcoord
 
 released_communicators(decomp) =
@@ -21,9 +21,13 @@ released_communicators(decomp) =
 
 @testset "refined solver rejects unsupported configurations" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = flat_solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                              bcs=per3l, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
-                              kw...)
+    mk(; deriv=lele_d1_6(), n_halo=4, art=ArtificialProperties(), filt=compact_filter(),
+         metric=CartesianMetric(), origin=(0.0, 0.0, 0.0), patch_grid=(1, 1, 1)) = build_solver(
+        Problem(domain=((origin[1], origin[1] + 2π), (origin[2], origin[2] + 1.0), (origin[3], origin[3] + 1.0)),
+                bcs=per3l, metric=metric, ic=nothing),
+        Numerics(n_global=(96, 1, 1), deriv=deriv, n_halo=n_halo, art=art, filter=filt,
+                 execution=Execution(patch_grid=patch_grid),
+                 amr=AMR(initial=BlockRegion((40, 0, 0), (16, 1, 1)), regrid_interval=0)))
     # C10 closes the coarse-fine boundary with two compact rows reading
     # four ghost layers, the default halo; a narrower one is refused (the
     # root's C8 filter trips first at three).
@@ -38,11 +42,14 @@ released_communicators(decomp) =
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
     # A region reaching the seam of a periodic dimension runs across it, but
     # one refined box does not close on itself around the period.
-    @test npatches(flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1, 1), bcs=per3l,
-                               refine=BlockRegion((0, 0, 0), (16, 1, 1)))) == 2
-    @test_throws "periodic dimension 1" flat_solver(n_global=(96, 1, 1),
-                                                    L_domain=(2π, 1, 1), bcs=per3l,
-                                                    refine=BlockRegion((0, 0, 0), (90, 1, 1)))
+    @test npatches(build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1), (0.0, 1)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1),
+                 amr=AMR(initial=BlockRegion((0, 0, 0), (16, 1, 1)), regrid_interval=0)))) == 2
+    @test_throws "periodic dimension 1" build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1), (0.0, 1)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1),
+                 amr=AMR(initial=BlockRegion((0, 0, 0), (90, 1, 1)), regrid_interval=0)))
     # A refined solver reports two patches, level 1 second, at h/3.
     solver = mk()
     @test npatches(solver) == 2
@@ -66,11 +73,13 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
     # node space, so the nest scales with N.
     e1 = 3 * (N ÷ 6) - 2
     r2 = BlockRegion((3 * r1.offset[1] + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
-    solver = flat_solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                         art=ArtificialProperties(enabled=false), filter_interval=0,
-                         level_restriction=mode, subcycle=subcycle, tile=tile,
-                         refine=levels == 3 ? [r1, r2] : r1, deriv=deriv,
-                         n_halo=n_halo, interface_flux=interface_flux, cfl=cfl)
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false), deriv=deriv,
+                 n_halo=n_halo, cfl=cfl, filter=StateFilter(interval=0),
+                 patch_interfaces=PatchInterfaces(flux=interface_flux),
+                 amr=AMR(initial=levels == 3 ? [r1, r2] : r1, regrid_interval=0,
+                         level_restriction=mode, subcycle=subcycle, tile=tile)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -143,9 +152,11 @@ _two_level_mass(solver, states) = volume_integral(solver, states, :rho)
     # run crosses the boundary in both directions, with the Cook sensors and
     # the state filter live throughout — the in-situ form of the
     # sensor-injection measurement.
-    solver = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(wall2, per, per), cfl=0.4,
-                         refine=BlockRegion((120, 0, 0), (41, 1, 1)))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.4,
+                 amr=AMR(initial=BlockRegion((120, 0, 0), (41, 1, 1)), regrid_interval=0)))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
     m0 = _two_level_mass(solver, states)
@@ -179,10 +190,12 @@ _two_level_mass(solver, states) = volume_integral(solver, states, :rho)
     # The :d8 detector and the pentadiagonal filter at the same faces. The
     # momentum ahead of the shock measured 7.3e-6 (2.0e-6 on the unrefined
     # run with the same numerics) and the mass drift 5.4e-9.
-    s8 = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.4, filt=pyranda_filter(),
-                     art=ArtificialProperties(detector=:d8),
-                     refine=BlockRegion((120, 0, 0), (41, 1, 1)))
+    s8 = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.4, art=ArtificialProperties(detector=:d8),
+                 filter=pyranda_filter(),
+                 amr=AMR(initial=BlockRegion((120, 0, 0), (41, 1, 1)), regrid_interval=0)))
     q8 = allocate_state(s8)
     initialize!(s8, q8, ic)
     m8 = _two_level_mass(s8, q8)
@@ -204,9 +217,11 @@ end
     # diagonally through a 2-D refined region.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0, v0 = 0.4, 0.3
-    solver = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                         art=ArtificialProperties(enabled=false), filter_interval=0,
-                         refine=BlockRegion((18, 18, 0), (12, 12, 1)))
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(48, 48, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0),
+                 amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)), regrid_interval=0)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, v0, 0), p=1.0, rho=1.0 + 0.1 * sin(x) * sin(y)))
@@ -230,8 +245,10 @@ end
 
 @testset "subcycle and regrid configuration guards" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = flat_solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                              bcs=per3l, kw...)
+    mk(; subcycle=false, regrid_interval=0, refine=nothing) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1),
+                 amr=AMR(initial=refine, subcycle=subcycle, regrid_interval=regrid_interval)))
     # Both features require an initial refined region.
     @test_throws ErrorException mk(subcycle=true)
     @test_throws ErrorException mk(regrid_interval=10)
@@ -241,11 +258,14 @@ end
 
 @testset "level interpolation order: configuration, exactness and rebuilds" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(p; kw...) = flat_solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                               bcs=per3l, art=ArtificialProperties(enabled=false),
-                               filter_interval=0,
-                               refine=BlockRegion((40, 0, 0), (17, 1, 1)),
-                               level_interpolation_order=p, kw...)
+    mk(p; regrid_interval=0, tag_threshold=CompactLES.DEFAULT_TAG_THRESHOLD, tag_buffer=4,
+          tag_predicate=nothing) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0),
+                 amr=AMR(initial=BlockRegion((40, 0, 0), (17, 1, 1)),
+                         level_interpolation_order=p, regrid_interval=regrid_interval,
+                         tag_threshold=tag_threshold, tag_buffer=tag_buffer)); tag_predicate=tag_predicate)
     for bad in (0, 3, 5, 12)
         @test_throws ErrorException mk(bad)
     end
@@ -257,14 +277,19 @@ end
                                     (lele_d1_10(), 10, 10),
                                     (lele_d1_6(closures=:brady_livescu), 6, 8))
         for (flux, p) in ((:closure, closure), (:ghost, ghost))
-            @test chain_order(flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                                          bcs=per3l, deriv=deriv, interface_flux=flux,
-                                          refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == p
+            @test chain_order(build_solver(
+                Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+                Numerics(n_global=(96, 1, 1), deriv=deriv,
+                         patch_interfaces=PatchInterfaces(flux=flux),
+                         amr=AMR(initial=BlockRegion((40, 0, 0), (17, 1, 1)),
+                                 regrid_interval=0)))) == p
         end
     end
     # The default interface flux is the ghost path's, and so is its order.
-    @test chain_order(flat_solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                                  refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == 8
+    @test chain_order(build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1),
+                 amr=AMR(initial=BlockRegion((40, 0, 0), (17, 1, 1)), regrid_interval=0)))) == 8
     @test CL.default_interpolation_order(compact_filter(0.45)) == 6
     # The shell reproduces a polynomial of degree p − 1 and not one of
     # degree p: the chain runs at the order requested.
@@ -400,8 +425,9 @@ end
     # A serial refined solver holds every level unsplit, so no communicator
     # is created and none is freed.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    solver = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                         refine=r(8))
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1), amr=AMR(initial=r(8), regrid_interval=0)))
     lc = solver.levels[2].level_comm
     @test lc.owned
     @test !lc.scoped
@@ -410,8 +436,11 @@ end
     @test npatches(solver) == 2
     # Likewise for the tile group: one rank spans every tile, so the group
     # is the level's communicator itself, and the tiles are held in order.
-    tiled = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                        refine=BlockRegion((80, 0, 0), (32, 1, 1)), tile=8)
+    tiled = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1),
+                 amr=AMR(initial=BlockRegion((80, 0, 0), (32, 1, 1)), regrid_interval=0,
+                         tile=8)))
     lev = tiled.levels[2]
     @test lev.owners == [0:0, 0:0, 0:0, 0:0]
     @test !lev.group.scoped && lev.group.ranks == 0:0
@@ -528,8 +557,12 @@ end
           ([0:3, 4:5, 6:7], 8)
     # Configuration guards.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                              refine=BlockRegion((80, 0, 0), (32, 1, 1)); kw...)
+    mk(; tile=0, regrid_interval=0, rebalance=0, rebalance_persist=2) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1),
+                 amr=AMR(initial=BlockRegion((80, 0, 0), (32, 1, 1)),
+                         regrid_interval=regrid_interval, tile=tile, rebalance=rebalance,
+                         rebalance_persist=rebalance_persist)))
     @test_throws ErrorException mk(tile=8, regrid_interval=5, rebalance=0.5)
     @test_throws ErrorException mk(tile=8, rebalance=1.5)
     @test_throws ErrorException mk(regrid_interval=5, rebalance=1.5)
@@ -557,8 +590,11 @@ end
     @test_throws ArgumentError CL._tile_edges((4, 12, 8, 2))
     @test_throws ArgumentError CL._tile_edges(4.0)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
-                              refine=BlockRegion((16, 16, 0), (17, 17, 1)); kw...)
+    mk(; tile=0, regrid_interval=0) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(48, 48, 1),
+                 amr=AMR(initial=BlockRegion((16, 16, 0), (17, 17, 1)),
+                         regrid_interval=regrid_interval, tile=tile)))
     @test_throws ErrorException mk(tile=(4, 2))
     @test_throws ErrorException mk(tile=(4, 0))
     # A thin-normal lattice: tiles four parent nodes along x spanning the
@@ -684,9 +720,11 @@ end
     # cell against every old tile it replaces, on the current lattice and on
     # a finer one, with cells at the hold level and young old tiles.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    spec = getfield(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
-                                refine=BlockRegion((16, 0, 0), (17, 1, 1)), tile=8,
-                                regrid_interval=5), :regrid)
+    spec = getfield(build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(48, 1, 1),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (17, 1, 1)), regrid_interval=5,
+                         tile=8))), :regrid)
     N, lo, hi = (49, 37, 25), (5, 5, 5), (45, 33, 21)
     a0, a1 = (8, 8, 8), (4, 8, 8)
     tiles(a) = [t for k3 in 0:3, k2 in 0:4, k1 in 0:6
@@ -805,9 +843,11 @@ end
     # the shell keeps the destination's values, as `_carry_over!` of the
     # replicated gather leaves it.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    solver = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                         refine=BlockRegion((80, 0, 0), (32, 1, 1)), tile=8,
-                         regrid_interval=5)
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1),
+                 amr=AMR(initial=BlockRegion((80, 0, 0), (32, 1, 1)), regrid_interval=5,
+                         tile=8)))
     states = allocate_state(solver)
     initialize!(solver, states,
                 (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0 + 0.1sin(x)))
@@ -860,10 +900,12 @@ end
     # the same crossing with the sensors and gradients through its own
     # interface rows.
     for (label, deriv, n_halo) in (("C6", lele_d1_6(), 4), ("C10", lele_d1_10(), 4))
-        solver = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             bcs=(wall2, per, per), cfl=0.4, subcycle=true,
-                             refine=BlockRegion((120, 0, 0), (41, 1, 1)),
-                             deriv=deriv, n_halo=n_halo)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                    ic=nothing),
+            Numerics(n_global=(N, 1, 1), cfl=0.4, deriv=deriv, n_halo=n_halo,
+                     amr=AMR(initial=BlockRegion((120, 0, 0), (41, 1, 1)),
+                             regrid_interval=0, subcycle=true)))
         states = allocate_state(solver)
         initialize!(solver, states, ic)
         m0 = _two_level_mass(solver, states)
@@ -902,24 +944,29 @@ end
     # level runs three substeps on one rate measurement, which tightens the
     # documented startup restriction (reference/AMR_GPU.md, two-level
     # refinement).
-    sf = flat_solver(n_global=(Nf, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2)
+    sf = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing), Numerics(n_global=(Nf, 1, 1), cfl=0.2))
     Qf = allocate_state(sf)
     initialize!(sf, Qf, ic)
     run!(sf, Qf; tfinal=tf, nmax=40000)
     padF = sf.decomp.n_halo_d[1]
     rho_ref = [Qf[i + padF, 1, 1, 1] for i in 1:Nf]
-    sc = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2)
+    sc = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing), Numerics(n_global=(N, 1, 1), cfl=0.2))
     Qc = allocate_state(sc)
     initialize!(sc, Qc, ic)
     run!(sc, Qc; tfinal=tf, nmax=40000)
     padC = sc.decomp.n_halo_d[1]
     e_base = maximum(abs(Qc[i + padC, 1, 1, 1] - rho_ref[3i - 2]) for i in 1:N)
     # AMR: subcycled with the region retagged every 5 coarse steps.
-    sa = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2, subcycle=true,
-                     regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                         regrid_interval=5)))
     states = allocate_state(sa)
     initialize!(sa, states, ic)
     lt0 = getfield(sa, :levels)[2].transfers[1]
@@ -961,9 +1008,11 @@ end
         @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n[1]) > 0.05
     end
     # The global-dt coupling regrids through the same machinery.
-    sg = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2, regrid_interval=5,
-                     refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    sg = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), regrid_interval=5)))
     states_g = allocate_state(sg)
     initialize!(sg, states_g, ic)
     run!(sg, states_g; tfinal=0.05, nmax=20000)
@@ -975,8 +1024,10 @@ end
 @testset "three levels: configuration and geometry" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     r1 = BlockRegion((40, 0, 0), (16, 1, 1))   # level-1 nodes 121..166
-    mk(r2; kw...) = flat_solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                                bcs=per3l, refine=[r1, r2], kw...)
+    mk(r2; regrid_interval=0) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(96, 1, 1),
+                 amr=AMR(initial=[r1, r2], regrid_interval=regrid_interval)))
     # Nesting is checked against the parent patch (level-1 node space),
     # not the root grid.
     @test_throws ErrorException mk(BlockRegion((122, 0, 0), (10, 1, 1)))
@@ -1031,10 +1082,13 @@ end
     # The two-level Sod gate's region with a level-2 patch over the middle
     # of the level-1 patch (extent 121): the shock crosses four coarse-fine
     # boundaries with the sensors and filter live.
-    solver = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(wall2, per, per), cfl=0.4, subcycle=true,
-                         refine=[BlockRegion((120, 0, 0), (41, 1, 1)),
-                            BlockRegion((390, 0, 0), (60, 1, 1))])
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.4,
+                 amr=AMR(initial=[BlockRegion((120, 0, 0), (41, 1, 1)),
+                             BlockRegion((390, 0, 0), (60, 1, 1))],
+                         regrid_interval=0, subcycle=true)))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
     run!(solver, states; tfinal=0.1, nmax=20000)
@@ -1060,9 +1114,11 @@ end
 
 @testset "tiled level: lattice cover, faces, and configuration guards" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    mk(; kw...) = flat_solver(; n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
-                              bcs=per3l, refine=BlockRegion((80, 0, 0), (32, 1, 1)),
-                              kw...)
+    mk(; tile=0) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1),
+                 amr=AMR(initial=BlockRegion((80, 0, 0), (32, 1, 1)), regrid_interval=0,
+                         tile=tile)))
     @test_throws ErrorException mk(tile=2)
     @test_throws ErrorException mk(tile=-1)
     # Lattice cells of edge 8 meeting nodes 81..112: cells 10..13, each of
@@ -1096,8 +1152,11 @@ end
     # A tile that would leave the nesting margin is clipped, and dropped when
     # fewer than four nodes remain: region 5..24 at margin 4 keeps cell 0
     # clipped to nodes 5..9, then cells 1 and 2.
-    s2 = flat_solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                     refine=BlockRegion((4, 0, 0), (20, 1, 1)), tile=8)
+    s2 = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(192, 1, 1),
+                 amr=AMR(initial=BlockRegion((4, 0, 0), (20, 1, 1)), regrid_interval=0,
+                         tile=8)))
     @test [(r.offset[1], r.extent[1]) for r in level_regions(s2, 1)] ==
           [(4, 5), (8, 9), (16, 9)]
 end
@@ -1122,10 +1181,12 @@ end
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0, v0 = 0.4, 0.3
     function vortex(; tile, subcycle)
-        solver = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                             art=ArtificialProperties(enabled=false), filter_interval=0,
-                             subcycle=subcycle, tile=tile,
-                             refine=BlockRegion((18, 18, 0), (12, 12, 1)))
+        solver = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(48, 48, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                             regrid_interval=0, subcycle=subcycle, tile=tile)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0, v0, 0), p=1.0, rho=1.0 + 0.1 * sin(x) * sin(y)))
@@ -1160,10 +1221,12 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     N = 201
-    sa = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2, subcycle=true,
-                     regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                     tile=8)
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                         regrid_interval=5, tile=8)))
     states = allocate_state(sa)
     initialize!(sa, states, ic)
     initial = level_regions(sa, 1)
@@ -1200,11 +1263,13 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     for tile in (8, 0)
-        s = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(wall2, per, per), cfl=0.2, subcycle=true,
-                        regrid_interval=5, tag_buffer=16, tile=tile,
-                        refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                        filt=pyranda_filter(), art=ArtificialProperties(detector=:d8))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                    ic=nothing),
+            Numerics(n_global=(201, 1, 1), cfl=0.2, art=ArtificialProperties(detector=:d8),
+                     filter=pyranda_filter(),
+                     amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                             regrid_interval=5, tag_buffer=16, tile=tile)))
         states = allocate_state(s)
         initialize!(s, states, ic)
         b0 = CL._conserved_budget(s, states)
@@ -1234,8 +1299,10 @@ end
     CL.CHILD_MASK_THRESHOLD[], CL.CHILD_MASK_REACH[] = 0.0, 0
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     for filt in (compact_filter(0.47), pyranda_filter())
-        s = flat_solver(n_global=(24, 20, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l,
-                        filt=filt, refine=BlockRegion((6, 5, 0), (9, 8, 1)))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(24, 20, 1), filter=filt,
+                     amr=AMR(initial=BlockRegion((6, 5, 0), (9, 8, 1)), regrid_interval=0)))
         states = allocate_state(s)
         ps = CL.PatchSolver(s, s.patches[1])
         Q = states.patches[1]
@@ -1270,9 +1337,12 @@ end
     # the plan of each parity, so the mirrored rows and the closure rows the
     # mask leaves alone are checked as the plan solves them.
     per = (PeriodicBC(), PeriodicBC())
-    s = flat_solver(n_global=(40, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=((AxisBC(), SlipWallBC()), per, per), metric=CylindricalMetric(),
-                    refine=BlockRegion((0, 0, 0), (13, 1, 1)))
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((AxisBC(), SlipWallBC()), per, per), metric=CylindricalMetric(),
+                ic=nothing),
+        Numerics(n_global=(40, 1, 1),
+                 amr=AMR(initial=BlockRegion((0, 0, 0), (13, 1, 1)), regrid_interval=0)))
     states = allocate_state(s)
     ps = CL.PatchSolver(s, s.patches[1])
     Q = states.patches[1]
@@ -1329,8 +1399,11 @@ end
     # an alternating tail of the jumps to its uncovered nodes; the masked ones
     # drop the jumps' sources, so the uncovered rates are zero.
     per = (PeriodicBC(), PeriodicBC())
-    s = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                    refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                ic=nothing),
+        Numerics(n_global=(64, 1, 1),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (33, 1, 1)), regrid_interval=0)))
     states = allocate_state(s)
     slab(x, y, z) = Prim(rho=0.36 < x < 0.64 ? 2.0 : 1.0, u=(1.0, 0.0, 0.0), p=1.0)
     initialize!(s, states, slab)
@@ -1374,10 +1447,11 @@ end
     per = (PeriodicBC(), PeriodicBC())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.25, 1.09)])
-    s = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                    eos=eos, transport=ConstantTransport{Float64}(mu0=1e-3),
-                    art=ArtificialProperties(enabled=true),
-                    refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per), eos=eos,
+                transport=ConstantTransport{Float64}(mu0=1e-3), ic=nothing),
+        Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=true),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (33, 1, 1)), regrid_interval=0)))
     states = allocate_state(s)
     initialize!(s, states, (x, y, z) -> begin
         θ = 0.36 < x < 0.64 ? 1.0 : 0.0
@@ -1419,10 +1493,13 @@ end
         θ = (0.36 < x < 0.64 || 0.86 < x < 0.92) ? 1.0 : 0.0
         Prim(Y=(1 - θ, θ), rho=1.0 + θ, u=(1.0, 0.0, 0.0), p=1.0)
     end
-    mk(; kw...) = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=(per, per, per), eos=eos,
-                              art=ArtificialProperties(enabled=true),
-                              refine=BlockRegion((16, 0, 0), (33, 1, 1)); kw...)
+    mk(; regrid_interval=0, tag_sensor_threshold=0) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per), eos=eos,
+                ic=nothing),
+        Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=true),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (33, 1, 1)),
+                         regrid_interval=regrid_interval,
+                         tag_sensor_threshold=tag_sensor_threshold)))
     s = mk()
     states = allocate_state(s)
     initialize!(s, states, slabs)
@@ -1480,10 +1557,13 @@ end
     end
     rates(masked) = begin
         CL.with_knob(CL.MASK_CHILD_SENSORS => masked) do
-            s = flat_solver(n_global=(64, 64, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(per, per, per), eos=eos, cfl=0.5, subcycle=true,
-                            art=ArtificialProperties(enabled=true),
-                            refine=BlockRegion((16, 16, 0), (33, 33, 1)))
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                        eos=eos, ic=nothing),
+                Numerics(n_global=(64, 64, 1), cfl=0.5,
+                         art=ArtificialProperties(enabled=true),
+                         amr=AMR(initial=BlockRegion((16, 16, 0), (33, 33, 1)),
+                                 regrid_interval=0, subcycle=true)))
             states = allocate_state(s)
             initialize!(s, states, disc)
             run!(s, states; tfinal=1e6, nmax=20)
@@ -1520,9 +1600,13 @@ end
     end
     gas(masked) = begin
         CL.with_knob(CL.MASK_CHILD_SPECIES_GRADIENTS => masked) do
-            s = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                            eos=eos, cfl=0.25, art=ArtificialProperties(enabled=true),
-                            refine=BlockRegion((16, 0, 0), (33, 1, 1)))
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                        eos=eos, ic=nothing),
+                Numerics(n_global=(n, 1, 1), cfl=0.25,
+                         art=ArtificialProperties(enabled=true),
+                         amr=AMR(initial=BlockRegion((16, 0, 0), (33, 1, 1)),
+                                 regrid_interval=0)))
             states = allocate_state(s)
             initialize!(s, states, layer)
             root, Q = s.patches[1], states.patches[1]
@@ -1560,8 +1644,11 @@ end
     # pair changed); the dimension-phased sync gives every copy the mean,
     # and the phase-2 strips, padded along x, fill the diagonal ghosts.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    solver = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                         refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(48, 48, 1),
+                 amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)), regrid_interval=0,
+                         tile=6)))
     states = allocate_state(solver)
     for (i, Q) in enumerate(states.patches)
         fill!(parent(Q), i - 1.0)              # tiles 2..5 carry 1..4
@@ -1603,8 +1690,11 @@ end
     # session of one thread takes; `TILE_SLOTS` holds it at any thread count.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     solver = CL.with_knob(CL.TILE_SLOTS => 1) do
-        flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+        build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(48, 48, 1),
+                     amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                             regrid_interval=0, tile=6)))
     end
     padded(p) = ntuple(d -> p.decomp.n_local[d] + 2 * p.decomp.n_halo_d[d], 3)
     extents = unique(padded(p) for p in solver.patches)
@@ -1624,7 +1714,9 @@ end
     @test all(size(p.rhs_workspace.flux[1, 1]) == padded(p) for p in solver.patches)
     # The single-patch property forwarding serves the workspace's own arrays,
     # and the launchable wrappers hold those same objects.
-    single = flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l)
+    single = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(16, 16, 1)))
     ws = single.patches[1].rhs_workspace
     @test single.tmp_a === ws.tmp_a && single.tmp_b === ws.tmp_b
     @test single.sensor === ws.sensor && single.strain_mag === ws.strain_mag
@@ -1648,11 +1740,16 @@ end
     # The tiles share one workspace as a session of one thread lays them out
     # (`TILE_SLOTS`, see the testset above).
     solver, plain = CL.with_knob(CL.TILE_SLOTS => 1) do
-        flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6),
-        flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
-                    art=ArtificialProperties(enabled=false))
+        build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(48, 48, 1),
+                     amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                             regrid_interval=0, tile=6))),
+        build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(48, 48, 1), art=ArtificialProperties(enabled=false),
+                     amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                             regrid_interval=0, tile=6)))
     end
     states = allocate_state(solver)
     initialize!(solver, states, initial)
@@ -1727,9 +1824,11 @@ end
              p=1.0 + 0.1exp(-4((x - π)^2 + (y - π)^2)))
     function evolve(slots, subcycle)
         CL.with_knob(CL.TILE_SLOTS => slots) do
-            s = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                            refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6,
-                            subcycle=subcycle)
+            s = build_solver(
+                Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+                Numerics(n_global=(48, 48, 1),
+                         amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                                 regrid_interval=0, subcycle=subcycle, tile=6)))
             q = allocate_state(s)
             initialize!(s, q, initial)
             run!(s, q; tfinal=1.0, nmax=3)
@@ -1762,8 +1861,10 @@ end
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     ic(x, y, z) = Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(2y), 0.2cos(3x), 0.0),
                        p=1.0)
-    mk(tile, region) = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                                   refine=region, tile=tile)
+    mk(tile, region) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+        Numerics(n_global=(48, 48, 1),
+                 amr=AMR(initial=region, regrid_interval=0, tile=tile)))
     st = mk(6, BlockRegion((18, 18, 0), (12, 12, 1)))
     # The box over the union of the tiles, which the lattice widens past the
     # requested region.
@@ -1855,8 +1956,10 @@ end
         rho = (1 - v) + 5v
         return Prim(Y=((1 - v) / rho, 5v / rho), rho=rho, u=(0.1, 0.0, 0.0), p=1.0)
     end
-    mk(tile, region) = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                                   eos=eos, art=art, refine=region, tile=tile)
+    mk(tile, region) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, eos=eos, ic=nothing),
+        Numerics(n_global=(48, 48, 1), art=art,
+                 amr=AMR(initial=region, regrid_interval=0, tile=tile)))
     st = mk(6, BlockRegion((18, 18, 0), (12, 12, 1)))
     regs = level_regions(st, 1)
     lo = ntuple(d -> minimum(r.offset[d] for r in regs), 3)
@@ -1921,10 +2024,12 @@ end
     # tiles, and this one adds a fourth). The step depends on the default
     # filter strength, on the root step size and on the parent's pass over
     # the covered nodes (8 under `MASK_CHILD_RESIDUAL[] = false`).
-    sa = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall2, per, per), cfl=0.2, subcycle=true, filter_cfl=0.0,
-                     regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                     tile=8)
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.2, filter=StateFilter(cfl=0.0),
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                         regrid_interval=5, tile=8)))
     states = allocate_state(sa)
     initialize!(sa, states, ic)
     run!(sa, states; tfinal=1.0, nmax=65)
@@ -1953,9 +2058,17 @@ end
     two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 1.0, 1.4)])
     r0 = BlockRegion((20, 0, 0), (31, 1, 1))
-    mk(; kw...) = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=(wall2, per, per), eos=two, cfl=0.2,
-                              refine=r0; kw...)
+    mk(; regrid_interval=0, tag_gradient_threshold=0, tag_sensor_threshold=0,
+         tag_vorticity_threshold=0, tag_predicate=nothing,
+         tag_threshold=CompactLES.DEFAULT_TAG_THRESHOLD, refine=r0) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per), eos=two,
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.2,
+                 amr=AMR(initial=refine, regrid_interval=regrid_interval,
+                         tag_threshold=tag_threshold,
+                         tag_sensor_threshold=tag_sensor_threshold,
+                         tag_gradient_threshold=tag_gradient_threshold,
+                         tag_vorticity_threshold=tag_vorticity_threshold)); tag_predicate=tag_predicate)
     # Configuration guards: a criterion is a regrid setting, and a
     # threshold is non-negative.
     @test_throws ErrorException mk(regrid_interval=5, tag_gradient_threshold=-1)
@@ -2006,9 +2119,11 @@ end
     N2 = 48
     gc = round(Int, xc * N2 / (2π)) + 1
     for (thr, hit) in ((0.0, false), (1.0, true), (10.0, false))
-        sv = flat_solver(n_global=(N2, N2, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                         refine=BlockRegion((8, 8, 0), (12, 12, 1)),
-                         regrid_interval=5, tag_vorticity_threshold=thr)
+        sv = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3l, ic=nothing),
+            Numerics(n_global=(N2, N2, 1),
+                     amr=AMR(initial=BlockRegion((8, 8, 0), (12, 12, 1)), regrid_interval=5,
+                             tag_vorticity_threshold=thr)))
         states = allocate_state(sv)
         initialize!(sv, states, icω)
         r = CL.tagged_region(sv, states.patches[1])
@@ -2108,10 +2223,13 @@ end
                        rho=1.0 + bump(x, 0.3, a_hi) + bump(x, 0.7, amp[]))
     anchor, feature = round(Int, 0.3 * (N - 1)) + 1, round(Int, 0.7 * (N - 1)) + 1
     has(regs, g) = any(r -> r.offset[1] < g <= r.offset[1] + r.extent[1], regs)
-    mk(; kw...) = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=(wall2, per, per), tag_threshold=thr,
-                              regrid_interval=1, tag_buffer=1,
-                              refine=BlockRegion((50, 0, 0), (20, 1, 1)); kw...)
+    mk(; untag_ratio=2, tile_lifetime=1, tile=0) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1),
+                 amr=AMR(initial=BlockRegion((50, 0, 0), (20, 1, 1)), regrid_interval=1,
+                         tag_threshold=thr, tag_buffer=1, untag_ratio=untag_ratio,
+                         tile_lifetime=tile_lifetime, tile=tile)))
     # One regrid check with the feature at amplitude `a`: the state is
     # re-initialized and the cadence hook runs, which is what counts checks.
     function check!(solver, states, workspace, a)
@@ -2237,9 +2355,12 @@ end
     N = 40
     edge = (p, I) -> interior_index(p, I)[1] == N
     # The margin holds at every face with the placement on faces off.
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(wall2, per, per),
-                    regrid_interval=1, tag_buffer=0, tag_predicate=edge,
-                    refine=BlockRegion((10, 0, 0), (8, 1, 1)), level_boundaries=false)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1),
+                 amr=AMR(initial=BlockRegion((10, 0, 0), (8, 1, 1)), regrid_interval=1,
+                         tag_buffer=0, level_boundaries=false)); tag_predicate=edge)
     states = allocate_state(s)
     initialize!(s, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     margin = getfield(s, :regrid).margin
@@ -2285,9 +2406,10 @@ end
             a
         end
     end
-    mk(; kw...) = flat_solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
-                              bcs=walls3, eos=two,
-                              transport=ConstantTransport(mu0=0.01); kw...)
+    mk(; tile=0, refine=nothing) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=walls3, eos=two,
+                transport=ConstantTransport(mu0=0.01), ic=nothing),
+        Numerics(n_global=(N, N, N), amr=AMR(initial=refine, regrid_interval=0, tile=tile)))
     # A composition linear in x and a shear u = y: the plane averages the
     # mixing measures need are exact at every station, and the shear's
     # gradient is exact for every compact derivative.
@@ -2369,10 +2491,12 @@ end
     # A regrid rewrites the root's mask from the new tile set, and the
     # composite quadrature stays exact across it.
     per = (PeriodicBC(), PeriodicBC())
-    sa = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall, per, per), cfl=0.2, subcycle=true,
-                     regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                     tile=8)
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall, per, per),
+                ic=nothing),
+        Numerics(n_global=(201, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                         regrid_interval=5, tile=8)))
     states = allocate_state(sa)
     initialize!(sa, states, (x, y, z) -> x < 0.5 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -2434,9 +2558,11 @@ end
                 patch_grid=(1, 1, 1)),
                (refine=nothing, tile=0, patch_grid=(2, 1, 1)))
     for lay in layouts
-        s = flat_solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(wall, wall, wall), refine=lay.refine, tile=lay.tile,
-                        patch_grid=lay.patch_grid)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall, wall, wall),
+                    ic=nothing),
+            Numerics(n_global=(N, N, N), execution=Execution(patch_grid=lay.patch_grid),
+                     amr=AMR(initial=lay.refine, regrid_interval=0, tile=lay.tile)))
         states = allocate_state(s)
         initialize!(s, states, lin)
         # A linear field is the same number on every level.
@@ -2475,10 +2601,12 @@ end
     # After regrids: the tiles have moved, and a marked state still reads the
     # finest level at every root node the level-1 tiles hold.
     per = (PeriodicBC(), PeriodicBC())
-    sa = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                     bcs=(wall, per, per), cfl=0.2, subcycle=true,
-                     regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                     tile=8)
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall, per, per),
+                ic=nothing),
+        Numerics(n_global=(201, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                         regrid_interval=5, tile=8)))
     states = allocate_state(sa)
     initialize!(sa, states, (x, y, z) -> x < 0.5 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -2513,8 +2641,11 @@ end
     p0 = c0^2 / 1.4
     tgv(x, y, z) = Prim(u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                         p=p0 + (cos(2x) + cos(2y)) * (cos(2z) + 2) / 16, rho=1.0)
-    mk(; kw...) = flat_solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3l,
-                              transport=ConstantTransport(mu0=1 / 1600), cfl=0.6; kw...)
+    mk(; refine=nothing, subcycle=false) = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3l,
+                transport=ConstantTransport(mu0=1 / 1600), ic=nothing),
+        Numerics(n_global=(N, N, N), cfl=0.6,
+                 amr=AMR(initial=refine, regrid_interval=0, subcycle=subcycle)))
     # Kinetic energy per unit volume: the composite quadrature of ½ρ|u|²
     # over the held patches, and the same sums without the masks.
     function energies(s, states)
@@ -2664,8 +2795,11 @@ end
     per = (PeriodicBC(), PeriodicBC())
     ic(x, y, z) = Prim(u=(0, 0, 0), p=1.0, rho=1.0 + 0.5 * tanh((x - 0.5) / 0.005))
     N = 81
-    mk(n; kw...) = flat_solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                               bcs=(wall2, per, per), tile=8, regrid_interval=1, kw...)
+    mk(n; refine=nothing, max_levels=nothing) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(n, 1, 1),
+                 amr=AMR(initial=refine, regrid_interval=1, tile=8, max_levels=max_levels)))
     s = mk(N; refine=BlockRegion((24, 0, 0), (33, 1, 1)), max_levels=3)
     @test [r.offset[1] for r in level_regions(s, 1)] == [24, 32, 40, 48]
     states = allocate_state(s)
@@ -2693,8 +2827,13 @@ end
 @testset "max_levels: configuration and levels created on demand" begin
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
-    mk(; kw...) = flat_solver(; n_global=(81, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=(wall2, per, per), kw...)
+    mk(; max_levels=nothing, regrid_interval=0, tile=0, refine=nothing, rebalance=0,
+         subcycle=false) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                ic=nothing),
+        Numerics(n_global=(81, 1, 1),
+                 amr=AMR(initial=refine, subcycle=subcycle, regrid_interval=regrid_interval,
+                         tile=tile, rebalance=rebalance, max_levels=max_levels)))
     r1 = BlockRegion((20, 0, 0), (41, 1, 1))
     r2 = BlockRegion((80, 0, 0), (30, 1, 1))
     # A level refine does not give starts empty, which needs tiles and a
@@ -2811,10 +2950,13 @@ end
     wall2 = (SlipWallBC(), SlipWallBC())
     # Four tiles meeting at a corner, walls along y, and a filter pass on
     # every other step, so both of the step's endings reach the restriction.
-    function nest(; kw...)
-        s = flat_solver(; n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
-                        bcs=(per, wall2, per), filter_interval=2, tile=6,
-                        refine=BlockRegion((18, 18, 0), (12, 12, 1)), kw...)
+    function nest(; subcycle=false)
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=(per, wall2, per),
+                    ic=nothing),
+            Numerics(n_global=(48, 48, 1), filter=StateFilter(interval=2),
+                     amr=AMR(initial=BlockRegion((18, 18, 0), (12, 12, 1)),
+                             regrid_interval=0, subcycle=subcycle, tile=6)))
         q = allocate_state(s)
         initialize!(s, q, (x, y, z) -> Prim(u=(0.4, 0.3 * sin(x) * sin(y), 0),
                                             p=1.0, rho=1.0 + 0.1 * sin(x) * cos(y)))
@@ -2822,9 +2964,14 @@ end
     end
     sod_ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                                 Prim(u=(0, 0, 0), p=0.1, rho=0.125)
-    function sod(; N=81, kw...)
-        s = flat_solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(wall2, per, per), cfl=0.2, tile=8, kw...)
+    function sod(; N=81,subcycle=false, regrid_interval=0, refine=nothing,
+                        max_levels=nothing)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(wall2, per, per),
+                    ic=nothing),
+            Numerics(n_global=(N, 1, 1), cfl=0.2,
+                     amr=AMR(initial=refine, subcycle=subcycle,
+                             regrid_interval=regrid_interval, tile=8, max_levels=max_levels)))
         q = allocate_state(s)
         initialize!(s, q, sod_ic)
         return s, q
@@ -2907,10 +3054,12 @@ const WALL_LEVEL_TOL = 1e-7
         m = (N - 1) ÷ 6 + 1
         region = BlockRegion((side == :lo ? 0 : N - m, 0, 0), (m, 1, 1))
         n = refined ? N : 3 * (N - 1) + 1
-        solver = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             bcs=((bc, bc), per, per), filter_interval=0, cfl=0.9,
-                             art=ArtificialProperties(enabled=false),
-                             refine=refined ? region : nothing)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=((bc, bc), per, per),
+                    ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? region : nothing, regrid_interval=0)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> begin
             rho = 1 + 0.05 * cos(pi * x)
@@ -2980,14 +3129,16 @@ const PLANE_LEVEL_TOL = 1e-10
     per = (PeriodicBC(), PeriodicBC())
     plane = SymmetryPlaneBC()
     function plane_level(N; refined=true, side=:lo, bcs=((plane, plane), per, per),
-                         nest=nothing, kw...)
+                         nest=nothing,)
         m = N ÷ 6 + 1
         region = BlockRegion((side == :lo ? 0 : N - m, 0, 0), (m, 1, 1))
         refine = !refined ? nothing : nest === nothing ? region : [region, nest]
-        solver = flat_solver(n_global=(refined ? N : 3N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             bcs=bcs, filter_interval=0, cfl=0.9,
-                             art=ArtificialProperties(enabled=false), refine=refine;
-                             kw...)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=(refined ? N : 3N, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refine, regrid_interval=0)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> begin
             rho = 1 + 0.05 * cos(pi * x)
@@ -3090,17 +3241,25 @@ const PLANE_LEVEL_TOL = 1e-10
         Prim(rho=rho, u=(0.05 * sin(pi * x) * cos(pi * y),
                          0.03 * cos(pi * x) * sin(pi * y), 0.0), p=rho^1.4)
     end
-    function corner_level(N; image=false, kw...)
+    function corner_level(N; image=false,level_restriction=:injectlevel_restriction=:inject)
         m = N ÷ 6 + 1
         solver = image ?
-            flat_solver(n_global=(2N, 2N, 1), L_domain=(2.0, 2.0, 1.0),
-                        origin=(0.5 / N, 0.5 / N, 0.0), bcs=(per, per, per),
-                        filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
-                        refine=BlockRegion((2N - m, 2N - m, 0), (2m, 2m, 1)); kw...) :
-            flat_solver(n_global=(N, N, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((plane, plane), (plane, plane), per), filter_interval=0,
-                        cfl=0.9, art=ArtificialProperties(enabled=false),
-                        refine=BlockRegion((0, 0, 0), (m, m, 1)); kw...)
+            build_solver(
+                Problem(domain=((0.5 / N, 0.5 / N + 2.0), (0.5 / N, 0.5 / N + 2.0), (0.0, 0.0 + 1.0)),
+                        bcs=(per, per, per), ic=nothing),
+                Numerics(n_global=(2N, 2N, 1), cfl=0.9,
+                         art=ArtificialProperties(enabled=false),
+                         filter=StateFilter(interval=0),
+                         amr=AMR(initial=BlockRegion((2N - m, 2N - m, 0), (2m, 2m, 1)),
+                                 regrid_interval=0, level_restriction=level_restriction))) :
+            build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                        bcs=((plane, plane), (plane, plane), per), ic=nothing),
+                Numerics(n_global=(N, N, 1), cfl=0.9,
+                         art=ArtificialProperties(enabled=false),
+                         filter=StateFilter(interval=0),
+                         amr=AMR(initial=BlockRegion((0, 0, 0), (m, m, 1)),
+                                 regrid_interval=0, level_restriction=level_restriction)))
         states = allocate_state(solver)
         initialize!(solver, states, ic2)
         return solver, states
@@ -3143,9 +3302,17 @@ const RZ_LEVEL_TOL = 1e-6
     wall = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
     axis = ((AxisBC(), SlipWallBC()), per, per)
-    rz(n; origin=0.5, bcs=(wall, per, per), L_domain=(1.0, 1.0, 1.0), kw...) =
-        flat_solver(; n_global=n, L_domain=L_domain, bcs=bcs,
-                    metric=CylindricalMetric(), origin=(origin, 0.0, 0.0), kw...)
+    rz(n; origin=0.5, bcs=(wall, per, per), L_domain=(1.0, 1.0, 1.0),refine=nothing,
+                                                                     transport=ConstantTransport(),
+                                                                     cfl=0.5,
+                                                                     filter_interval=1,
+                                                                     art=ArtificialProperties()) =
+        build_solver(
+            Problem(domain=((origin, origin + (L_domain[1])), (0.0, 0.0 + (L_domain[2])), (0.0, 0.0 + (L_domain[3]))),
+                    bcs=bcs, metric=CylindricalMetric(), transport=transport, ic=nothing),
+            Numerics(n_global=n, cfl=cfl, art=art,
+                     filter=StateFilter(interval=filter_interval),
+                     amr=AMR(initial=refine, regrid_interval=0)))
     # Each tile evaluates its geometry at its own nodes: the refined patch's
     # arrays equal the uniform run's at the level's spacing node for node,
     # halo layers included.
@@ -3282,11 +3449,12 @@ const NSCBC_REFLECTION_TOL = 1e-6
                                   T_ion=1.0, p=1.0)
         inflow = NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0,
                                target=face === :inflow ? target : nothing)
-        solver = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per, per),
-                             filter_interval=0, cfl=0.9,
-                             art=ArtificialProperties(enabled=false),
-                             refine=refined ? region : nothing)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per, per), ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? region : nothing, regrid_interval=0)))
         states = allocate_state(solver)
         dir = face === :outflow ? 1.0 : -1.0
         initialize!(solver, states, (x, y, z) -> begin
@@ -3350,9 +3518,11 @@ const NSCBC_REFLECTION_TOL = 1e-6
     @test abs(r_level - r_fine) < NSCBC_REFLECTION_TOL
     @test abs(r_coarse - r_fine) > 3 * NSCBC_REFLECTION_TOL
     # A face no level carries is refused by name.
-    @test_throws "ExtrapolationBC" flat_solver(n_global=(49, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                          bcs=((SlipWallBC(), ExtrapolationBC()), per, per),
-                                          refine=BlockRegion((40, 0, 0), (9, 1, 1)))
+    @test_throws "ExtrapolationBC" build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((SlipWallBC(), ExtrapolationBC()), per, per), ic=nothing),
+        Numerics(n_global=(49, 1, 1),
+                 amr=AMR(initial=BlockRegion((40, 0, 0), (9, 1, 1)), regrid_interval=0)))
 end
 
 # The tile at the outer face of the r-z annulus against the uniform run at its
@@ -3371,13 +3541,15 @@ const RADIAL_NSCBC_LEVEL_TOL = 5e-6
     # at the level's spacing, 3(N − 1) + 1 nodes.
     function radial_level(N; refined=true)
         m = (N - 1) ÷ 6 + 1
-        solver = flat_solver(n_global=(refined ? N : 3 * (N - 1) + 1, 1, 1),
-                             L_domain=(1.0, 1.0, 1.0), origin=(0.5, 0.0, 0.0),
-                             metric=CylindricalMetric(),
-                             bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per, per),
-                             filter_interval=0, cfl=0.9,
-                             art=ArtificialProperties(enabled=false),
-                             refine=refined ? BlockRegion((N - m, 0, 0), (m, 1, 1)) : nothing)
+        solver = build_solver(
+            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 1.0), (0.0, 0.0 + 1.0)),
+                    metric=CylindricalMetric(),
+                    bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per, per), ic=nothing),
+            Numerics(n_global=(refined ? N : 3 * (N - 1) + 1, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? BlockRegion((N - m, 0, 0), (m, 1, 1)) : nothing,
+                             regrid_interval=0)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> begin
             a = 0.01 * exp(-((x - 1) / 0.1)^2)
@@ -3423,13 +3595,17 @@ const AXIS_FILTER_TOL = 2e-5
     # tile's node j. Filtered at every step: the axis converts the grid-scale
     # waves the coarse-fine face emits into smooth ones
     # (`axis_level_case` in smooth_cases.jl).
-    function axis_level(N; refined=true, nest=nothing, kw...)
+    function axis_level(N; refined=true, nest=nothing,level_restriction=:inject)
         region = BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, 1))
         refine = !refined ? nothing : nest === nothing ? region : [region, nest]
-        solver = flat_solver(; n_global=(refined ? N : 3N - 1, 1, 1),
-                             L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
-                             metric=CylindricalMetric(), filter_interval=1, cfl=0.9,
-                             art=ArtificialProperties(enabled=false), refine=refine, kw...)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(axis, per, per),
+                    metric=CylindricalMetric(), ic=nothing),
+            Numerics(n_global=(refined ? N : 3N - 1, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=1),
+                     amr=AMR(initial=refine, regrid_interval=0,
+                             level_restriction=level_restriction)))
         states = allocate_state(solver)
         initialize!(solver, states, (r, θ, z) -> begin
             rho = 1 + 0.05 * exp(-((r - 0.3) / 0.1)^2)
@@ -3479,8 +3655,10 @@ const AXIS_FILTER_TOL = 2e-5
     @test CL.uncovered_fraction(root.amr.covered[padded_index(root, 1, 1, 1)]) == 0
     @test CL.quad_weight(fine, 1, 1) == 1.0
     @test CL._edge_factor(fine, 1, 1, padded_index(fine, 1, 1, 1)) ≈ 11 / 12
-    alone = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, per),
-                        metric=CylindricalMetric())
+    alone = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(axis, per, per),
+                metric=CylindricalMetric(), ic=nothing),
+        Numerics(n_global=(N, 1, 1)))
     @test domain_volume(s) ≈ domain_volume(alone) atol = 1e-15
     # Against the uniform run at the level's spacing in the same equal steps,
     # the tile differs by the refinement's error alone.
@@ -3526,12 +3704,17 @@ const AXIS_FILTER_TOL = 2e-5
 
     # The corner of the axis and a symmetry plane at z = 0: the tile folds on
     # both dimensions, with each root fold's parities.
-    function corner(N; refined=true, kw...)
+    function corner(N; refined=true,transport=ConstantTransport(), filter_interval=1,
+                                    art=ArtificialProperties(), cfl=0.5)
         n = refined ? N : 3N - 1
-        solver = flat_solver(; n_global=(n, 1, n), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(axis, per, zplane), metric=CylindricalMetric(),
-                        refine=refined ? BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, N ÷ 6 + 1)) :
-                               nothing, kw...)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(axis, per, zplane),
+                    metric=CylindricalMetric(), transport=transport, ic=nothing),
+            Numerics(n_global=(n, 1, n), art=art, cfl=cfl,
+                     filter=StateFilter(interval=filter_interval),
+                     amr=AMR(initial=refined ? BlockRegion((0, 0, 0), (N ÷ 6 + 1, 1, N ÷ 6 + 1)) :
+                                     nothing,
+                             regrid_interval=0)))
         states = allocate_state(solver)
         initialize!(solver, states, (r, θ, z) -> begin
             rho = 1 + 0.05 * exp(-((sqrt(r^2 + z^2) - 0.4) / 0.15)^2)
@@ -3551,8 +3734,10 @@ const AXIS_FILTER_TOL = 2e-5
     # The axis's edge term at the tile's spacing and the junction's Ω on the
     # tile's r face cancel per unit of z, as on the axis tile above, and the
     # z face's Ω takes nothing from an integrand r constant along z.
-    alone = flat_solver(n_global=(N, 1, N), L_domain=(1.0, 1.0, 1.0), bcs=(axis, per, zplane),
-                        metric=CylindricalMetric())
+    alone = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(axis, per, zplane),
+                metric=CylindricalMetric(), ic=nothing),
+        Numerics(n_global=(N, 1, N)))
     @test domain_volume(s) ≈ domain_volume(alone) atol = 1e-15
     # A uniform state at rest stays at rest to round-off through both folds,
     # the viscous ghost fluxes, the artificial properties, the d8 detector and
@@ -3625,14 +3810,18 @@ const PLACED_NSCBC_TOL = 5e-6
     upper = Ref(2.0)
     near(p, I) = cut[] < xcoord(p, 1, interior_index(p, I)[1]) < upper[]
     function placed(; refined=true, tile=0, lb=true, bcs=(walls, per, per),
-                    region=BlockRegion((16, 0, 0), (9, 1, 1)), ic=wave, kw...)
+                    region=BlockRegion((16, 0, 0), (9, 1, 1)), ic=wave,level_interpolation_order=nothing,
+                                                                       max_levels=nothing)
         local n = refined ? N : 3 * (N - 1) + 1
-        local s = flat_solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                   filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
-                   refine=refined ? region : nothing,
-                   regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
-                   tag_predicate=refined ? near : nothing, tag_buffer=2, tile=tile,
-                   level_boundaries=refined && lb, kw...)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? region : nothing,
+                             level_interpolation_order=level_interpolation_order,
+                             regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
+                             tag_buffer=2, tile=tile, max_levels=max_levels,
+                             level_boundaries=refined && lb)); tag_predicate=refined ? near : nothing)
         local q = allocate_state(s)
         initialize!(s, q, ic)
         return s, q
@@ -3662,11 +3851,18 @@ const PLACED_NSCBC_TOL = 5e-6
     reaches(r) = r.offset[1] + r.extent[1] == N
     # The placement is on by default; without regridding the keyword
     # leaves an explicit region as it is.
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, per, per),
-                    refine=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=1)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=1)))
     @test getfield(s, :regrid).boundaries
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(walls, per, per),
-                    level_boundaries=true, refine=BlockRegion((16, 0, 0), (9, 1, 1)))
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1),
+                 amr=AMR(initial=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=0,
+                         level_boundaries=true)))
     @test only(level_regions(s, 1)) == BlockRegion((16, 0, 0), (9, 1, 1))
 
     # --- The tag clamp of a box, off and on ----------------------------------
@@ -3785,12 +3981,13 @@ const PLACED_NSCBC_TOL = 5e-6
                       Prim(rho=1 + a / c^2, u=(0.3 + a / c, 0.0, 0.0), p=1 + a))
     function pulse_run(; refined=true, lb=true, coarse=false)
         local n = refined || coarse ? N : 3 * (N - 1) + 1
-        local s = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=open_bcs,
-                   filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
-                   refine=refined ? BlockRegion((16, 0, 0), (17, 1, 1)) : nothing,
-                   regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
-                   tag_predicate=refined ? follow : nothing, tag_buffer=2, tile=8,
-                   level_boundaries=refined && lb)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=open_bcs, ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? BlockRegion((16, 0, 0), (17, 1, 1)) : nothing,
+                             regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
+                             tag_buffer=2, tile=8, level_boundaries=refined && lb)); tag_predicate=refined ? follow : nothing)
         local q = allocate_state(s)
         initialize!(s, q, pulse)
         return s, q
@@ -3871,11 +4068,14 @@ end
                      Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
     high(p, I) = xcoord(p, 1, interior_index(p, I)[1]) > 0.85
     low(p, I) = xcoord(p, 1, interior_index(p, I)[1]) < 0.15
-    function tagged(bcs, tag; kw...)
-        local s = flat_solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                              filter_interval=0, art=ArtificialProperties(enabled=false),
-                              refine=BlockRegion((16, 0, 0), (9, 1, 1)), regrid_interval=10^6,
-                              tag_threshold=Inf, tag_predicate=tag, tag_buffer=2, kw...)
+    function tagged(bcs, tag; tile=0, level_restriction=:inject)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=BlockRegion((16, 0, 0), (9, 1, 1)),
+                             level_restriction=level_restriction, regrid_interval=10^6,
+                             tag_threshold=Inf, tag_buffer=2, tile=tile)); tag_predicate=tag)
         local q = allocate_state(s)
         initialize!(s, q, wave)
         return s, q
@@ -3929,17 +4129,18 @@ const FOLD_NEST_TOL = 5e-12
     # the low face and a wall at the high one put the root's node 1 at h/2
     # with h = 1/(N − ½), so the level's spacing is that of 3N − 1 nodes.
     function placed(fold; refined=true, tile=0, lb=true, region=BlockRegion((16, 0, 0),
-                                                                          (9, 1, 1)), kw...)
+                                                                          (9, 1, 1)),max_levels=nothing)
         cyl = fold === axis
-        local s = flat_solver(; n_global=(refined ? N : 3N - 1, 1, 1),
-                              L_domain=(1.0, 1.0, 1.0), bcs=(fold, per, per),
-                              metric=cyl ? CylindricalMetric() : CartesianMetric(),
-                              filter_interval=cyl ? 1 : 0, cfl=0.9,
-                              art=ArtificialProperties(enabled=false),
-                              refine=refined ? region : nothing,
-                              regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
-                              tag_predicate=refined ? near : nothing, tag_buffer=2, tile=tile,
-                              level_boundaries=refined && lb, kw...)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(fold, per, per),
+                    metric=cyl ? CylindricalMetric() : CartesianMetric(), ic=nothing),
+            Numerics(n_global=(refined ? N : 3N - 1, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=cyl ? 1 : 0),
+                     amr=AMR(initial=refined ? region : nothing,
+                             regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
+                             tag_buffer=2, tile=tile, max_levels=max_levels,
+                             level_boundaries=refined && lb)); tag_predicate=refined ? near : nothing)
         local q = allocate_state(s)
         initialize!(s, q, wave)
         return s, q
@@ -4093,16 +4294,19 @@ end
     # there, at offset −1 of level 1's node space, and at the high plane ends
     # one node past the last node coincident with the root's, 3(N − 1) + 1.
     N = 48
-    function nested(side; refined=true, kw...)
+    function nested(side; refined=true,)
         E1 = 3 * (N - 1) + 1
         r1 = side == :lo ? BlockRegion((0, 0, 0), (9, 1, 1)) :
                            BlockRegion((N - 9, 0, 0), (9, 1, 1))
         r2 = side == :lo ? BlockRegion((-1, 0, 0), (12, 1, 1)) :
                            BlockRegion((E1 + 1 - 12, 0, 0), (12, 1, 1))
-        local s = flat_solver(; n_global=(refined ? N : 9N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=((plane, plane), per, per), filter_interval=0, cfl=0.9,
-                              art=ArtificialProperties(enabled=false),
-                              refine=refined ? [r1, r2] : nothing, kw...)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((plane, plane), per, per), ic=nothing),
+            Numerics(n_global=(refined ? N : 9N, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? [r1, r2] : nothing, regrid_interval=0)))
         local q = allocate_state(s)
         initialize!(s, q, wave)
         return s, q
@@ -4161,9 +4365,12 @@ end
     end
     # A second level stopping short of the plane inside the margin is
     # refused, with the offset that reaches the plane named.
-    @test_throws "offset -1 reaches the SymmetryPlaneBC" flat_solver(
-        n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=((plane, plane), per, per),
-        refine=[BlockRegion((0, 0, 0), (9, 1, 1)), BlockRegion((0, 0, 0), (12, 1, 1))])
+    @test_throws "offset -1 reaches the SymmetryPlaneBC" build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=((plane, plane), per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1),
+                 amr=AMR(initial=[BlockRegion((0, 0, 0), (9, 1, 1)), BlockRegion((0, 0, 0), (12, 1, 1))],
+                         regrid_interval=0)))
 end
 
 # A level across a periodic seam against the same level placed away from the
@@ -4192,11 +4399,15 @@ const SEAM_REGRID_TOL = 5e-9
         Prim(rho=1 + 0.2 * sin(phase + 0.37), u=(0.5, dims == 2 ? 0.25 : 0.0, 0.0),
              p=1.0)
     end
-    function seam(; dims=1, s=0, region=nothing, kw...)
-        local sv = flat_solver(; n_global=dims == 2 ? (N, N, 1) : (N, 1, 1),
-                               L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                               filter_interval=0, cfl=0.9,
-                               art=ArtificialProperties(enabled=false), refine=region, kw...)
+    function seam(; dims=1, s=0, region=nothing,subcycle=false, tile=0)
+        local sv = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                    ic=nothing),
+            Numerics(n_global=dims == 2 ? (N, N, 1) : (N, 1, 1), cfl=0.9,
+                     art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=region, regrid_interval=0, subcycle=subcycle,
+                             tile=tile)))
         local q = allocate_state(sv)
         initialize!(sv, q, wave(s, dims))
         return sv, q
@@ -4280,8 +4491,10 @@ const SEAM_REGRID_TOL = 5e-9
             Prim(rho=density[profile](mod(x - s / N, 1.0)), u=(0.5, 0.0, 0.0), p=1.0)
         contact = map(((0, BlockRegion((10, 0, 0), (9, 1, 1))),
                        (36, BlockRegion((-2, 0, 0), (9, 1, 1))))) do (s, r)
-            local sv = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                   bcs=(per, per, per), cfl=0.4, refine=r)
+            local sv = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                        ic=nothing),
+                Numerics(n_global=(N, 1, 1), cfl=0.4, amr=AMR(initial=r, regrid_interval=0)))
             local q = allocate_state(sv)
             initialize!(sv, q, step_ic(s))
             local m0 = volume_integral(sv, q, :rho)
@@ -4347,11 +4560,19 @@ const SEAM_REGRID_TOL = 5e-9
     # A fold on one dimension and the seam on another: a level at the axis of
     # an r-z run across the periodic seam in z, static and regridded onto the
     # axis under level_boundaries, box and tiles, against its translation in z.
-    function rz(; s=0, region=nothing, kw...)
-        local sv = flat_solver(; n_global=(24, 1, N), L_domain=(1.0, 1.0, 1.0),
-                               bcs=((AxisBC(), SlipWallBC()), per, per),
-                               metric=CylindricalMetric(), filter_interval=1, cfl=0.9,
-                               art=ArtificialProperties(enabled=false), refine=region, kw...)
+    function rz(; s=0, region=nothing,tile=0, regrid_interval=0,
+                                      tag_threshold=CompactLES.DEFAULT_TAG_THRESHOLD,
+                                      tag_predicate=nothing, tag_buffer=4,
+                                      level_boundaries=true)
+        local sv = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((AxisBC(), SlipWallBC()), per, per), metric=CylindricalMetric(),
+                    ic=nothing),
+            Numerics(n_global=(24, 1, N), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=1),
+                     amr=AMR(initial=region, regrid_interval=regrid_interval,
+                             tag_threshold=tag_threshold, tag_buffer=tag_buffer, tile=tile,
+                             level_boundaries=level_boundaries)); tag_predicate=tag_predicate)
         local q = allocate_state(sv)
         initialize!(sv, q, (r, θ, z) ->
             Prim(rho=1 + 0.1 * exp(-10r^2) * sin(2pi * (z - s / N) + 0.37),
@@ -4400,13 +4621,14 @@ const SEAM_REGRID_TOL = 5e-9
                        0.5) < 0.08
     function moving(; refined=true, tile=0, lb=true)
         local n = refined ? N : 3N
-        local s = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                   bcs=(per, per, per), filter_interval=0, cfl=0.9,
-                   art=ArtificialProperties(enabled=false),
-                   refine=refined ? BlockRegion((32, 0, 0), (9, 1, 1)) : nothing,
-                   regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
-                   tag_predicate=refined ? window : nothing, tag_buffer=2, tile=tile,
-                   level_boundaries=refined && lb)
+        local s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                    ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refined ? BlockRegion((32, 0, 0), (9, 1, 1)) : nothing,
+                             regrid_interval=refined ? 4 : 0, tag_threshold=Inf,
+                             tag_buffer=2, tile=tile, level_boundaries=refined && lb)); tag_predicate=refined ? window : nothing)
         local q = allocate_state(s)
         initialize!(s, q, wave(0, 1))
         return s, q
@@ -4461,10 +4683,13 @@ const SEAM_REGRID_TOL = 5e-9
     # Three regridded levels: the second is tagged on the first's tiles, on
     # the lattice of the first level's node space, which wraps at its own
     # period, 3N.
-    s3 = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per),
-                     filter_interval=0, cfl=0.9, art=ArtificialProperties(enabled=false),
-                     regrid_interval=4, tag_threshold=Inf, tag_predicate=window,
-                     tag_buffer=2, tile=6, max_levels=3, level_boundaries=true)
+    s3 = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
+                ic=nothing),
+        Numerics(n_global=(N, 1, 1), cfl=0.9, art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0),
+                 amr=AMR(initial=nothing, regrid_interval=4, tag_threshold=Inf,
+                         tag_buffer=2, tile=6, max_levels=3, level_boundaries=true)); tag_predicate=window)
     q3 = allocate_state(s3)
     initialize!(s3, q3, wave(0, 1))
     crossed = false

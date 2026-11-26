@@ -1,6 +1,6 @@
 # Included by mpi_tests.jl after its MPI harness definitions.
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: npatches
 
 function test_composite_budgets()
@@ -10,12 +10,16 @@ function test_composite_budgets()
     vel = (0.4, -0.3, 0.2)
     ic(x, y, z) = Prim(Y=(0.3, 0.7), u=vel, p=2.0,
                        rho=1.0 + 0.2sin(2π * x))
-    function make(comm_here, dims_here; kw...)
-        common = (; n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                  bcs=per3, eos=eos, art=ArtificialProperties(enabled=false),
-                  filter_interval=0, comm=comm_here)
-        s = dims_here === nothing ? flat_solver(; common..., kw...) :
-                                    flat_solver(; common..., dims=dims_here, kw...)
+    function make(comm_here, dims_here; patch_grid=(1, 1, 1), refine=nothing,
+                  subcycle=false)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, eos=eos,
+                    ic=nothing),
+            Numerics(n_global=(192, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     execution=Execution(comm=comm_here, dims=dims_here,
+                                         patch_grid=patch_grid),
+                     amr=AMR(initial=refine, subcycle=subcycle, regrid_interval=0)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         return s, Q
@@ -73,13 +77,16 @@ function test_composite_budgets()
     # steps, through the ghost fluxes' area factors, matches the undecomposed
     # run.
     function rz(comm_here, dims_here)
-        kw = dims_here === nothing ? (;) : (; dims=dims_here)
-        s = flat_solver(; n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
-                        (PeriodicBC(), PeriodicBC())),
-                        metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
-                        refine=BlockRegion((16, 0, 16), (16, 1, 16)),
-                        transport=ConstantTransport(mu0=1e-3), comm=comm_here, kw...)
+        s = build_solver(
+            Problem(domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+                         (PeriodicBC(), PeriodicBC())),
+                    metric=CylindricalMetric(), transport=ConstantTransport(mu0=1e-3),
+                    ic=nothing),
+            Numerics(n_global=(48, 1, 48),
+                     execution=Execution(comm=comm_here, dims=dims_here),
+                     amr=AMR(initial=BlockRegion((16, 0, 16), (16, 1, 16)),
+                             regrid_interval=0)))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) -> begin
             g = exp(-40((r - 0.9)^2 + (z - 0.45)^2))

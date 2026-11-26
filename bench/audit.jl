@@ -12,7 +12,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "../test/build_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, step!
 using Printf, InteractiveUtils
@@ -26,9 +26,11 @@ function build(; N=48, n_species=1, art=true, deriv=lele_d1_6(),
     eos = n_species == 1 ? IdealSpecies("gas"; R=1.0, gamma=1.4) :
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    solver = flat_solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
-               transport=ConstantTransport(mu0=1e-3), deriv=deriv,
-               art=ArtificialProperties(enabled=art, species_flux=species_flux))
+    solver = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos,
+                transport=ConstantTransport(mu0=1e-3), ic=nothing),
+        Numerics(n_global=(N, N, N), deriv=deriv,
+                 art=ArtificialProperties(enabled=art, species_flux=species_flux)))
     Q = allocate_state(solver)
     if n_species == 1
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x) * cos(y), -0.1cos(x) * sin(y), 0.05sin(z)),
@@ -82,9 +84,10 @@ alloc("compute_rhs! (2 species, bulk)", () -> compute_rhs!(sb, Qb, dQb); scale=n
 alloc("step!        (2 species, bulk)", () -> step!(sb, Qb, dQb, dub, 1e-4); scale=npt)
 
 println("\n=== allocation per call (cylindrical axis fold, 1-D radial) ===")
-sf = flat_solver(n_global=(128, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
-                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                 art=ArtificialProperties(enabled=true))
+sf = build_solver(
+    Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+    Numerics(n_global=(128, 1, 1), art=ArtificialProperties(enabled=true)))
 Qf = allocate_state(sf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 dQf = zero(Qf); duf = zero(Qf)
@@ -157,29 +160,33 @@ function float64_in_point_bodies()
                          rho=1 + 0.1sin(y))
     pair(x, y, z) = Prim(Y=(0.6 + 0.1sin(x), 0.4 - 0.1sin(x)),
                          u=(0.0, 0.05sin(y), 0.0), p=1.0, rho=1 + 0.1sin(y))
+    unit = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
+    # Per run, the Problem's keywords, the Numerics' and the initial condition.
     runs = [
-        ((n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
-          transport=ConstantTransport(mu0=1e-3),
-          art=ArtificialProperties(enabled=true)), wave),
-        ((n_global=(24, 16, 1), L_domain=(1.0, 2π, 1.0), bcs=(iso, per, per),
-          eos=mix, transport=ConstantTransport(mu0=1e-3),
-          art=ArtificialProperties(enabled=true, species_flux=:bulk),
-          sources=(ConstantBodyForce((0.0, -1.0, 0.0)),)), pair),
-        ((n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-          bcs=((NSCBCInflowBC(u=(0.1, 0.0, 0.0), T_ion=1.0),
-                NSCBCOutflowBC(pinf=1.0)), per, per),
-          art=ArtificialProperties(enabled=true)),
+        ((; domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
+            transport=ConstantTransport(mu0=1e-3)),
+         (; n_global=(24, 24, 24), art=ArtificialProperties(enabled=true)), wave),
+        ((; domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), bcs=(iso, per, per), eos=mix,
+            transport=ConstantTransport(mu0=1e-3),
+            sources=(ConstantBodyForce((0.0, -1.0, 0.0)),)),
+         (; n_global=(24, 16, 1),
+            art=ArtificialProperties(enabled=true, species_flux=:bulk)), pair),
+        ((; domain=unit,
+            bcs=((NSCBCInflowBC(u=(0.1, 0.0, 0.0), T_ion=1.0),
+                  NSCBCOutflowBC(pinf=1.0)), per, per)),
+         (; n_global=(48, 1, 1), art=ArtificialProperties(enabled=true)),
          (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1.0, rho=1.0)),
-        ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-          eos=StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0),
-          art=ArtificialProperties(enabled=true)),
+        ((; domain=unit, bcs=per3, eos=StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0)),
+         (; n_global=(32, 1, 1), art=ArtificialProperties(enabled=true)),
          (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1 + 0.1sin(2π * x), rho=1.0)),
-        ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
-          bcs=((AxisBC(), SlipWallBC()), per, per), art=ArtificialProperties(enabled=true)),
+        ((; domain=unit, metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per, per)),
+         (; n_global=(32, 1, 1), art=ArtificialProperties(enabled=true)),
          (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + 0.1exp(-40(r - 0.4)^2), rho=1.0)),
     ]
-    for (deck, ic) in runs
-        s = flat_solver(; precision=Float32, cfl=0.3, deck...)
+    for (problem, numerics, ic) in runs
+        s = build_solver(Problem(; problem..., ic=nothing),
+                         Numerics(; numerics..., cfl=0.3,
+                                  execution=Execution(storage=Float32)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=2)

@@ -8,7 +8,7 @@
 # and MPI internals do not drown the signal.
 using MPI
 MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "../test/build_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, apply_bcs!, filter_state!, step!
 # JET is not a dependency of this package. It resolves from the default
@@ -29,21 +29,25 @@ using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-solver = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-           transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
+solver = build_solver(
+    Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
+            transport=ConstantTransport(mu0=1e-3), ic=nothing),
+    Numerics(n_global=(32, 32, 32), art=ArtificialProperties(enabled=true)))
 Q = allocate_state(solver); dQ = zero(Q); du = zero(Q)
 initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
-ss = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-                 sources=(ConstantBodyForce((0.0, -1.0, 0.0)),),
-                 art=ArtificialProperties(enabled=false))
+ss = build_solver(
+    Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
+            sources=(ConstantBodyForce((0.0, -1.0, 0.0)),), ic=nothing),
+    Numerics(n_global=(32, 32, 32), art=ArtificialProperties(enabled=false)))
 Qs = allocate_state(ss); dQs = zero(Qs)
 initialize!(ss, Qs, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
 # axis-fold solver: exercises the fold path, which the Cartesian one skips
-sf = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
-                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                 art=ArtificialProperties(enabled=true))
+sf = build_solver(
+    Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+    Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=true)))
 Qf = allocate_state(sf); dQf = zero(Qf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 
@@ -52,8 +56,10 @@ initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), r
 # a runtime field and JET analyses the partial-density branch in the same method
 eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                      IdealSpecies{Float64}("b", 0.2, 1.09)])
-sb = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos2,
-                 art=ArtificialProperties(enabled=true, species_flux=:bulk))
+sb = build_solver(
+    Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos2, ic=nothing),
+    Numerics(n_global=(32, 32, 32),
+             art=ArtificialProperties(enabled=true, species_flux=:bulk)))
 Qb = allocate_state(sb); dQb = zero(Qb)
 initialize!(sb, Qb, (x, y, z) -> Prim(Y=(0.5 + 0.4tanh(4sin(x)), 0.5 - 0.4tanh(4sin(x))),
                                        u=(0.1sin(x), 0, 0), p=1.0, rho=1 + 0.5cos(x)))

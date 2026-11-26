@@ -3,7 +3,7 @@ module TransportTests
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES
 using CompactLES: compute_rhs!, max_rate, CPUBackend, padded_index, xcoord
 using Test
@@ -271,16 +271,19 @@ end
     @test isfinite(compute_dt(solver, Q))
     compute_rhs!(solver, Q, zero(Q))
 
-    patched = flat_solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                          eos=eos, transport=tr, patch_grid=(2, 1, 1),
-                          art=ArtificialProperties(enabled=false))
+    patched = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos, transport=tr,
+                ic=nothing),
+        Numerics(n_global=(32, 1, 1), art=ArtificialProperties(enabled=false),
+                 execution=Execution(patch_grid=(2, 1, 1))))
     @test patched.transport isa CeaTransport
     @test length(patched.patches) == 2
 
-    refined = flat_solver(n_global=(32, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                          eos=eos, transport=tr,
-                          refine=BlockRegion((8, 4, 0), (16, 8, 1)),
-                          art=ArtificialProperties(enabled=false))
+    refined = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos, transport=tr,
+                ic=nothing),
+        Numerics(n_global=(32, 16, 1), art=ArtificialProperties(enabled=false),
+                 amr=AMR(initial=BlockRegion((8, 4, 0), (16, 8, 1)), regrid_interval=0)))
     @test refined.transport isa CeaTransport
     @test length(refined.patches) > 1
 end
@@ -290,9 +293,11 @@ end
     tr = VariableTransport(2e-3, 0.35, 3e-3, 0.8)
 
     eos1 = IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))
-    st = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                     eos=eos1, transport=tr, art=ArtificialProperties(enabled=false),
-                     filter_interval=0)
+    st = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos1,
+                transport=tr, ic=nothing),
+        Numerics(n_global=(n, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0)))
     Qt = allocate_state(st)
     base, amp = 1.2, 0.08
     initialize!(st, Qt, (x, y, z) -> Prim(rho=1.0, T_ion=base + amp*cospi(2x)))
@@ -315,9 +320,11 @@ end
     # velocity rather than only a scalar variable-coefficient Laplacian.
     eos2 = IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
                          IdealSpecies("b"; R=1.0, gamma=1.4)))
-    ss = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                     eos=eos2, transport=tr, art=ArtificialProperties(enabled=false),
-                     filter_interval=0)
+    ss = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos2,
+                transport=tr, ic=nothing),
+        Numerics(n_global=(n, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0)))
     Qs = allocate_state(ss)
     ybase, yamp = 0.45, 0.12
     initialize!(ss, Qs, (x, y, z) -> begin
@@ -348,9 +355,11 @@ end
         eos1 = IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))
         tsrc = ManufacturedTransportSource(:thermal, 1.2, 0.08,
                                             tr.thermal_slope, tr.k0, 0, 0)
-        st = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                         eos=eos1, transport=tr, sources=(tsrc,), cfl=0.15,
-                         art=ArtificialProperties(enabled=false), filter_interval=0)
+        st = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos1,
+                    transport=tr, sources=(tsrc,), ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.15, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0)))
         Qt = allocate_state(st)
         initialize!(st, Qt, (x, y, z) -> Prim(rho=1.0,
                     T_ion=tsrc.base + tsrc.amplitude*cospi(2x)))
@@ -365,9 +374,11 @@ end
                              IdealSpecies("b"; R=1.0, gamma=1.4)))
         ssrc = ManufacturedTransportSource(:species, 0.45, 0.12, 0, 0,
                                             tr.species_slope, tr.D0)
-        ss = flat_solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                         eos=eos2, transport=tr, sources=(ssrc,), cfl=0.15,
-                         art=ArtificialProperties(enabled=false), filter_interval=0)
+        ss = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos2,
+                    transport=tr, sources=(ssrc,), ic=nothing),
+            Numerics(n_global=(n, 1, 1), cfl=0.15, art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0)))
         Qs = allocate_state(ss)
         initialize!(ss, Qs, (x, y, z) -> begin
             y1 = ssrc.base + ssrc.amplitude*cospi(2x)
@@ -391,9 +402,11 @@ end
     eos = IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
                         IdealSpecies("b"; R=1.0, gamma=1.4)))
     tr = VariableTransport(0.0, 0.0, 2.5, 0.0)
-    s = flat_solver(n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                    eos=eos, transport=tr, cfl=0.4,
-                    art=ArtificialProperties(enabled=false), filter_interval=0)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER, eos=eos, transport=tr,
+                ic=nothing),
+        Numerics(n_global=(24, 1, 1), cfl=0.4, art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0)))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), rho=1.0, T_ion=1.0))
     h = s.h[1]
@@ -436,21 +449,25 @@ end
                                  500.0, 1.0, 2.5, (1.0,)).mu > 0
 
     tr = CeaTransport(Nasa9Mixture(["H2", "N2"]))
-    @test_throws ArgumentError flat_solver(n_global=(12, 1, 1),
-        L_domain=(1.0, 1.0, 1.0), bcs=PER,
-        eos=Nasa9Mixture(["N2", "H2"]), transport=tr)
-    @test_throws ArgumentError flat_solver(n_global=(12, 1, 1),
-        L_domain=(1.0, 1.0, 1.0), bcs=PER,
-        eos=Nasa9Mixture(["H2"]), transport=tr)
+    @test_throws ArgumentError build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER,
+                eos=Nasa9Mixture(["N2", "H2"]), transport=tr, ic=nothing),
+        Numerics(n_global=(12, 1, 1)))
+    @test_throws ArgumentError build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=PER,
+                eos=Nasa9Mixture(["H2"]), transport=tr, ic=nothing),
+        Numerics(n_global=(12, 1, 1)))
 end
 
 @testset "CEA timestep agrees on host and KernelAbstractions paths" begin
     eos = IdealMixture(["H2", "N2"])
     tr = CeaTransport(eos)
     function build(backend)
-        s = flat_solver(n_global=(16, 12, 1), L_domain=(1.0, 0.75, 1.0), bcs=PER,
-                        eos=eos, transport=tr, backend=backend,
-                        art=ArtificialProperties(enabled=false), filter_interval=0)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.75), (0.0, 1.0)), bcs=PER, eos=eos,
+                    transport=tr, ic=nothing),
+            Numerics(n_global=(16, 12, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0), execution=Execution(storage=backend)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.2 + 0.1sinpi(2x),
                                                     0.8 - 0.1sinpi(2x)),

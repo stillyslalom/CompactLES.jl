@@ -4,7 +4,7 @@
 # Then the δ⁴ sensor's reading of the ghost data at those same faces.
 # Included by runtests.jl after the patch and level suites.
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: padded_index, xcoord
 
 @testset "interface budgets: coarse-fine acoustic reflection" begin
@@ -16,9 +16,11 @@ using CompactLES: padded_index, xcoord
     ic(x, y, z) = Prim(rho=(1 + pulse(x))^(1 / 1.4),
                        p=1 + pulse(x), u=(pulse(x) / c0, 0, 0))
     function reflected_characteristic(; refine=nothing, subcycle=false)
-        s = flat_solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0),
-                        bcs=bcs, art=ArtificialProperties(enabled=false), filter_interval=0,
-                        refine=refine, subcycle=subcycle)
+        s = build_solver(
+            Problem(domain=((0.0, 2pi), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(interval=0),
+                     amr=AMR(initial=refine, regrid_interval=0, subcycle=subcycle)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=pi / c0)
@@ -66,9 +68,11 @@ end
     # the sensor reads the discretization alone.
     ic(x, y, z) = Prim(rho=1 + 0.3 * sinpi(2x) + 0.05 * sinpi(10x), p=1.0,
                        u=(0.0, 0.0, 0.0))
-    mk(n; kw...) = flat_solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                               bcs=perx, art=ArtificialProperties(enabled=false),
-                               filter_interval=0, kw...)
+    mk(n; patch_grid=(1, 1, 1), refine=nothing) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=perx, ic=nothing),
+        Numerics(n_global=(n, 1, 1), art=ArtificialProperties(enabled=false),
+                 filter=StateFilter(interval=0), execution=Execution(patch_grid=patch_grid),
+                 amr=AMR(initial=refine, regrid_interval=0)))
     # The references: one grid, no interface. The refined patch runs at h/3,
     # and the 3N grid carries its nodes at the same coordinates.
     function uniform(n)

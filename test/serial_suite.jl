@@ -5,7 +5,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 @isdefined(use_test_image) || include(joinpath(@__DIR__, "test_image.jl"))
 using CompactLES
 using CompactLES: validate_bc, sensor_mirror, isperiodic, state_admissibility, EquationSet,
@@ -28,8 +28,12 @@ using Test, LinearAlgebra, Random
 const CL = CompactLES
 Random.seed!(7)
 
-mkslv(; kw...) = flat_solver(; bcs=per3, L_domain=(2π, 2π, 2π),
-                             art=ArtificialProperties(enabled=false), kw...)
+mkslv(; n_global, deriv=lele_d1_6(), eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+      sources=(), transport=ConstantTransport(), control=StepControl()) =
+    build_solver(Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos,
+                         transport=transport, sources=sources, ic=nothing),
+                 Numerics(n_global=n_global, deriv=deriv, control=control,
+                          art=ArtificialProperties(enabled=false)))
 
 "Max interior error of a scalar field against an analytic function."
 function ferr(solver, f, fn)
@@ -256,11 +260,11 @@ end
     T = Float32
     errs = T[]
     for N in (12, 18, 24)
-        solver = flat_solver(n_global=(N, 12, 12),
-                             L_domain=(T(2π), T(2π), T(2π)), bcs=per3,
-                             transport=ConstantTransport{T}(),
-                             art=ArtificialProperties{T}(enabled=false),
-                             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+        solver = build_solver(
+            Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))), bcs=per3,
+                    transport=ConstantTransport{T}(), ic=nothing),
+            Numerics(n_global=(N, 12, 12), art=ArtificialProperties{T}(enabled=false),
+                     deriv=lele_d1_6(T), filter=compact_filter(T(0.45), T)))
         f = CL.field(solver.decomp)
         df = similar(f)
         fillf!(solver, f, (x, y, z) -> sin(x))
@@ -288,10 +292,11 @@ end
     # argument outside it rather than a state the solver cannot carry.
     nasa = Nasa9Mixture([CL.nasa9_constant_cp(T, "gas", T(1), T(3.5))])
     tn = typed_num()
-    ns = flat_solver(n_global=(12, 12, 12),
-                     L_domain=(T(2π), T(2π), T(2π)), bcs=per3, eos=nasa,
-                     filter_interval=0, transport=tn.transport, art=tn.art,
-                     deriv=tn.deriv, filt=tn.filt)
+    ns = build_solver(
+        Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))), bcs=per3, eos=nasa,
+                transport=tn.transport, ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=tn.art, deriv=tn.deriv,
+                 filter=StateFilter(tn.filt, interval=0)))
     NQ = allocate_state(ns)
     initialize!(ns, NQ, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1, T_ion=300))
     CL.exchange_state!(NQ, ns.decomp)
@@ -308,10 +313,11 @@ end
     sg = StiffenedGas{T}(gamma=T(1.4), p_inf=zero(T), cv=T(2.5),
                          name="gas")
     wall = (SlipWallBC(), SlipWallBC())
-    ss = flat_solver(n_global=(24, 1, 1), L_domain=(one(T), one(T), one(T)),
-                     bcs=(wall, per3[2], per3[3]), eos=sg,
-                     filter_interval=0, transport=tn.transport, art=tn.art,
-                     deriv=tn.deriv, filt=tn.filt)
+    ss = build_solver(
+        Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
+                bcs=(wall, per3[2], per3[3]), eos=sg, transport=tn.transport, ic=nothing),
+        Numerics(n_global=(24, 1, 1), art=tn.art, deriv=tn.deriv,
+                 filter=StateFilter(tn.filt, interval=0)))
     SQ = allocate_state(ss)
     initialize!(ss, SQ, (x, y, z) ->
         Prim(u=(0.1sin(T(π) * x), 0, 0), p=1, rho=1))
@@ -328,13 +334,13 @@ end
 
 @testset "Float32 static two-level AMR step" begin
     T = Float32
-    solver = flat_solver(n_global=(48, 1, 1),
-                         L_domain=(T(2π), one(T), one(T)), bcs=per3,
-                         transport=ConstantTransport{T}(),
-                         art=ArtificialProperties{T}(enabled=false),
-                         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-                         filter_interval=0, cfl=T(0.2),
-                         refine=BlockRegion((20, 0, 0), (8, 1, 1)))
+    solver = build_solver(
+        Problem(domain=((0.0, T(2π)), (0.0, one(T)), (0.0, one(T))), bcs=per3,
+                transport=ConstantTransport{T}(), ic=nothing),
+        Numerics(n_global=(48, 1, 1), art=ArtificialProperties{T}(enabled=false),
+                 deriv=lele_d1_6(T), cfl=T(0.2),
+                 filter=StateFilter(compact_filter(T(0.45), T), interval=0),
+                 amr=AMR(initial=BlockRegion((20, 0, 0), (8, 1, 1)), regrid_interval=0)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.5, 0, 0), p=1, rho=1 + 0.1sin(x)))
@@ -347,8 +353,10 @@ end
 
 @testset "Float32 varying-cp mixture and open/viscous boundaries" begin
     T = Float32
-    typed = (transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+    # Every component at T, so the solver adopts it.
+    transport = ConstantTransport{T}()
+    typed = (art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
+             filter=StateFilter(compact_filter(T(0.45), T); interval=0))
 
     # Both fits are tabulated over the CEA default range of 200 K to 6000 K and
     # the states below are physical, so the mixture is evaluated where its data
@@ -360,9 +368,9 @@ end
     inert = CL.nasa9_constant_cp(T, "inert", T(0.7), T(2.8))
     eos = Nasa9Mixture([varying, inert])
     @test CL.species_cp(eos, 1, T(600)) > CL.species_cp(eos, 1, T(300))
-    ns = flat_solver(; n_global=(12, 12, 12),
-                     L_domain=(T(2π), T(2π), T(2π)), bcs=per3, eos=eos,
-                     filter_interval=0, typed...)
+    ns = build_solver(Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))),
+                              bcs=per3, eos=eos, transport=transport, ic=nothing),
+                      Numerics(; n_global=(12, 12, 12), typed...))
     NQ = allocate_state(ns)
     initialize!(ns, NQ, (x, y, z) ->
         Prim(u=(0.1, 0, 0), p=1, T_ion=300, Y=(0.3, 0.7)))
@@ -378,11 +386,12 @@ end
 
     per = (PeriodicBC(), PeriodicBC())
     uin = (T(0.2), zero(T), zero(T))
-    sb = flat_solver(; n_global=(32, 1, 1),
-                L_domain=(one(T), one(T), one(T)),
-                bcs=((NSCBCInflowBC(u=uin, T_ion=one(T), Y=T[1]),
-                      NSCBCOutflowBC(pinf=one(T))), per, per),
-                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), filter_interval=0, typed...)
+    sb = build_solver(Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
+                              bcs=((NSCBCInflowBC(u=uin, T_ion=one(T), Y=T[1]),
+                                    NSCBCOutflowBC(pinf=one(T))), per, per),
+                              eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
+                              transport=transport, ic=nothing),
+                      Numerics(; n_global=(32, 1, 1), typed...))
     BQ = allocate_state(sb)
     initialize!(sb, BQ, (x, y, z) -> Prim(u=uin, p=1, T_ion=1))
     apply_bcs!(sb, BQ)
@@ -397,11 +406,12 @@ end
     @test all(isfinite, parent(BQ))
 
     Twall = T(1.2)
-    sw = flat_solver(; n_global=(24, 1, 1),
-                L_domain=(one(T), one(T), one(T)),
-                bcs=((NoSlipWallBC(Twall=Twall),
-                      NoSlipWallBC(Twall=Twall)), per, per),
-                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), filter_interval=0, typed...)
+    sw = build_solver(Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
+                              bcs=((NoSlipWallBC(Twall=Twall),
+                                    NoSlipWallBC(Twall=Twall)), per, per),
+                              eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
+                              transport=transport, ic=nothing),
+                      Numerics(; n_global=(24, 1, 1), typed...))
     WQ = allocate_state(sw)
     initialize!(sw, WQ, (x, y, z) ->
         Prim(u=(0.3, -0.2, 0.1), p=1, T_ion=1))
@@ -419,14 +429,16 @@ end
 @testset "Float32 resolved fold and moving subcycled level" begin
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
-    typed = (transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+    # Every component at T, so the solver adopts it.
+    transport = ConstantTransport{T}()
+    typed = (art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
+             filter=StateFilter(compact_filter(T(0.45), T); interval=0))
 
-    sf = flat_solver(; n_global=(32, 16, 1),
-                     L_domain=(one(T), T(2π), one(T)),
-                     metric=CylindricalMetric(),
-                     bcs=((AxisBC(), SlipWallBC()), per, per),
-                     filter_interval=0, typed...)
+    sf = build_solver(Problem(domain=((0.0, one(T)), (0.0, T(2π)), (0.0, one(T))),
+                              metric=CylindricalMetric(),
+                              bcs=((AxisBC(), SlipWallBC()), per, per), transport=transport,
+                              ic=nothing),
+                      Numerics(; n_global=(32, 16, 1), typed...))
     f = CL.field(sf.decomp)
     df = similar(f)
     fillf!(sf, f, (r, θ, z) -> r * cos(θ) * exp(-T(4) * r^2))
@@ -437,13 +449,13 @@ end
         cos(θ) * (one(T) - T(8) * r^2) * exp(-T(4) * r^2)) < T(6e-5)
 
     wall = (SlipWallBC(), SlipWallBC())
-    sr = flat_solver(n_global=(96, 1, 1),
-                     L_domain=(one(T), one(T), one(T)),
-                     bcs=(wall, per, per), cfl=T(0.1),
-                     subcycle=true, regrid_interval=1,
-                     refine=BlockRegion((34, 0, 0), (28, 1, 1)),
-                     transport=ConstantTransport{T}(), art=ArtificialProperties{T}(),
-                     deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+    sr = build_solver(
+        Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))), bcs=(wall, per, per),
+                transport=ConstantTransport{T}(), ic=nothing),
+        Numerics(n_global=(96, 1, 1), cfl=T(0.1), art=ArtificialProperties{T}(),
+                 deriv=lele_d1_6(T), filter=compact_filter(T(0.45), T),
+                 amr=AMR(initial=BlockRegion((34, 0, 0), (28, 1, 1)), subcycle=true,
+                         regrid_interval=1)))
     states = allocate_state(sr)
     initialize!(sr, states, (x, y, z) ->
         x < T(0.5) ? Prim(u=(0, 0, 0), p=1, rho=1) :
@@ -554,9 +566,11 @@ end
     @test e10 < ferr(s6, df6, (x, y, z) -> 3cos(3x) * cos(2y)) / 100
     # Closed domain: deg-3 polynomial is exact through the C10 closure rows
     # (a distinct band path: closure substitution, V = W = 0, no reduced stage).
-    sc = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                     deriv=lele_d1_10(), art=ArtificialProperties(enabled=false))
+    sc = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(32, 12, 12), deriv=lele_d1_10(),
+                 art=ArtificialProperties(enabled=false)))
     fc = CL.field(sc.decomp); dfc = CL.field(sc.decomp)
     fillf!(sc, fc, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
     CL.exchange_halos!(fc, sc.decomp)
@@ -644,8 +658,9 @@ end
     for d in (2, 3)
         ng = ntuple(k -> k == d ? 32 : 12, 3)
         bcs = ntuple(k -> k == d ? (SlipWallBC(), SlipWallBC()) : per3[k], 3)
-        solver = flat_solver(n_global=ng, L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                   art=ArtificialProperties(enabled=false))
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=ng, art=ArtificialProperties(enabled=false)))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         poly = t -> 1 + 2t + 3t^2 - t^3
         dpoly = t -> 2 + 6t - 3t^2
@@ -660,10 +675,11 @@ end
     # operators_banded.jl folds the ghost-unknown coupling onto the diagonal
     # for the pentadiagonal scheme (lo_fold/hi_fold). The C6 axis tests never
     # reach it and the C10 tests are all periodic or plain-walled.
-    solver = flat_solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
-               metric=CylindricalMetric(), deriv=lele_d1_10(),
-               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(64, 1, 12), deriv=lele_d1_10(),
+                 art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
     CL.exchange_halos!(f, solver.decomp)
@@ -865,30 +881,41 @@ end
     noart = ArtificialProperties(enabled=false)
     walls = (SlipWallBC(), SlipWallBC())
     geometries = (
-        ("stretched line", 1, true, flat_solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
-            bcs=(walls, per3[2], per3[3]), art=noart,
-            stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing))),
-        ("cylindrical shell", 1, true, flat_solver(
-            n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
-            metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
-            bcs=(walls, per3[2], per3[3]), art=noart)),
-        ("cylindrical axis", 1, false, flat_solver(
-            n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-            metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-            art=noart)),
-        ("resolved-θ axis", 1, false, flat_solver(
-            n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0),
-            metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-            art=noart)),
-        ("cylindrical θ", 2, true, flat_solver(n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0),
-            metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
-            bcs=(walls, per3[2], per3[3]), art=noart)),
-        ("spherical origin", 1, true, flat_solver(n_global=(12, 12, 12), L_domain=(1.0, π, 2π),
-            metric=SphericalMetric(), bcs=((OriginBC(), SlipWallBC()),
-            (PoleBC(), PoleBC()), per3[3]), art=noart)),
-        ("spherical poles", 2, false, flat_solver(n_global=(12, 12, 12), L_domain=(1.0, π, 2π),
-            metric=SphericalMetric(), bcs=((OriginBC(), SlipWallBC()),
-            (PoleBC(), PoleBC()), per3[3]), art=noart)),
+        ("stretched line", 1, true, build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=(walls, per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(17, 1, 1), art=noart,
+                     stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing)))),
+        ("cylindrical shell", 1, true, build_solver(
+            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 1.0), (0.0, 0.0 + 1.0)),
+                    metric=CylindricalMetric(), bcs=(walls, per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(17, 1, 1), art=noart))),
+        ("cylindrical axis", 1, false, build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(16, 1, 1), art=noart))),
+        ("resolved-θ axis", 1, false, build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(12, 12, 1), art=noart))),
+        ("cylindrical θ", 2, true, build_solver(
+            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)),
+                    metric=CylindricalMetric(), bcs=(walls, per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(12, 12, 1), art=noart))),
+        ("spherical origin", 1, true, build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+                                                           metric=SphericalMetric(),
+                                                           bcs=((OriginBC(), SlipWallBC()),
+                                 (PoleBC(), PoleBC()), per3[3]),
+                                                           ic=nothing),
+                                                   Numerics(n_global=(12, 12, 12),
+                                                            art=noart))),
+        ("spherical poles", 2, false, build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+                                                           metric=SphericalMetric(),
+                                                           bcs=((OriginBC(), SlipWallBC()),
+                                 (PoleBC(), PoleBC()), per3[3]),
+                                                           ic=nothing),
+                                                   Numerics(n_global=(12, 12, 12),
+                                                            art=noart))),
     )
     for (label, d, symmetric, solver) in geometries
         decomp = solver.decomp
@@ -975,35 +1002,43 @@ end
     # are first order at the wall node, which the solve carries into a
     # second-order solution; on the resolved axis T is negligible at the wall.
     cases = (
-        ("walls", N -> flat_solver(n_global=(N + 1, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                   bcs=(walls, walls, per3[3]), art=noart), 1, true, 6.0,
+        ("walls", N -> build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=(walls, walls, per3[3]), ic=nothing),
+            Numerics(n_global=(N + 1, N + 1, 1), art=noart)), 1, true, 6.0,
          (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
-        ("isothermal walls", N -> flat_solver(n_global=(N + 1, N + 1, 1),
-                                              L_domain=(1.0, 1.0, 1.0),
-                                              bcs=(walls, walls, per3[3]), art=noart),
+        ("isothermal walls", N -> build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=(walls, walls, per3[3]), ic=nothing),
+            Numerics(n_global=(N + 1, N + 1, 1), art=noart)),
          -1, true, 6.0, (x, y, z) -> sinpi(x) * sinpi(y) * (1 + 0.3cospi(x)),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
-        ("symmetry planes", N -> flat_solver(n_global=(N, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                        bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), walls,
-                                             per3[3]), art=noart), 1, true, 6.0,
+        ("symmetry planes", N -> build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                                      bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), walls,
+                                                           per3[3]),
+                                                      ic=nothing),
+                                              Numerics(n_global=(N, N + 1, 1), art=noart)), 1, true, 6.0,
          (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
-        ("stretched walls", N -> flat_solver(
-            n_global=(N + 1, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
-            bcs=(walls, walls, per3[3]), art=noart,
-            stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing,
-                                                 nothing)), 1, true, 6.0,
+        ("stretched walls", N -> build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=(walls, walls, per3[3]), ic=nothing),
+            Numerics(n_global=(N + 1, N + 1, 1), art=noart,
+                     stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing,
+                                                          nothing))), 1, true, 6.0,
          (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
-        ("cylindrical shell", N -> flat_solver(n_global=(N + 1, N, 1), L_domain=(1.0, 2π, 1.0),
-                                               metric=CylindricalMetric(),
-                                               origin=(0.5, 0.0, 0.0),
-                                               bcs=(walls, per3[2], per3[3]), art=noart),
+        ("cylindrical shell", N -> build_solver(
+            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)),
+                    metric=CylindricalMetric(), bcs=(walls, per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(N + 1, N, 1), art=noart)),
          1, true, 2.0, (r, θ, z) -> cospi(r - 0.5) * (1 + 0.3cos(θ)),
          (r, θ, z) -> 1 + 0.3r * sin(θ)),
-        ("resolved axis", N -> flat_solver(n_global=(N, N, 1), L_domain=(1.5, 2π, 1.0),
-                                           metric=CylindricalMetric(), bcs=axis, art=noart),
+        ("resolved axis", N -> build_solver(
+            Problem(domain=((0.0, 1.5), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                    bcs=axis, ic=nothing),
+            Numerics(n_global=(N, N, 1), art=noart)),
          1, false, 6.0, (r, θ, z) -> gauss(r) * (1 + r * cos(θ)),
          (r, θ, z) -> 1 + 0.5r^2 + 0.2r * sin(θ)),
     )
@@ -1071,10 +1106,10 @@ end
 
     # A spherical ball with its origin and poles, on the GMRES path: the
     # residual of the solve and a uniform right-hand side.
-    solver = flat_solver(n_global=(12, 12, 12), L_domain=(1.5, π, 2π),
-                         metric=SphericalMetric(),
-                         bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-                         art=noart)
+    solver = build_solver(
+        Problem(domain=((0.0, 1.5), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]), ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=noart))
     decomp = solver.decomp
     stage = CL.DiffusionStage(solver)
     κ = fillf!(solver, field(decomp), (r, θ, φ) -> 1 + 0.5r^2 + 0.2r * sin(θ) * cos(φ))
@@ -1090,8 +1125,9 @@ end
     @test CL.solve_stage!(T, stage, rhs, κ, 10.0).iterations == 0
     @test maximum(abs, T[inner] .- 2) < 1e-13
 
-    @test_throws ArgumentError CL.DiffusionStage(flat_solver(n_global=(16, 16, 1),
-        L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart, patch_grid=(2, 1, 1)))
+    @test_throws ArgumentError CL.DiffusionStage(build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 1), art=noart, execution=Execution(patch_grid=(2, 1, 1)))))
 end
 
 @testset "additive Runge–Kutta conduction" begin
@@ -1140,11 +1176,13 @@ end
                   control=StepControl())
         h = 2 / n
         mu = 1e-3 * α * h^2
-        flat_solver(n_global=(n, 1, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.0, 0.0),
+        build_solver(
+            Problem(domain=((-1.0, -1.0 + 2.0), (0.0, 0.0 + 1.0), (0.0, 0.0 + 1.0)),
                     bcs=per3, eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
                     transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas) / α, Sc=1.0),
-                    art=noart, filter_interval=0, cfl=1e6, implicit=implicit,
-                    control=control)
+                    ic=nothing),
+            Numerics(n_global=(n, 1, 1), art=noart, cfl=1e6, implicit=implicit,
+                     control=control, filter=StateFilter(interval=0)))
     end
     function start(solver, T0)
         Q = allocate_state(solver)
@@ -1230,22 +1268,27 @@ end
 
     # The default integrator is untouched, and the unsupported ends are
     # refused.
-    plain = flat_solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart)
+    plain = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 1, 1), art=noart))
     @test plain.implicit === nothing && plain.transport isa ConstantTransport
     iso = NoSlipWallBC(Twall=1.0)
-    @test_throws ArgumentError flat_solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                           bcs=((iso, iso), per3[2], per3[3]), art=noart,
-                                           implicit=ImplicitConduction())
-    @test_throws ArgumentError flat_solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                           bcs=per3, art=noart, patch_grid=(2, 1, 1),
-                                           implicit=ImplicitConduction())
+    @test_throws ArgumentError build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((iso, iso), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(16, 1, 1), art=noart, implicit=ImplicitConduction()))
+    @test_throws ArgumentError build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(32, 1, 1), art=noart, implicit=ImplicitConduction(),
+                 execution=Execution(patch_grid=(2, 1, 1))))
     @test_throws ArgumentError ImplicitConduction(step_rule=:splitting)
 end
 
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
-    solver = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
-               bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(32, 12, 12), art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
     CL.exchange_halos!(f, solver.decomp)
@@ -1270,9 +1313,11 @@ end
                          (lele_d1_8(closures=:brady_livescu), 7),
                          (lele_d1_10(), 3),
                          (lele_d1_10(closures=:cascade3), 3))
-        solver = flat_solver(n_global=(32, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                             deriv=deriv, art=ArtificialProperties(enabled=false))
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(32, 16, 16), deriv=deriv,
+                     art=ArtificialProperties(enabled=false)))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
         CL.exchange_halos!(f, solver.decomp)
@@ -1348,9 +1393,11 @@ end
     # One closed-domain pass: the one-sided rows leave a degree-7 polynomial
     # unchanged; the cascade's F2 row alters anything above degree 1.
     for (filt, deg, exact) in ((os, 7, true), (base, 3, false))
-        solver = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                             filt=filt, art=ArtificialProperties(enabled=false))
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(32, 12, 12), art=ArtificialProperties(enabled=false),
+                     filter=filt))
         f = CL.field(solver.decomp); g = CL.field(solver.decomp)
         fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
         CL.exchange_halos!(f, solver.decomp)
@@ -1465,9 +1512,12 @@ end
     # the wall leak inward and are checked separately below.
     N = 64
     walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
-    line(wt; filt=compact_filter(0.45; closures=:cascade), kw...) =
-        flat_solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=filt,
-                    art=ArtificialProperties(enabled=false), filter_weighting=wt, kw...)
+    line(wt; filt=compact_filter(0.45; closures=:cascade), bcs, metric=CartesianMetric(),
+         stretch=(nothing, nothing, nothing),
+         domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))) =
+        build_solver(Problem(; domain, bcs, metric, ic=nothing),
+                     Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                              stretch=stretch, filter=StateFilter(filt; weighting=wt)))
     function line_operator(s)
         Q = allocate_state(s)
         M = zeros(N, N)
@@ -1526,7 +1576,7 @@ end
     @test abs(dv[1]) > 0.1
     @test abs(dv[1]) > 10 * abs(dn[1])
     orig = ((OriginBC(), SlipWallBC()), per3[2], per3[3])
-    sph = (; metric=SphericalMetric(), origin=(0.0, π / 2, 0.0))
+    sph = (; metric=SphericalMetric(), domain=((0.0, 1.0), (π / 2, π / 2 + 1.0), (0.0, 1.0)))
     dn = defect(line(:none; bcs=orig, sph...))
     dv = defect(line(:volume; bcs=orig, sph...))
     @test maximum(abs, dn[1:4]) < 1e-9                # measured 6.5e-11
@@ -1540,18 +1590,25 @@ end
         maximum(abs(Q[padded_index(s, i, j, k), c] - Q0[padded_index(s, i, j, k), c])
                 for c in 1:s.equations.n_cons, i in 1:nx, j in 1:ny, k in 1:nz)
     end
+    none = (nothing, nothing, nothing)
     metrics = [
-        (; n_global=(24, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
-           bcs=walls, stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing)),
-        (; n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5), metric=CylindricalMetric(),
-           bcs=axis),
-        (; n_global=(24, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
-           bcs=axis),
-        (; n_global=(24, 12, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
-           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3])),
+        (; n_global=(24, 12, 12), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+           metric=CartesianMetric(), bcs=walls,
+           stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing)),
+        (; n_global=(32, 1, 12), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)),
+           metric=CylindricalMetric(), bcs=axis, stretch=none),
+        (; n_global=(24, 16, 1), domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+           metric=CylindricalMetric(), bcs=axis, stretch=none),
+        (; n_global=(24, 12, 12), domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+           metric=SphericalMetric(),
+           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]), stretch=none),
     ]
     for cs in metrics, wt in (:none, :volume)
-        s = flat_solver(; cs..., art=ArtificialProperties(enabled=false), filter_weighting=wt)
+        s = build_solver(Problem(; domain=cs.domain, metric=cs.metric, bcs=cs.bcs,
+                                 ic=nothing),
+                         Numerics(; n_global=cs.n_global, stretch=cs.stretch,
+                                  art=ArtificialProperties(enabled=false),
+                                  filter=StateFilter(weighting=wt)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(s, Q)
@@ -1565,16 +1622,19 @@ end
     ic = (x, y, z) -> Prim(u=(0.3sin(x)cos(y), -0.3cos(x)sin(y), 0.1sin(z)),
                             p=1 + 0.1cos(x)cos(z), rho=1 + 0.2sin(y))
     states = map((:none, :volume)) do wt
-        s = flat_solver(n_global=(16, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-                        art=ArtificialProperties(enabled=false), filter_weighting=wt)
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, ic=nothing),
+            Numerics(n_global=(16, 16, 16), art=ArtificialProperties(enabled=false),
+                     filter=StateFilter(weighting=wt)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         filter_state!(s, Q)
         Q
     end
     @test states[1] == states[2]
-    @test_throws ErrorException flat_solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                            bcs=per3, filter_weighting=:mass)
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 1, 1), filter=StateFilter(weighting=:mass)))
 end
 
 # --- AMR level-transfer operators (reference/AMR_GPU.md) -------------------
@@ -1744,8 +1804,10 @@ end
     # cells). The bounds here carry factor 2–6 headroom.
     nc = 33
     nf = 3nc - 2
-    solver = flat_solver(; n_global=(nf, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(nf, 1, 1)))
     df = solver.decomp
     dc = Decomp((nc, 1, 1), (false, true, true); dims=(1, 1, 1))
     tp = plan_transfer(df, dc, 1)
@@ -1784,10 +1846,10 @@ end
     # u_r = r·g(r) is an odd smooth function; d/dr through the fold must
     # match analytics at the first half-offset nodes — the sharpest probe of
     # the folded row and mirror fill.
-    solver = flat_solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
-               metric=CylindricalMetric(),
-               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(64, 1, 12), art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
     CL.exchange_halos!(f, solver.decomp)
@@ -1807,10 +1869,10 @@ end
     # the axis; its antipodal image is −f, so the odd combination carries all
     # of it. It is not a velocity component (a u_r of that form has no smooth
     # Cartesian preimage), so σ = +1.
-    solver = flat_solver(n_global=(48, 16, 1), L_domain=(1.0, 2π, 1.0),
-               metric=CylindricalMetric(),
-               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(48, 16, 1), art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
@@ -1830,11 +1892,12 @@ end
     # max(2, ⌊π(i − ½)⌋) is 2, 4, 7, 10, 14 on the first five rings, and
     # ring 6 (17 ≥ N_θ/2) is the first to keep every mode. The radial and
     # azimuthal momenta keep one mode more, and the θ rate is capped at it.
-    mk(κ; kw...) = flat_solver(; n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0),
-                               metric=CylindricalMetric(),
-                               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                               art=ArtificialProperties(enabled=false),
-                               polar_truncation=κ, kw...)
+    mk(κ; n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0)) = build_solver(
+        Problem(domain=((0.0, L_domain[1]), (0.0, L_domain[2]), (0.0, L_domain[3])),
+                metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=n_global, art=ArtificialProperties(enabled=false),
+                 polar_truncation=κ))
     solver = mk(1.0)
     tr = solver.truncation
     o1 = solver.decomp.n_halo_d[1]
@@ -1847,14 +1910,16 @@ end
     @test mk(2.0).truncation.mode_limit == [2, 2, 3, 5, 7, 8, 10, 11, 13, 14]
     @test_throws ArgumentError mk(0.5)
     @test_throws ErrorException mk(1.0; n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0))
-    @test_throws ErrorException flat_solver(n_global=(24, 32, 1),
-                                            L_domain=(1.0, π, 1.0), bcs=per3,
-                                            polar_truncation=1.0)
-    @test_throws ErrorException flat_solver(n_global=(24, 32, 1), L_domain=(1.0, π, 2π),
-                                            metric=SphericalMetric(),
-                                            bcs=((OriginBC(), SlipWallBC()),
-                                            (PoleBC(), PoleBC()), per3[3]),
-                                            polar_truncation=1.0)
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(24, 32, 1), polar_truncation=1.0))
+    @test_throws ErrorException build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+                                                     metric=SphericalMetric(),
+                                                     bcs=((OriginBC(), SlipWallBC()),
+                                                     (PoleBC(), PoleBC()), per3[3]),
+                                                     ic=nothing),
+                                             Numerics(n_global=(24, 32, 1),
+                                                      polar_truncation=1.0))
 
     nθ = 32
     ring(Q, i, c) = [Q[padded_index(solver, i, j, 1), c] for j in 1:nθ]
@@ -1969,11 +2034,13 @@ end
 
 @testset "spherical poles + origin: derivative of a smooth 3-D Gaussian" begin
     # f = e^{−4r²} is smooth at origin and poles; ∂f/∂r and (1/r)∂f/∂θ = 0.
-    solver = flat_solver(n_global=(40, 16, 12), L_domain=(1.0, π, 2π),
-               metric=SphericalMetric(),
-               bcs=((OriginBC(), SlipWallBC()),
-                         (PoleBC(), PoleBC()), per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+                                  metric=SphericalMetric(),
+                                  bcs=((OriginBC(), SlipWallBC()),
+                                            (PoleBC(), PoleBC()), per3[3]),
+                                  ic=nothing),
+                          Numerics(n_global=(40, 16, 12),
+                                   art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, φ) -> exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
@@ -1989,9 +2056,10 @@ end
     # two give L/N, with node 1 at h/2 wherever the low end is folded.
     sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
     wall = SlipWallBC()
-    cart(bcs1) = flat_solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                             bcs=(bcs1, per3[2], per3[3]),
-                             art=ArtificialProperties(enabled=false))
+    cart(bcs1) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(bcs1, per3[2], per3[3]),
+                ic=nothing),
+        Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false)))
     both = cart(sym)
     @test both.h[1] ≈ 1 / 16
     @test both.coord_shift[1] ≈ both.h[1] / 2
@@ -2030,9 +2098,10 @@ end
     @test CL._is_fold_bc(SymmetryPlaneBC())
     # A plane on dimension 3 beside a cylindrical axis on dimension 1: the
     # pairing is per dimension, and the axis' resolved-θ fold still buffers.
-    cyl = flat_solver(n_global=(16, 16, 12), L_domain=(1.0, 2π, 0.5),
-                      metric=CylindricalMetric(), art=ArtificialProperties(enabled=false),
-                      bcs=((AxisBC(), SlipWallBC()), per3[2], sym))
+    cyl = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], sym), ic=nothing),
+        Numerics(n_global=(16, 16, 12), art=ArtificialProperties(enabled=false)))
     @test cyl.h[3] ≈ 0.5 / 12
     @test cyl.coord_shift[3] ≈ cyl.h[3] / 2
     @test cyl.folds[3].pair === nothing
@@ -2048,8 +2117,10 @@ end
     sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.5, 1.3)])
-    solver = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), eos=eos,
-                         bcs=(sym, sym, sym), art=ArtificialProperties(enabled=true))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), eos=eos, bcs=(sym, sym, sym),
+                ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=true)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(Y=(0.3, 0.7), rho=1.2, p=0.8, u=(0.0, 0.0, 0.0)))
@@ -2100,12 +2171,14 @@ end
                 Prim(Y=(0.5 + 0.2cos(pi * s), 0.5 - 0.2cos(pi * s)),
                      rho=rho, u=u, p=rho^1.4)
         end
-        common = (; deriv=deriv, art=art, filter_interval=1, filter_cfl=0.0,
-                  cfl=0.4, transport=ConstantTransport(mu0=mu, Pr=0.7))
-        eos === nothing || (common = merge(common, (; eos=eos)))
+        gas = eos === nothing ? IdealSpecies("gas"; R=1.0, gamma=1.4) : eos
         function advance(ng, L, bcs, origin)
-            s = flat_solver(; n_global=ng, L_domain=L, bcs=bcs, origin=origin,
-                            common...)
+            domain = ntuple(d -> (origin[d], origin[d] + L[d]), 3)
+            s = build_solver(Problem(; domain, bcs, eos=gas,
+                                     transport=ConstantTransport(mu0=mu, Pr=0.7),
+                                     ic=nothing),
+                             Numerics(n_global=ng, deriv=deriv, art=art, cfl=0.4,
+                                      filter=StateFilter(interval=1, cfl=0.0)))
             Q = allocate_state(s)
             initialize!(s, Q, ic)
             run!(s, Q; tfinal=1e9, nmax=nsteps)
@@ -2155,8 +2228,11 @@ end
     sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
     wall = (SlipWallBC(), SlipWallBC())
     off = ArtificialProperties(enabled=false)
-    cart(; kw...) = flat_solver(n_global=(48, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                                bcs=(sym, per3[2], per3[3]), art=off; kw...)
+    cart(; stretch=(nothing, nothing, nothing), patch_grid=(1, 1, 1)) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(sym, per3[2], per3[3]),
+                ic=nothing),
+        Numerics(n_global=(48, 12, 12), art=off, stretch=stretch,
+                 execution=Execution(patch_grid=patch_grid)))
     @test cart() isa Solver
     # A stretched dimension has no mirror: the fold reflects the computational
     # coordinate and the map does not commute with it.
@@ -2166,30 +2242,36 @@ end
     # coordinate, which excludes the cylindrical radius and every spherical
     # dimension (validate_bc). The same rule makes a shared dimension with a
     # coordinate fold unreachable, since every dimension carrying one fails it.
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 12),
-        L_domain=(1.0, π, 2π), metric=SphericalMetric(), art=off,
-        bcs=(sym, (PoleBC(), PoleBC()), per3[3]))
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 12),
-        L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(), art=off,
-        origin=(0.2, 0.0, 0.0), bcs=(sym, per3[2], per3[3]))
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 12),
-        L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(), art=off,
-        bcs=((AxisBC(), SymmetryPlaneBC()), per3[2], per3[3]))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                bcs=(sym, (PoleBC(), PoleBC()), per3[3]), ic=nothing),
+        Numerics(n_global=(16, 16, 12), art=off))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.2, 0.2 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 0.5)),
+                metric=CylindricalMetric(), bcs=(sym, per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(16, 16, 12), art=off))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SymmetryPlaneBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(16, 16, 12), art=off))
     # A patched run takes SlipWallBC at that face instead. A refined run
     # keeps the plane, whether its level stays off it or reaches it (the
     # level tests cover the second).
     @test_throws ErrorException cart(patch_grid=(2, 1, 1))
-    @test length(flat_solver(n_global=(48, 1, 1),
-        L_domain=(2π, 1.0, 1.0), bcs=(sym, per3[2], per3[3]), art=off,
-        filter_interval=0, refine=BlockRegion((20, 0, 0), (8, 1, 1))).patches) == 2
+    @test length(build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=(sym, per3[2], per3[3]),
+                ic=nothing),
+        Numerics(n_global=(48, 1, 1), art=off, filter=StateFilter(interval=0),
+                 amr=AMR(initial=BlockRegion((20, 0, 0), (8, 1, 1)), regrid_interval=0))).patches) == 2
 end
 
 @testset "rigid rotation in cylindrical: zero strain" begin
     # u_θ = Ω r ⇒ S_ij = 0 identically; probes the curvature corrections.
-    solver = flat_solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5),
-               metric=CylindricalMetric(), origin=(0.2, 0.0, 0.0),
-               bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.2, 0.2 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 0.5)),
+                metric=CylindricalMetric(),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(32, 16, 12), art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.3r, 0.0), p=1.0, rho=1.0))
     dQ = zero(Q)
@@ -2242,11 +2324,14 @@ end
            kw=(; origin=(1.0, π/4, 0.0))),
     ]
     for cs in cases
-        kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
-                     bcs=cs.bcs, art=ArtificialProperties(enabled=false)), cs.kw)
+        o = merge((; origin=(0.0, 0.0, 0.0), stretch=(nothing, nothing, nothing),
+                   bcs=cs.bcs), cs.kw)
+        domain = ntuple(d -> (o.origin[d], o.origin[d] + cs.L_domain[d]), 3)
+        build() = build_solver(Problem(; domain, metric=cs.metric, bcs=o.bcs, ic=nothing),
+                               Numerics(; n_global=cs.n_global, stretch=o.stretch,
+                                        art=ArtificialProperties(enabled=false)))
         solver = cs.n_global[1] == 1 ?
-                 (@test_logs (:warn, r"r is collapsed") flat_solver(; kw...)) :
-                 flat_solver(; kw...)
+                 (@test_logs (:warn, r"r is collapsed") build()) : build()
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(solver, Q)
@@ -2343,10 +2428,12 @@ end
 end
 
 @testset "NSCBC outflow: matched uniform stream ⇒ no correction" begin
-    solver = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
-               bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
-                     NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
+                                  bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
+                                        NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                                  ic=nothing),
+                          Numerics(n_global=(32, 12, 12),
+                                   art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)
@@ -2370,11 +2457,13 @@ end
                                  (CylindricalMetric(), (0.5, 0.0, 0.0), 1),
                                  (SphericalMetric(), (0.5, π / 2, 0.0), 2)),
         sigma in (0.0, 0.25, 4.0)
-        solver = flat_solver(n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0), origin=origin,
-                             metric=metric,
-                             bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0, sigma=sigma)),
-                             per3[2], per3[3]),
-                             art=ArtificialProperties(enabled=false))
+        solver = build_solver(Problem(domain=((origin[1], origin[1] + 1.0), (origin[2], origin[2] + 1.0), (origin[3], origin[3] + 1.0)),
+                                      metric=metric,
+                                      bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0, sigma=sigma)),
+                                      per3[2], per3[3]),
+                                      ic=nothing),
+                              Numerics(n_global=(24, 1, 1),
+                                       art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(rho=1.0, p=1.0 + δ))
         dQ = zero(Q)
@@ -2403,10 +2492,12 @@ end
 
 @testset "NoSlipWallBC: adiabatic zeroes velocity, isothermal sets T_ion" begin
     for Twall in (NaN, 2.5)
-        solver = flat_solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
-                   bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
-                             per3[2], per3[3]),
-                   art=ArtificialProperties(enabled=false))
+        solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
+                                      bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
+                                                per3[2], per3[3]),
+                                      ic=nothing),
+                              Numerics(n_global=(24, 12, 12),
+                                       art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, -0.2, 0.1), p=1.0, T_ion=1.0))
         apply_bcs!(solver, Q)
@@ -2426,9 +2517,10 @@ end
 end
 
 @testset "ExtrapolationBC: copies the adjacent interior plane" begin
-    solver = flat_solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
-               bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
+                bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(24, 12, 12), art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2 + x, 0, 0), p=1 + 0.1x, rho=1 + 0.3x))
     apply_bcs!(solver, Q)
@@ -2452,11 +2544,12 @@ end
     # method, so without it the inflow path, the transverse terms included,
     # is never executed.
     uin = (0.3, 0.0, 0.0)
-    solver = flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
-               bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
-                         per3[2], per3[3]),
-               eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-               art=ArtificialProperties(enabled=false))
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
+                                  bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
+                                            per3[2], per3[3]),
+                                  eos=IdealSpecies("gas"; gamma=1.4, R=1.0), ic=nothing),
+                          Numerics(n_global=(32, 12, 12),
+                                   art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=uin, p=1.0, T_ion=1.0))
     apply_bcs!(solver, Q)
@@ -2505,10 +2598,11 @@ end
                            eta_u=eta, eta_T=eta, eta_t=eta, eta_Y=eta,
                            beta_t=beta_t, target=target)
         out = NSCBCOutflowBC(pinf=1.0)
-        solver = flat_solver(n_global=n, L_domain=(1.0, 1.0, 0.5),
-                             bcs=(side == 1 ? (bc, out) : (out, bc), per3[2], per3[3]),
-                             eos=eos, transport=ConstantTransport(mu0=0.0),
-                             art=ArtificialProperties(enabled=false))
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)),
+                    bcs=(side == 1 ? (bc, out) : (out, bc), per3[2], per3[3]), eos=eos,
+                    transport=ConstantTransport(mu0=0.0), ic=nothing),
+            Numerics(n_global=n, art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, ic(sgn))
         apply_bcs!(solver, Q)
@@ -2586,12 +2680,14 @@ end
     function face_rates(beta_t, n; pressure=true)
         bc = NSCBCInflowBC(u=(0.0, 0.0, -0.3), T_ion=1.0, Y=[0.6, 0.4], eta_u=0.0,
                            eta_T=0.0, eta_t=0.0, eta_Y=0.0, beta_t=beta_t)
-        solver = flat_solver(n_global=(n, 1, n), L_domain=(1.0, 2π, 1.0),
-                             metric=CylindricalMetric(),
-                             bcs=((AxisBC(), SlipWallBC()), per3[2],
-                             (NSCBCOutflowBC(pinf=1.0), bc)),
-                             eos=eos, transport=ConstantTransport(mu0=0.0),
-                             art=ArtificialProperties(enabled=false))
+        solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+                                      metric=CylindricalMetric(),
+                                      bcs=((AxisBC(), SlipWallBC()), per3[2],
+                                      (NSCBCOutflowBC(pinf=1.0), bc)),
+                                      eos=eos, transport=ConstantTransport(mu0=0.0),
+                                      ic=nothing),
+                              Numerics(n_global=(n, 1, n),
+                                       art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, ic)
         apply_bcs!(solver, Q)
@@ -2636,14 +2732,15 @@ end
                        p=1 + 0.05 * cos(2π * r^2 + 1) + 0.02 * cos(2π * z),
                        T_ion=1 + 0.1 * cos(π * r^2) * sin(2π * z))
     function face_rate(beta_t, n)
-        solver = flat_solver(n_global=(n, 1, n), L_domain=(1.0, 2π, 1.0),
-                             metric=CylindricalMetric(),
-                             bcs=((AxisBC(), SlipWallBC()), per3[2],
-                             (NSCBCInflowBC(u=(0.0, 0.0, 0.3), T_ion=1.0),
-                              NSCBCOutflowBC(pinf=1.0, sigma=0.0, beta_t=beta_t))),
-                             eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                             transport=ConstantTransport(mu0=0.0),
-                             art=ArtificialProperties(enabled=false))
+        solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+                                      metric=CylindricalMetric(),
+                                      bcs=((AxisBC(), SlipWallBC()), per3[2],
+                                      (NSCBCInflowBC(u=(0.0, 0.0, 0.3), T_ion=1.0),
+                                       NSCBCOutflowBC(pinf=1.0, sigma=0.0, beta_t=beta_t))),
+                                      eos=IdealSpecies("gas"; gamma=γ, R=1.0),
+                                      transport=ConstantTransport(mu0=0.0), ic=nothing),
+                              Numerics(n_global=(n, 1, n),
+                                       art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, ic)
         apply_bcs!(solver, Q)
@@ -2678,19 +2775,22 @@ end
     two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 2.0, 1.6)])
     wall = (SlipWallBC(), SlipWallBC())
-    cyl(θbc) = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                           bcs=(wall, θbc, per3[3]), metric=CylindricalMetric(),
-                           origin=(1.0, 0.0, 0.0), art=ArtificialProperties(enabled=false))
+    cyl(θbc) = build_solver(
+        Problem(domain=((1.0, 1.0 + 1.0), (0.0, 0.0 + 1.0), (0.0, 0.0 + 1.0)),
+                bcs=(wall, θbc, per3[3]), metric=CylindricalMetric(), ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
     # r is a length under CylindricalMetric, θ is not.
     @test cyl(wall) isa Solver
     @test_throws ErrorException cyl((NSCBCOutflowBC(pinf=1.0), SlipWallBC()))
     @test_throws ErrorException cyl((SlipWallBC(),
                                      NSCBCInflowBC(u=(0.0, 0.1, 0.0), T_ion=1.0)))
     # Composition length, checked once at setup rather than on every RHS call.
-    cart(Y) = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                          bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
-                           NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-                          eos=two, art=ArtificialProperties(enabled=false))
+    cart(Y) = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                   bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
+                                    NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                                   eos=two, ic=nothing),
+                           Numerics(n_global=(12, 12, 12),
+                                    art=ArtificialProperties(enabled=false)))
     @test cart([0.4, 0.6]) isa Solver
     @test_throws ErrorException cart([1.0])
     @test_throws ErrorException cart([0.2, 0.3, 0.5])
@@ -2701,8 +2801,9 @@ end
     # never executed, since the only multi-species test disables art.
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    solver = flat_solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3, eos=eos,
-               art=ArtificialProperties(enabled=true))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 0.2), (0.0, 0.2)), bcs=per3, eos=eos, ic=nothing),
+        Numerics(n_global=(64, 12, 12), art=ArtificialProperties(enabled=true)))
     Q = allocate_state(solver)
     dQ = zero(Q)
     # smooth composition: D* must stay tiny
@@ -2736,9 +2837,11 @@ end
     # a single `Solver` specialization instead of compiling one each.
     linmap(a) = Stretch(ξ -> a * ξ, ξ -> a)
     function art_coefficients(L, st)
-        s = flat_solver(n_global=(Nx, 12, 12), L_domain=(L, 0.2, 0.2), eos=eos2,
-                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                        art=ArtificialProperties(enabled=true), stretch=(st, nothing, nothing))
+        s = build_solver(
+            Problem(domain=((0.0, L), (0.0, 0.2), (0.0, 0.2)), eos=eos2,
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(Nx, 12, 12), art=ArtificialProperties(enabled=true),
+                     stretch=(st, nothing, nothing)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = tanh_blend(x, 0.5L, 0.03L)
@@ -2919,8 +3022,9 @@ end
     end
 
     # The option is validated at setup.
-    @test_throws ErrorException flat_solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtificialProperties(species_flux=:brill))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(32, 12, 12), art=ArtificialProperties(species_flux=:brill)))
 end
 
 @testset "consistent species channels on patched, refined and tiled layouts" begin
@@ -2937,12 +3041,20 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1 / 20, 1.4)])
     Rk, cvk = eos.Rk, eos.cvk
-    function slab(channel; kw...)
+    function slab(channel; patch_grid=(1, 1, 1), interface_rhs=:extended,
+                           interface_flux=:ghost, refine=nothing, tile=0)
         N = 96
         h = 1.0 / N
-        s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
-                        art=ArtificialProperties(enabled=true, species_flux=channel),
-                        transport=ConstantTransport(mu0=0.0), filter_interval=1; kw...)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, eos=eos,
+                    transport=ConstantTransport(mu0=0.0), ic=nothing),
+            Numerics(n_global=(N, 1, 1),
+                     art=ArtificialProperties(enabled=true, species_flux=channel),
+                     filter=StateFilter(interval=1),
+                     patch_interfaces=PatchInterfaces(flux=interface_flux,
+                                                      rhs=interface_rhs),
+                     execution=Execution(patch_grid=patch_grid),
+                     amr=AMR(initial=refine, regrid_interval=0, tile=tile)))
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> begin
             V = (1 - tanh((abs(x - 0.5) - 0.25) / 3h)) / 2
@@ -3019,8 +3131,10 @@ end
     # along with the requirement that mu* — which keeps the strain sensor in
     # every case — is bit-identical across the three settings.
     tgv(sensor) = begin
-        s = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-                        art=ArtificialProperties(enabled=true, beta_sensor=sensor))
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, ic=nothing),
+            Numerics(n_global=(32, 32, 32),
+                     art=ArtificialProperties(enabled=true, beta_sensor=sensor)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
             u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
@@ -3050,8 +3164,10 @@ end
     # A velocity ramp: beta* must be exactly zero wherever the flow expands,
     # and must still switch on where it compresses.
     ramp(sensor) = begin
-        s = flat_solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                        art=ArtificialProperties(enabled=true, beta_sensor=sensor))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.2), (0.0, 0.2)), bcs=per3, ic=nothing),
+            Numerics(n_global=(64, 12, 12),
+                     art=ArtificialProperties(enabled=true, beta_sensor=sensor)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0,
                                             u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0)))
@@ -3074,8 +3190,9 @@ end
     @test all(i -> sg2.beta_art[padded_index(sg2, i, 1, 1)] <=
                    rstrain.beta_art[padded_index(rstrain, i, 1, 1)] + 1e-300, 1:64)
 
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtificialProperties(beta_sensor=:bogus))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 16), art=ArtificialProperties(beta_sensor=:bogus)))
 end
 
 @testset "compact_d8 ring detector: symbol, closures, and selectivity" begin
@@ -3087,7 +3204,9 @@ end
     # rows mirrored rather than negated).
     N = 64
     art8 = ArtificialProperties(detector=:d8)
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8, bcs=per3)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(N, 1, 1), art=art8))
     f = CL.field(s.decomp); out = CL.field(s.decomp)
     pad = s.decomp.n_halo_d[1]
     A(k) = 1 + 2 * (14 / 29) * cos(k) + 2 * (3 / 58) * cos(2k)
@@ -3123,8 +3242,10 @@ end
     # by cancellation: every row's weights sum to zero by construction. A slip
     # wall takes the node-centred rows, an extrapolation face the scheme's own.
     for lo in (SlipWallBC(), ExtrapolationBC())
-        sw = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8,
-                         bcs=((lo, lo), per3[2], per3[3]))
+        sw = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((lo, lo), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(N, 1, 1), art=art8))
         fw = CL.field(sw.decomp); ow = CL.field(sw.decomp)
         fill!(fw, 1.0)
         CL.exchange_halos!(fw, sw.decomp)
@@ -3132,9 +3253,9 @@ end
         @test maximum(abs, ow[(pad+1):(pad+N), 1, 1]) < 1e-14
     end
 
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                            bcs=per3,
-                                            art=ArtificialProperties(detector=:bogus))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 16), art=ArtificialProperties(detector=:bogus)))
 end
 
 @testset "sensor operators at a reflecting wall" begin
@@ -3148,10 +3269,12 @@ end
     wallbc = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
     even_field(x) = cospi(x) + 0.5cospi(5x) + 0.1cospi(13x)
     odd_field(x) = sinpi(x) + 0.1sinpi(13x)
-    both(art) = (flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art,
-                             bcs=wallbc),
-                 flat_solver(n_global=(2(N - 1), 1, 1), L_domain=(2.0, 1.0, 1.0),
-                             art=art, bcs=per3))
+    both(art) = (build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=wallbc, ic=nothing),
+        Numerics(n_global=(N, 1, 1), art=art)),
+                 build_solver(
+                     Problem(domain=((0.0, 2.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                             ic=nothing), Numerics(n_global=(2(N - 1), 1, 1), art=art)))
     function load(s, fn)
         f = CL.field(s.decomp)
         pad = s.decomp.n_halo_d[1]
@@ -3218,17 +3341,19 @@ end
     # A fold's far end may be a wall. The outer end of a radial line takes the
     # same rows, so the fold holds one detector plan per ghost parity and per
     # wall sign.
-    sa = flat_solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                     metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
-                     bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]))
+    sa = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(32, 1, 12), art=ArtificialProperties(detector=:d8)))
     @test sa.folds[1].ring_plans.ghost === sa.folds[1].ring_plans.closed
     rp = sa.folds[1].ring_plans.closed
     @test length(rp) == 2 && all(p -> length(p) == 2, rp)
     @test rp[1][1] !== rp[1][2] && rp[2][1] !== rp[2][2]
     # An outer end that reflects nothing keeps one plan in both slots.
-    sx = flat_solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                     metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
-                     bcs=((AxisBC(), ExtrapolationBC()), per3[2], per3[3]))
+    sx = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), ExtrapolationBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(32, 1, 12), art=ArtificialProperties(detector=:d8)))
     @test sx.folds[1].ring_plans.closed[1][1] === sx.folds[1].ring_plans.closed[1][2]
 end
 
@@ -3237,8 +3362,9 @@ end
     # its analytic symbol the way the d8 detector is; the same filter-side
     # sign conventions of BandPlan carry it.
     N = 64
-    s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=pyranda_filter(),
-                    bcs=per3)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(N, 1, 1), filter=pyranda_filter()))
     f = CL.field(s.decomp)
     pad = s.decomp.n_halo_d[1]
     β, α = 1.6688e-1, 6.6624e-1
@@ -3270,8 +3396,10 @@ end
     for row in pyranda_filter().closures
         @test sum(row.lhs) ≈ sum(row.rhs) rtol = 1e-14
     end
-    sw = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=pyranda_filter(),
-                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]))
+    sw = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(N, 1, 1), filter=pyranda_filter()))
     fw = CL.field(sw.decomp)
     fill!(fw, 1.0)
     filter_field!(fw, sw)
@@ -3292,8 +3420,10 @@ end
     # therefore differ by 2.6e6 on κ\* and by a factor of 1.8 on β\*. See
     # `reference/CALIBRATION_APPENDIX.md`.
     sensors(detector, fn) = begin
-        s = flat_solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                        art=ArtificialProperties(enabled=true, detector=detector))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.2), (0.0, 0.2)), bcs=per3, ic=nothing),
+            Numerics(n_global=(64, 12, 12),
+                     art=ArtificialProperties(enabled=true, detector=detector)))
         Q = allocate_state(s)
         initialize!(s, Q, fn)
         compute_rhs!(s, Q, zero(Q))
@@ -3321,10 +3451,10 @@ end
 @testset "detector = :d8 through a coordinate-singularity fold" begin
     # BandPlan's fold assembly with a SYMMETRIC scheme, plus the :ring role in
     # fold_apply!. The C10 fold test covers the antisymmetric case only.
-    s = flat_solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                    metric=CylindricalMetric(),
-                    bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                    art=ArtificialProperties(enabled=true, detector=:d8))
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(64, 1, 12), art=ArtificialProperties(enabled=true, detector=:d8)))
     f = CL.field(s.decomp); out = CL.field(s.decomp)
     # An even function of r: d8 across the axis fold must stay smooth and
     # small, and in particular must not blow up in the first cells.
@@ -3350,7 +3480,9 @@ end
     # difference between the two is the absolute value, and these tests pin its
     # two consequences.
     oned(art, fn; N=64) = begin
-        s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=art)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+            Numerics(n_global=(N, 1, 1), art=art))
         Q = allocate_state(s)
         initialize!(s, Q, fn)
         compute_rhs!(s, Q, zero(Q))
@@ -3385,8 +3517,9 @@ end
     @test oned(ArtificialProperties(reduction=:sum), ramp1).mu_art ==
           oned(ArtificialProperties(reduction=:max), ramp1).mu_art
     tgv3(red) = begin
-        s = flat_solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-                        art=ArtificialProperties(reduction=red))
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, ic=nothing),
+            Numerics(n_global=(32, 32, 32), art=ArtificialProperties(reduction=red)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
             u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
@@ -3402,9 +3535,10 @@ end
     # behaviour of a radial velocity at the axis, while a uniform u_r produces
     # one on the first cell, the folded field having a genuine kink there.
     axial(art, fn) = begin
-        s = flat_solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        metric=CylindricalMetric(),
-                        bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), art=art)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+            Numerics(n_global=(32, 1, 1), art=art))
         Q = allocate_state(s)
         initialize!(s, Q, fn)
         compute_rhs!(s, Q, zero(Q))
@@ -3446,10 +3580,12 @@ end
     @test sdil.mu_art[CL.interior(sdil.decomp)] == base.mu_art[CL.interior(base.decomp)]
     @test oned(ArtificialProperties(mu_sensor=:velocity), ramp1).mu_art != base.mu_art
 
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtificialProperties(mu_sensor=:bogus))
-    @test_throws ErrorException flat_solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtificialProperties(reduction=:bogus))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 16), art=ArtificialProperties(mu_sensor=:bogus)))
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 16), art=ArtificialProperties(reduction=:bogus)))
 end
 
 @testset "dt_report agrees with compute_dt and names the limiter" begin
@@ -3469,10 +3605,11 @@ end
     # stiff geometric source the advective CFL loop never sees. Swirl must
     # therefore shorten dt even though nothing varies in θ or φ.
     mk(metric, uang) = begin
-        solver = flat_solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=metric,
-                   origin=(0.5, π / 2, 0.0),
-                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                   art=ArtificialProperties(enabled=false))
+        solver = build_solver(
+            Problem(domain=((0.5, 0.5 + 1.0), (π / 2, π / 2 + 1.0), (0.0, 0.0 + 1.0)),
+                    metric=metric, bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                    ic=nothing),
+            Numerics(n_global=(64, 1, 1), art=ArtificialProperties(enabled=false)))
         Q = allocate_state(solver)
         initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0.0, uang, uang), p=1.0, rho=1.0))
         solver, Q
@@ -4388,8 +4525,10 @@ end
     # speed is set by p∞, not by p, so it stays near 1500 m/s at 1 atm where a
     # perfect gas would give a few hundred.
     water = StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0, name="water")
-    s2 = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                     eos=water, art=ArtificialProperties(enabled=false))
+    s2 = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, eos=water,
+                ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
     Q2 = allocate_state(s2)
     initialize!(s2, Q2, (x, y, z) -> Prim(u=(0, 0, 0), p=101325.0, rho=1000.0))
     CL.exchange_state!(Q2, s2.decomp); CL.primitives!(s2, Q2)
@@ -4418,8 +4557,9 @@ end
     # carries the transverse means instead, and every value is definitional.
     ic(x, y, z) = Prim(p=1.0, rho=1 + 0.1x + 0.2y + 0.3z)
     rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
-    solver = flat_solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), bcs=per3,
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 2.0), (0.0, 1.0), (0.0, 0.5)), bcs=per3, ic=nothing),
+        Numerics(n_global=(24, 16, 12), art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     gx(d, g) = global_xcoord(solver, d, g)
@@ -4448,8 +4588,9 @@ end
     # resolved, and the same one when both are collapsed.
     _, mean_line = line_profile(solver, Q, :rho; dim=1)
     @test maximum(abs, mean_line .- first_line) > 0.1
-    solver1 = flat_solver(n_global=(32, 1, 1), L_domain=(2.0, 1.0, 1.0), bcs=per3,
-                          art=ArtificialProperties(enabled=false))
+    solver1 = build_solver(
+        Problem(domain=((0.0, 2.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(32, 1, 1), art=ArtificialProperties(enabled=false)))
     Q1 = allocate_state(solver1)
     initialize!(solver1, Q1, ic)
     _, sample1 = line_sample(solver1, Q1, :rho)
@@ -4468,9 +4609,10 @@ end
     # rather than failing. Cartesian must be exact, and so must a constant over
     # a linear or quadratic Jacobian once the metric's share of each edge term
     # is removed (see the note in diagnostics.jl).
-    solver = flat_solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
-                         bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 2.0), (0.0, 1.0), (0.0, 0.5)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(24, 16, 12), art=ArtificialProperties(enabled=false)))
     @test domain_volume(solver) ≈ 1.0 atol = 1e-12          # 2.0 × 1.0 × 0.5
     ones_f = CL.field(solver.decomp); fill!(ones_f, 1.0)
     @test volume_integral(solver, ones_f) ≈ 1.0 atol = 1e-12
@@ -4493,21 +4635,22 @@ end
     # h²/24 and h²/12 on ∫r dr; the axis node's weight, 11/12 of the
     # midpoint's, and the wall node's remove both, so the linear J = r and the
     # quadratic J = r² integrate exactly. The origin has no such term.
-    rz(N) = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        metric=CylindricalMetric(),
-                        bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                        art=ArtificialProperties(enabled=false))
-    cyl = flat_solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 1.0),
-                      metric=CylindricalMetric(),
-                      bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                      art=ArtificialProperties(enabled=false))
+    rz(N) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false)))
+    cyl = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(64, 1, 12), art=ArtificialProperties(enabled=false)))
     ones_c = CL.field(cyl.decomp); fill!(ones_c, 1.0)
     @test volume_integral(cyl, ones_c) ≈ 0.5 atol = 1e-14  # ∫r dr dθ dz, θ collapsed
     @test CL._edge_factor(cyl, 1, 1, padded_index(cyl, 1, 1, 1)) ≈ 11 / 12
-    sph = flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                      metric=SphericalMetric(), origin=(0.0, π / 2, 0.0),
-                      bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
-                      art=ArtificialProperties(enabled=false))
+    sph = build_solver(
+        Problem(domain=((0.0, 0.0 + 1.0), (π / 2, π / 2 + 1.0), (0.0, 0.0 + 1.0)),
+                metric=SphericalMetric(),
+                bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(48, 1, 1), art=ArtificialProperties(enabled=false)))
     @test CL._edge_factor(sph, 1, 1, padded_index(sph, 1, 1, 1)) == 1.0
     @test domain_volume(sph) ≈ sin(xcoord(sph, 2, 1)) / 3 atol = 1e-14
     # A field even across the axis whose derivative vanishes at the wall
@@ -4523,8 +4666,10 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 1.0, 1.4)])
     mk(ic) = begin
-        s = flat_solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                        eos=eos, art=ArtificialProperties(enabled=false))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.2), (0.0, 0.2)), bcs=per3, eos=eos,
+                    ic=nothing),
+            Numerics(n_global=(64, 12, 12), art=ArtificialProperties(enabled=false)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         CL.exchange_state!(Q, s.decomp); CL.primitives!(s, Q)
@@ -4622,8 +4767,9 @@ end
 
 @testset "save_vtk: field selection and derived fields" begin
     dir = mktempdir()
-    solver = flat_solver(bcs=per3, n_global=(32, 32, 12), L_domain=(1.0, 1.0, 1.0),
-                         art=ArtificialProperties(enabled=true))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(32, 32, 12), art=ArtificialProperties(enabled=true)))
     Q = allocate_state(solver)
 
     # (a) A uniform stream, for which every derived field is zero by
@@ -4678,8 +4824,9 @@ end
 @testset "save_vtk: strided subsampling" begin
     dir = mktempdir()
     N = (32, 16, 16)
-    solver = flat_solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=N, art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                              rho=1 + x + 2y + 4z))
@@ -4728,8 +4875,9 @@ end
     @test whole == "0 7 0 7 0 15"
 
     # An odd extent keeps the ceiling: 1, 3, ..., 15 out of 15 is 8 stations.
-    odd = flat_solver(bcs=per3, n_global=(15, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                      art=ArtificialProperties(enabled=false))
+    odd = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(15, 16, 16), art=ArtificialProperties(enabled=false)))
     Qo = allocate_state(odd)
     initialize!(odd, Qo, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     save_vtk(odd, Qo, joinpath(dir, "odd"); fields=(:rho,), stride=2)
@@ -4745,8 +4893,9 @@ end
 @testset "save_vtk: slicing" begin
     dir = mktempdir()
     N = (24, 16, 12)
-    solver = flat_solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=N, art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                              rho=1 + x + 100y + 10000z))
@@ -4797,9 +4946,10 @@ end
     bcs = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
            (PeriodicBC(), PeriodicBC()))
     nr, nθ, nz = 12, 24, 10
-    solver = flat_solver(bcs=bcs, n_global=(nr, nθ, nz), L_domain=(1.0, 2π, 1.0),
-                         origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)), bcs=bcs,
+                metric=CylindricalMetric(), ic=nothing),
+        Numerics(n_global=(nr, nθ, nz), art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     # Solid-body swirl: purely azimuthal, constant magnitude.
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0))
@@ -4834,20 +4984,23 @@ end
     # An axisymmetric (θ-collapsed) polar run remains rectilinear, since the
     # meridional half-plane is the computed domain and a rectangle represents
     # it correctly.
-    axi = flat_solver(bcs=(bcs[1], (PeriodicBC(), PeriodicBC()), bcs[3]),
-                      n_global=(nr, 1, nz), L_domain=(1.0, 2π, 1.0),
-                      origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                      art=ArtificialProperties(enabled=false))
+    axi = build_solver(
+        Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)),
+                bcs=(bcs[1], (PeriodicBC(), PeriodicBC()), bcs[3]),
+                metric=CylindricalMetric(), ic=nothing),
+        Numerics(n_global=(nr, 1, nz), art=ArtificialProperties(enabled=false)))
     @test container_extension(axi) == ".pvtr"
     rm(dir; recursive=true)
 end
 
 @testset "FieldWriter: numbered frames and a .pvd carrying physical time" begin
     dir = mktempdir()
-    solver = flat_solver(bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
-                         (PeriodicBC(), PeriodicBC())),
-                         n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                         art=ArtificialProperties(enabled=false), cfl=0.4)
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                  bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+                                  (PeriodicBC(), PeriodicBC())),
+                                  ic=nothing),
+                          Numerics(n_global=(16, 12, 12),
+                                   art=ArtificialProperties(enabled=false), cfl=0.4))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                              p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -4927,8 +5080,12 @@ end
     end
     wall = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
-    mk(; kw...) = flat_solver(; n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
-                              bcs=(wall, per, per), kw...)
+    mk(; cfl=0.5, filter_interval=1, filter_cfl=0.35, L_domain=(1.0, 1.0, 1.0),
+         n_global=(16, 12, 1), transport=ConstantTransport(), art=ArtificialProperties()) = build_solver(
+        Problem(domain=((0.0, L_domain[1]), (0.0, L_domain[2]), (0.0, L_domain[3])),
+                bcs=(wall, per, per), transport=transport, ic=nothing),
+        Numerics(n_global=n_global, cfl=cfl, art=art,
+                 filter=StateFilter(interval=filter_interval, cfl=filter_cfl)))
     for (kw, name) in [((; predict=-1.0), "predict"), ((; max_growth=0.5), "max_growth"),
                        ((; dt_min=NaN), "dt_min"), ((; dt_min_ratio=1.0), "dt_min_ratio"),
                        ((; retries=-1), "retries"), ((; cfl_backoff=1.0), "cfl_backoff"),
@@ -4973,8 +5130,10 @@ end
     wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
              (PeriodicBC(), PeriodicBC()))
     mkrun() = begin
-        solver = flat_solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                             art=ArtificialProperties(enabled=false), cfl=0.4)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=wall3, ic=nothing),
+            Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false),
+                     cfl=0.4))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -5106,8 +5265,10 @@ end
     mkrun() = begin
         # cfl 0.244 keeps the step this test was written at (0.4 under the
         # summed acoustic rate): the sliver below needs dt below the 0.01 interval.
-        solver = flat_solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                             art=ArtificialProperties(enabled=false), cfl=0.244)
+        solver = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=wall3, ic=nothing),
+            Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false),
+                     cfl=0.244))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -5199,8 +5360,9 @@ end
     @test trigger.next == 1
 
     et = EveryTime(0.01)
-    solver = flat_solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false)))
     solver.t = 0.045
     @test CL.next_time(et, solver) ≈ 0.05
     CL.rewind!(et, 0.021, 3)
@@ -5215,8 +5377,9 @@ end
     # places the rollback across instants that have already fired.
     walls = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
              (PeriodicBC(), PeriodicBC()))
-    s2 = flat_solver(bcs=walls, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                     art=ArtificialProperties(enabled=false), cfl=0.4)
+    s2 = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=walls, ic=nothing),
+        Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false), cfl=0.4))
     Q2 = allocate_state(s2)
     initialize!(s2, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                           p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -5245,8 +5408,9 @@ end
 @testset "state queries and refresh_primitives! in a callback" begin
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 2.0, 1.6)])
-    solver = flat_solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                         eos=eos, art=ArtificialProperties(enabled=false), cfl=0.4)
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, eos=eos, ic=nothing),
+        Numerics(n_global=(16, 12, 12), art=ArtificialProperties(enabled=false), cfl=0.4))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(0.2, -0.1, 0.05),
                                              p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -5489,8 +5653,11 @@ end
     # extents agree in every case and the state means something else. The
     # expected message is asserted to ensure each case exercises its intended
     # check, not an earlier one.
-    mk(; kw...) = flat_solver(; n_global=(12, 12, 12), bcs=per3, L_domain=(2π, 2π, 2π),
-                              art=ArtificialProperties(enabled=false), kw...)
+    mk(; eos=IdealSpecies("gas"; R=1.0, gamma=1.4), L_domain=(2π, 2π, 2π),
+         origin=(0.0, 0.0, 0.0), bcs=per3, metric=CartesianMetric()) = build_solver(
+        Problem(domain=((origin[1], origin[1] + (L_domain[1])), (origin[2], origin[2] + (L_domain[2])), (origin[3], origin[3] + (L_domain[3]))),
+                eos=eos, bcs=bcs, metric=metric, ic=nothing),
+        Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
     eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                          IdealSpecies{Float64}("b", 2.0, 1.6)])
     base = mk(eos=eos2)
@@ -5533,9 +5700,11 @@ end
     # stretched dimension must be non-periodic, so this pair needs a checkpoint
     # of its own, and it is paired with a reload onto the grid that wrote it so
     # that the check is shown to discriminate rather than to refuse everything.
-    mkw(st) = flat_solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                     stretch=(st, nothing, nothing), art=ArtificialProperties(enabled=false))
+    mkw(st) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(12, 12, 12), stretch=(st, nothing, nothing),
+                 art=ArtificialProperties(enabled=false)))
     uniform = mkw(nothing)
     Qu = allocate_state(uniform)
     initialize!(uniform, Qu, (x, y, z) -> Prim(p=1.0, rho=1.0))
@@ -5679,8 +5848,10 @@ end
     function tube_pair()
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-        s = flat_solver(n_global=(48, 32, 1), L_domain=(1.0, 0.6, 1.0), eos=eos,
-                        bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.6), (0.0, 1.0)), eos=eos,
+                    bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]), ic=nothing),
+            Numerics(n_global=(48, 32, 1)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -5706,9 +5877,11 @@ end
     function channel_tube_pair(channel)
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-        s = flat_solver(n_global=(48, 32, 1), L_domain=(1.0, 0.6, 1.0), eos=eos,
-                        bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]),
-                        art=ArtificialProperties(enabled=true, species_flux=channel))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.6), (0.0, 1.0)), eos=eos,
+                    bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]), ic=nothing),
+            Numerics(n_global=(48, 32, 1),
+                     art=ArtificialProperties(enabled=true, species_flux=channel)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -5735,9 +5908,11 @@ end
     @test s1.D_art[1][CL.interior(s1.decomp)] == s1.D_art[2][CL.interior(s1.decomp)]
 
     function axis_pair()
-        s = flat_solver(n_global=(32, 1, 24), L_domain=(1.0, 2π, 1.0),
-                        bcs=((AxisBC(), SlipWallBC()), per3k[2], per3k[3]),
-                        metric=CylindricalMetric())
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+                    bcs=((AxisBC(), SlipWallBC()), per3k[2], per3k[3]),
+                    metric=CylindricalMetric(), ic=nothing),
+            Numerics(n_global=(32, 1, 24)))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) ->
             Prim(u=(0.0, 0.2r, 0.05 * sin(2π * z)), p=1.0 + 0.02r^2, rho=1.0))

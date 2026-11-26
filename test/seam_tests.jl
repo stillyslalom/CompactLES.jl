@@ -5,7 +5,7 @@
 # here is one that the rest of the suite passed while the seam was wrong.
 # Included from runtests.jl, which supplies `CL`, `per3`, `fillf!` and `ferr`.
 
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, xcoord
 
 @testset "resolved axis: velocity components of a smooth Cartesian field" begin
@@ -14,10 +14,10 @@ using CompactLES: compute_rhs!, apply_bcs!, xcoord
     # derivatives vanish. The even/odd butterfly must mirror the even
     # combination as even for ANY σ; mirroring it with σ = −1 gave an O(1/h)
     # error on the two cells beside the axis.
-    solver = flat_solver(n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0),
-                         metric=CylindricalMetric(),
-                         bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(24, 32, 1), art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     for (fun, dfun, σ) in (((r, θ, z) -> cos(θ), (r, θ, z) -> 0.0, -1),
                            ((r, θ, z) -> -sin(θ), (r, θ, z) -> 0.0, -1),
@@ -30,10 +30,10 @@ using CompactLES: compute_rhs!, apply_bcs!, xcoord
     end
     # The δ⁴ detector on the same field, through the same butterfly: the
     # sensor beside the axis must sit at the interior floor, not 10⁴ above it.
-    solver = flat_solver(n_global=(24, 64, 1), L_domain=(1.0, 2π, 1.0),
-                         metric=CylindricalMetric(),
-                         bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                         art=ArtificialProperties(mu_sensor=:velocity))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(24, 64, 1), art=ArtificialProperties(mu_sensor=:velocity)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(cos(θ), -sin(θ), 0.0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)
@@ -56,10 +56,13 @@ end
     # derivatives of a constant for a uniform state at rest, and the sources
     # carry no pressure, so the right-hand side is at round-off without that
     # discrete value.
-    solver = flat_solver(n_global=(16, 32, 12), L_domain=(1.0, π/2, 2π),
-                         origin=(1.0, π/4, 0.0), metric=SphericalMetric(),
-                         bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                         per3[3]), art=ArtificialProperties(enabled=false))
+    solver = build_solver(Problem(domain=((1.0, 1.0 + 1.0), (π/4, π/4 + (π/2)), (0.0, 0.0 + 2π)),
+                                  metric=SphericalMetric(),
+                                  bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                                  per3[3]),
+                                  ic=nothing),
+                          Numerics(n_global=(16, 32, 12),
+                                   art=ArtificialProperties(enabled=false)))
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny = solver.decomp.n_local[1], solver.decomp.n_local[2]
     ana(i, j) = cos(xcoord(solver, 2, j)) / (xcoord(solver, 1, i) * sin(xcoord(solver, 2, j)))
@@ -74,10 +77,11 @@ end
     # θ collapsed: no θ divergence is taken, so the term (cotθ/r) F_θ of every
     # θ flux is omitted. Setup rejects a collapsed θ off the equator, where
     # that term is of order one, and on the equator a state at rest holds.
-    line(θ) = flat_solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                          origin=(0.2, θ, 0.0), metric=SphericalMetric(),
-                          bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                          art=ArtificialProperties(enabled=false))
+    line(θ) = build_solver(
+        Problem(domain=((0.2, 0.2 + 1.0), (θ, θ + 1.0), (0.0, 0.0 + 1.0)),
+                metric=SphericalMetric(),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
+        Numerics(n_global=(16, 1, 1), art=ArtificialProperties(enabled=false)))
     @test_throws "a collapsed θ must lie at π/2" line(π/2 - 0.5)
     solver = line(π/2)
     Q = allocate_state(solver)
@@ -91,9 +95,12 @@ end
     # A C10 derivative of the same profile along x and along y must agree
     # bitwise; the x sweep divided by the pivot where the y sweep multiplied by
     # its reciprocal, and the two differed in the last bit.
-    solver = flat_solver(n_global=(24, 24, 12), L_domain=(1.0, 1.0, 0.5),
-                         bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                         per3[3]), deriv=lele_d1_10(), art=ArtificialProperties(enabled=false))
+    solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)),
+                                  bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                                  per3[3]),
+                                  ic=nothing),
+                          Numerics(n_global=(24, 24, 12), deriv=lele_d1_10(),
+                                   art=ArtificialProperties(enabled=false)))
     f = CL.field(solver.decomp); g = CL.field(solver.decomp)
     d1 = CL.field(solver.decomp); d2 = CL.field(solver.decomp)
     fn(x, y, z) = exp(sin(3x)) * (1 + 0.1z)
@@ -112,9 +119,10 @@ end
     # With conduction dominant, the rate must scale with cv, not cp: ideal gas
     # at γ = 1.4, a 40% larger thermal rate than the cp form gives.
     n = (16, 16, 12)
-    solver = flat_solver(n_global=n, L_domain=(1.0, 1.0, 0.75), bcs=per3,
-                         transport=ConstantTransport(mu0=1e-2, Pr=1e-3, Sc=1.0),
-                         art=ArtificialProperties(enabled=false))
+    solver = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.75)), bcs=per3,
+                transport=ConstantTransport(mu0=1e-2, Pr=1e-3, Sc=1.0), ic=nothing),
+        Numerics(n_global=n, art=ArtificialProperties(enabled=false)))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     rate, _ = CL.max_rate(solver, Q)

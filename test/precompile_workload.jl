@@ -17,10 +17,10 @@
 # compile of test/mpi_tests.jl at np = 2 fell from 72 s to 17 s and the wall
 # time from 99 s to 38 s.
 #
-# The configurations are written with the suites' flat keyword list
-# (flat_solver.jl), so that each reads as its test does.
+# The configurations are built as the suites build theirs (build_solver.jl),
+# so that each reads as its test does.
 
-include(joinpath(@__DIR__, "flat_solver.jl"))
+include(joinpath(@__DIR__, "build_solver.jl"))
 
 # The configurations of the serial suite and of the multi-rank suite's
 # ordinary phases.
@@ -31,8 +31,9 @@ function _test_suite_workload(cpu)
     off = ArtificialProperties(enabled=false)
     # Periodic and closed C6 / C10 derivatives.
     for deriv in (lele_d1_6(), lele_d1_10()), bcs in (per3, (walls, per, per))
-        s = flat_solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                        deriv=deriv, art=off)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+            Numerics(n_global=(16, 12, 12), deriv=deriv, art=off))
         f = field(s.decomp); df = field(s.decomp)
         f .= 1.0
         exchange_halos!(f, s.decomp)
@@ -41,23 +42,27 @@ function _test_suite_workload(cpu)
         end
     end
     # Every metric and fold, through the RHS.
+    unit = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
+    none = (nothing, nothing, nothing)
     cases = (
-        (; n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
-           bcs=per3, kw=(;)),
-        (; n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
+        (; n_global=(16, 12, 12), domain=unit, metric=CartesianMetric(), bcs=per3,
+           stretch=none),
+        (; n_global=(16, 12, 12), domain=unit, metric=CartesianMetric(),
            bcs=(walls, per, per),
-           kw=(; stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing))),
-        (; n_global=(12, 16, 12), L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(),
-           bcs=(walls, per, per), kw=(; origin=(0.2, 0.0, 0.0))),
-        (; n_global=(16, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
-           bcs=((AxisBC(), SlipWallBC()), per, per), kw=(;)),
-        (; n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
-           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per), kw=(;)),
+           stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing)),
+        (; n_global=(12, 16, 12), domain=((0.2, 1.2), (0.0, 2π), (0.0, 0.5)),
+           metric=CylindricalMetric(), bcs=(walls, per, per), stretch=none),
+        (; n_global=(16, 16, 1), domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+           metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per, per),
+           stretch=none),
+        (; n_global=(16, 16, 12), domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
+           metric=SphericalMetric(),
+           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per), stretch=none),
     )
     for cs in cases
-        kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
-                    bcs=cs.bcs, art=off), cs.kw)
-        s = flat_solver(; kw...)
+        s = build_solver(Problem(; domain=cs.domain, metric=cs.metric, bcs=cs.bcs,
+                                 ic=nothing),
+                         Numerics(; n_global=cs.n_global, stretch=cs.stretch, art=off))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(s, Q)
@@ -69,7 +74,9 @@ function _test_suite_workload(cpu)
                 ArtificialProperties(enabled=true, beta_sensor=:dilatation),
                 ArtificialProperties(enabled=true, beta_sensor=:ungated_dilatation),
                 ArtificialProperties(enabled=true, detector=:d8))
-        s = flat_solver(n_global=(12, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3, art=art)
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, ic=nothing),
+            Numerics(n_global=(12, 12, 12), art=art))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.3sin(2z)),
@@ -82,8 +89,10 @@ function _test_suite_workload(cpu)
                         IdealSpecies{Float64}("heavy", 0.2, 1.09)])
     for backend in (PRECOMPILE_DEVICE ? (CPUBackend(), DeviceBackend(cpu)) :
                     (CPUBackend(),))
-        s = flat_solver(n_global=(16, 12, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
-                        bcs=(walls, per, per), backend=backend)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 0.6), (0.0, 0.3)), eos=eos,
+                    bcs=(walls, per, per), ic=nothing),
+            Numerics(n_global=(16, 12, 12), execution=Execution(storage=backend)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -92,9 +101,11 @@ function _test_suite_workload(cpu)
         end)
         run!(s, Q; tfinal=0.02, nmax=2)
         positivity_floors(s, Q, StepControl(floor_ratio=1e-6))
-        s = flat_solver(n_global=(12, 16, 12), L_domain=(1.0, 2π, 0.5),
-                        bcs=((AxisBC(), SlipWallBC()), per, per),
-                        metric=CylindricalMetric(), backend=backend)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 0.5)),
+                    bcs=((AxisBC(), SlipWallBC()), per, per), metric=CylindricalMetric(),
+                    ic=nothing),
+            Numerics(n_global=(12, 16, 12), execution=Execution(storage=backend)))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, z) ->
             Prim(u=(0.05r * cos(θ), 0.2r, 0.05 * sin(2π * z / 0.5)),
@@ -112,16 +123,20 @@ function _test_suite_workload(cpu)
         apply_along!(out, dplan, f, decomp)
     end
     # Patches and levels: two patches, two and three levels, tiles, a regrid.
-    s = flat_solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, art=off,
-                    filter_interval=0, patch_grid=(2, 1, 1))
+    s = build_solver(
+        Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(48, 1, 1), art=off, filter=StateFilter(interval=0),
+                 execution=Execution(patch_grid=(2, 1, 1))))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2sin(x)))
     run!(s, Q; tfinal=0.5, nmax=2)
     r1 = BlockRegion((16, 0, 0), (16, 1, 1))
     r2 = BlockRegion((3 * 16 + 10, 0, 0), (20, 1, 1))
     for subcycle in (false, true), refine in (r1, [r1, r2])
-        s = flat_solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, art=off,
-                        filter_interval=0, subcycle=subcycle, refine=refine)
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+            Numerics(n_global=(48, 1, 1), art=off, filter=StateFilter(interval=0),
+                     amr=AMR(initial=refine, regrid_interval=0, subcycle=subcycle)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2sin(x)))
         run!(s, Q; tfinal=0.5, nmax=2)
@@ -130,19 +145,23 @@ function _test_suite_workload(cpu)
         end
     end
     for subcycle in (false, true)
-        s = flat_solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3, art=off,
-                        filter_interval=0, subcycle=subcycle, tile=12,
-                        refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+        s = build_solver(
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 1.0)), bcs=per3, ic=nothing),
+            Numerics(n_global=(48, 48, 1), art=off, filter=StateFilter(interval=0),
+                     amr=AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
+                             regrid_interval=0, subcycle=subcycle, tile=12)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(u=(0.4, 0.3, 0), p=1.0, rho=1.0 + 0.1sin(x)sin(y)))
         run!(s, Q; tfinal=0.5, nmax=1)
         _sync_level_records!(s, Q, s.levels[2])
     end
-    s = flat_solver(n_global=(120, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(walls, per, per), cfl=0.2,
-                    refine=BlockRegion((40, 0, 0), (30, 1, 1)),
-                    subcycle=true, regrid_interval=2, tag_buffer=8)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                ic=nothing),
+        Numerics(n_global=(120, 1, 1), cfl=0.2,
+                 amr=AMR(initial=BlockRegion((40, 0, 0), (30, 1, 1)), subcycle=true,
+                         regrid_interval=2, tag_buffer=8)))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> x < 0.45 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
@@ -157,12 +176,12 @@ function _test_suite_workload(cpu)
     # rather than spending a third dimension of image on it.
     if PRECOMPILE_FLOAT32
         T = Float32
-        f32 = (precision=T, art=ArtificialProperties(enabled=false))
-        for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
-                      ((;),))
-            s = flat_solver(; n_global=(16, 12, 12),
-                            L_domain=(one(T), one(T), one(T)), bcs=per3,
-                            cfl=T(0.2), f32..., extra...)
+        for storage in (PRECOMPILE_DEVICE ? (T, DeviceBackend(cpu) => T) : (T,))
+            s = build_solver(Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
+                                     bcs=per3, ic=nothing),
+                             Numerics(n_global=(16, 12, 12), cfl=T(0.2),
+                                      art=ArtificialProperties(enabled=false),
+                                      execution=Execution(storage=storage)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) ->
                 Prim(rho=1 + T(0.01) * sin(2π * x), T_ion=one(T),
@@ -170,9 +189,14 @@ function _test_suite_workload(cpu)
             run!(s, Q; tfinal=T(0.01), nmax=2)
             compute_dt(s, Q)
         end
-        s = flat_solver(; n_global=(48, 1, 1), L_domain=(T(2π), one(T), one(T)),
-                        bcs=per3, filter_interval=0, cfl=T(0.2),
-                        refine=BlockRegion((20, 0, 0), (8, 1, 1)), f32...)
+        s = build_solver(Problem(domain=((0.0, T(2π)), (0.0, one(T)), (0.0, one(T))),
+                                 bcs=per3, ic=nothing),
+                         Numerics(n_global=(48, 1, 1), cfl=T(0.2),
+                                  art=ArtificialProperties(enabled=false),
+                                  filter=StateFilter(interval=0),
+                                  execution=Execution(storage=T),
+                                  amr=AMR(initial=BlockRegion((20, 0, 0), (8, 1, 1)),
+                                          regrid_interval=0)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
             Prim(u=(T(0.5), zero(T), zero(T)), p=one(T),
@@ -186,18 +210,22 @@ function _test_suite_workload(cpu)
     # Behind `PRECOMPILE_DEVICE`, and so off unless a checkout asks for it.
     if PRECOMPILE_DEVICE
         with_knob(FORCE_KA => true, FORCE_DEVICE_EXCHANGE => true) do
-            s = flat_solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(walls, per, per), cfl=0.2, subcycle=true,
-                            regrid_interval=5, tile=8,
-                            refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                            backend=DeviceBackend(cpu))
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                        ic=nothing),
+                Numerics(n_global=(201, 1, 1), cfl=0.2,
+                         execution=Execution(storage=DeviceBackend(cpu)),
+                         amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                                 regrid_interval=5, tile=8)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> x < 0.5 ?
                 Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                 Prim(u=(0, 0, 0), p=0.1, rho=0.125))
             run!(s, Q; tfinal=0.06, nmax=3)
             # The same bodies on host storage, the form FORCE_KA selects.
-            s = flat_solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3)
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+                Numerics(n_global=(16, 12, 12)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) ->
                 Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
@@ -226,15 +254,18 @@ function _mpi_suite_workload(cpu)
     # end of a line whose low end is a Dirichlet inflow.
     function plane_case(T, ng, bcs, ic, detector, channel)
         local s, Q
-        s = flat_solver(n_global=ng, L_domain=(one(T), one(T), one(T)), bcs=bcs,
-                        eos=IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
-                                     IdealSpecies{T}("b", T(0.7), T(1.3))]),
-                        comm=world, dims=whole,
-                        transport=ConstantTransport{T}(mu0=T(0.01)),
-                        art=ArtificialProperties{T}(enabled=true, detector=detector,
-                                               species_flux=channel),
-                        deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-                        filter_interval=1, filter_cfl=zero(T), cfl=T(0.4))
+        s = build_solver(Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
+                                 bcs=bcs,
+                                 eos=IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
+                                              IdealSpecies{T}("b", T(0.7), T(1.3))]),
+                                 transport=ConstantTransport{T}(mu0=T(0.01)), ic=nothing),
+                         Numerics(n_global=ng,
+                                  art=ArtificialProperties{T}(enabled=true, detector=detector,
+                                                         species_flux=channel),
+                                  deriv=lele_d1_6(T), cfl=T(0.4),
+                                  filter=StateFilter(compact_filter(T(0.45), T), interval=1,
+                                                     cfl=zero(T)),
+                                  execution=Execution(comm=world, dims=whole)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         apply_bcs!(s, Q)
@@ -265,23 +296,28 @@ function _mpi_suite_workload(cpu)
     mixed = (x, y, z) -> Prim(rho=1 + 0.1 * cos(pi * x), u=(0.05 * sin(pi * x), 0.0, 0.0),
                               p=1.0, Y=(0.5 + 0.1 * cos(pi * x), 0.5 - 0.1 * cos(pi * x)))
     for tile in (0, 5)
-        s = flat_solver(n_global=(48, 24, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(sym, per, per), comm=world, cfl=0.4, eos=pair,
-                        transport=ConstantTransport{Float64}(mu0=0.01),
-                        art=ArtificialProperties(enabled=true, detector=:d8),
-                        filter_interval=1, tile=tile,
-                        refine=BlockRegion((0, 4, 0), (10, 16, 1)))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(sym, per, per),
+                    eos=pair, transport=ConstantTransport{Float64}(mu0=0.01), ic=nothing),
+            Numerics(n_global=(48, 24, 1), cfl=0.4,
+                     art=ArtificialProperties(enabled=true, detector=:d8),
+                     filter=StateFilter(interval=1), execution=Execution(comm=world),
+                     amr=AMR(initial=BlockRegion((0, 4, 0), (10, 16, 1)), regrid_interval=0,
+                             tile=tile)))
         Q = allocate_state(s)
         initialize!(s, Q, mixed)
         run!(s, Q; tfinal=1e9, nmax=2)
         domain_volume(s)
-        s = flat_solver(n_global=(48, 1, 36), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
-                        metric=CylindricalMetric(), comm=world, cfl=0.4, eos=pair,
-                        transport=ConstantTransport{Float64}(mu0=0.01),
-                        art=ArtificialProperties(enabled=true, detector=:d8),
-                        filter_interval=1, tile=tile,
-                        refine=BlockRegion((0, 0, 0), (10, 1, 10)))
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                    metric=CylindricalMetric(), eos=pair,
+                    transport=ConstantTransport{Float64}(mu0=0.01), ic=nothing),
+            Numerics(n_global=(48, 1, 36), cfl=0.4,
+                     art=ArtificialProperties(enabled=true, detector=:d8),
+                     filter=StateFilter(interval=1), execution=Execution(comm=world),
+                     amr=AMR(initial=BlockRegion((0, 0, 0), (10, 1, 10)), regrid_interval=0,
+                             tile=tile)))
         Q = allocate_state(s)
         initialize!(s, Q, mixed)
         run!(s, Q; tfinal=1e9, nmax=2)
@@ -302,27 +338,37 @@ function _mpi_suite_workload(cpu)
         fill!(T, 1.0); fill!(κ, 1.0)
         staggered_diffusion!(out, op, T, κ, decomp)
     end
-    stretched = flat_solver(n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(walls, per, per),
-                            stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
-                            art=noart, comm=world, dims=whole)
-    cyl(n) = flat_solver(n_global=(n, 16, 1), L_domain=(1.0, 2π, 1.0),
-                         metric=CylindricalMetric(),
-                         bcs=((AxisBC(), SlipWallBC()), per, per), art=noart,
-                         comm=world, dims=whole)
-    sph = flat_solver(n_global=(16, 16, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
-                      bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-                      art=noart, comm=world, dims=whole)
+    stretched = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                ic=nothing),
+        Numerics(n_global=(16, 12, 1),
+                 stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing), art=noart,
+                 execution=Execution(comm=world, dims=whole)))
+    cyl(n) = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per, per), ic=nothing),
+        Numerics(n_global=(n, 16, 1), art=noart,
+                 execution=Execution(comm=world, dims=whole)))
+    sph = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per), ic=nothing),
+        Numerics(n_global=(16, 16, 12), art=noart,
+                 execution=Execution(comm=world, dims=whole)))
     for (s, d) in ((stretched, 1), (cyl(16), 1), (sph, 1), (sph, 2))
         op = StaggeredDiffusion(s, d)
         T = field(s.decomp); κ = field(s.decomp); L = field(s.decomp)
         fill!(T, 1.0); fill!(κ, 1.0)
         staggered_diffusion!(L, op, T, κ, s.decomp)
     end
-    closed = flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(walls, per, per), art=noart, comm=world, dims=whole)
-    box = flat_solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart,
-                      comm=world, dims=whole)
+    closed = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                ic=nothing),
+        Numerics(n_global=(16, 16, 1), art=noart,
+                 execution=Execution(comm=world, dims=whole)))
+    box = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
+        Numerics(n_global=(16, 16, 1), art=noart,
+                 execution=Execution(comm=world, dims=whole)))
     for (s, parity) in ((closed, 1), (closed, -1), (box, 1), (cyl(12), 1))
         stage = DiffusionStage(s; parity=parity)
         r = field(s.decomp); κ = field(s.decomp); out = field(s.decomp)
@@ -336,11 +382,14 @@ function _mpi_suite_workload(cpu)
     end
     # "implicit conduction": the additive pair on a periodic box under the
     # default step rule, and on a line under `:none` with rollbacks.
-    s = flat_solver(n_global=(24, 36, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                    eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
-                    transport=ConstantTransport(mu0=1e-3, Pr=1e-3 * 3.5 / 2.5, Sc=1.0),
-                    art=noart, cfl=0.5, implicit=ImplicitConduction(rtol=1e-12),
-                    comm=world, dims=whole)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                transport=ConstantTransport(mu0=1e-3, Pr=1e-3 * 3.5 / 2.5, Sc=1.0),
+                ic=nothing),
+        Numerics(n_global=(24, 36, 1), art=noart, cfl=0.5,
+                 implicit=ImplicitConduction(rtol=1e-12),
+                 execution=Execution(comm=world, dims=whole)))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1 / (1 + 0.3exp(-((x - 0.4)^2 +
                                                               (y - 0.55)^2) / 0.02)),
@@ -350,12 +399,14 @@ function _mpi_suite_workload(cpu)
     h = 2 / n
     gas = 1e-10
     mu = 1e-3 * h^2
-    s = flat_solver(n_global=(n, 1, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.0, 0.0),
-                    bcs=per3, eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
-                    transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas), Sc=1.0),
-                    art=noart, filter_interval=0, cfl=1e6, control=StepControl(retries=6),
-                    implicit=ImplicitConduction(step_rule=:none, rtol=1e-12),
-                    comm=world, dims=whole)
+    s = build_solver(
+        Problem(domain=((-1.0, -1.0 + 2.0), (0.0, 0.0 + 1.0), (0.0, 0.0 + 1.0)), bcs=per3,
+                eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
+                transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas), Sc=1.0), ic=nothing),
+        Numerics(n_global=(n, 1, 1), art=noart, cfl=1e6, control=StepControl(retries=6),
+                 implicit=ImplicitConduction(step_rule=:none, rtol=1e-12),
+                 filter=StateFilter(interval=0),
+                 execution=Execution(comm=world, dims=whole)))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                         p=gas * (abs(x + 0.5) < h / 2 ? 1.2 : 0.2)))
@@ -387,57 +438,68 @@ function _mpi_suite_workload(cpu)
         positivity_counts(s)
         state_report(s, Q)
     end
-    limited(flat_solver(n_global=(36, 36, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=(walls, per, per), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.4,
-                        control=permissive, positivity_limiter=true,
-                        comm=world, dims=whole), blast, 20)
-    limited(flat_solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        origin=(0.0, π / 2, 0.0), metric=SphericalMetric(),
-                        bcs=((OriginBC(), SlipWallBC()), per, per), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.3,
-                        control=permissive, positivity_limiter=true,
-                        comm=world, dims=whole),
+    limited(build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per), eos=gas,
+                ic=nothing),
+        Numerics(n_global=(36, 36, 1), art=ArtificialProperties(enabled=true), cfl=0.4,
+                 control=permissive, positivity_limiter=true,
+                 execution=Execution(comm=world, dims=whole))), blast, 20)
+    limited(build_solver(
+        Problem(domain=((0.0, 0.0 + 1.0), (π / 2, π / 2 + 1.0), (0.0, 0.0 + 1.0)),
+                metric=SphericalMetric(), bcs=((OriginBC(), SlipWallBC()), per, per),
+                eos=gas, ic=nothing),
+        Numerics(n_global=(48, 1, 1), art=ArtificialProperties(enabled=true), cfl=0.3,
+                 control=permissive, positivity_limiter=true,
+                 execution=Execution(comm=world, dims=whole))),
             (r, θ, φ) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1e-4 + exp(-(r / 0.08)^2)),
             30)
-    limited(flat_solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
-                        metric=CylindricalMetric(),
-                        bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
-                        eos=gas, art=ArtificialProperties(enabled=true), cfl=0.3,
-                        control=permissive, positivity_limiter=true,
-                        comm=world, dims=whole), corner, 20)
+    limited(build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                bcs=((AxisBC(), SlipWallBC()), per, (SymmetryPlaneBC(), SlipWallBC())),
+                eos=gas, ic=nothing),
+        Numerics(n_global=(36, 1, 36), art=ArtificialProperties(enabled=true), cfl=0.3,
+                 control=permissive, positivity_limiter=true,
+                 execution=Execution(comm=world, dims=whole))), corner, 20)
     for flux in (:closure, :ghost)
-        limited(flat_solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(walls, per, per), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.4,
-                            control=permissive, positivity_limiter=true,
-                            patch_grid=(2, 1, 1), interface_flux=flux,
-                            interface_limited_ghost=true, comm=world), blast, 20)
+        limited(build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                    eos=gas, ic=nothing),
+            Numerics(n_global=(96, 32, 1), art=ArtificialProperties(enabled=true), cfl=0.4,
+                     control=permissive, positivity_limiter=true,
+                     patch_interfaces=PatchInterfaces(flux=flux, limited_ghost=true),
+                     execution=Execution(patch_grid=(2, 1, 1), comm=world))), blast, 20)
     end
     for flux in (:closure, :ghost), sub in (false, true)
-        limited(flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(walls, walls, per), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.4,
-                            control=permissive, positivity_limiter=true,
-                            refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
-                            subcycle=sub, interface_flux=flux,
-                            interface_limited_ghost=true, comm=world), blast, 10)
-        limited(flat_solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
-                            metric=CylindricalMetric(),
-                            bcs=((AxisBC(), SlipWallBC()), per,
-                            (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.3,
-                            control=permissive, positivity_limiter=true,
-                            refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8,
-                            subcycle=sub, interface_flux=flux,
-                            interface_limited_ghost=true, comm=world), corner, 10)
+        limited(build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, walls, per),
+                    eos=gas, ic=nothing),
+            Numerics(n_global=(48, 48, 1), art=ArtificialProperties(enabled=true), cfl=0.4,
+                     control=permissive, positivity_limiter=true,
+                     patch_interfaces=PatchInterfaces(flux=flux, limited_ghost=true),
+                     execution=Execution(comm=world),
+                     amr=AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
+                             regrid_interval=0, subcycle=sub, tile=8))), blast, 10)
+        limited(build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                     metric=CylindricalMetric(),
+                                     bcs=((AxisBC(), SlipWallBC()), per,
+                                     (SymmetryPlaneBC(), SlipWallBC())),
+                                     eos=gas, ic=nothing),
+                             Numerics(n_global=(36, 1, 36),
+                                      art=ArtificialProperties(enabled=true), cfl=0.3,
+                                      control=permissive, positivity_limiter=true,
+                                      patch_interfaces=PatchInterfaces(flux=flux,
+                                                                       limited_ghost=true),
+                                      execution=Execution(comm=world),
+                                      amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)),
+                                              regrid_interval=0, subcycle=sub, tile=8))), corner, 10)
     end
-    s = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(walls, walls, per), eos=gas, transport=ConstantTransport(mu0=0.0),
-                    art=ArtificialProperties(enabled=true), cfl=0.4,
-                    control=permissive,
-                    refine=BlockRegion((20, 18, 0), (10, 10, 1)), subcycle=true,
-                    comm=world)
+    s = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, walls, per),
+                eos=gas, transport=ConstantTransport(mu0=0.0), ic=nothing),
+        Numerics(n_global=(48, 48, 1), art=ArtificialProperties(enabled=true), cfl=0.4,
+                 control=permissive, execution=Execution(comm=world),
+                 amr=AMR(initial=BlockRegion((20, 18, 0), (10, 10, 1)), regrid_interval=0,
+                         subcycle=true)))
     Q = allocate_state(s)
     initialize!(s, Q, blast)
     run!(s, Q; tfinal=1.0, nmax=10)
@@ -446,21 +508,24 @@ function _mpi_suite_workload(cpu)
     for device in (PRECOMPILE_DEVICE ? (false, true) : (false,))
         backend = device ? DeviceBackend(cpu) : CPUBackend()
         with_knob(FORCE_KA => device, FORCE_DEVICE_EXCHANGE => device) do
-            s = flat_solver(n_global=(36, 36, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=(walls, per, per), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.4,
-                            control=permissive, positivity_limiter=true,
-                            dims=whole, backend=backend)
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, per, per),
+                        eos=gas, ic=nothing),
+                Numerics(n_global=(36, 36, 1), art=ArtificialProperties(enabled=true),
+                         cfl=0.4, control=permissive, positivity_limiter=true,
+                         execution=Execution(dims=whole, storage=backend)))
             Q = allocate_state(s)
             initialize!(s, Q, blast)
             run!(s, Q; tfinal=1.0, nmax=10)
             for flux in (:closure, :ghost)
-                s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                bcs=(walls, per, per), eos=gas,
-                                art=ArtificialProperties(enabled=true), cfl=0.3,
-                                filter_cfl=0.35, control=permissive, positivity_limiter=true,
-                                patch_grid=(2, 1, 1), interface_flux=flux,
-                                interface_limited_ghost=true, backend=backend)
+                s = build_solver(
+                    Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                            bcs=(walls, per, per), eos=gas, ic=nothing),
+                    Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=true),
+                             cfl=0.3, control=permissive, positivity_limiter=true,
+                             filter=StateFilter(cfl=0.35),
+                             patch_interfaces=PatchInterfaces(flux=flux, limited_ghost=true),
+                             execution=Execution(patch_grid=(2, 1, 1), storage=backend)))
                 Q = allocate_state(s)
                 initialize!(s, Q, (x, y, z) ->
                     Prim(rho=1.0, u=(0.0, 0.0, 0.0),

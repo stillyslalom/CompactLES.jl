@@ -1,4 +1,4 @@
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES, Test
 using CompactLES: step!
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -20,7 +20,9 @@ MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     step!(sf, Qf, Workspace(Qf), 1e-4)
     @test parent(Q) == parent(Qf)
 
-    direct = flat_solver(n_global=num.n_global, L_domain=(1.0, 1.0, 1.0), bcs=bcs)
+    direct = build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs, ic=nothing),
+        Numerics(n_global=num.n_global))
     @test direct.bcs == full
     mixed = ((wall, NSCBCOutflowBC(pinf=1.0)), periodic, periodic)
     @test Problem(; domain, bcs=mixed, ic).bcs[1] == mixed[1]

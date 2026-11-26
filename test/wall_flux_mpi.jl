@@ -4,7 +4,7 @@
 # The slip-wall case carries a tangential velocity in its initial data, so
 # that the tangential momentum fluxes its contract zeros are nonzero to
 # begin with.
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "build_solver.jl"))
 using CompactLES: compute_rhs!, apply_bcs!, padded_index
 
 function test_no_slip_wall_flux()
@@ -19,12 +19,14 @@ function test_no_slip_wall_flux()
         eos = IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
                             IdealSpecies{T}("b", T(0.7), T(1.3))])
         function build_wall(comm_here, dims_here)
-            sol = flat_solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
-                       bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
-                       transport=ConstantTransport{T}(mu0=T(0.01)),
-                       art=ArtificialProperties{T}(enabled=true, species_flux=channel),
-                       deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-                       filter_interval=0)
+            sol = build_solver(
+                Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))), bcs=bcs,
+                        eos=eos, transport=ConstantTransport{T}(mu0=T(0.01)), ic=nothing),
+                Numerics(n_global=ng,
+                         art=ArtificialProperties{T}(enabled=true, species_flux=channel),
+                         deriv=lele_d1_6(T),
+                         filter=StateFilter(compact_filter(T(0.45), T), interval=0),
+                         execution=Execution(comm=comm_here, dims=dims_here)))
             state = allocate_state(sol)
             initialize!(sol, state, (x, y, z) -> begin
                 r = (x, y, z)[ax]
@@ -83,12 +85,14 @@ function test_slip_wall_flux()
         eos = IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
                             IdealSpecies{T}("b", T(0.7), T(1.3))])
         function build_slip(comm_here, dims_here)
-            sol = flat_solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
-                       bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
-                       transport=ConstantTransport{T}(mu0=T(0.01)),
-                       art=ArtificialProperties{T}(enabled=true, species_flux=channel),
-                       deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-                       filter_interval=0)
+            sol = build_solver(
+                Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))), bcs=bcs,
+                        eos=eos, transport=ConstantTransport{T}(mu0=T(0.01)), ic=nothing),
+                Numerics(n_global=ng,
+                         art=ArtificialProperties{T}(enabled=true, species_flux=channel),
+                         deriv=lele_d1_6(T),
+                         filter=StateFilter(compact_filter(T(0.45), T), interval=0),
+                         execution=Execution(comm=comm_here, dims=dims_here)))
             state = allocate_state(sol)
             initialize!(sol, state, (x, y, z) -> begin
                 r = (x, y, z)[ax]

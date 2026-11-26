@@ -80,7 +80,7 @@ common ones that are expensive to compile at run time. Keep that balance
 when adding a block, and add none for a test; the `precompile_float32`
 preference adds a single-precision box and refined line. The test suites'
 configurations are a separate workload, `test/precompile_workload.jl`,
-written with `flat_solver` (`test/flat_solver.jl`). It belongs to a helper
+built with `build_solver` (`test/build_solver.jl`). It belongs to a helper
 package, `test/TestPrecompile`, whose image holds those trees; nothing under
 `src/` refers to it. Run `julia --project=. test/test_image.jl` in one
 process before the serial or MPI suite locally, as CI does, or those suites

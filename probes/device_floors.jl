@@ -62,7 +62,7 @@
 
 using MPI
 MPI.Init(threadlevel=:funneled)
-@isdefined(flat_solver) || include(joinpath(@__DIR__, "../test/flat_solver.jl"))
+@isdefined(build_solver) || include(joinpath(@__DIR__, "../test/build_solver.jl"))
 using CompactLES
 import CompactLES: Decomp, device_plan
 using Printf
@@ -282,12 +282,13 @@ function tgv_build(T, deriv, n, ka_backend)
     γ = T(1.4)
     c0 = T(10)
     p0 = c0^2 / γ
-    s = flat_solver(n_global=(n, n, n), L_domain=(T(2π), T(2π), T(2π)),
-                    bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
-                    transport=ConstantTransport{T}(mu0=T(1 / 1600)),
-                    art=ArtificialProperties{T}(enabled=false),
-                    deriv=deriv, filt=compact_filter(T(0.45), T),
-                    cfl=T(0.6), backend=DeviceBackend(ka_backend))
+    s = build_solver(
+        Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))), bcs=(per, per, per),
+                eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
+                transport=ConstantTransport{T}(mu0=T(1 / 1600)), ic=nothing),
+        Numerics(n_global=(n, n, n), art=ArtificialProperties{T}(enabled=false),
+                 deriv=deriv, cfl=T(0.6), filter=compact_filter(T(0.45), T),
+                 execution=Execution(storage=DeviceBackend(ka_backend))))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(
         u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), zero(T)),

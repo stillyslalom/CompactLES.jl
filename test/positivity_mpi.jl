@@ -11,11 +11,14 @@ function test_positivity_limiter()
     ic(x, y, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                        p=1e-3 + exp(-((x - 0.45)^2 + (y - 0.5)^2) / 0.004))
     function make(comm_here, dims_here)
-        s = flat_solver(n_global=(SPLITN, SPLITN, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.4,
-                        control=StepControl(validity=:permissive), positivity_limiter=true,
-                        comm=comm_here, dims=dims_here)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                    ic=nothing),
+            Numerics(n_global=(SPLITN, SPLITN, 1), art=ArtificialProperties(enabled=true),
+                     cfl=0.4, control=StepControl(validity=:permissive),
+                     positivity_limiter=true,
+                     execution=Execution(comm=comm_here, dims=dims_here)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=40)
@@ -59,12 +62,13 @@ function test_positivity_limiter()
     N = 96
     blast(r, θ, φ) = Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1e-4 + exp(-(r / 0.08)^2))
     function sphere(comm_here, dims_here)
-        s = flat_solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        origin=(0.0, π / 2, 0.0), metric=SphericalMetric(),
-                        bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.3,
-                        control=StepControl(validity=:permissive), positivity_limiter=true,
-                        comm=comm_here, dims=dims_here)
+        s = build_solver(
+            Problem(domain=((0.0, 0.0 + 1.0), (π / 2, π / 2 + 1.0), (0.0, 0.0 + 1.0)),
+                    metric=SphericalMetric(),
+                    bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]), eos=gas, ic=nothing),
+            Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true), cfl=0.3,
+                     control=StepControl(validity=:permissive), positivity_limiter=true,
+                     execution=Execution(comm=comm_here, dims=dims_here)))
         Q = allocate_state(s)
         initialize!(s, Q, blast)
         run!(s, Q; tfinal=1.0, nmax=60)
@@ -102,12 +106,14 @@ function test_positivity_limiter()
     corner(r, θ, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                            p=1e-4 + exp(-(r^2 + z^2) / 0.06^2))
     function plane(comm_here, dims_here)
-        s = flat_solver(n_global=(SPLITN, 1, SPLITN), L_domain=(1.0, 1.0, 1.0),
-                   metric=CylindricalMetric(),
-                   bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
-                   eos=gas, art=ArtificialProperties(enabled=true), cfl=0.3,
-                   control=StepControl(validity=:permissive), positivity_limiter=true,
-                   comm=comm_here, dims=dims_here)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), per3[2], (SymmetryPlaneBC(), SlipWallBC())),
+                    eos=gas, ic=nothing),
+            Numerics(n_global=(SPLITN, 1, SPLITN), art=ArtificialProperties(enabled=true),
+                     cfl=0.3, control=StepControl(validity=:permissive),
+                     positivity_limiter=true,
+                     execution=Execution(comm=comm_here, dims=dims_here)))
         Q = allocate_state(s)
         initialize!(s, Q, corner)
         run!(s, Q; tfinal=1.0, nmax=40)
@@ -154,12 +160,15 @@ function test_positivity_limiter()
         section("positivity limiter: same-level patches across ranks against one " *
                 "rank, :$flux")
         function patched(comm_here)
-            s = flat_solver(n_global=(96, 32, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.4,
-                            control=StepControl(validity=:permissive), positivity_limiter=true,
-                            patch_grid=(2, 1, 1), interface_flux=flux,
-                            interface_limited_ghost=true, comm=comm_here)
+            s = build_solver(
+                Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                        ic=nothing),
+                Numerics(n_global=(96, 32, 1), art=ArtificialProperties(enabled=true),
+                         cfl=0.4, control=StepControl(validity=:permissive),
+                         positivity_limiter=true,
+                         patch_interfaces=PatchInterfaces(flux=flux, limited_ghost=true),
+                         execution=Execution(patch_grid=(2, 1, 1), comm=comm_here)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -229,11 +238,14 @@ function test_positivity_limiter()
         end
     end
     function blast2(backend)
-        s = flat_solver(n_global=(SPLITN, SPLITN, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.4,
-                        control=StepControl(validity=:permissive), positivity_limiter=true,
-                        dims=splitdims(1), backend=backend)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                    ic=nothing),
+            Numerics(n_global=(SPLITN, SPLITN, 1), art=ArtificialProperties(enabled=true),
+                     cfl=0.4, control=StepControl(validity=:permissive),
+                     positivity_limiter=true,
+                     execution=Execution(dims=splitdims(1), storage=backend)))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=20)
@@ -249,12 +261,15 @@ function test_positivity_limiter()
     # A pressure jump beside the interface, whose shock limits the faces about
     # the shared node from one side first, so that the exchange acts.
     function patched2(backend, flux)
-        s = flat_solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
-                        art=ArtificialProperties(enabled=true), cfl=0.3, filter_cfl=0.35,
-                        control=StepControl(validity=:permissive), positivity_limiter=true,
-                        patch_grid=(2, 1, 1), interface_flux=flux,
-                        interface_limited_ghost=true, backend=backend)
+        s = build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), eos=gas,
+                    ic=nothing),
+            Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=true), cfl=0.3,
+                     control=StepControl(validity=:permissive), positivity_limiter=true,
+                     filter=StateFilter(cfl=0.35),
+                     patch_interfaces=PatchInterfaces(flux=flux, limited_ghost=true),
+                     execution=Execution(patch_grid=(2, 1, 1), storage=backend)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                             p=1000 * (1 - tanh_blend(x, 0.45, 2 / 95)) +
@@ -287,14 +302,19 @@ function test_positivity_limiter()
         section("positivity limiter: refined tiles across ranks against one rank" *
                 (sub ? ", subcycled" : "") * ", :$flux")
         function refined(comm_here)
-            s = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                            bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                            per3[3]), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.4,
-                            control=StepControl(validity=:permissive), positivity_limiter=true,
-                            refine=BlockRegion((12, 12, 0), (24, 24, 1)), tile=8,
-                            subcycle=sub, interface_flux=flux,
-                            interface_limited_ghost=true, comm=comm_here)
+            s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                                     per3[3]),
+                                     eos=gas, ic=nothing),
+                             Numerics(n_global=(48, 48, 1),
+                                      art=ArtificialProperties(enabled=true), cfl=0.4,
+                                      control=StepControl(validity=:permissive),
+                                      positivity_limiter=true,
+                                      patch_interfaces=PatchInterfaces(flux=flux,
+                                                                       limited_ghost=true),
+                                      execution=Execution(comm=comm_here),
+                                      amr=AMR(initial=BlockRegion((12, 12, 0), (24, 24, 1)),
+                                              regrid_interval=0, subcycle=sub, tile=8)))
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                                 p=1e-3 + exp(-((x - 0.5)^2 +
@@ -352,14 +372,20 @@ function test_positivity_limiter()
         section("positivity limiter: r-z tiles across ranks against one rank" *
                 (sub ? ", subcycled" : "") * ", :$flux")
         function rztiled(comm_here)
-            s = flat_solver(n_global=(36, 1, 36), L_domain=(1.0, 1.0, 1.0),
-                            metric=CylindricalMetric(),
-                            bcs=((AxisBC(), SlipWallBC()), per3[2],
-                            (SymmetryPlaneBC(), SlipWallBC())), eos=gas,
-                            art=ArtificialProperties(enabled=true), cfl=0.3,
-                            control=StepControl(validity=:permissive), positivity_limiter=true,
-                            refine=BlockRegion((0, 0, 0), (17, 1, 17)), tile=8, subcycle=sub,
-                            interface_flux=flux, interface_limited_ghost=true, comm=comm_here)
+            s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                     metric=CylindricalMetric(),
+                                     bcs=((AxisBC(), SlipWallBC()), per3[2],
+                                     (SymmetryPlaneBC(), SlipWallBC())),
+                                     eos=gas, ic=nothing),
+                             Numerics(n_global=(36, 1, 36),
+                                      art=ArtificialProperties(enabled=true), cfl=0.3,
+                                      control=StepControl(validity=:permissive),
+                                      positivity_limiter=true,
+                                      patch_interfaces=PatchInterfaces(flux=flux,
+                                                                       limited_ghost=true),
+                                      execution=Execution(comm=comm_here),
+                                      amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)),
+                                              regrid_interval=0, subcycle=sub, tile=8)))
             Q = allocate_state(s)
             initialize!(s, Q, corner)
             run!(s, Q; tfinal=1.0, nmax=20)
@@ -404,13 +430,16 @@ function test_positivity_limiter()
     # by the last step of the one-rank run.
     section("shell fallback: a decomposed box against one rank")
     function boxed(comm_here)
-        s = flat_solver(n_global=(48, 48, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                        per3[3]), eos=gas, transport=ConstantTransport(mu0=0.0),
-                        art=ArtificialProperties(enabled=true), cfl=0.4,
-                        control=StepControl(validity=:permissive),
-                        refine=BlockRegion((20, 18, 0), (10, 10, 1)), subcycle=true,
-                        comm=comm_here)
+        s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                                 bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
+                                 per3[3]),
+                                 eos=gas, transport=ConstantTransport(mu0=0.0), ic=nothing),
+                         Numerics(n_global=(48, 48, 1),
+                                  art=ArtificialProperties(enabled=true), cfl=0.4,
+                                  control=StepControl(validity=:permissive),
+                                  execution=Execution(comm=comm_here),
+                                  amr=AMR(initial=BlockRegion((20, 18, 0), (10, 10, 1)),
+                                          regrid_interval=0, subcycle=true)))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                             p=1e-3 + exp(-((x - 0.5)^2 +
