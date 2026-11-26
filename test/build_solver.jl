@@ -3,8 +3,9 @@
 # the benchmark scripts build their configurations in, then fill a state with
 # `allocate_state` and `initialize!`. `setup` is the entry point of a run.
 #
-# Included by whichever file needs it, the test image's module among them, so
-# every name is qualified and nothing is imported.
+# Included by whichever file needs it, the test image's module among them, and
+# sometimes before the package is loaded, so every name is qualified, nothing
+# is imported, and the signature names no type of the package.
 
 """
     build_solver(prob, num; tag_predicate = nothing, equations = nothing) -> Solver
@@ -18,8 +19,7 @@ list builds its levels at once, with no initial tagging pass. `tag_predicate`
 is a `(patch, I) -> Bool` closure over the parent patch, and `equations` the
 `EquationSet` owning the conserved layout.
 """
-function build_solver(prob::CompactLES.Problem, num::CompactLES.Numerics;
-                      tag_predicate=nothing, equations=nothing)
+function build_solver(prob, num; tag_predicate=nothing, equations=nothing)
     C = CompactLES
     num.control === nothing && (num = C.Numerics(num; control=C.StepControl()))
     lv = num.amr === nothing ? C.LevelSetup(; tag_predicate) :
