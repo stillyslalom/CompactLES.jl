@@ -45,12 +45,6 @@
 _level_sensors(solver, lev::Level) =
     lev.index > 0 && any(lev.phases) && solver.art.enabled
 
-_strain_sensed(art::ArtificialProperties) =
-    art.mu_sensor === :strain || art.beta_sensor === :strain ||
-    art.beta_sensor === :gated_strain
-_dilatation_sensed(art::ArtificialProperties) =
-    art.beta_sensor === :dilatation || art.beta_sensor === :ungated_dilatation
-
 """
     _sensed_field_count(art, tile, n_species) -> Int
     _sensed_field_count(solver, tile) -> Int
@@ -81,37 +75,23 @@ _sensor_field_count(art::ArtificialProperties) = 1 + Int(_dilatation_sensed(art)
 _sharpen_gradient(p, art::ArtificialProperties, sp::Int, d::Int) =
     p.amr.sensed_fields[_sensor_field_count(art) + 3 * (sp - 1) + d]
 
-# The coefficient arrays of patch `p` that hold the level's sensors between
-# detection and the coefficients: the μ* sensor in `mu_art` unless β* shares
-# the strain sensor, the β* sensor in `beta_art`, the internal-energy sensor in
-# `kappa_art`, and the species sensor in `D_art[1]` where one diffusivity
-# serves every species or in each `D_art[k]` under `:fickian`.
+# Where a tile holds its sensed fields and its internal-energy sensor between
+# the stages (`_sensor_slots`, artificial.jl): its `sensed_fields`, the
+# dilatation's slot standing for the strain magnitude's where none is sensed,
+# and its `kappa_art`.
+_sensor_slots(ps, ::LevelSensors) = _level_slots(ps, ps.art)
+function _level_slots(p, art::ArtificialProperties)
+    sf = p.amr.sensed_fields
+    return (sf[1], sf[_dilatation_sensed(art) ? 2 : 1], p.kappa_art)
+end
+
+# The arrays of tile `p` that hold its sensors between detection and the
+# coefficients (`_foreach_sensor_array`), collected for the level's exchanges.
 function _sensor_arrays(p, art::ArtificialProperties, n_species::Int)
     out = empty(p.Y)
-    _foreach_sensor_array(f -> push!(out, f), p, art, n_species)
+    _foreach_sensor_array(f -> push!(out, f), p, _level_slots(p, art), art, n_species)
     return out
 end
-
-# `g(f)` for each array of `_sensor_arrays`, in its order, without collecting
-# them.
-@inline function _foreach_sensor_array(g::G, p, art::ArtificialProperties,
-                                       n_species::Int) where {G}
-    shared_strain = art.mu_sensor === :strain && _strain_beta(art)
-    shared_strain || g(p.mu_art)
-    g(p.beta_art)
-    g(p.kappa_art)
-    if n_species > 1
-        if _shared_species_diffusivity(art, n_species)
-            g(p.D_art[1])
-        else
-            foreach(g, p.D_art)
-        end
-    end
-    return nothing
-end
-
-_strain_beta(art::ArtificialProperties) =
-    art.beta_sensor === :strain || art.beta_sensor === :gated_strain
 
 # The right-hand sides of a level that takes the pass (`_level_rhs!`): the
 # boundary conditions on every tile, the pass, then each unit's right-hand side
@@ -221,29 +201,26 @@ _sharpen_list(p, solver) =
      for sp in 1:(solver.equations.n_species - 1) for d in 1:3 if p.decomp.active[d]]
 
 # The units of `_level_artificial!` and `_level_sharpening_gradients!`.
+# Each is a stage of `compute_artificial!` (artificial.jl) on one unit, its
+# sensed fields and its internal-energy sensor held in the tile's arrays.
 function _unit_sensed!(ps, Q, prepared::Bool)
     compute_primitives_and_gradients!(ps, Q, prepared, true)
-    _sensed_fields!(ps)
+    _sense_stage!(patch_fields(ps), ps.art, _sensor_slots(ps, LevelSensors()))
     return nothing
 end
 function _unit_detect!(ps, Q, mask_child::Bool)
-    _level_sensor_detect!(ps, Q)
-    # A tile with a child level drops its overwritten nodes from every sensor
-    # before the first smoothing pass, as `smooth_sensor!` does on one patch.
-    _sensor_mask_patch(ps, mask_child) &&
-        _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f
-            _mask_child_sensor!(f, ps)
-        end
+    _detect_stage!(patch_fields(ps), ps.art, equation_layout(ps.equations), Q, ps,
+                   _sensor_slots(ps, LevelSensors()), true)
+    _mask_sensors!(ps, LevelSensors(), mask_child)
     return nothing
 end
-_unit_coefficients!(ps, Q, ::Nothing) = (_level_coefficients!(ps); nothing)
-function _unit_smooth_sensors!(ps, Q, d::Int)
-    _foreach_sensor_array(ps, ps.art, ps.equations.n_species) do f
-        smooth_along!(ps.tmp_a, f, ps, d, 1, true)
-        copy_interior!(f, ps.tmp_a, ps.decomp)
-    end
+function _unit_coefficients!(ps, Q, ::Nothing)
+    _coefficient_stage!(patch_fields(ps), ps.eos, ps.art, equation_layout(ps.equations),
+                        _sensor_slots(ps, LevelSensors()))
+    _mark_sensors!(ps)
     return nothing
 end
+_unit_smooth_sensors!(ps, Q, d::Int) = _smooth_sensors!(ps, LevelSensors(), d)
 function _unit_sharpen_gradients!(ps, Q, ::Nothing)
     art = ps.art
     for sp in 1:(ps.equations.n_species - 1)
@@ -327,109 +304,6 @@ function _level_sharpening_gradients!(solver::Solver, lev::Level, states)
         _each_unit(_unit_smooth_gradients!, solver, lev, states, d)
     end
     return nothing
-end
-
-# The sensed fields without interface ghosts, over the interior, from the
-# velocity gradients the shared workspace holds for this unit.
-function _sensed_fields!(ps)
-    art = ps.art
-    decomp = ps.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    sf = ps.amr.sensed_fields
-    grad_u = ps.field_tuples.grad_u
-    pointwise!(_strain_mag_point!, sf[1], nx, ny, nz, sf[1], _dims_tuple(grad_u, Val(3)),
-               o1, o2, o3)
-    _dilatation_sensed(art) &&
-        pointwise!(_dilatation_point!, sf[2], nx, ny, nz, sf[2], grad_u, o1, o2, o3)
-    return ps
-end
-
-# Every sensor of the unit before smoothing, each into the coefficient array
-# `_sensor_arrays` names, through the detectors `compute_artificial!` applies
-# but reading the ghost layers of every field at every interface face.
-function _level_sensor_detect!(ps, Q)
-    art = ps.art
-    decomp = ps.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    n_species, _, i_energy, (m1, m2, m3) = equation_layout(ps.equations)
-    sf = ps.amr.sensed_fields
-    _strain_sensed(art) &&
-        _detect!(_strain_beta(art) ? ps.beta_art : ps.mu_art, sf[1], ps, 2, true)
-    if art.mu_sensor === :velocity
-        vel = (ps.u, ps.v, ps.w)
-        fill!(ps.mu_art, 0)
-        for j in 1:3
-            detect_sum!(ps.mu_art, vel[j], ps, 1; accumulate=true,
-                        parity=ntuple(d -> vel_parity(ps, d, j), 3),
-                        wall_parity=ntuple(d -> d == j ? -1 : 1, 3), ghosts=true)
-        end
-    end
-    _dilatation_sensed(art) && _detect!(ps.beta_art, sf[2], ps, 2, true)
-    nxf, nyf, nzf = padded_extent(decomp)
-    pointwise!(_internal_energy_point!, ps.tmp_a, nxf, nyf, nzf,
-               ps.tmp_a, Q, ps.rho, m1, m2, m3, i_energy)
-    exchange_halos!(ps.tmp_a, decomp)
-    _detect!(ps.kappa_art, ps.tmp_a, ps, 1, true)
-    n_species > 1 || return ps
-    h_bound, inv_n = _species_bound_length(decomp, ps.h, art.C_D)
-    a1, a2, a3 = decomp.active
-    ih1, ih2, ih3 = ps.inv_h
-    if _shared_species_diffusivity(art, n_species)
-        _bulk_species_sensor!(ps.D_art[1], ps, art.C_D, art.C_Y, h_bound, inv_n,
-                              ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance)
-        return ps
-    end
-    for sp in 1:n_species
-        D = ps.D_art[sp]
-        species_detect_sum!(D, ps.Y[sp], ps)
-        pointwise!(_species_bound_point!, D, nx, ny, nz, D, ps.Y[sp], art.C_D,
-                   art.C_Y, h_bound, inv_n, ih1, ih2, ih3, a1, a2, a3,
-                   art.Y_tolerance, o1, o2, o3)
-    end
-    return ps
-end
-
-# The coefficients from the smoothed sensors, in place, by the per-point bodies
-# `compute_artificial!` uses. Each body reads its sensor at a point before it
-# writes that point, so a coefficient array may hold its own sensor; the
-# shared species sensor in `D_art[1]` is read into the other species first.
-# The workspace's `strain_mag` and `sensor` take what `compute_artificial!`
-# leaves in them, the strain magnitude and the smoothed internal-energy
-# sensor, for `scalar_field`, and name the unit as their writer; the last
-# unit's stay.
-function _level_coefficients!(ps)
-    art = ps.art
-    decomp = ps.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    copy_interior!(ps.strain_mag, ps.amr.sensed_fields[1], decomp)
-    copy_interior!(ps.sensor, ps.kappa_art, decomp)
-    _mark_sensors!(ps)
-    mu, beta, rho = ps.mu_art, ps.beta_art, ps.rho
-    if art.mu_sensor === :strain && _strain_beta(art)
-        pointwise!(_mu_beta_point!, mu, nx, ny, nz, mu, beta, rho, beta,
-                   art.C_mu, art.C_beta, o1, o2, o3)
-    else
-        pointwise!(_rho_sensor_point!, mu, nx, ny, nz, mu, rho, mu, art.C_mu,
-                   o1, o2, o3)
-        pointwise!(_rho_sensor_point!, beta, nx, ny, nz, beta, rho, beta,
-                   art.C_beta, o1, o2, o3)
-    end
-    kappa = ps.kappa_art
-    pointwise!(_kappa_point!, kappa, nx, ny, nz, kappa, ps.eos, rho, ps.c,
-               ps.T_ion, ps.cp_mix, kappa, art.C_kappa, o1, o2, o3)
-    n_species = ps.equations.n_species
-    n_species > 1 || return ps
-    D = ps.D_art
-    shared = _shared_species_diffusivity(art, n_species)
-    for sp in n_species:-1:1
-        src = shared ? D[1] : D[sp]
-        pointwise!(_species_diffusivity_point!, src, nx, ny, nz, D[sp], ps.c, src,
-                   o1, o2, o3)
-    end
-    return ps
 end
 
 # --- Output --------------------------------------------------------------------

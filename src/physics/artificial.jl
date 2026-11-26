@@ -19,15 +19,15 @@
 # the field each of the two viscosities is built from. Cook (2007) takes both
 # from the strain magnitude |S|; Cook (2009, appendix A) changes β* to a
 # dilatation sensor. Pyranda's public kernels build μ* from the velocity
-# components and β* from the dilatation (see `velocity_mu!` and
-# `dilatation_beta!`). β* may also key on compression through a Ducros switch
+# components and β* from the dilatation (see `_velocity_sensor!` and
+# `_dilatation_point!`). β* may also key on compression through a Ducros switch
 # (`gate_beta!`). Directions combine by Σ_d or by MAX, under
 # `ArtificialProperties.reduction`. `smooth!` stands in for Cook's Gaussian test
 # filter, and `ArtificialProperties.smoother` selects the operator it applies.
 # With more than one species, the default
 # `ArtificialProperties.species_flux = :partial_density` and the
 # `:bulk` channel build one diffusivity D_b shared by every species, sensed on
-# the mass and the mole fraction of each (`bulk_diffusivity!`); the fluxes are
+# the mass and the mole fraction of each (`_bulk_species_sensor!`); the fluxes are
 # assembled in rhs.jl. Under `:fickian` each species carries its own sensor and
 # its own D*_k, and Σ_k J_k = 0 is restored by the correction velocity in the
 # flux assembly. Under `:delta4`, indices past
@@ -114,7 +114,7 @@ given keywords replaced, keeping its element type.
   detector D and the reduction the two fields below name. `:velocity` is
   Pyranda's construction, built from the velocity components themselves. It
   costs three detector applications per direction, versus one for `:strain`
-  (`velocity_mu!`).
+  (`_velocity_sensor!`).
   The two differ in the absolute value taken by |S|, which places a cusp
   wherever the strain passes through zero; a cusp is grid-scale structure at
   any resolution, so a sensor built from |S| responds to smooth flow.
@@ -125,7 +125,7 @@ given keywords replaced, keeping its element type.
   `:ungated_dilatation` rebuilds the sensor from ∇·u, the Cook (2009, appendix A)
   form also exposed by Pyranda, and `:dilatation` applies the compression switch
   to that as well; both cost one further smoothing pass per RHS evaluation
-  (`dilatation_beta!`).
+  (`_dilatation_point!`).
 - `reduction`: how the per-direction detector outputs combine into one sensor.
   `:sum` is Σ_d, which is Cook's form and grows with the number of active
   dimensions; `:max` is Pyranda's MAX, which does not. The
@@ -337,7 +337,7 @@ _sharpening_constants(solver) =
 end
 
 # Whether the species channel builds one diffusivity D_b shared by every species
-# (`bulk_diffusivity!`) and differences conserved components (`_bulk_gradients!`):
+# (`_bulk_species_sensor!`) and differences conserved components (`_bulk_gradients!`):
 # `:bulk` and `:partial_density` do, `:fickian` builds one D*_k per species. With
 # the artificial properties off or a single species there is nothing for either
 # to act on, and none of the channel's passes or storage is set up for it.
@@ -397,7 +397,7 @@ setup, identical everywhere, so no rank can disagree.
 `parity[d]` is the field's sign across a coordinate fold on dimension `d`, and
 `wall_parity[d]` its sign across a reflecting wall on that dimension: +1 for
 every scalar sensed and for a velocity component tangential to the wall, −1 for
-the wall-normal component, which only `velocity_mu!` passes. The two signs are
+the wall-normal component, which only `_velocity_sensor!` passes. The two signs are
 carried separately because one line may end at a fold and at a wall and they
 need not agree there; each is applied at its own kind of edge and nowhere else.
 
@@ -683,7 +683,7 @@ every rank in the directional sub-communicators to call it in the same order.
 `parity[d]` is the field's antipodal sign across a fold on dimension `d`, and
 is `+1` for every even scalar the sensors are built from: the strain magnitude,
 the internal energy, a mass fraction, the dilatation. Only
-`velocity_mu!` passes anything else.
+`_velocity_sensor!` passes anything else.
 
 `wall_parity[d]` is the field's sign across a reflecting wall on that
 dimension, as it is for [`delta4_sum!`](@ref). A wall face, which
@@ -694,10 +694,11 @@ variants. Every other closed physical edge keeps the scheme's own rows, which
 fold onto the half-offset mirror. The rows are fixed when the solver is built.
 
 `solver.ring_buf` receives the directional result and is scratch belonging to
-this function alone. It cannot be `tmp_a` or `tmp_b`: both of
-those hold live inputs at two of the call sites (the internal energy for
-κ\\*, and the dilatation and its compression switch in
-[`dilatation_beta!`](@ref)).
+this function alone. It cannot be `tmp_a` or `tmp_b`: `tmp_a` holds the
+detected field at two of the call sites (the internal energy for κ\\*, and
+on one patch the dilatation of `_dilatation_point!`), and `tmp_b` holds the
+detector output of one field of `_bulk_species_sensor!` while its maximum
+accumulates.
 
 `ghosts` states that `f` has valid interface ghosts, as it does for
 [`delta4_sum!`](@ref). On a refined patch it selects the interface rows that
@@ -811,28 +812,10 @@ enter the distributed line solve.
 """
 function smooth!(f, solver)
     for d in 1:3
-        solver.decomp.active[d] || continue
-        # Only dimension d: the filter about to run is a 1-D stencil along d,
-        # so the other two dimensions' halos are dead. `exchange_halos!`
-        # would refresh all three every time round the loop, three times the
-        # traffic needed in a 3-D run, on a routine that runs once per sensor
-        # per species per RHS.
-        exchange_dim!(f, solver.decomp, d)
-        if _smooth_in_place(solver, d)
-            smooth_along!(f, f, solver, d, 1)
-        else
-            smooth_along!(solver.tmp_a, f, solver, d, 1)
-            copy_interior!(f, solver.tmp_a, solver.decomp)
-        end
+        solver.decomp.active[d] && _smooth_along_field!(f, solver, PatchSensors(), d)
     end
     return f
 end
-
-# `smooth!` of a detector output on its way to a coefficient: on a parent
-# patch the nodes a child's restriction overwrites are dropped from it first
-# (`_mask_child_sensor!`, rhs.jl).
-smooth_sensor!(f, solver, mask_child::Bool=true) =
-    smooth!(_mask_child_sensor!(f, solver, mask_child), solver)
 
 # Whether the pass along `d` may write its result straight into the field it
 # reads. A host solve fills a line's buffer from that line of the field alone,
@@ -846,6 +829,10 @@ _smooth_in_place(::Nothing, solver, d::Int) =
 _smooth_in_place(fold::FoldSpec, solver, d::Int) =
     fold.pair === nothing && !(_fold_plan(fold, 1, Val(:smooth), 1, false) isa DevicePlan)
 
+# `C · ρ · max(sensor, 0)` over the interior, the form μ* and β* take. κ* and
+# D* carry their own scale in place of ρ, an EOS query and the sound speed
+# respectively. The clamp is against a smoother that undershoots, not against
+# a negative detector output: |δ⁴f| and |d⁸f| are non-negative by construction.
 @inline function _rho_sensor_point!(dest, rho, sensor, C, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -855,28 +842,10 @@ _smooth_in_place(fold::FoldSpec, solver, d::Int) =
 end
 
 """
-    rho_sensor!(dest, solver, C)
+    _velocity_sensor!(out, solver)
 
-Write `C · ρ · max(sensor, 0)` over the interior of `dest` from the smoothed
-sensor `solver.sensor`, the form μ\\* and β\\* take. κ\\* and D\\* carry their
-own scale in place of ρ, an EOS query and the sound speed respectively, and are
-assembled in `compute_artificial!`, not here. The clamp is against a
-smoother that undershoots, not against a negative detector output: |δ⁴f| and
-|d⁸f| are non-negative by construction.
-"""
-function rho_sensor!(dest, solver, C)
-    o1, o2, o3 = solver.decomp.n_halo_d
-    nx, ny, nz = solver.decomp.n_local
-    pointwise!(_rho_sensor_point!, dest, nx, ny, nz,
-               dest, solver.rho, solver.sensor, C, o1, o2, o3)
-    return dest
-end
-
-"""
-    velocity_mu!(solver, C_mu)
-
-Rebuild `solver.mu_art` from the velocity components, replacing the strain
-form. Selected by `ArtificialProperties(mu_sensor = :velocity)`.
+The μ\\* sensor from the velocity components, unsmoothed, into `out`,
+replacing the strain form. Selected by `ArtificialProperties(mu_sensor = :velocity)`.
 
 The sensor is the reduction of Δ_d |D_d u_j| over the (direction, component)
 pairs, three velocity components by each active direction and so nine pairs in
@@ -908,17 +877,15 @@ passed here. Both detectors read it: `:delta4` mirrors its taps with that
 sign, and `:d8` selects the closure rows planned for it, one set per sign at
 every wall face; see [`ring_sum!`](@ref).
 """
-function velocity_mu!(solver, C_mu, mask_child::Bool=true)
+function _velocity_sensor!(out, solver)
     vel = (solver.u, solver.v, solver.w)
-    fill!(solver.sensor, 0)
+    fill!(out, 0)
     for j in 1:3
-        detect_sum!(solver.sensor, vel[j], solver, 1; accumulate=true,
+        detect_sum!(out, vel[j], solver, 1; accumulate=true,
                     parity=ntuple(d -> vel_parity(solver, d, j), 3),
                     wall_parity=ntuple(d -> d == j ? -1 : 1, 3), ghosts=true)
     end
-    smooth_sensor!(solver.sensor, solver, mask_child)
-    rho_sensor!(solver.mu_art, solver, C_mu)
-    return solver
+    return out
 end
 
 # Guard against 0/0 in the Ducros ratio where the flow is exactly quiescent. It
@@ -970,7 +937,7 @@ This is the shock-switch half of the Mani, Larsson & Moin refinement without
 the sensor-field half. The two are separable and they do different things: the
 switch confines β\\* to compression, while changing the sensor from |S| to Δ
 also changes *how much* β\\* a given compression produces. The second half
-loses the coordinate folds (see `dilatation_beta!`), so this variant takes the
+loses the coordinate folds (see `_dilatation_point!`), so this variant takes the
 first half alone.
 
 Cost is one pointwise pass over the interior of `solver.beta_art`, reading
@@ -1005,11 +972,12 @@ _gated(art::ArtificialProperties) =
 end
 
 """
-    dilatation_beta!(solver, C_beta, gated)
+    _dilatation_point!(tmp_a, grad_u, o1, o2, o3, i, j, k)
 
-Rebuild `solver.beta_art` from a sensor built on the dilatation, replacing the
-strain form. Selected by `ArtificialProperties(beta_sensor = :ungated_dilatation)` for
-`gated = false` and `= :dilatation` for `gated = true`.
+The dilatation Δ = ∇·u at one point, the field the β\\* sensor is built
+from in place of the strain magnitude under
+`ArtificialProperties(beta_sensor = :ungated_dilatation)`, and under
+`= :dilatation`, which multiplies the coefficient by `compression_switch`.
 
 The sensor is the reduction of |D_d Δ| over the active directions, weighted by
 the squared local physical spacing along `d` as the strain sensor is
@@ -1052,61 +1020,11 @@ depending on the last bit of a cancelling sum. The measured spread over three
 split axes is 2e-7 relative, against 1e-14 for the strain sensor;
 `test/mpi_tests.jl` holds the guard. The ungated form has no switch and no such
 discontinuity, and reproduces as the strain sensor does.
-
-`solver.sensor` and `solver.tmp_a` are scratch here, as is `solver.tmp_b` in
-the gated form, under the invariant recorded on `compute_artificial!`.
 """
-function dilatation_beta!(solver, C_beta, gated::Bool, mask_child::Bool=true)
-    decomp = solver.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    if gated
-        # Δ into tmp_a, the switch into tmp_b.
-        pointwise!(_dilatation_switch_point!, solver.tmp_a, nx, ny, nz,
-                   solver.tmp_a, solver.tmp_b, solver.field_tuples.grad_u,
-                   o1, o2, o3)
-    else
-        pointwise!(_dilatation_point!, solver.tmp_a, nx, ny, nz,
-                   solver.tmp_a, solver.field_tuples.grad_u, o1, o2, o3)
-    end
-    exchange_halos!(solver.tmp_a, decomp)
-    detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
-    # The smoother clobbers tmp_a, which is spent by now.
-    smooth_sensor!(solver.sensor, solver, mask_child)
-    if !gated
-        rho_sensor!(solver.beta_art, solver, C_beta)
-        return solver
-    end
-    pointwise!(_gated_beta_point!, solver.beta_art, nx, ny, nz,
-               solver.beta_art, solver.rho, solver.sensor, solver.tmp_b,
-               C_beta, o1, o2, o3)
-    return solver
-end
-
-@inline function _dilatation_switch_point!(tmp_a, tmp_b, grad_u, o1, o2, o3,
-                                           i, j, k)
-    @inbounds begin
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-        tmp_b[I] = compression_switch(grad_u, I)
-    end
-    return nothing
-end
-
 @inline function _dilatation_point!(tmp_a, grad_u, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-    end
-    return nothing
-end
-
-@inline function _gated_beta_point!(beta_art, rho, sensor, switch, C_beta,
-                                    o1, o2, o3, i, j, k)
-    @inbounds begin
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        beta_art[I] = C_beta * rho[I] *
-                      max(sensor[I], zero(sensor[I])) * switch[I]
     end
     return nothing
 end
@@ -1119,11 +1037,11 @@ Fill `solver.mu_art`, `solver.beta_art` and `solver.kappa_art`, and
 current primitives and (metric-corrected) velocity gradients. A single-species
 run never enters the per-species sweep, so its `D_art` keeps the zeros it was
 allocated with. Under the default `ArtificialProperties.species_flux = :partial_density`
-and under `:bulk` the species sweep is [`bulk_diffusivity!`](@ref), which
-writes one diffusivity into every
-`D_art[k]`. `solver.strain_mag` is written whichever sensors are selected,
-since `scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded
-conserved array, read only for the internal energy behind the κ\\* sensor.
+and under `:bulk` the species sweep builds one diffusivity
+(`_bulk_species_sensor!`) and writes it into every `D_art[k]`.
+`solver.strain_mag` is written whichever sensors are selected, since
+`scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded conserved
+array, read only for the internal energy behind the κ\\* sensor.
 No-op if disabled.
 
 Every sensor weight is the local physical spacing, `solver.h[d]` divided by
@@ -1166,25 +1084,24 @@ function compute_artificial!(solver, Q, mask_child::Bool=true)
     return solver
 end
 
-# Positional forms of the plan-dependent operators for the body below, which
-# reaches them through an unspecialized handle. A keyword call through a
-# dynamic dispatch builds its NamedTuple on the heap, and a floating-point
-# argument is boxed, so these take only arrays, the handle, and small
-# integers or Bools (which Julia keeps preallocated), and read constants off
-# the handle themselves.
+# Positional form of the detector for the stages below, which reach it
+# through an unspecialized handle. A keyword call through a dynamic dispatch
+# builds its NamedTuple on the heap, and a floating-point argument is boxed,
+# so the calls through the handle take only arrays, the handle, and small
+# integers or Bools (which Julia keeps preallocated), and the callee reads
+# constants off the handle itself, as `_shared_species_sensor!` does.
 _detect!(out, f, solver, wpow::Int, ghosts::Bool) =
     detect_sum!(out, f, solver, wpow; ghosts=ghosts)
-_velocity_mu!(solver, mask_child::Bool=true) =
-    velocity_mu!(solver, solver.art.C_mu, mask_child)
-_dilatation_beta!(solver, gated::Bool, mask_child::Bool=true) =
-    dilatation_beta!(solver, solver.art.C_beta, gated, mask_child)
-function _bulk_diffusivity!(solver, mask_child::Bool=true)
+
+# The bracket of the shared species diffusivity into `acc`, with the
+# constants of `_bulk_species_sensor!` read off the solver.
+function _shared_species_sensor!(acc, solver)
     art = solver.art
     h_bound, inv_n = _species_bound_length(solver.decomp, solver.h, art.C_D)
     a1, a2, a3 = solver.decomp.active
     ih1, ih2, ih3 = solver.inv_h
-    return bulk_diffusivity!(solver, art.C_D, art.C_Y, h_bound, inv_n,
-                             ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance, mask_child)
+    return _bulk_species_sensor!(acc, solver, art.C_D, art.C_Y, h_bound, inv_n,
+                                 ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance)
 end
 
 # The mass-fraction bound's length is the geometric mean of the local physical
@@ -1202,131 +1119,287 @@ function _species_bound_length(decomp, h, C_D)
     return h_bound, one(C_D) / n_active
 end
 
-# The body of `compute_artificial!`, keyed on what its launches read: the
-# field storage `f` (a `PatchFields`, typed by T and the array types only), the
-# EOS, the parameters, the equation layout as integers, and the conserved
-# array `Q`. Every `pointwise!` launch here is therefore a static call with
-# concrete arguments. The solver itself arrives as `ops`, unspecialized: it is
-# consulted only by the operators that depend on plan, fold and wall types
-# (`detect_sum!`, `smooth!` and the optional sensor rebuilds), each one
-# dynamic dispatch in front of a whole-array sweep whose callee specializes on
-# the concrete solver. Those calls pass only arrays loaded from `f`, the
-# already-boxed handle, and small integers, so none of them allocates.
-function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops),
-                              mask_child::Bool=true)
-    n_species, _, i_energy, (m1, m2, m3) = eqi
-    decomp = f.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    # The coefficients are read into locals, not off `art` inside the
-    # loops. A threaded closure that captures the struct allocates once per
-    # region in proportion to the closure's size: 768 B per RHS call when this
-    # was written the obvious way. The driver is that size, not `beta_sensor`
-    # making ArtificialProperties non-isbits, since an isbits struct of the same shape
-    # measures the same +128 B per region when captured. Unpacking is therefore
-    # the fix, and a further ArtificialProperties field costs nothing so long as no loop
-    # closes over the struct. A field consulted *inside* a loop is the case to
-    # avoid: keep the test at a function barrier, as `beta_sensor` is below.
-    C_mu, C_beta = art.C_mu, art.C_beta
-    C_kappa, C_D = art.C_kappa, art.C_D
-    C_Y, Y_tolerance = art.C_Y, art.Y_tolerance
+# --- The stages -----------------------------------------------------------------
+#
+# The coefficients are built in five stages, the same for one patch and for a
+# tiled level (`_level_artificial!`, level_sensors.jl), which differ only in
+# what runs between them:
+#
+#   sense         the strain magnitude, and the dilatation where β* is built
+#                 from it, over the interior (`_sense_stage!`)
+#   detect        every sensor, unsmoothed, into the array that holds it until
+#                 its coefficient is written (`_detect_stage!`), then the
+#                 child-level mask (`_mask_sensors!`)
+#   smooth        one direction at a time, every sensor (`_smooth_sensors!`)
+#   coefficients  in place over the smoothed sensors (`_coefficient_stage!`)
+#
+# One patch (`PatchSensors`) fills the rank halos of the sensed fields before
+# the detectors and of each sensor before each smoothing direction, and reads
+# no interface ghosts. A tiled level (`LevelSensors`) fills them over the
+# level's same-level records between the stages, so its detectors on the
+# sensed fields and its smoother read the ghost layers at every interface.
+# The two also hold the sensed fields and the internal-energy sensor in
+# different arrays (`_sensor_slots`): one patch in its workspace, whose
+# `strain_mag` and `sensor` `scalar_field` reads afterwards, and a level in
+# each tile's `sensed_fields` and `kappa_art`, since the tiles share one
+# workspace and the stages run every tile before the next stage starts. Every
+# other sensor waits in the coefficient array it becomes (`_foreach_sensor_array`).
+#
+# The stages that launch per-point bodies take the field storage `f` (a
+# `PatchFields`, typed by T and the array types only), the EOS, the
+# parameters, the equation layout as integers and the conserved array, so
+# that every `pointwise!` launch is a static call with concrete arguments.
+# The solver arrives as `ops`, unspecialized: it is consulted only by the
+# operators that depend on plan, fold and wall types (the detectors and the
+# smoother), each one dynamic dispatch in front of a whole-array sweep whose
+# callee specializes on the concrete solver. Those calls pass only arrays
+# loaded from `f`, the already-boxed handle, a singleton and small integers,
+# so none of them allocates.
 
-    # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
-    # components; the metric corrections are in grad_u).
-    pointwise!(_strain_mag_point!, f.strain_mag, nx, ny, nz,
-               f.strain_mag, _dims_tuple(f.ft.grad_u, Val(3)), o1, o2, o3)
+struct PatchSensors end
+struct LevelSensors end
 
-    # Strain sensor: Δ_d² |D_d S| reduced over directions for the selected
-    # detector D, smoothed. One pass serves μ* and β* where both are built from
-    # it, which is the default configuration; a setting that rebuilds either
-    # channel from its own field skips the corresponding write here, avoiding
-    # an overwrite afterwards. The strain magnitude above is computed either
-    # way, since `scalar_field(solver, :strain_mag)` exposes it.
-    strain_mu = art.mu_sensor === :strain
-    strain_beta = art.beta_sensor === :strain || art.beta_sensor === :gated_strain
-    if strain_mu || strain_beta
-        exchange_halos!(f.strain_mag, decomp)
-        _detect!(f.sensor, f.strain_mag, ops, 2, false)
-        smooth_sensor!(f.sensor, ops, mask_child)
-        if strain_mu && strain_beta
-            pointwise!(_mu_beta_point!, f.mu_art, nx, ny, nz,
-                       f.mu_art, f.beta_art, f.rho,
-                       f.sensor, C_mu, C_beta, o1, o2, o3)
-        elseif strain_mu
-            pointwise!(_rho_sensor_point!, f.mu_art, nx, ny, nz,
-                       f.mu_art, f.rho, f.sensor, C_mu, o1, o2, o3)
-        else
-            pointwise!(_rho_sensor_point!, f.beta_art, nx, ny, nz,
-                       f.beta_art, f.rho, f.sensor, C_beta, o1, o2, o3)
-        end
-    end
-    # μ* may instead come from the velocity components, and β* may be keyed on
-    # compression, rebuilt from the dilatation, or both. Each rebuild writes one
-    # coefficient array and leaves the other untouched.
-    art.mu_sensor === :velocity && _velocity_mu!(ops, mask_child)
-    if art.beta_sensor === :gated_strain
-        pointwise!(_gate_beta_point!, f.beta_art, nx, ny, nz,
-                   f.beta_art, f.ft.grad_u, o1, o2, o3)
-    end
-    art.beta_sensor === :dilatation && _dilatation_beta!(ops, true, mask_child)
-    art.beta_sensor === :ungated_dilatation && _dilatation_beta!(ops, false, mask_child)
+# The strain magnitude, the dilatation and the internal-energy sensor of one
+# patch, held in its workspace. The dilatation is read by its detector before
+# `tmp_a` takes the internal energy.
+_sensor_slots(f, ::PatchSensors) = (f.strain_mag, f.tmp_a, f.sensor)
 
-    # κ* sensor: Σ_d Δ_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
-    # with the scale ρc/T_ion for the gas models. Internal energy comes straight
-    # from Q, so the sensor itself is EOS-agnostic; the scale is an EOS query
-    # (see the note in physics.jl on why it is the weaker of the two
-    # abstractions and what it is still singular in).
-    nxf, nyf, nzf = padded_extent(decomp)
-    pointwise!(_internal_energy_point!, f.tmp_a, nxf, nyf, nzf,
-               f.tmp_a, Q, f.rho, m1, m2, m3, i_energy)
-    exchange_halos!(f.tmp_a, decomp)
-    _detect!(f.sensor, f.tmp_a, ops, 1, true)
-    smooth_sensor!(f.sensor, ops, mask_child)
-    pointwise!(_kappa_point!, f.kappa_art, nx, ny, nz,
-               f.kappa_art, eos, f.rho, f.c,
-               f.T_ion, f.cp_mix, f.sensor, C_kappa,
-               o1, o2, o3)
+_strain_sensed(art::ArtificialProperties) =
+    art.mu_sensor === :strain || art.beta_sensor === :strain ||
+    art.beta_sensor === :gated_strain
+_dilatation_sensed(art::ArtificialProperties) =
+    art.beta_sensor === :dilatation || art.beta_sensor === :ungated_dilatation
+_strain_beta(art::ArtificialProperties) =
+    art.beta_sensor === :strain || art.beta_sensor === :gated_strain
 
-    # Per-species D*_k = c · G[max(C_D Σ_d Δ_d |D_d Y_k|, C_Y Δ_g (Y_k's excursion
-    # outside [0, 1] beyond Y_tolerance))]. The bound is folded into the ringing
-    # sensor before the one smoothing pass, Cook's single filter of the whole
-    # bracket, so it costs one pointwise pass and no line solve; smoothing the
-    # two separately measures the same to three digits. Costs n_species filter
-    # sweeps per RHS; the flux assembly's correction velocity keeps Σ_k J_k = 0
-    # despite unequal D_k. Only meaningful with more than one species.
+# `g(f)` for each array that holds a sensor between detection and the
+# coefficients, in this order: the μ* sensor in `mu_art` unless β* shares
+# the strain sensor, the β* sensor in `beta_art`, the internal-energy sensor
+# in `slots[3]`, and the species sensor in `D_art[1]` where one diffusivity
+# serves every species or in each `D_art[k]` under `:fickian`.
+@inline function _foreach_sensor_array(g::G, p, slots, art::ArtificialProperties,
+                                       n_species::Int) where {G}
+    shared_strain = art.mu_sensor === :strain && _strain_beta(art)
+    shared_strain || g(p.mu_art)
+    g(p.beta_art)
+    g(slots[3])
     if n_species > 1
         if _shared_species_diffusivity(art, n_species)
-            _bulk_diffusivity!(ops, mask_child)
-            return nothing
-        end
-        h_bound, inv_n = _species_bound_length(decomp, f.h, C_D)
-        a1, a2, a3 = decomp.active
-        ih1, ih2, ih3 = f.inv_h
-        for sp in 1:n_species
-            species_detect_sum!(f.sensor_sp, f.Y[sp], ops)
-            pointwise!(_species_bound_point!, f.sensor_sp, nx, ny, nz,
-                       f.sensor_sp, f.Y[sp], C_D, C_Y, h_bound, inv_n,
-                       ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
-            smooth_sensor!(f.sensor_sp, ops, mask_child)
-            pointwise!(_species_diffusivity_point!, f.sensor_sp,
-                       nx, ny, nz, f.D_art[sp], f.c,
-                       f.sensor_sp, o1, o2, o3)
+            g(p.D_art[1])
+        else
+            foreach(g, p.D_art)
         end
     end
     return nothing
 end
 
-"""
-    bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
-                      a1, a2, a3, Y_tolerance)
+# The body of `compute_artificial!` on one patch: the five stages with the
+# rank-halo exchanges between them, then the compression switch of a gated
+# β*, which a tiled level leaves to each tile's right-hand side
+# (`_artificial_step!`, rhs.jl), the shared workspace holding one tile's
+# velocity gradients at a time.
+function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops),
+                              mask_child::Bool=true)
+    sync = PatchSensors()
+    slots = _sensor_slots(f, sync)
+    decomp = f.decomp
+    _sense_stage!(f, art, slots)
+    _strain_sensed(art) && exchange_halos!(slots[1], decomp)
+    _dilatation_sensed(art) && exchange_halos!(slots[2], decomp)
+    _detect_stage!(f, art, eqi, Q, ops, slots, false)
+    _mask_sensors!(ops, sync, mask_child)
+    for d in 1:3
+        decomp.active[d] && _smooth_sensors!(ops, sync, d)
+    end
+    _coefficient_stage!(f, eos, art, eqi, slots)
+    if _gated(art)
+        o1, o2, o3 = decomp.n_halo_d
+        nx, ny, nz = decomp.n_local
+        pointwise!(_gate_beta_point!, f.beta_art, nx, ny, nz,
+                   f.beta_art, f.ft.grad_u, o1, o2, o3)
+    end
+    return nothing
+end
 
-The species sweep of [`compute_artificial!`](@ref) under
-`ArtificialProperties.species_flux = :partial_density` or `:bulk`: one diffusivity
+# The sensed fields over the interior, from the velocity gradients the
+# workspace holds: the strain magnitude, which is computed whichever sensors
+# are selected, since `scalar_field(solver, :strain_mag)` exposes it, and the
+# dilatation where β* is built from it.
+function _sense_stage!(f, art, slots)
+    decomp = f.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    grad_u = f.ft.grad_u
+    pointwise!(_strain_mag_point!, slots[1], nx, ny, nz,
+               slots[1], _dims_tuple(grad_u, Val(3)), o1, o2, o3)
+    _dilatation_sensed(art) &&
+        pointwise!(_dilatation_point!, slots[2], nx, ny, nz, slots[2], grad_u,
+                   o1, o2, o3)
+    return nothing
+end
+
+# Every sensor before smoothing, each into the array `_foreach_sensor_array`
+# names for it. `ghosts` says the sensed fields carry interface ghosts, which
+# only a tiled level's exchange fills; the internal energy, the velocity and
+# the mass fractions carry them on every patch.
+#
+# The strain sensor is Δ_d² |D_d S| reduced over directions for the selected
+# detector D. One sensor serves μ* and β* where both are built from it, which
+# is the default configuration. μ* may instead come from the velocity
+# components (`_velocity_sensor!`), and β* from the dilatation
+# (`_dilatation_point!`). The κ* sensor is Σ_d Δ_d |D_d e|; κ* = C_κ ·
+# scale(EOS) · sensor, with the scale ρc/T_ion for the gas models. Internal
+# energy comes straight from Q, so the sensor itself is EOS-agnostic; the
+# scale is an EOS query (see the note in physics.jl on why it is the weaker of
+# the two abstractions and what it is still singular in).
+#
+# Per-species D*_k = c · G[max(C_D Σ_d Δ_d |D_d Y_k|, C_Y Δ_g (Y_k's excursion
+# outside [0, 1] beyond Y_tolerance))]. The bound is folded into the ringing
+# sensor before the one smoothing pass, Cook's single filter of the whole
+# bracket, so it costs one pointwise pass and no line solve; smoothing the
+# two separately measures the same to three digits. Costs n_species filter
+# sweeps per RHS; the flux assembly's correction velocity keeps Σ_k J_k = 0
+# despite unequal D_k. Only meaningful with more than one species. Under
+# `species_flux = :partial_density` or `:bulk` one sensor serves every species
+# (`_bulk_species_sensor!`).
+function _detect_stage!(f, art, eqi, Q, @nospecialize(ops), slots, ghosts::Bool)
+    n_species, _, i_energy, (m1, m2, m3) = eqi
+    decomp = f.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    _strain_sensed(art) &&
+        _detect!(_strain_beta(art) ? f.beta_art : f.mu_art, slots[1], ops, 2, ghosts)
+    art.mu_sensor === :velocity && _velocity_sensor!(f.mu_art, ops)
+    _dilatation_sensed(art) && _detect!(f.beta_art, slots[2], ops, 2, ghosts)
+    nxf, nyf, nzf = padded_extent(decomp)
+    pointwise!(_internal_energy_point!, f.tmp_a, nxf, nyf, nzf,
+               f.tmp_a, Q, f.rho, m1, m2, m3, i_energy)
+    exchange_halos!(f.tmp_a, decomp)
+    _detect!(slots[3], f.tmp_a, ops, 1, true)
+    n_species > 1 || return nothing
+    if _shared_species_diffusivity(art, n_species)
+        _shared_species_sensor!(f.D_art[1], ops)
+        return nothing
+    end
+    C_D, C_Y, Y_tolerance = art.C_D, art.C_Y, art.Y_tolerance
+    h_bound, inv_n = _species_bound_length(decomp, f.h, C_D)
+    a1, a2, a3 = decomp.active
+    ih1, ih2, ih3 = f.inv_h
+    for sp in 1:n_species
+        D = f.D_art[sp]
+        species_detect_sum!(D, f.Y[sp], ops)
+        pointwise!(_species_bound_point!, D, nx, ny, nz, D, f.Y[sp], C_D, C_Y,
+                   h_bound, inv_n, ih1, ih2, ih3, a1, a2, a3, Y_tolerance,
+                   o1, o2, o3)
+    end
+    return nothing
+end
+
+# Every sensor set to zero at the nodes a child level's restriction
+# overwrites, ahead of the first smoothing pass (`_mask_child_sensor!`, rhs.jl).
+function _mask_sensors!(solver, sync, mask_child::Bool)
+    _sensor_mask_patch(solver, mask_child) || return nothing
+    _foreach_sensor_array(solver, _sensor_slots(solver, sync), solver.art,
+                          solver.equations.n_species) do g
+        _mask_child_sensor!(g, solver)
+    end
+    return nothing
+end
+
+# Every sensor smoothed along `d` (`_smooth_along_field!`).
+function _smooth_sensors!(solver, sync, d::Int)
+    _foreach_sensor_array(solver, _sensor_slots(solver, sync), solver.art,
+                          solver.equations.n_species) do g
+        _smooth_along_field!(g, solver, sync, d)
+    end
+    return nothing
+end
+
+# One field smoothed along `d`. On one patch the field's rank halos along `d`
+# are exchanged first and the smoother writes in place where its plan allows;
+# a level's exchange has filled the ghost layers, which the smoother's
+# interface rows read.
+function _smooth_along_field!(g, solver, ::PatchSensors, d::Int)
+    # Only dimension d: the filter about to run is a 1-D stencil along d, so
+    # the other two dimensions' halos are dead. `exchange_halos!` would
+    # refresh all three every time round the loop, three times the traffic
+    # needed in a 3-D run, on a routine that runs once per sensor per species
+    # per RHS.
+    exchange_dim!(g, solver.decomp, d)
+    if _smooth_in_place(solver, d)
+        smooth_along!(g, g, solver, d, 1)
+    else
+        smooth_along!(solver.tmp_a, g, solver, d, 1)
+        copy_interior!(g, solver.tmp_a, solver.decomp)
+    end
+    return g
+end
+function _smooth_along_field!(g, solver, ::LevelSensors, d::Int)
+    smooth_along!(solver.tmp_a, g, solver, d, 1, true)
+    copy_interior!(g, solver.tmp_a, solver.decomp)
+    return g
+end
+
+# The coefficients from the smoothed sensors, in place, together with the
+# strain magnitude and the smoothed internal-energy sensor in the workspace's
+# `strain_mag` and `sensor` where the slots held them elsewhere. Each body
+# reads its sensor at a point before it writes that point, so a coefficient
+# array may hold its own sensor; the shared species sensor in `D_art[1]` is
+# read into the other species first.
+#
+# The coefficients are read into locals, not off `art` inside the loops. A
+# threaded closure that captures the struct allocates once per region in
+# proportion to the closure's size: 768 B per RHS call when this was written
+# the obvious way. The driver is that size, not `beta_sensor` making
+# ArtificialProperties non-isbits, since an isbits struct of the same shape
+# measures the same +128 B per region when captured. Unpacking is therefore
+# the fix, and a further ArtificialProperties field costs nothing so long as
+# no loop closes over the struct. A field consulted *inside* a loop is the
+# case to avoid: keep the test at a function barrier, as `beta_sensor` is here.
+function _coefficient_stage!(f, eos, art, eqi, slots)
+    n_species = eqi[1]
+    decomp = f.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    C_mu, C_beta, C_kappa = art.C_mu, art.C_beta, art.C_kappa
+    slots[1] === f.strain_mag || copy_interior!(f.strain_mag, slots[1], decomp)
+    slots[3] === f.sensor || copy_interior!(f.sensor, slots[3], decomp)
+    mu, beta, rho = f.mu_art, f.beta_art, f.rho
+    if art.mu_sensor === :strain && _strain_beta(art)
+        pointwise!(_mu_beta_point!, mu, nx, ny, nz, mu, beta, rho, beta,
+                   C_mu, C_beta, o1, o2, o3)
+    else
+        pointwise!(_rho_sensor_point!, mu, nx, ny, nz, mu, rho, mu, C_mu,
+                   o1, o2, o3)
+        pointwise!(_rho_sensor_point!, beta, nx, ny, nz, beta, rho, beta,
+                   C_beta, o1, o2, o3)
+    end
+    kappa = f.kappa_art
+    pointwise!(_kappa_point!, kappa, nx, ny, nz, kappa, eos, rho, f.c,
+               f.T_ion, f.cp_mix, slots[3], C_kappa, o1, o2, o3)
+    n_species > 1 || return nothing
+    D = f.D_art
+    shared = _shared_species_diffusivity(art, n_species)
+    for sp in n_species:-1:1
+        src = shared ? D[1] : D[sp]
+        pointwise!(_species_diffusivity_point!, src, nx, ny, nz, D[sp], f.c, src,
+                   o1, o2, o3)
+    end
+    return nothing
+end
+
+"""
+    _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                          a1, a2, a3, Y_tolerance)
+
+The species sensor of [`compute_artificial!`](@ref) under
+`ArtificialProperties.species_flux = :partial_density` or `:bulk`, before
+smoothing, into the interior of `acc`: the bracket of one diffusivity
 D_b = c · G[max_k max_{f ∈ {Y_k, X_k}} max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f))],
-written into every `solver.D_art[k]`, so that the checkpoint's coefficient
-block and `max_rate`'s diffusive rate see it where they saw the Fickian
-D\\*_k. The arguments after `solver` are the unpacked constants and geometry
-of the caller (see the note on closures there).
+which the coefficient stage writes into every `solver.D_art[k]`, so that the
+checkpoint's coefficient block and `max_rate`'s diffusive rate see it where
+they saw the Fickian D\\*_k. The arguments after `solver` are the unpacked
+constants and geometry of the caller (`_shared_species_sensor!`).
 
 Each species contributes two fields to the maximum, its mass fraction and its
 mole fraction from [`mole_fraction`](@ref), and the two do different work. On
@@ -1340,32 +1413,12 @@ The maximum over both is Pyranda's combination of mass- and volume-fraction
 detectors, as reported by
 [Brill, Olson & Bokman (2025, eqs. 33–37)](https://arxiv.org/abs/2503.12680).
 
-Scratch: `solver.sensor_sp` accumulates the maximum, `solver.tmp_b` holds one
-field's detector output and `solver.tmp_a` the mole fraction over the padded
-extent, computed from the padded `Y` that `primitives!` fills, so no exchange
-is needed before the detector reads it; `smooth!` overwrites `tmp_a` only
-after the last field is in. Every rank must call this: the detector and the
-smoother carry the collectives recorded on `compute_artificial!`.
+Scratch: `solver.tmp_b` holds one field's detector output and `solver.tmp_a`
+the mole fraction over the padded extent, computed from the padded `Y` that
+`primitives!` fills, so no exchange is needed before the detector reads it.
+Every rank must call this: the detector carries the collectives recorded on
+`compute_artificial!`.
 """
-function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
-                           a1, a2, a3, Y_tolerance, mask_child::Bool=true)
-    decomp = solver.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    acc = solver.sensor_sp
-    _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
-                          a1, a2, a3, Y_tolerance)
-    smooth_sensor!(acc, solver, mask_child)
-    for sp in 1:solver.equations.n_species
-        pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
-                   solver.D_art[sp], solver.c, acc, o1, o2, o3)
-    end
-    return solver
-end
-
-# The bracket of `bulk_diffusivity!` before smoothing, the maximum over the
-# species' mass and mole fractions, into the interior of `acc`. `tmp_a` and
-# `tmp_b` are its scratch.
 function _bulk_species_sensor!(acc, solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
                                a1, a2, a3, Y_tolerance)
     decomp = solver.decomp
