@@ -107,11 +107,11 @@ summarize("compute_rhs! (bulk species)", @report_opt target_modules=(CL,) comput
 summarize("compute_dt (bulk species)", @report_opt target_modules=(CL,) compute_dt(sb, Qb))
 # Callees the solver reaches only through an intended dynamic dispatch, probed
 # at the concrete types they are compiled for at run time (see `summarize`).
-summarize("_smooth_sensors!", @report_opt target_modules=(CL,)
-          CL._smooth_sensors!(CL.sole_patch(solver), CL.PatchSensors(), 1))
+summarize("_smooth_sensors!", @report_opt(target_modules=(CL,),
+          CL._smooth_sensors!(CL.sole_patch(solver), CL.PatchSensors(), 1)))
 summarize("_detect!", @report_opt target_modules=(CL,) CL._detect!(solver.sensor, solver.tmp_a, solver, 1, true))
-summarize("_shared_species_sensor!", @report_opt target_modules=(CL,)
-          CL._shared_species_sensor!(sb.D_art[1], CL.sole_patch(sb)))
+summarize("_shared_species_sensor!", @report_opt(target_modules=(CL,),
+          CL._shared_species_sensor!(sb.D_art[1], CL.sole_patch(sb))))
 summarize("_bulk_gradients!", @report_opt target_modules=(CL,) CL._bulk_gradients!(sb, Qb))
 summarize("_local_max_rate_launch",
           @report_opt target_modules=(CL,) CL._local_max_rate_launch(solver, Q))
