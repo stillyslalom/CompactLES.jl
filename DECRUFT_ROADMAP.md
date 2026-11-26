@@ -34,12 +34,17 @@ Further rulings made during execution:
 - **Phase 2C done with Phase 6.** The observer parameter is on the merged
   driver. The ledger keeps its per-stage attribution and its boundary-flux
   closure: the hooks are not coarsened to phase boundaries.
-- **`test/flat_solver.jl`, a proposed exception to D3 awaiting the
-  maintainer's confirmation.** The suites' flat keyword adapter stays, in
-  `test/` only: the tests, the test image and the benchmark scripts include
-  it, and `src/`, `examples/` and `docs/` do not. With it stays the `extent`
-  keyword of `_Solver`, which hands the constructor a domain extent apart
-  from the endpoints.
+- **`test/flat_solver.jl` is retired in Phase 7, as a fourth item.** D3
+  takes no exception for the suites' flat keyword adapter. The benchmark
+  scripts move to `setup` first, then the test files one at a time, with
+  `test/convergence.jl`, `test/smooth_cases.jl` and
+  `test/precompile_workload.jl` last; a test that needs a solver without a
+  state builds it with `_build_solver`. The adapter and the `extent`
+  keyword of `_Solver` are deleted together. An extent recovered from
+  endpoints with a nonzero origin can differ from the given one in the last
+  place, so convergence is compared after each of those files, and a moved
+  digit is either removed by endpoints that subtract exactly or re-recorded
+  with the reason.
 - **CLAUDE.md's vocabulary.** No internal name is added to its Naming
   section before Phase 9, which removes the section.
 - **Gate cadence.** The full gate runs once per phase, at its boundary.
