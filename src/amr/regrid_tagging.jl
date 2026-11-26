@@ -197,10 +197,6 @@ function _tag_predicate!(tags, predicate::F, ps, n::NTuple{3,Int},
     return nothing
 end
 
-# Host alias of a patch array: the array itself on the CPU backend, a
-# download of a device one (a backend copy at the regrid cadence only).
-_tag_host(x) = _cpu_storage(x) ? x : Array(x)
-
 # Mixture density at one node of the tag sweep's extended block: the point
 # `(i, j, k)` of the iteration box maps to the padded slot `base + (i, j, k)`.
 @inline function _tag_rho_point!(rho, Qc, n_species, base, i, j, k)
@@ -255,7 +251,7 @@ function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
     # sweep runs on the host as a whole (a backend copy at the regrid
     # cadence, not per step).
     on_device = _device_path(Qc) && spec.predicate === nothing
-    Qc = _cpu_storage(Qc) || on_device ? Qc : Array(parent(Qc))
+    Qc = _cpu_storage(Qc) || on_device ? Qc : _host_field(parent(Qc))
     # Mixture density over the interior extended two layers along each active
     # dimension: the δ⁴ taps reach that far, and beyond a closed edge the
     # clamped indexing below never reads it.
@@ -291,7 +287,8 @@ function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
     if spec.sensor_threshold > 0
         thr = spec.sensor_threshold
         hmin = minimum(coarse.h[d] for d in 1:3 if active[d])
-        host(a) = on_device ? a : _tag_host(a)
+        # A download of a device array, at the regrid cadence only.
+        host(a) = on_device ? a : _host_field(a)
         D_host = FieldVector([host(a) for a in coarse.D_art])
         pointwise!(_tag_sensor_point!, tags, n[1], n[2], n[3],
                    tags, host(coarse.mu_art), host(coarse.beta_art),
@@ -687,7 +684,7 @@ _fill_fallback(solver) =
     getfield(solver, :positivity) !== nothing && _shell_fallback(solver)
 
 function _fill_fallback!(solver, Qf, lt::LevelTransfer, df::Decomp)
-    src = _limiter_upload(parent(Qf), lt.box_gather)
+    src = _on_storage(parent(Qf), lt.box_gather)
     place = (df.offset, df.n_halo_d, _box_shift(lt),
              (df.active[1], df.active[2], df.active[3]))
     box = (lt.pdecomps[1].n_halo_d, lt.pdecomps[1].n_local)

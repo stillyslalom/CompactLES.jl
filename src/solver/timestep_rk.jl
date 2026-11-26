@@ -1813,15 +1813,8 @@ end
 _zero_state!(Q) = fill!(Q, 0)
 _reset_workspace!(w::Workspace) = (_zero_state!(w.dQ); _zero_state!(w.du); w)
 
-# Savepoint copies, one per patch. A stacked tile's state is a view; its copy
-# is a dense array of the same storage, and the restore assigns back into
-# the view by broadcast, the form every backend runs as a kernel (a `copyto!`
-# between a device view and a dense device array is not a contract every
-# backend keeps). Dense host states keep `copyto!`, through `_assign!`.
+# Savepoint copies, one per patch (`_dense_copy`, halo.jl).
 _snapshot(state) = [_dense_copy(Q) for Q in _patch_states(state)]
-_dense_copy(Q::ConservedState) = ConservedState(_dense_copy(parent(Q)))
-_dense_copy(a::AbstractArray) = copy(a)
-_dense_copy(v::SubArray) = (d = similar(parent(v), size(v)); d .= v; d)
 function _restore_state!(dst, src)
     to, from = _patch_states(dst), _patch_states(src)
     for i in eachindex(to)

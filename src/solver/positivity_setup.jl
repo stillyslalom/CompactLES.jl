@@ -848,7 +848,7 @@ function PositivityLimiter(solver; separate::Bool=false)
     all(f -> size(f) == shape, fields) ||
         error("positivity limiter: the solver's fields do not share one padded extent")
     # The vectors the bodies read, formed on the host and uploaded once.
-    up(x) = _limiter_upload(like, x)
+    up(x) = _on_storage(like, x)
     weights_s = map(up, weights)
     free_s = map(up, free)
     line_counts = [_limiter_zeros(like, Int, (4, _transverse(decomp.n_local, d)...))
@@ -887,15 +887,6 @@ function _limiter_flux_rows(solver, active::NTuple{3,Bool}, radial::NTuple{3,Boo
         end
     end
     return ws
-end
-
-# A host array in the storage of `like`: the array itself on host storage, a
-# device copy otherwise.
-function _limiter_upload(like, x::Array)
-    _cpu_storage(like) && return x
-    y = similar(like, eltype(x), size(x))
-    copyto!(y, x)
-    return y
 end
 
 # A zero-filled array of `dims` in the storage of `like`.

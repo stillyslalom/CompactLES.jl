@@ -90,7 +90,7 @@ end
 # sweep, once per `run!`.
 _limiter_minima(solver, Q) =
     _device_path(Q) ?
-    _limiter_minima_host(solver, ConservedState(Array(_dense_copy(parent(Q))))) :
+    _limiter_minima_host(solver, ConservedState(_host_copy(parent(Q)))) :
     _limiter_minima_host(solver, Q)
 
 function _limiter_minima_host(solver, Q)

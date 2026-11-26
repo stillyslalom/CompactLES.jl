@@ -152,17 +152,7 @@ function art_block(solver::PatchSolver)
     arrays = art_arrays(solver)
     block = Array{eltype(solver.rho)}(undef, nx, ny, nz, length(arrays))
     for (c, a) in enumerate(arrays)
-        interior = view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
-        if _cpu_storage(a)
-            block[:, :, :, c] .= interior
-        else
-            # A broadcast from device storage into a host array indexes the
-            # device array element by element; gather the interior into a
-            # contiguous device array by a kernel and download that instead.
-            staged = similar(a, nx, ny, nz)
-            staged .= interior
-            copyto!(view(block, :, :, :, c), Array(staged))
-        end
+        block[:, :, :, c] .= _host_field(view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz))
     end
     return block
 end
@@ -177,12 +167,7 @@ function set_art_block!(solver::PatchSolver, block)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     for (c, a) in enumerate(art_arrays(solver))
-        interior = view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
-        if _cpu_storage(a)
-            interior .= view(block, :, :, :, c)
-        else
-            _upload!(interior, block[:, :, :, c])
-        end
+        _upload!(view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz), block[:, :, :, c])
     end
     return solver
 end
@@ -989,7 +974,7 @@ function _write_ckpt_block(io, ps::PatchSolver, Q)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     block = parent(Q)[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :]
-    write(io, _cpu_storage(block) ? block : Array(block))
+    write(io, _host_field(block))
     write(io, Int64(n_art_fields(ps)))
     write(io, art_block(ps))
     return io
@@ -1122,7 +1107,7 @@ function _read_ckpt_block!(io, ps::PatchSolver, Q, path::AbstractString,
     buf = Array{eltype(Q)}(undef, nx, ny, nz, ps.equations.n_cons)
     read!(io, buf)
     interior = view(parent(Q), o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :)
-    _cpu_storage(interior) ? (interior .= buf) : _upload!(interior, buf)
+    _upload!(interior, buf)
     stored = Int(read(io, Int64))
     phase || _check_art_count(stored, ps, path)
     block = read!(io, Array{eltype(Q)}(undef, nx, ny, nz, stored))
@@ -1637,22 +1622,7 @@ function _check_output(solver::PatchSolver, stride::NTuple{3,Int}, slice, ranges
 end
 
 # The output path below indexes fields point by point, which device storage
-# does not allow. A device field is downloaded whole first; a tile of a stacked
-# level holds a view of device storage, which a kernel gathers into a
-# contiguous device array before the download, as `art_block` does.
-function _host_field(a)
-    _cpu_storage(a) && return a
-    a isa SubArray || return Array(a)
-    staged = similar(a)
-    staged .= a
-    return Array(staged)
-end
-
-# A host copy of `a` that the solver does not hold, whatever `a`'s storage.
-_host_copy(a) = _cpu_storage(a) ? Array(a) : _host_field(a)
-
-# A host array to hold a field derived from `a`, whatever `a`'s storage.
-_host_similar(a) = Array{eltype(a)}(undef, size(a))
+# does not allow: a device field is downloaded first (`_host_field`, halo.jl).
 
 # The mass fractions of every species on the host, as `mole_fraction` reads them.
 _host_mass_fractions(solver::PatchSolver) =

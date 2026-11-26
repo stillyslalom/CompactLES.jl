@@ -94,6 +94,50 @@ end
 
 _assign!(dst, src) = (_cpu_storage(dst) ? copyto!(dst, src) : (dst .= src); dst)
 
+# --- Host staging --------------------------------------------------------------
+#
+# The operations by which host code reads device storage or places host data in
+# it, so that a caller holds no branch on `_cpu_storage` of its own: on host
+# storage each is the array itself or a plain copy, and nothing on the CPU path
+# changes. `_upload!` above writes host data into a field, `_assign!` copies
+# between fields of one storage.
+
+# The array itself on host storage, a download otherwise. A broadcast from
+# device storage into a host array indexes the device array element by
+# element, so a view of device storage (a tile of a stacked level) is gathered
+# into a contiguous device array by a kernel and that array is downloaded.
+function _host_field(a)
+    _cpu_storage(a) && return a
+    a isa SubArray || return Array(a)
+    staged = similar(a)
+    staged .= a
+    return Array(staged)
+end
+
+# A host copy of `a` that the solver does not hold, whatever `a`'s storage.
+_host_copy(a) = _cpu_storage(a) ? Array(a) : _host_field(a)
+
+# A host array to hold a field derived from `a`, whatever `a`'s storage.
+_host_similar(a) = Array{eltype(a)}(undef, size(a))
+
+# The host array `x` in the storage of `like`: `x` itself on host storage, a
+# device copy otherwise.
+function _on_storage(like, x::Array)
+    _cpu_storage(like) && return x
+    y = similar(like, eltype(x), size(x))
+    copyto!(y, x)
+    return y
+end
+
+# A dense copy in the storage of `a`. A stacked tile's state is a view; its
+# copy is a dense array of the same storage, and a restore assigns back into
+# the view by broadcast, the form every backend runs as a kernel (a `copyto!`
+# between a device view and a dense device array is not a contract every
+# backend keeps). Dense host states keep `copyto!`, through `_assign!`.
+_dense_copy(Q::ConservedState) = ConservedState(_dense_copy(parent(Q)))
+_dense_copy(a::AbstractArray) = copy(a)
+_dense_copy(v::SubArray) = (d = similar(parent(v), size(v)); d .= v; d)
+
 @inline function _tracked_copy!(dest, doffs::Int, src, soffs::Int, n::Int)
     if TRACK_DEVICE_TRANSFERS[]
         t0 = time_ns()
