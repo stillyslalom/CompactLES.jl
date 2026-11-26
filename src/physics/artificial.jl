@@ -1143,7 +1143,10 @@ end
 # `strain_mag` and `sensor` `scalar_field` reads afterwards, and a level in
 # each tile's `sensed_fields` and `kappa_art`, since the tiles share one
 # workspace and the stages run every tile before the next stage starts. Every
-# other sensor waits in the coefficient array it becomes (`_foreach_sensor_array`).
+# other sensor waits in the coefficient array it becomes (`_foreach_sensor_array`),
+# whose ghost layers keep the sensor's exchanged values afterwards: every reader
+# of a coefficient (the fluxes, `max_rate`, the metric sources, the outputs)
+# takes the interior, and clearing the layers would cost a pass per array.
 #
 # The stages that launch per-point bodies take the field storage `f` (a
 # `PatchFields`, typed by T and the array types only), the EOS, the

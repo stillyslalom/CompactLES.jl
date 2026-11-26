@@ -3040,8 +3040,11 @@ end
     bsum(s) = sum(s.beta_art[padded_index(s, i, j, k)] for i in 1:32, j in 1:32, k in 1:32)
     @test maximum(sd.beta_art) < 1e-12 * maximum(ss.beta_art)
     @test bsum(sg) < 1e-2 * bsum(ss)
-    @test sd.mu_art == ss.mu_art
-    @test sg.mu_art == ss.mu_art
+    # Over the interior: the ghost layers of a coefficient array that held a
+    # sensor keep the sensor's exchanged values, which no reader takes.
+    I = CL.interior(ss.decomp)
+    @test sd.mu_art[I] == ss.mu_art[I]
+    @test sg.mu_art[I] == ss.mu_art[I]
     @test all(isfinite, sd.beta_art) && all(isfinite, sg.beta_art)
 
     # A velocity ramp: beta* must be exactly zero wherever the flow expands,
@@ -3359,8 +3362,8 @@ end
     # returns the full undivided response, C_mu·ρ·16h.
     nyq = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(cospi(64x), 0.0, 0.0))
     @test maximum(oned(ArtificialProperties(mu_sensor=:strain), nyq).mu_art) == 0.0
-    @test maximum(oned(ArtificialProperties(mu_sensor=:velocity), nyq).mu_art) ≈
-          0.002 * 16 / 64 rtol = 1e-12
+    sv = oned(ArtificialProperties(mu_sensor=:velocity), nyq)
+    @test maximum(sv.mu_art[CL.interior(sv.decomp)]) ≈ 0.002 * 16 / 64 rtol = 1e-12
     @test maximum(oned(ArtificialProperties(beta_sensor=:ungated_dilatation),
                        nyq).beta_art) == 0.0
 
@@ -3439,8 +3442,8 @@ end
     # numbers bit-identical to the default configuration's.
     base = oned(ArtificialProperties(), ramp1)
     @test oned(ArtificialProperties(mu_sensor=:velocity), ramp1).beta_art == base.beta_art
-    @test oned(ArtificialProperties(beta_sensor=:ungated_dilatation),
-               ramp1).mu_art == base.mu_art
+    sdil = oned(ArtificialProperties(beta_sensor=:ungated_dilatation), ramp1)
+    @test sdil.mu_art[CL.interior(sdil.decomp)] == base.mu_art[CL.interior(base.decomp)]
     @test oned(ArtificialProperties(mu_sensor=:velocity), ramp1).mu_art != base.mu_art
 
     @test_throws ErrorException flat_solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
@@ -5725,10 +5728,11 @@ end
         @test s1b.step == s2b.step
         @test parent(Q1b) == parent(Q2b)
         @test maximum(s1b.D_art[1]) > 0
-        channel === :bulk && @test s1b.D_art[1] == s1b.D_art[2]
+        Ib = CL.interior(s1b.decomp)
+        channel === :bulk && @test s1b.D_art[1][Ib] == s1b.D_art[2][Ib]
     end
     @test maximum(s1.D_art[1]) > 0
-    @test s1.D_art[1] == s1.D_art[2]
+    @test s1.D_art[1][CL.interior(s1.decomp)] == s1.D_art[2][CL.interior(s1.decomp)]
 
     function axis_pair()
         s = flat_solver(n_global=(32, 1, 24), L_domain=(1.0, 2π, 1.0),
