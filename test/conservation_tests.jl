@@ -115,7 +115,6 @@ const CL = CompactLES
     Q = allocate_state(single)
     initialize!(single, Q, ic)
     @test CL._conserved_budget(single, Q).total_mass ≈ mass atol=1e-13
-    @test_throws ArgumentError CL._conserved_budget(single, ConservedState[])
 end
 
 @testset "budget ledger: attribution, closure, and an unchanged run" begin
@@ -131,10 +130,10 @@ end
         return s, Q
     end
     s, Q = closed_box()
-    CL._ledger_begin!(s, Q)
-    run!(s, Q; tfinal=0.6)
-    r = CL._ledger_end!(s, Q)
-    @test !CL.BUDGET_LEDGER.on
+    ledger = CL._ledger_begin!(s, Q)
+    run!(s, Q; tfinal=0.6, observer=ledger)
+    r = CL._ledger_end!(ledger, s, Q)
+    @test !ledger.on
     # The ledger reads the state and writes none of it.
     ref, Qref = closed_box()
     run!(ref, Qref; tfinal=0.6)
@@ -171,9 +170,9 @@ end
                    tag_predicate=(p, I) -> 0.6 < xcoord(p, 1, interior_index(p, I)[1]) < 0.8)
         Q = allocate_state(s)
         initialize!(s, Q, wave)
-        CL._ledger_begin!(s, Q)
-        run!(s, Q; tfinal=0.2)
-        r = CL._ledger_end!(s, Q)
+        ledger = CL._ledger_begin!(s, Q)
+        run!(s, Q; tfinal=0.2, observer=ledger)
+        r = CL._ledger_end!(ledger, s, Q)
         @test !any(k -> k[1] === :unattributed, keys(r.pieces))
         @test maximum(abs, r.residual) < 1e-12
         # The imposed shell writes only nodes the conserved quadrature does

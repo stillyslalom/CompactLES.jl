@@ -1697,7 +1697,7 @@ and the production configuration they lead to are in
   the error of each rejection, held to the code by `test/capability_tests.jl`
   (commit `fb3b242`).
 - [x] **A9** — `line_sample`, `field_slice` and the Makie recipes take the
-  state vector of a refined run and sample root nodes from the finest level
+  state of a refined run and sample root nodes from the finest level
   holding them (commit `e5d521d`).
 - [x] **A11** — A tiled, regridded level may hold no tiles, so a run starts
   unrefined, refines when tags appear and empties when they vanish; the box

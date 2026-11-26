@@ -941,14 +941,14 @@ CFL estimate; the refresh cadence is therefore every regrid check, independent
 of whether tagging or load balancing changed the layout. The savepoint is
 rebuilt only after an actual layout change. Returns whether it changed.
 """
-function regrid!(solver::Solver, Q, workspace::Workspace, save)
+function regrid!(solver::Solver, Q, workspace::Workspace, save, observer=nothing)
     states, workspace = _patch_states(Q), _patch_workspace(workspace)
-    _tag_coefficients!(solver, states)
+    _tag_coefficients!(solver, states, observer)
     changed = _regrid_impl!(solver, states, workspace, save)
     # The coefficient refresh is a regrid-check cadence, not a layout-change
     # side effect: otherwise a timing-dependent rebalance decision changes the
     # root CFL sequence.  A savepoint still follows only a changed layout.
-    _regrid_prime!(solver, states, workspace, save, changed)
+    _regrid_prime!(solver, states, workspace, save, changed, observer)
     _close_lattice_check!(solver, getfield(solver, :regrid), 0.0)
     return changed
 end
@@ -962,13 +962,13 @@ end
 # coefficients before the next step reads them (`_regrid_prime!`). A no-op
 # with the criterion off; collective otherwise, the record alike on every
 # rank.
-function _tag_coefficients!(solver::Solver, states::AbstractVector)
+function _tag_coefficients!(solver::Solver, states::AbstractVector, observer=nothing)
     spec = getfield(solver, :regrid)
     (spec.sensor_threshold > 0 && solver.art.enabled) || return nothing
     solver.tstage = solver.t
-    _presync!(solver, states)
+    _presync!(solver, states, true, observer)
     # Every patch's sensors kept whole (`_sensor_mask_patch`).
-    _prime_level_coefficients!(solver, states, false)
+    _prime_level_coefficients!(solver, states, false, observer)
     return nothing
 end
 
@@ -1014,12 +1014,12 @@ end
 # that kept the layout recomputes the coefficients alone
 # (`_prime_level_coefficients!`): the rest of a right-hand side writes only
 # what the next step's first evaluation overwrites before reading it.
-function _regrid_prime!(solver, states, workspace, save, changed)
+function _regrid_prime!(solver, states, workspace, save, changed, observer=nothing)
     if solver.art.enabled
         solver.tstage = solver.t
-        _presync!(solver, states)
-        changed ? _prime_rhs!(solver, states, workspace) :
-                  _prime_level_coefficients!(solver, states)
+        _presync!(solver, states, true, observer)
+        changed ? _prime_rhs!(solver, states, workspace, observer) :
+                  _prime_level_coefficients!(solver, states, true, observer)
     end
     changed && _rebank!(solver, states, save)
     return nothing

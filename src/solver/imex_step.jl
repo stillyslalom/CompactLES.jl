@@ -33,13 +33,9 @@ function _implicit_step_limit(solver::ImexSolver, dt)
     return min(dt, oftype(dt, integ.dt_limit), oftype(dt, integ.dt_cap))
 end
 
-function _step_patch!(solver::ImexSolver, Q, dQ, du, dt, prepared::Bool)
-    failure = _imex_advance!(solver, Q, dt, prepared, solver.control)
-    failure === nothing || throw(failure)
-    return Q
-end
-
-_run_step!(solver::ImexSolver, Q, workspace, dt, prepared, control) =
+# The step engine's entry for the additive pair: the stage arrays are unused.
+_advance!(solver::ImexSolver, policy::StepPolicy, observer, Q::SimulationState,
+          dQ::SimulationState, du::SimulationState, dt, prepared::Bool, control) =
     _imex_advance!(solver, sole_state(Q), dt, prepared, control)
 
 # Whether `flag` holds on every rank of `comm`.

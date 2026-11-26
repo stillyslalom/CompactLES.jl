@@ -240,11 +240,9 @@ them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the intended ones, so *any* report elsewhere is a regression. The
 baseline is one site in `apply_bcs!` (`enforce!`), six in `compute_rhs!`,
-and 73 in `step!`: those seven and 66 inside `_build_reflux!`, which rebuilds
-the coarse-fine captures after a layout change, not per step. It takes the
-solver `@nospecialize`, so it is compiled once for the abstract `Solver` and
-its calls on the solver's fields dispatch. From Julia 1.12 the call through
-its `_cold` barrier is a type test and a static call, which is not reported
+and those seven in `step!`, whose single-patch stage loop holds no code of a
+composite layout or of the budget ledger. From Julia 1.12 a call through a
+`_cold` barrier is a type test and a static call, which is not reported
 as a site. Both `compute_dt` probes report one: the `_cold` barrier in front
 of `_local_max_rate_launch`, which host storage takes only under the
 `FORCE_KA` test toggle. Of the six in `compute_rhs!`, three are the boundary hooks
@@ -262,7 +260,7 @@ abstract type in an argument Julia specializes on, an instance that never
 runs, and probes those callees at concrete types instead. A `@nospecialize`
 argument is compiled at its declared type whatever JET infers there. Where
 JET infers it abstract, the dispatches inside the callee are counted
-(`_face_mirror`, `_build_reflux!`); where JET infers it concrete, as for the
+(`_face_mirror`); where JET infers it concrete, as for the
 plan-operator handle of `compute_artificial!`, the dispatches the callee
 makes at run time do not appear here. The counts overlap between entry
 points (`step!` contains `compute_rhs!`), so compare like with like and never
@@ -272,9 +270,10 @@ sum them.
 **keyword argument on a probed entry point, or an optional trailing argument the
 probe omits**, resolves that signature to the short forwarding method, not the
 body, and the reported count falls to 1 while measuring nothing.
-`compute_rhs!` and `step!` therefore carry a trailing `Bool` positionally. If you
-add another optional argument to either, extend the probe tuple in the same
-commit.
+`compute_rhs!` therefore carries its trailing `Bool`s positionally, and the
+step is probed at `_rk_stages!`, the stage loop `step!` runs, which takes
+every argument positionally. If you add an optional argument to either,
+extend the probe tuple in the same commit.
 
 `bench/coverage.jl`'s header has the coverage sequence. Serial alone reaches
 94.8% of executable lines and the full set with MPI 97.2%; the difference is
@@ -401,8 +400,7 @@ Names are spelled out in full. Current vocabulary:
   serves the names flat), `GridGeometry` /
   `ClockState` / `WallAccounting` (the `Solver` groups behind `solver.metric`,
   `solver.t` and `solver.wall_step`), `_root_spacing` (the root level's `h`,
-  where `solver.h` is the patch's), `LimiterState` (the supertype of what
-  `Solver.positivity` holds)
+  where `solver.h` is the patch's)
 - `LimiterWeights` / `LimiterLineBuffers` / `LimiterScratch` /
   `LimiterCounters` (the `PositivityLimiter` groups `weight_set`,
   `line_buffers`, `scratch` and `counters`), `borrow_stage_buffers` / `borrow_filter_buffers` /
@@ -519,8 +517,9 @@ Names are spelled out in full. Current vocabulary:
   in-plane weights a mask byte gives), `_composite` (whether a solver's
   diagnostics take the multi-patch forms), `_composite_profile` /
   `_plane_accumulate!` (the composite plane average at the root's
-  stations). A diagnostic's `Vector` form is the composite, masked one; the
-  single-array form is the one-patch quadrature and applies no mask
+  stations). A diagnostic of a field takes a `Vector` of arrays on a
+  composite solver and applies the mask; the single-array form is the
+  one-patch quadrature and applies none
 - `overwritten` (a `Patch` field: 1 at the nodes a child's restriction
   writes, 2 at those of them the positivity limiter leaves free),
   `MASK_CHILD_SENSORS` / `_mask_child_sensor!` / `smooth_sensor!` (a

@@ -1056,7 +1056,7 @@ one-node perturbation of interpolation order. A tiled level may hold no
 tiles: a check at which no cell reaches the hold level drops every tile past
 its lifetime, and the level stays in `solver.levels` with no transfers, an
 absent `LevelComm` on every rank and a zero covered mask, so the solver type
-and the state vector survive the change. The subcycled driver takes a child
+and the state survive the change. The subcycled driver takes a child
 with no tiles as no child, so the root step is the unrefined one, and the
 next tag places the first tiles as fresh ones (`_place_tiles` with no
 survivor). The AMR frontend starts a tiled, regridded run this way when its
@@ -1594,7 +1594,7 @@ so with `tag_sensor_threshold > 0` a marginal node may tag differently at
 the first check after a restart. Every other criterion reads Q.
 
 Both formats carry the same record. The shared HDF5 file
-(`save_checkpoint_hdf5` on a state vector) holds it as readable tables
+(`save_checkpoint_hdf5` on a refined solver) holds it as readable tables
 (`hierarchy/level<ℓ>/regions`, `.../owners`, `hierarchy/regrid/...`) and
 each tile's state as a dataset over the tile's node space written in
 per-rank hyperslabs (`levels/<ℓ>/tiles/<t>/Q`, `.../art`); the per-rank file
@@ -1650,7 +1650,7 @@ first step, as `run!` computes them at step 0.
 
 ### Field output
 
-`save_vtk` on a state vector writes one `.vtr` piece per patch per rank, in
+`save_vtk` on a refined solver writes one `.vtr` piece per patch per rank, in
 the patch's own node space with physical coordinates, and rank 0 lists them
 under a `.vtm` multiblock index, one block per level, from a gather of the
 piece lists. A coarse node a child level covers entirely (`Patch.covered`
@@ -1659,7 +1659,7 @@ composite renders the finest data at every point and the coarse-fine face,
 whose coarse nodes are half covered, once. `stride` acts in each patch's
 node space; `slice` names a root plane, mapped to each patch's coincident
 node, and a patch the plane misses writes no piece. `FieldWriter` on a
-state vector numbers `.vtm` frames into its `.pvd`. Not covered: a
+refined solver numbers `.vtm` frames into its `.pvd`. Not covered: a
 shared-file (`save_hdf5`) dump of a hierarchy, which needs an XDMF tree of
 grids, and the checkpoint of a same-level slab layout.
 

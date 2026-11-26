@@ -775,8 +775,7 @@ end
             run!(s, q; tfinal=1.0, nmax=nmax)
             s, q
         end
-        a = q1 isa AbstractVector ? q1 : [q1]
-        b = q2 isa AbstractVector ? q2 : [q2]
+        a, b = q1, q2
         return s1.step == s2.step == nmax && all(isfinite, parent(b.patches[1])) &&
                all(parent(a.patches[i]) == parent(b.patches[i]) for i in eachindex(a.patches))
     end
@@ -883,8 +882,7 @@ end
             run!(s, q; tfinal=1.0, nmax=nmax)
             s, q
         end
-        a = q1 isa AbstractVector ? q1 : [q1]
-        b = q2 isa AbstractVector ? q2 : [q2]
+        a, b = q1, q2
         counts = CL.positivity_counts(s1)
         @testset "$name" begin
             @test counts.stage_limited > 0 && counts.filter_limited > 0
@@ -916,7 +914,7 @@ end
                                     execution=Execution(storage=backend),
                                     patch_interfaces=ghost, positivity_limiter=true,
                                     amr=AMR(initial=BlockRegion((0, 0, 0), (25, 1, 1)))))
-        CL._fill_tiles_from_parent!(s, Q, getfield(s, :levels)[2])
+        CL._fill_tiles_from_parent!(s, Q.patches, getfield(s, :levels)[2])
         return s, Q
     end
     s1, q1 = filled(CPUBackend())

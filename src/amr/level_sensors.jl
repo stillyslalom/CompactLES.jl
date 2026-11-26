@@ -118,7 +118,7 @@ _strain_beta(art::ArtificialProperties) =
 # with the coefficients and the primitives the pass leaves. A stacked level is
 # device storage, which the ledger does not sweep, so it takes no hooks.
 function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
-                            enforce::Bool)
+                            enforce::Bool, observer=nothing)
     patches = getfield(solver, :patches)
     stacked = !isempty(lev.stacks)
     if enforce
@@ -127,7 +127,7 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
                 _tile_bcs!(solver, _cold(patches[pi]), states, pi)
             end
         else
-            _foreach_tile(_enforced_tile!, solver, lev, states)
+            _foreach_tile(_enforced_tile!, solver, lev, states, observer)
         end
     end
     _level_artificial!(solver, lev, states, prepared)
@@ -139,22 +139,22 @@ function _sensor_level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::B
                          _stack_state(st, dQs), true, true)
         end
     else
-        _foreach_tile(_current_tile_rhs!, solver, lev, states, dQs)
+        _foreach_tile(_current_tile_rhs!, solver, lev, states, dQs, observer)
     end
     return nothing
 end
 
 # One tile's parts of `_sensor_level_rhs!`, with their ledger hooks.
-function _enforced_tile!(solver, pi::Int, states)
-    _ledger_open!(solver, states, pi)
+function _enforced_tile!(solver, pi::Int, states, observer)
+    _ledger_open!(observer, solver, states, pi)
     _tile_bcs!(solver, _cold(getfield(solver, :patches)[pi]), states, pi)
-    _ledger!(solver, states, :wall_enforce, pi)
+    _ledger!(observer, solver, states, :wall_enforce, pi)
     return nothing
 end
-function _current_tile_rhs!(solver, pi::Int, states, dQs)
+function _current_tile_rhs!(solver, pi::Int, states, dQs, observer)
     _tile_rhs!(solver, _cold(getfield(solver, :patches)[pi]), states, dQs, pi, true,
                true)
-    _ledger_faces!(solver, pi)
+    _ledger_faces!(observer, solver, pi)
     return nothing
 end
 

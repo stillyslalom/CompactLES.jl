@@ -213,18 +213,18 @@ function evolve(mode, N, ny, tfinal, nmax, subcycle)
     initial = snapshot(solver, Q)
     ws = Workspace(Q)
     history = Any[initial]
-    args.ledger && CL._ledger_begin!(solver, Q)
+    ledger = args.ledger ? CL._ledger_begin!(solver, Q) : nothing
     # The ledger at the sample of largest drift, beside the final one.
     worst = (drift=-1.0, ledger=nothing, time=0.0)
     # Separate run! calls land exactly on each requested physical observation
     # time, retaining max excursion rather than allowing final cancellation to
     # hide an earlier interface defect.
     for target in range(tfinal / args.samples, tfinal; length=args.samples)
-        run!(solver, Q, ws; tfinal=target, nmax=nmax)
+        run!(solver, Q, ws; tfinal=target, nmax=nmax, observer=ledger)
         sample = snapshot(solver, Q)
         push!(history, sample)
         if args.ledger
-            r = CL._ledger_end!(solver, Q; close=false)
+            r = CL._ledger_end!(ledger, solver, Q; close=false)
             d = maxconserved(drift(sample, initial; c0=sqrt(1.4)))
             d > worst.drift && (worst = (drift=d, ledger=r, time=sample.time))
         end
@@ -241,7 +241,7 @@ function evolve(mode, N, ny, tfinal, nmax, subcycle)
         show_ledger("$(mode), subcycle=$(subcycle), largest drift at " *
                     "t=$(round(worst.time; digits=4))", worst.ledger, initial)
         show_ledger("$(mode), subcycle=$(subcycle), final",
-                    CL._ledger_end!(solver, Q), initial)
+                    CL._ledger_end!(ledger, solver, Q), initial)
     end
     # c0 = sqrt(gamma*p/rho) at the uniform initial state.
     ds = [drift(s, initial; c0=sqrt(1.4)) for s in history]
@@ -259,14 +259,14 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
     initialize!(solver, Q, layer_ic(true))
     ws = Workspace(Q)
     initial = snapshot(solver, Q)
-    args.ledger && CL._ledger_begin!(solver, Q)
+    ledger = args.ledger ? CL._ledger_begin!(solver, Q) : nothing
     events = Any[]
     history = Any[initial]
     cumulative_jump = 0.0
     signed_jump = _zero_drift(length(initial.conserved.species_masses))
     max_evolution = 0.0
     for target in range(tfinal / args.samples, tfinal; length=args.samples)
-        run!(solver, Q, ws; tfinal=target, nmax=nmax)
+        run!(solver, Q, ws; tfinal=target, nmax=nmax, observer=ledger)
         before = snapshot(solver, Q)
         push!(history, before)             # retain both sides of every transfer
         residual = _sub_drift(drift(before, initial; c0=sqrt(1.4)), signed_jump)
@@ -275,7 +275,7 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
         # normal collective check.  Advance it explicitly because automatic
         # regrids are suppressed to isolate each immediate transfer jump.
         solver.regrid.checks += 1
-        changed = CL.regrid!(solver, Q, ws, nothing)
+        changed = CL.regrid!(solver, Q, ws, nothing, ledger)
         after = snapshot(solver, Q)
         push!(history, after)
         if changed
@@ -295,7 +295,7 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
     end
     final = history[end]
     args.ledger && show_ledger("regrid, subcycle=$(subcycle)",
-                               CL._ledger_end!(solver, Q), initial)
+                               CL._ledger_end!(ledger, solver, Q), initial)
     ds = [drift(s, initial; c0=sqrt(1.4)) for s in history]
     total = drift(final, initial; c0=sqrt(1.4))
     return (; initial, final, history, events, drift=total,

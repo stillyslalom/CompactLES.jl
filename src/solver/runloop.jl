@@ -23,18 +23,18 @@
 # from its last step or from a checkpoint's art block, and is left alone; a
 # phase change that switches the properties on primes it through `_prime_art!`
 # (phases.jl).
-function _prime_coefficients!(solver::Solver, Q, workspace)
+function _prime_coefficients!(solver::Solver, Q, workspace, observer=nothing)
     (solver.art.enabled && solver.step == 0) || return solver
-    return _prime_art!(solver, Q, workspace)
+    return _prime_art!(solver, Q, workspace, observer)
 end
-function _prime_art!(solver::Solver, Q, workspace)
-    _presync!(solver, Q)
-    _prime_rhs!(solver, Q, workspace)
+function _prime_art!(solver::Solver, Q, workspace, observer=nothing)
+    _presync!(solver, Q, true, observer)
+    _prime_rhs!(solver, Q, workspace, observer)
     return solver
 end
 # `Q` and the workspace are the run's state and stage arrays, or the per-patch
 # vectors a composite driver holds.
-function _prime_rhs!(solver::Solver, Q, workspace)
+function _prime_rhs!(solver::Solver, Q, workspace, observer=nothing)
     if !_multipatch(solver)
         apply_bcs!(solver, Q)
         compute_rhs!(solver, Q, workspace.dQ, false)
@@ -42,7 +42,8 @@ function _prime_rhs!(solver::Solver, Q, workspace)
     end
     states, dQs = _patch_states(Q), _patch_states(workspace.dQ)
     for lev in getfield(solver, :levels)
-        status = _level_rhs!(solver, lev, states, dQs, false)
+        status = _level_rhs!(solver, lev, states, dQs, false, true, solver.comm,
+                             observer)
         _check_transport_status(solver, status)
     end
     return Q
@@ -56,7 +57,7 @@ end
 # overwritten by the next step's first evaluation before anything reads them,
 # and `max_rate` reads the coefficients, the state and the primitives alone.
 function _prime_level_coefficients!(solver::Solver, states::AbstractVector,
-                                    mask_child::Bool=true)
+                                    mask_child::Bool=true, observer=nothing)
     for lev in getfield(solver, :levels)
         status = _prepare_level_transport!(solver, lev, states, false, true,
                                            solver.comm)
@@ -65,10 +66,10 @@ function _prime_level_coefficients!(solver::Solver, states::AbstractVector,
         prepared, enforce = domain, !domain
         if _level_sensors(solver, lev)
             _level_coefficient_pass!(_cold(solver), lev, states, prepared, enforce,
-                                     mask_child)
+                                     mask_child, observer)
         elseif isempty(lev.stacks)
             _foreach_tile(_enforced_tile_coefficients!, solver, lev, states, prepared,
-                          enforce, mask_child)
+                          enforce, mask_child, observer)
         else
             patches = getfield(solver, :patches)
             enforce && for pi in lev.patches
@@ -98,12 +99,12 @@ end
 # One tile's part of `_prime_level_coefficients!`, with the ledger hooks of
 # `_enforced_tile_rhs!`.
 function _enforced_tile_coefficients!(solver, pi::Int, states, prepared::Bool,
-                                      enforce::Bool, mask_child::Bool=true)
+                                      enforce::Bool, mask_child::Bool, observer)
     patches = getfield(solver, :patches)
     if enforce
-        _ledger_open!(solver, states, pi)
+        _ledger_open!(observer, solver, states, pi)
         _tile_bcs!(solver, _cold(patches[pi]), states, pi)
-        _ledger!(solver, states, :wall_enforce, pi)
+        _ledger!(observer, solver, states, :wall_enforce, pi)
     end
     _tile_coefficients!(solver, _cold(patches[pi]), states, pi, prepared, mask_child)
     return nothing
@@ -114,11 +115,11 @@ _tile_coefficients!(solver, p, states, pi::Int, prepared::Bool, mask_child::Bool
 # The level-wide pass of `_sensor_level_rhs!` and the compression switch each
 # tile's right-hand side applies after it.
 function _level_coefficient_pass!(solver::Solver, lev::Level, states, prepared::Bool,
-                                  enforce::Bool, mask_child::Bool=true)
+                                  enforce::Bool, mask_child::Bool, observer)
     patches = getfield(solver, :patches)
     if enforce
         if isempty(lev.stacks)
-            _foreach_tile(_enforced_tile!, solver, lev, states)
+            _foreach_tile(_enforced_tile!, solver, lev, states, observer)
         else
             for pi in lev.patches
                 _tile_bcs!(solver, _cold(patches[pi]), states, pi)
@@ -137,10 +138,10 @@ _unit_switch!(ps, Q, ::Nothing) = _coefficient_step!(ps, Q, true, true)
 # arrives here, so the state checks, the step checks and the endpoint check
 # share one recovery rather than one bypassing it.
 function _rollback!(solver, Q, workspace, callback, control, save, failure,
-                    attempts, rank)
+                    attempts, rank, observer)
     (save === nothing || attempts >= control.retries) && throw(failure)
     _restore_state!(Q, save.Q)
-    _ledger_rebase!(solver, Q, :rollback)
+    _ledger_rebase!(observer, solver, Q, :rollback)
     _restore_art!(solver, save.art)
     solver.t = save.t
     solver.step = save.step
@@ -183,40 +184,40 @@ end
 # writes none of those, and the shared-plane averaging leaves them unchanged,
 # since the planes were averaged after the last stage or filter pass, so a
 # repeated restriction would write every node's own value.
-function _presync!(solver, Q, restrict::Bool=true)
+function _presync!(solver, Q, restrict::Bool=true, observer=nothing)
     _multipatch(solver) || return Q
     states = _patch_states(Q)
-    _ledger_open!(solver, states)
+    _ledger_open!(observer, solver, states)
     sync_patches!(solver, states)
-    _ledger!(solver, states, :same_level)
+    _ledger!(observer, solver, states, :same_level)
     # `sync_levels!` is the restriction followed by the prolongation.
     if restrict
         restrict_level!(solver, states)
-        _ledger!(solver, states, :restrict)
+        _ledger!(observer, solver, states, :restrict)
     end
     prolong_level_ghosts!(solver, states)
-    _ledger!(solver, states, :shell)
+    _ledger!(observer, solver, states, :shell)
     return Q
 end
 
 # Per-step level maintenance, after the state filter: restrict the fine state
 # onto the covered coarse region, then re-impose the fine shell from the
 # restricted coarse state. No-ops without refinement.
-function _post_step!(solver, Q)
+function _post_step!(solver, Q, observer)
     _multipatch(solver) || return Q
     states = _patch_states(Q)
-    _ledger_open!(solver, states)
+    _ledger_open!(observer, solver, states)
     restrict_level!(solver, states)
-    _ledger!(solver, states, :restrict)
+    _ledger!(observer, solver, states, :restrict)
     # Under subcycling each deeper parent took its correction after its own
     # step (`_advance_level!`); here the root's, or every level's.
     nlev = length(getfield(solver, :levels))
     for ℓp in (getfield(solver, :subcycle) ? (1:min(1, nlev - 1)) : (1:nlev-1))
         _reflux_apply!(solver, states, ℓp)
     end
-    _ledger!(solver, states, :reflux)
+    _ledger!(observer, solver, states, :reflux)
     prolong_level_ghosts!(solver, states)
-    _ledger!(solver, states, :shell)
+    _ledger!(observer, solver, states, :shell)
     return Q
 end
 
@@ -334,9 +335,9 @@ collective through [`max_rate`](@ref) and the line solves beneath
 [`step!`](@ref), so every rank must call it with the same `tfinal`, `nmax` and
 callbacks.
 """
-function run!(solver::Solver, Q, workspace::Workspace;
+function run!(solver::Solver, Q::SimulationState, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
-              control::StepControl=solver.control)
+              control::StepControl=solver.control, observer=nothing)
     # The loop is reached through a barrier. A caller compiled around `setup`,
     # such as a script's `simulate` function or an `mpi_main` block, holds the
     # partially typed solver `setup` infers to, and inference of that caller
@@ -346,7 +347,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # loop is inferred only for the concrete types it is called with, at the
     # cost of one dynamic dispatch per call.
     _check_not_released(solver)
-    _cold(_run!)(solver, Q, workspace, tfinal, nmax, callback, control)
+    _cold(_run!)(solver, Q, workspace, tfinal, nmax, callback, control, observer)
     return Q
 end
 
@@ -355,8 +356,7 @@ end
 # own closures. It reaches them through two dynamic calls per step, which
 # allocate nothing (see `_step_callbacks`).
 function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
-               nmax::Int,
-               @nospecialize(callback), control::StepControl)
+               nmax::Int, @nospecialize(callback), control::StepControl, observer)
     rank = MPI.Comm_rank(solver.comm)
     instant = Ref(solver.t)
     # The endpoint is carried in the solver's own time type from here on. A
@@ -367,7 +367,7 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
     # every remaining step of its `nmax`.
     tfin = oftype(solver.t, tfinal)
     _check_run_limits(solver, tfinal, tfin, nmax)
-    _prime_coefficients!(solver, Q, workspace)
+    _prime_coefficients!(solver, Q, workspace, observer)
     # Off by default (`retries = 0`), so behind `_cold`: `save` is then
     # untyped, and read only on the rollback and savepoint paths, both cold.
     save = control.retries > 0 ? _savepoint(_cold(solver), Q) : nothing
@@ -429,14 +429,14 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
             # than after the loop keeps it on the retry path: a rejection rolls
             # back to the savepoint and lowers the CFL like any other failure,
             # so the endpoint cannot deliver a state that bypassed recovery.
-            _ledger_open!(solver, Q)
+            _ledger_open!(observer, solver, Q)
             _, failure = _apply_validity!(solver, Q, control,
                                           "the state run! returns",
                                           (rho_floor, e_floor), true)
-            _ledger!(solver, Q, :repair)
+            _ledger!(observer, solver, Q, :repair)
             failure === nothing && break
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
-                                  save, failure, attempts, rank)::Int
+                                  save, failure, attempts, rank, observer)::Int
             dt_seen = 0.0
             stopped = false
             levels_synced = false
@@ -451,10 +451,10 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         solver.wall_wait = 0.0
         # The regrid is attributed by the first hook after it, which sees
         # the regrid check counter move and rebases every patch.
-        _ledger_open!(solver, Q)
+        _ledger_open!(observer, solver, Q)
         _maybe_regrid!(solver, Q, workspace, save, control,
-                       (rho_floor, e_floor)) && (levels_synced = false)
-        _presync!(solver, Q, !levels_synced)
+                       (rho_floor, e_floor), observer) && (levels_synced = false)
+        _presync!(solver, Q, !levels_synced, observer)
         levels_synced = false
         # Boundary conditions before the rate measurement, for two reasons. The
         # step should be sized from the state it is about to advance, and the
@@ -463,9 +463,9 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         # and primitives pass also serve stage 1, as `prepared` below
         # asserts; that removes one sixth of both from the per-step cost.
         solver.tstage = solver.t
-        _ledger_open!(solver, Q)
+        _ledger_open!(observer, solver, Q)
         apply_bcs!(solver, Q)
-        _ledger!(solver, Q, :wall_enforce)
+        _ledger!(observer, solver, Q, :wall_enforce)
         rate, rho_min, filter_rate = max_rate(solver, Q)
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -476,20 +476,20 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         if failure === nothing && control.validity_interval > 0 &&
            solver.step % control.validity_interval == 0
             repaired_0 = solver.floor_tally.cells
-            _ledger_open!(solver, Q)
+            _ledger_open!(observer, solver, Q)
             _, failure = _apply_validity!(solver, Q, control,
                                           "the state entering the step",
                                           (rho_floor, e_floor), true)
-            _ledger!(solver, Q, :repair)
+            _ledger!(observer, solver, Q, :repair)
             # A `:repair` policy rewrites interior points after `max_rate` has
             # read them, which leaves the halos, the boundary values and the
             # primitives that `prepared` asserts behind the state. The tally is
             # reduced, so every rank takes this branch together.
             if failure === nothing && solver.floor_tally.cells != repaired_0
-                _presync!(solver, Q)
-                _ledger_open!(solver, Q)
+                _presync!(solver, Q, true, observer)
+                _ledger_open!(observer, solver, Q)
                 apply_bcs!(solver, Q)
-                _ledger!(solver, Q, :wall_enforce)
+                _ledger!(observer, solver, Q, :wall_enforce)
                 rate, rho_min, filter_rate = max_rate(solver, Q)
                 dt = predicted_dt(solver, control, rate)
                 failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -498,7 +498,7 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         end
         if failure !== nothing
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
-                                  save, failure, attempts, rank)::Int
+                                  save, failure, attempts, rank, observer)::Int
             dt_seen = 0.0
             continue
         end
@@ -574,12 +574,13 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         end
         prepared = true         # see the apply_bcs!/max_rate note above
         failure = limiting ?
-                  _limited_run_step!(_cold(solver), Q, workspace, dt, prepared,
-                                     control)::Union{Nothing,SolverFailure} :
-                  _run_step!(solver, Q, workspace, dt, prepared, control)
+                  _limited_advance!(_cold(solver), observer, Q, workspace, dt, prepared,
+                                    control)::Union{Nothing,SolverFailure} :
+                  _advance!(solver, StandardStepPolicy(), observer, Q, workspace.dQ,
+                            workspace.du, dt, prepared, control)
         if failure !== nothing
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
-                                  save, failure, attempts, rank)::Int
+                                  save, failure, attempts, rank, observer)::Int
             dt_seen = 0.0
             continue
         end
@@ -589,37 +590,38 @@ function _run!(solver::Solver, Q::SimulationState, workspace::Workspace, tfinal,
         solver.rate_prev = rate
         solver.filter_rate_prev = filter_rate
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
-            _ledger_open!(solver, Q)
-            limiting ? _limited_filter_state!(_cold(solver), Q) : filter_state!(solver, Q)
-            _ledger!(solver, Q, :filter)
+            _ledger_open!(observer, solver, Q)
+            limiting ? _limited_filter_state!(_cold(solver), Q, observer) :
+                       _filter_step!(solver, StandardStepPolicy(), observer, Q)
+            _ledger!(observer, solver, Q, :filter)
         end
         # Once per step, after the filter and before the failsafe; see
         # `truncate_modes!` for why the halos may stay stale here.
         if _truncating(solver.truncation)
-            _ledger_open!(solver, Q)
+            _ledger_open!(observer, solver, Q)
             truncate_modes!(solver, Q)
-            _ledger!(solver, Q, :truncation)
+            _ledger!(observer, solver, Q, :truncation)
         end
-        _post_step!(solver, Q)
+        _post_step!(solver, Q, observer)
         levels_synced = restrict_repeats
         # After the filter, not immediately after step!, ensuring the state
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can
         # produce sub-floor values itself. The repaired count is reduced.
-        _ledger_open!(solver, Q)
+        _ledger_open!(observer, solver, Q)
         rho_floor > 0 && _positivity_failsafe!(_cold(solver), Q, rho_floor,
                                                 e_floor, control, floor_0,
                                                 rank)::Bool && (levels_synced = false)
-        _ledger!(solver, Q, :repair)
+        _ledger!(observer, solver, Q, :repair)
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time; wall_total counts work that stood.
         _validate_transport_state!(solver, Q)
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
-        _ledger_open!(solver, Q)
+        _ledger_open!(observer, solver, Q)
         flags = _step_callbacks(callback, solver, Q)::Int
-        _ledger!(solver, Q, :callback)
+        _ledger!(observer, solver, Q, :callback)
         flags & 1 != 0 && (stopped = true)
         flags & 2 != 0 && (levels_synced = false)
     end

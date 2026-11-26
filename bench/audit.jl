@@ -58,7 +58,8 @@ dQ = zero(Q); du = zero(Q)
 npt = prod(solver.decomp.n_local)
 @printf("  grid points: %d\n", npt)
 alloc("primitives!(solver, Q)", () -> CL.primitives!(solver, Q); scale=npt)
-alloc("exchange_state!(Q, decomp)", () -> CL.exchange_state!(Q, solver.decomp); scale=npt)
+alloc("exchange_state!(Q, decomp)", () -> CL.exchange_state!(CL.sole_state(Q), solver.decomp);
+      scale=npt)
 alloc("deriv_along!(tmp_a, rho, solver, 1, 1)", () -> CL.deriv_along!(solver.tmp_a, solver.rho, solver, 1, 1); scale=npt)
 alloc("deriv_along!(tmp_a, rho, solver, 2, 1)", () -> CL.deriv_along!(solver.tmp_a, solver.rho, solver, 2, 1); scale=npt)
 alloc("compute_artificial!(solver, Q)", () -> CL.compute_artificial!(solver, Q); scale=npt)
@@ -114,20 +115,27 @@ println("\n=== inference: non-concrete SSA values (lower is better) ===")
 # returns the forward: one SSA value, and no sight of the body. `compute_rhs!`
 # carries two trailing `Bool`s and `step!` one (see their docstrings), so probing
 # them without those would report a count of 1 and hide every regression.
-# The compute routines are probed at the `PatchSolver` the entry points build:
-# their `Solver` methods are one-line forwards (`sole_patch`).
+# The compute routines are probed at the `PatchSolver` and the patch state the
+# entry points build: their `Solver` methods are one-line forwards
+# (`sole_patch`, `sole_state`). `step!` is probed at the stage loop it runs,
+# `_rk_stages!` on the sole patch under the standard policy with no observer,
+# whose body holds the five stages.
 ps = CL.sole_patch(solver)
 psb = CL.sole_patch(sb)
+qT, dqT, duT = map(x -> typeof(CL.sole_state(x)), (Q, dQ, du))
+qbT, dqbT = map(x -> typeof(CL.sole_state(x)), (Qb, dQb))
 probes = [
-    ("primitives!",        CL.primitives!,  Tuple{typeof(ps), typeof(Q)}),
-    ("recover_primitives!", CL.recover_primitives!, Tuple{typeof(ps), typeof(solver.eos), typeof(Q)}),
-    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(ps), typeof(Q), typeof(dQ), Bool, Bool}),
+    ("primitives!",        CL.primitives!,  Tuple{typeof(ps), qT}),
+    ("recover_primitives!", CL.recover_primitives!, Tuple{typeof(ps), typeof(solver.eos), qT}),
+    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(ps), qT, dqT, Bool, Bool}),
     ("compute_dt",         compute_dt,      Tuple{typeof(solver), typeof(Q)}),
-    ("step!",              step!,           Tuple{typeof(solver), typeof(Q), typeof(dQ), typeof(du), Float64, Bool}),
+    ("step!",              CL._rk_stages!,  Tuple{typeof(solver), CL.SoleUnit{typeof(ps)},
+                                                  CL.StandardStepPolicy, Nothing, qT, dqT,
+                                                  duT, typeof(solver.t), Float64, Bool}),
     ("deriv_along!",       CL.deriv_along!, Tuple{typeof(solver.tmp_a), typeof(solver.rho), typeof(ps), Int, Int}),
-    ("filter_state!",      filter_state!,   Tuple{typeof(ps), typeof(Q)}),
-    ("apply_bcs!",         apply_bcs!,      Tuple{typeof(ps), typeof(Q)}),
-    ("compute_rhs! (bulk)", compute_rhs!,   Tuple{typeof(psb), typeof(Qb), typeof(dQb), Bool, Bool}),
+    ("filter_state!",      filter_state!,   Tuple{typeof(ps), qT}),
+    ("apply_bcs!",         apply_bcs!,      Tuple{typeof(ps), qT}),
+    ("compute_rhs! (bulk)", compute_rhs!,   Tuple{typeof(psb), qbT, dqbT, Bool, Bool}),
 ]
 for (name, f, T) in probes
     n, bad = badtypes(f, T)

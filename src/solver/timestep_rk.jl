@@ -129,41 +129,278 @@ the reason given under [`compute_rhs!`](@ref).
 """
 function step!(solver::Solver, Q::SimulationState, dQ::SimulationState,
                du::SimulationState, dt, prepared::Bool=false)
-    if _multipatch(solver)
-        _step_patches!(solver, Q.patches, dQ.patches, du.patches, dt, prepared)
-    else
-        _step_patch!(solver, sole_state(Q), sole_state(dQ), sole_state(du), dt,
-                     prepared)
-    end
+    failure = _advance!(solver, StandardStepPolicy(), nothing, Q, dQ, du, dt, prepared,
+                        solver.control)
+    failure === nothing || throw(failure)
     return Q
 end
 
-function _step_patch!(solver::Solver, Q, dQ, du, dt, prepared::Bool)
-    ps = sole_patch(solver)
-    decomp = ps.decomp
+# --- The step engine ----------------------------------------------------------
+#
+# Every step this package takes with the low-storage integrator runs the one
+# stage loop `_rk_stages!`. Two arguments select what a stage does, each a
+# concrete type, so a configuration compiles the calls it makes and no other:
+#
+# - the unit, what the loop advances: the sole patch of a single-patch solver
+#   (`SoleUnit`), every level of a patched or refined solver at once
+#   (`HierarchyUnit`), or one level of the Berger–Oliger schedule
+#   (`LevelUnit`);
+# - the policy, what happens to a stage's increment: nothing
+#   (`StandardStepPolicy`) or the positivity limiter (`LimitedStepPolicy`).
+#
+# The third, `observer`, is `nothing` or the budget ledger (ledger.jl), handed
+# to the hooks that bracket every write of the state.
+
+abstract type StepPolicy end
+
+"The step as the integrator defines it."
+struct StandardStepPolicy <: StepPolicy end
+
+"""
+The step of `Numerics(positivity_limiter = true)`: the stage limiter between
+each stage's right-hand side and its low-storage update, and the filter
+limiter after each directional filter pass. With no face limited it makes the
+calls of the standard step in the same order and the same arithmetic.
+`limiters` holds one limiter per patch this rank holds.
+"""
+struct LimitedStepPolicy <: StepPolicy
+    limiters::Vector{PositivityLimiter}
+end
+
+# The right-hand side array a stage hands `compute_rhs!` or `_level_rhs!`:
+# the stage array, or under the limiter its `_LimiterRHS` (positivity_step.jl),
+# one per patch for a vector of them.
+@inline _stage_target(::StandardStepPolicy, dQ, stage::Int, dt) = dQ
+_stage_target(policy::LimitedStepPolicy, dQs::AbstractVector, stage::Int, dt) =
+    _limiter_stage_rhs(policy.limiters, dQs, stage, dt)
+function _stage_target(policy::LimitedStepPolicy, dQ::ConservedState, stage::Int, dt)
+    lim = only(policy.limiters)
+    T = eltype(lim.eps_rho)
+    return _LimiterRHS(dQ, lim, T(RKA[stage]), T(dt))
+end
+
+# The limiting of one stage's increment, on one patch and on one level.
+@inline _limit_patch!(::StandardStepPolicy, ps, Q, dQ, du, stage::Int, dt) = nothing
+_limit_patch!(policy::LimitedStepPolicy, ps, Q, dQ, du, stage::Int, dt) =
+    _limit_stage!(only(policy.limiters), ps, Q, dQ, du, stage, dt)
+@inline _limit_level!(::StandardStepPolicy, solver, lev, states, dQs, dus,
+                      stage::Int, dt) = nothing
+_limit_level!(policy::LimitedStepPolicy, solver, lev, states, dQs, dus, stage::Int, dt) =
+    _limit_level_stage!(policy.limiters, solver, lev, states, dQs, dus, stage, dt)
+
+# The state filter of one patch and of one level.
+@inline _filter_patch!(::StandardStepPolicy, ps, Q) = filter_state!(ps, Q)
+_filter_patch!(policy::LimitedStepPolicy, ps, Q) =
+    _limited_filter_pass!(only(policy.limiters), ps, Q)
+@inline _filter_level!(::StandardStepPolicy, solver, lev, states) =
+    _level_filter!(solver, lev, states)
+_filter_level!(policy::LimitedStepPolicy, solver, lev, states) =
+    _limited_level_filter!(policy.limiters, solver, lev, states)
+
+"The sole patch of a single-patch solver; its arrays are `ConservedState`s."
+struct SoleUnit{PS}
+    ps::PS
+end
+
+"""
+Every level of a patched or refined solver, advanced together: each stage
+evaluates every local patch's right-hand side and update in the global patch
+order, then makes the interfaces consistent with `sync_patches!`, the
+shared-plane averaging and ghost refill, and re-imposes the refined shells.
+Its arrays are the vectors aligned with `solver.patches`.
+"""
+struct HierarchyUnit end
+
+"""
+Level `ℓ` (1-based index into `solver.levels`) of the Berger–Oliger schedule,
+as substep `m` of its parent's step `parent_dt`, which the Hermite shell reads
+as θ = (m − 1 + RKC) / 3; both are unused at the root. `count` is the level's
+global step index and `child` the level below it, or `nothing` where that
+level holds no tile.
+"""
+struct LevelUnit{T,L,C,K,G}
+    lev::L
+    child::C
+    ℓ::Int
+    m::Int
+    parent_dt::T
+    count::Int
+    control::K
+    guard::G
+end
+
+# The five stages of one step of `unit` from `t0`, leaving `solver.tstage` at
+# `t0 + dt`. Returns a status, zero unless a level of the subcycled schedule
+# rejected the step (`SUBSTEP_CFL`, `SUBSTEP_INVALID` or a transport status),
+# which climbs out of the recursion as a value: throwing on a child owner
+# would strand its parent peers in the box gathers.
+function _rk_stages!(solver::Solver, unit, policy::StepPolicy, observer, Q, dQ, du,
+                     t0, dt, prepared::Bool)
     for stage in 1:5
-        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
+        solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         # RKC[1] = 0, so a prepared caller's boundary values are the ones this
         # stage would compute; nothing between there and here has touched Q.
         first_prepared = prepared && stage == 1
-        if !first_prepared
-            _ledger_open!(solver, Q)
-            apply_bcs!(ps, Q)
-            _ledger!(solver, Q, :wall_enforce)
-        end
-        compute_rhs!(ps, Q, dQ, first_prepared)
-        _ledger_faces!(solver, 1)
-        _ledger_open!(solver, Q)
-        _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
-                    RKA[stage], RKB[stage], dt)
-        _ledger_update!(solver, Q, dQ, RKA[stage], RKB[stage], dt)
+        status = _stage_rhs!(unit, policy, observer, solver, Q, dQ, stage, dt,
+                             first_prepared)
+        status == 0 || return status
+        _stage_limit!(unit, policy, solver, Q, dQ, du, stage, dt)
+        _stage_update!(unit, observer, solver, Q, dQ, du, RKA[stage], RKB[stage], dt)
+        _stage_sync!(unit, observer, solver, Q)
     end
-    solver.tstage = solver.t + dt
-    _ledger_open!(solver, Q)
-    apply_bcs!(ps, Q)
-    _ledger!(solver, Q, :wall_enforce)
-    _validate_transport_state!(ps, Q)
-    return Q
+    solver.tstage = t0 + dt
+    return UInt8(0)
+end
+
+@inline function _stage_rhs!(unit::SoleUnit, policy, observer, solver, Q, dQ,
+                             stage::Int, dt, first_prepared::Bool)
+    ps = unit.ps
+    if !first_prepared
+        _ledger_open!(observer, solver, Q)
+        apply_bcs!(ps, Q)
+        _ledger!(observer, solver, Q, :wall_enforce)
+    end
+    compute_rhs!(ps, Q, _stage_target(policy, dQ, stage, dt), first_prepared)
+    _ledger_faces!(observer, solver, 1)
+    return UInt8(0)
+end
+@inline _stage_limit!(unit::SoleUnit, policy, solver, Q, dQ, du, stage::Int, dt) =
+    _limit_patch!(policy, unit.ps, Q, dQ, du, stage, dt)
+@inline function _stage_update!(unit::SoleUnit, observer, solver, Q, dQ, du, A, B, dt)
+    _ledger_open!(observer, solver, Q)
+    _rk_update!(unit.ps.decomp, solver.equations.n_cons, Q, dQ, du, A, B, dt)
+    _ledger_update!(observer, solver, Q, dQ, A, B, dt)
+    return nothing
+end
+@inline _stage_sync!(::SoleUnit, observer, solver, Q) = nothing
+
+function _stage_rhs!(::HierarchyUnit, policy, observer, solver, states, dQs,
+                     stage::Int, dt, first_prepared::Bool)
+    target = _stage_target(policy, dQs, stage, dt)
+    # Level by level, which is the global patch order (the root's patches,
+    # then each level's tiles), so a stacked level's tiles evaluate together.
+    for lev in getfield(solver, :levels)
+        status = _level_rhs!(solver, lev, states, target, first_prepared,
+                             !first_prepared, solver.comm, observer)
+        _check_transport_status(solver, status)
+    end
+    return UInt8(0)
+end
+function _stage_limit!(::HierarchyUnit, policy, solver, states, dQs, dus, stage::Int, dt)
+    for lev in getfield(solver, :levels)
+        _limit_level!(policy, solver, lev, states, dQs, dus, stage, dt)
+    end
+    return nothing
+end
+function _stage_update!(::HierarchyUnit, observer, solver, states, dQs, dus, A, B, dt)
+    for lev in getfield(solver, :levels)
+        _ledger_open!(observer, solver, states, lev)
+        _level_update!(solver, lev, states, dQs, dus, A, B, dt)
+        _ledger_update!(observer, solver, states, dQs, A, B, dt, lev)
+    end
+    return nothing
+end
+function _stage_sync!(::HierarchyUnit, observer, solver, states)
+    _ledger_open!(observer, solver, states)
+    sync_patches!(solver, states)
+    _ledger!(observer, solver, states, :same_level)
+    prolong_level_ghosts!(solver, states)
+    _ledger!(observer, solver, states, :shell)
+    return nothing
+end
+
+function _stage_rhs!(unit::LevelUnit, policy, observer, solver, states, dQs,
+                     stage::Int, dt, first_prepared::Bool)
+    lev = unit.lev
+    T = typeof(dt)
+    unit.ℓ > 1 && _level_shell!(unit, observer, solver, states,
+                                (T(unit.m - 1) + T(RKC[stage])) / T(3))
+    status = _level_rhs!(solver, lev, states, _stage_target(policy, dQs, stage, dt),
+                         first_prepared, !first_prepared, lev.level_comm.comm, observer)
+    status == 0 || return status
+    status = _refreshed_substep_status!(solver, lev, states, dt, stage, unit.count,
+                                        unit.control, unit.guard)
+    status == 0 || return status
+    # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
+    # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
+    # patch of this level has its RHS before the gathers, since a child's box
+    # may span several of them. Under the limiter the save precedes the
+    # limiting, which keeps the right-hand side.
+    stage == 1 && _save_child_boxes!(unit, solver, states, dQs, false)
+    return UInt8(0)
+end
+_stage_limit!(unit::LevelUnit, policy, solver, states, dQs, dus, stage::Int, dt) =
+    _limit_level!(policy, solver, unit.lev, states, dQs, dus, stage, dt)
+function _stage_update!(unit::LevelUnit, observer, solver, states, dQs, dus, A, B, dt)
+    lev = unit.lev
+    _ledger_open!(observer, solver, states, lev)
+    _level_update!(solver, lev, states, dQs, dus, A, B, dt)
+    _ledger_update!(observer, solver, states, dQs, A, B, dt, lev)
+    return nothing
+end
+function _stage_sync!(unit::LevelUnit, observer, solver, states)
+    # Same-level consistency before the next stage's shell imposition,
+    # which leaves the shared faces to these records.
+    _sync_level!(solver, states, unit.lev)
+    _ledger!(observer, solver, states, :same_level, unit.lev)
+    return nothing
+end
+
+# The shell of every tile of a subcycled level at θ of its parent's step. A
+# tile's imposition is entered only by the ranks that own that tile.
+function _level_shell!(unit::LevelUnit, observer, solver, states, θ)
+    lev = unit.lev
+    _ledger_open!(observer, solver, states, lev)
+    _foreach_tile(_tile_hermite_shell!, solver, lev, lev, states, θ, unit.parent_dt)
+    _ledger!(observer, solver, states, :shell, lev)
+    return nothing
+end
+
+# The box exchanges are entered by every owner of this level, so a rank
+# waits here for the parent ranks holding its tiles' boxes; the rebalance
+# measure counts that as waiting, not work.
+function _save_child_boxes!(unit::LevelUnit, solver, states, dQs, at_end::Bool)
+    child = unit.child
+    child === nothing && return nothing
+    wall_gather = time_ns()
+    save_level_boxes!(solver, child, states, dQs, at_end)
+    _charge_exchange!(solver, child, wall_gather)
+    _wait!(solver, wall_gather)
+    return nothing
+end
+
+# One step of size `dt` from `solver.t` under `policy`: `nothing`, or the
+# `SolverFailure` of a substep the subcycled schedule rejected, which `run!`
+# hands to its rollback and `step!` throws. `Q`, `dQ` and `du` are the run's
+# state and stage arrays.
+function _advance!(solver::Solver, policy::StepPolicy, observer, Q::SimulationState,
+                   dQ::SimulationState, du::SimulationState, dt, prepared::Bool,
+                   control)
+    if !_multipatch(solver)
+        ps = sole_patch(solver)
+        q = sole_state(Q)
+        _rk_stages!(solver, SoleUnit(ps), policy, observer, q, sole_state(dQ),
+                    sole_state(du), solver.t, dt, prepared)
+        _ledger_open!(observer, solver, q)
+        apply_bcs!(ps, q)
+        _ledger!(observer, solver, q, :wall_enforce)
+        _validate_transport_state!(ps, q)
+        return nothing
+    end
+    states, dQs, dus = Q.patches, dQ.patches, du.patches
+    getfield(solver, :subcycle) &&
+        return _subcycled_advance!(_cold(solver), policy, observer, states, dQs, dus,
+                                   dt, prepared, control)::Union{Nothing,SolverFailure}
+    _reflux_begin_step!(solver, states)
+    _rk_stages!(solver, HierarchyUnit(), policy, observer, states, dQs, dus, solver.t,
+                dt, prepared)
+    _ledger_open!(observer, solver, states)
+    for (i, p) in enumerate(getfield(solver, :patches))
+        apply_bcs!(PatchSolver(solver, p), states[i])
+    end
+    _ledger!(observer, solver, states, :wall_enforce)
+    _validate_transport_state!(solver, states)
+    return nothing
 end
 
 # The low-storage stage update over one patch's interior, shared between the
@@ -189,49 +426,6 @@ function _rk_update!(decomp::Decomp, n_cons::Int, Q, dQ, du, A, B, dt)
     return Q
 end
 
-# The step of a patched or refined solver: `states`, `dQs` and `dus` are the
-# vectors aligned with `solver.patches`. Each stage evaluates every local
-# patch's RHS and update in the global patch order, then makes the interfaces
-# consistent with `sync_patches!`, the shared-plane averaging and ghost refill
-# after every stage. A solver built with `subcycle = true` takes the
-# Berger–Oliger schedule instead.
-function _step_patches!(solver::Solver, states, dQs, dus, dt, prepared::Bool)
-    getfield(solver, :subcycle) &&
-        return _subcycled_step!(solver, states, dQs, dus, dt, prepared)
-    levels = getfield(solver, :levels)
-    patches = getfield(solver, :patches)
-    _reflux_begin_step!(solver, states)
-    for stage in 1:5
-        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
-        first_prepared = prepared && stage == 1
-        # Level by level, which is the global patch order (the root's
-        # patches, then each level's tiles), so a stacked level's tiles
-        # evaluate together.
-        for lev in levels
-            status = _level_rhs!(solver, lev, states, dQs, first_prepared)
-            _check_transport_status(solver, status)
-        end
-        for lev in levels
-            _ledger_open!(solver, states, lev)
-            _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
-            _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
-        end
-        _ledger_open!(solver, states)
-        sync_patches!(solver, states)
-        _ledger!(solver, states, :same_level)
-        prolong_level_ghosts!(solver, states)
-        _ledger!(solver, states, :shell)
-    end
-    solver.tstage = solver.t + dt
-    _ledger_open!(solver, states)
-    for (i, p) in enumerate(patches)
-        apply_bcs!(PatchSolver(solver, p), states[i])
-    end
-    _ledger!(solver, states, :wall_enforce)
-    _validate_transport_state!(solver, states)
-    return states
-end
-
 # --- Concurrent tiles ---------------------------------------------------------
 #
 # A tile of a refined level is small: a lattice cell of 12 parent nodes holds
@@ -253,17 +447,18 @@ end
 # solves and halo fills are then local, and no MPI call is made off the main
 # thread), no paired fold, whose butterfly exchanges with a partner, no
 # `CompositeBC` face, whose scratch is filled on first use, no transport
-# domain check, which reduces inside every right-hand side, and the budget
-# ledger off, whose accumulators are the rank's. A tile's coarse-fine junction
-# hooks write its own captures and read its own deferral flag
-# (`Patch.reflux_deferred`), so a tile with captures runs with the others.
+# domain check, which reduces inside every right-hand side, and no budget
+# ledger among the phase's arguments, whose accumulators are the rank's. A
+# tile's coarse-fine junction hooks write its own captures and read its own
+# deferral flag (`Patch.reflux_deferred`), so a tile with captures runs with
+# the others.
 
 # The groups of `lev`'s tiles that may run concurrently, each a list of patch
 # indices in level order, or `nothing` where the level runs tile by tile.
 function _tile_groups(@nospecialize(solver::Solver), lev::Level)
     (Threads.nthreads() > 1 || TILE_SLOTS[] > 0) || return nothing
     (length(lev.patches) > 1 && isempty(lev.stacks)) || return nothing
-    (BUDGET_LEDGER.on || transport_has_domain(solver.transport)) && return nothing
+    transport_has_domain(solver.transport) && return nothing
     patches = getfield(solver, :patches)
     groups = Vector{Int}[]
     sets = Any[]
@@ -296,7 +491,7 @@ end
 # rank calls this with the same `lev`.
 function _foreach_tile(f::F, solver::Solver, lev::Level,
                        args::Vararg{Any,N}) where {F,N}
-    groups = _tile_groups(solver, lev)
+    groups = _observed(args...) ? nothing : _tile_groups(solver, lev)
     if groups === nothing || _new_tile_phase!(f, solver, lev, args)
         for pi in lev.patches
             t0 = time_ns()
@@ -425,19 +620,20 @@ end
 # conditions first, which a prepared state never needs and the Hermite
 # endpoint's extra evaluation skips too, its state being enforced already.
 function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
-                     enforce::Bool=!prepared, comm=solver.comm)
+                     enforce::Bool=!prepared, comm=solver.comm, observer=nothing)
     status = _prepare_level_transport!(solver, lev, states, prepared, enforce, comm)
     status == 0 || return status
     # Sources that sum over the whole level (the binned ablation drive) do so here,
     # before any patch's right-hand side, where the level's ranks may communicate.
     _prepare_sources!(solver.sources, solver, lev, states, comm)
-    status = _level_rhs_patches!(solver, lev, states, dQs, prepared, enforce, comm)
+    status = _level_rhs_patches!(solver, lev, states, dQs, prepared, enforce, comm,
+                                 observer)
     _release_sources!(solver.sources, solver, lev)
     return status
 end
 
 function _level_rhs_patches!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
-                             enforce::Bool, comm)
+                             enforce::Bool, comm, observer)
     if transport_has_domain(solver.transport)
         prepared = true
         enforce = false
@@ -447,10 +643,10 @@ function _level_rhs_patches!(solver::Solver, lev::Level, states, dQs, prepared::
         # A tiled level with shared faces computes its artificial
         # coefficients over the whole level first (level_sensors.jl); a
         # configuration either takes this on every step or never.
-        _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce)
+        _sensor_level_rhs!(_cold(solver), lev, states, dQs, prepared, enforce, observer)
     elseif isempty(lev.stacks)
         _foreach_tile(_enforced_tile_rhs!, solver, lev, states, dQs,
-                      prepared, enforce)
+                      prepared, enforce, observer)
     else
         # A stacked level is device storage, which the ledger does not
         # sweep, so it takes no hooks.
@@ -472,15 +668,15 @@ end
 # The boundary conditions, when `enforce`, and the right-hand side of tile
 # `pi`, with their ledger hooks: one tile's part of `_level_rhs!`.
 function _enforced_tile_rhs!(solver, pi::Int, states, dQs, prepared::Bool,
-                             enforce::Bool)
+                             enforce::Bool, observer)
     patches = getfield(solver, :patches)
     if enforce
-        _ledger_open!(solver, states, pi)
+        _ledger_open!(observer, solver, states, pi)
         _tile_bcs!(solver, _cold(patches[pi]), states, pi)
-        _ledger!(solver, states, :wall_enforce, pi)
+        _ledger!(observer, solver, states, :wall_enforce, pi)
     end
     _tile_rhs!(solver, _cold(patches[pi]), states, dQs, pi, prepared, false)
-    _ledger_faces!(solver, pi)
+    _ledger_faces!(observer, solver, pi)
     return nothing
 end
 
@@ -568,18 +764,10 @@ component-distributed chain's ring `Allgatherv`.
 """
 function subcycled_step!(solver::Solver, Q::SimulationState, dQ::SimulationState,
                          du::SimulationState, dt, prepared::Bool=false)
-    _subcycled_step!(solver, Q.patches, dQ.patches, du.patches, dt, prepared)
+    failure = _subcycled_advance!(solver, StandardStepPolicy(), nothing, Q.patches,
+                                  dQ.patches, du.patches, dt, prepared, solver.control)
+    failure === nothing || throw(failure)
     return Q
-end
-
-function _subcycled_step!(solver::Solver, states, dQs, dus, dt, prepared::Bool)
-    status, guard = _subcycled_step_status!(solver, states, dQs, dus, dt,
-                                             prepared, solver.control)
-    status == SUBSTEP_CFL && throw(_substep_cfl_failure(solver, guard, dt,
-                                                        solver.control))
-    status == SUBSTEP_INVALID && throw(_substep_invalid_failure(solver, guard, dt))
-    _check_transport_status(solver, status)
-    return states
 end
 
 # A refreshed coefficient field is available only after `_level_rhs!`.  A
@@ -692,38 +880,29 @@ function _substep_cfl_failure(solver, guard, root_dt, control)
         "StepControl.substep_cfl = $(control.substep_cfl)")
 end
 
-# `limiter` is the positivity limiters of the patches (`_limited_run_step!`),
-# or `nothing`.
-function _subcycled_step_status!(solver::Solver, states, dQs, dus, dt,
-                                 prepared::Bool, control, limiter=nothing)
+function _subcycled_step_status!(solver::Solver, policy::StepPolicy, observer, states,
+                                 dQs, dus, dt, prepared::Bool, control)
     t0 = solver.t
     guard = SubstepCFLGuard(dt)
     _reflux_begin_step!(solver, states)
     # `solver.step` counts completed steps; the level counts below are
     # one-based indices of the step in progress.
-    status = _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
-                             solver.step + 1, dt, 1, control, guard, limiter)
+    status = _advance_level!(solver, 1, policy, observer, states, dQs, dus, t0, dt,
+                             prepared, solver.step + 1, dt, 1, control, guard)
     status == 0 || return status, guard
     solver.tstage = t0 + dt
     _validate_transport_state!(solver, states)
     return UInt8(0), guard
 end
 
-# `step!` keeps its direct contract: a substep violation is thrown there.  The
-# outer driver needs the same completed-or-rejected distinction without an
-# exception escaping recursive stepping, so it uses this private form and lets
-# `_rollback!` decide whether the rejection is recoverable.
-function _run_step!(solver, Q, workspace, dt, prepared, control)
-    getfield(solver, :subcycle) || return (step!(solver, Q, workspace, dt, prepared);
-                                           nothing)
-    return _subcycled_run_step!(_cold(solver), Q, workspace, dt, prepared,
-                                control)::Union{Nothing,SolverFailure}
-end
-
-function _subcycled_run_step!(solver, Q, workspace, dt, prepared, control)
-    status, guard = _subcycled_step_status!(solver, Q.patches, workspace.dQ.patches,
-                                             workspace.du.patches, dt, prepared,
-                                             control)
+# The Berger–Oliger step as a completed-or-rejected value: `step!` throws a
+# substep violation, and `run!` needs the same distinction without an
+# exception escaping the recursive stepping, so that `_rollback!` decides
+# whether the rejection is recoverable.
+function _subcycled_advance!(solver, policy::StepPolicy, observer, states, dQs, dus, dt,
+                             prepared::Bool, control)
+    status, guard = _subcycled_step_status!(solver, policy, observer, states, dQs, dus,
+                                             dt, prepared, control)
     status == 0 && return nothing
     status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
     status == SUBSTEP_INVALID && return _substep_invalid_failure(solver, guard, dt)
@@ -757,12 +936,12 @@ _child_count(count::Int, mc::Int) = 3 * (count - 1) + mc
 # step, which the Hermite shell reads as θ = (m − 1 + RKC) / 3; both are
 # unused at the root. The operation order at two levels is the one the
 # two-level driver established, so a two-level run is unchanged by the
-# recursion. Under the positivity limiter (`limiter`, the patches' limiters)
-# each stage's increment is limited after the Hermite endpoint's save, which
-# keeps the right-hand side, and a refined level's filter passes are limited.
-function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
-                         prepared::Bool, count::Int, parent_dt, m::Int,
-                         control, guard, limiter=nothing)
+# recursion. Under the positivity limiter (`policy`) each stage's increment is
+# limited after the Hermite endpoint's save, which keeps the right-hand side,
+# and a refined level's filter passes are limited.
+function _advance_level!(solver::Solver, ℓ::Int, policy::StepPolicy, observer, states,
+                         dQs, dus, t0, dt, prepared::Bool, count::Int, parent_dt,
+                         m::Int, control, guard)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[ℓ]
@@ -784,62 +963,25 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # - Recursive child stepping uses level ℓ + 1's communicator and is
     #   entered only by its owners.
     #
-    # Every owner of level ℓ enters this function. A tile shell imposition is
-    # entered only by the ranks that own that tile.
-    function shell!(θ)
-        _ledger_open!(solver, states, lev)
-        _foreach_tile(_tile_hermite_shell!, solver, lev, lev, states, θ, parent_dt)
-        _ledger!(solver, states, :shell, lev)
-    end
-    # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
-    # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
-    # patch of this level has its RHS before the gathers, since a child's box
-    # may span several of them.
-    # The box exchanges are entered by every owner of this level, so a rank
-    # waits here for the parent ranks holding its tiles' boxes; the rebalance
-    # measure counts that as waiting, not work.
-    function save_boxes!(at_end)
-        child === nothing && return nothing
-        wall_gather = time_ns()
-        save_level_boxes!(solver, child, states, dQs, at_end)
-        _charge_exchange!(solver, child, wall_gather)
-        _wait!(solver, wall_gather)
-        return nothing
-    end
-    for stage in 1:5
-        solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
-        first_prepared = prepared && stage == 1
-        ℓ > 1 && shell!((T(m - 1) + T(RKC[stage])) / T(3))
-        status = _level_rhs!(solver, lev, states,
-                             _limiter_stage_rhs(limiter, dQs, stage, dt), first_prepared,
-                             !first_prepared, lev.level_comm.comm)
-        status == 0 || return status
-        status = _refreshed_substep_status!(solver, lev, states, dt, stage,
-                                            count, control, guard)
-        status == 0 || return status
-        stage == 1 && save_boxes!(false)
-        _limit_level_stage!(limiter, solver, lev, states, dQs, dus, stage, dt)
-        _ledger_open!(solver, states, lev)
-        _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
-        _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
-        # Same-level consistency before the next stage's shell imposition,
-        # which leaves the shared faces to these records.
-        _sync_level!(solver, states, lev)
-        _ledger!(solver, states, :same_level, lev)
-    end
-    solver.tstage = t0 + dt
+    # Every owner of level ℓ enters this function.
+    unit = LevelUnit(lev, child, ℓ, m, parent_dt, count, control, guard)
+    shell!(θ) = _level_shell!(unit, observer, solver, states, θ)
+    save_boxes!(at_end) = _save_child_boxes!(unit, solver, states, dQs, at_end)
+    status = _rk_stages!(solver, unit, policy, observer, states, dQs, dus, t0, dt,
+                         prepared)
+    status == 0 || return status
     θ_end = T(m) / T(3)
     ℓ > 1 && shell!(θ_end)
-    _ledger_open!(solver, states, lev)
+    _ledger_open!(observer, solver, states, lev)
     for pi in lev.patches
         apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
     end
-    _ledger!(solver, states, :wall_enforce, lev)
+    _ledger!(observer, solver, states, :wall_enforce, lev)
     if ℓ > 1 && solver.filter_interval > 0 && count % solver.filter_interval == 0
-        _limited_level_filter!(limiter, solver, lev, states)
-        _ledger!(solver, states, :filter, lev)
+        _filter_level!(policy, solver, lev, states)
+        _ledger!(observer, solver, states, :filter, lev)
         _sync_level!(solver, states, lev)
-        _ledger!(solver, states, :same_level, lev)
+        _ledger!(observer, solver, states, :same_level, lev)
         # The filter is not shell-preserving; re-impose the forcing so the
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
@@ -852,7 +994,8 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         solver, lev, states, false, false, lev.level_comm.comm)
     # The t^{n+1} Hermite endpoint: the conditions are already enforced on
     # this state, so the right-hand side alone, with its primitives refreshed.
-    status = _level_rhs!(solver, lev, states, dQs, false, false, lev.level_comm.comm)
+    status = _level_rhs!(solver, lev, states, dQs, false, false, lev.level_comm.comm,
+                         observer)
     status == 0 || return status
     save_boxes!(true)
     dtf = dt / T(3)
@@ -861,9 +1004,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # count is fixed, so the two rank sets do not diverge.
     if child.level_comm.owned
         for mc in 1:3
-            status = _advance_level!(solver, ℓ + 1, states, dQs, dus,
-                            t0 + (mc - 1) * dtf, dtf, false,
-                            _child_count(count, mc), dt, mc, control, guard, limiter)
+            status = _advance_level!(solver, ℓ + 1, policy, observer, states, dQs, dus,
+                                     t0 + (mc - 1) * dtf, dtf, false,
+                                     _child_count(count, mc), dt, mc, control, guard)
             status == 0 || break
         end
     end
@@ -875,15 +1018,15 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # The root's restriction is `run!`'s, after its filter pass; every deeper
     # level restricts here so its parent's next substep sees the composite.
     if ℓ > 1
-        _ledger_open!(solver, states, lev)
+        _ledger_open!(observer, solver, states, lev)
         _restrict_tiles!(solver, states, child)
-        _ledger!(solver, states, :restrict, lev)
+        _ledger!(observer, solver, states, :restrict, lev)
         _reflux_apply!(solver, states, ℓ)
-        _ledger!(solver, states, :reflux, lev)
+        _ledger!(observer, solver, states, :reflux, lev)
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.
         _sync_level!(solver, states, lev)
-        _ledger!(solver, states, :same_level, lev)
+        _ledger!(observer, solver, states, :same_level, lev)
     end
     return UInt8(0)
 end
@@ -1631,24 +1774,33 @@ end
 
 # Under subcycling the fine level filters itself inside `subcycled_step!` at
 # its own step cadence, so the per-coarse-step pass here covers level 0 only.
-function filter_state!(solver::Solver, state::SimulationState)
-    _multipatch(solver) ||
-        return (filter_state!(sole_patch(solver), sole_state(state)); state)
-    _filter_patches!(solver, state.patches)
-    return state
-end
-function _filter_patches!(solver::Solver, states)
+filter_state!(solver::Solver, state::SimulationState) =
+    _filter_step!(solver, StandardStepPolicy(), nothing, state)
+
+# `run!`'s filter pass under `policy`. Under the limiter each patch's passes
+# are limited: the filter's rows at a node two same-level patches share
+# conserve, and the averaging that follows takes the mean of the node's two
+# limited updates (`_limited_level_filter!`); the shell imposition overwrites
+# a refined patch's node at a coarse-fine face, where the filter's row is the
+# identity.
+function _filter_step!(solver::Solver, policy::StepPolicy, observer,
+                       state::SimulationState)
+    if !_multipatch(solver)
+        _filter_patch!(policy, sole_patch(solver), sole_state(state))
+        return state
+    end
+    states = state.patches
     subcycle = getfield(solver, :subcycle)
     for lev in getfield(solver, :levels)
         # A subcycled refined level filters at its own cadence inside the
         # driver (`_advance_level!`).
         subcycle && lev.index > 0 && continue
-        _level_filter!(solver, lev, states)
+        _filter_level!(policy, solver, lev, states)
     end
-    _ledger!(solver, states, :filter)
+    _ledger!(observer, solver, states, :filter)
     sync_patches!(solver, states)
-    _ledger!(solver, states, :same_level)
-    return states
+    _ledger!(observer, solver, states, :same_level)
+    return state
 end
 
 function truncate_modes!(solver::Solver, state::SimulationState)

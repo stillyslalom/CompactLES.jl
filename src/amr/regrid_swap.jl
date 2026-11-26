@@ -1235,7 +1235,7 @@ end
 # back: the savepoint predates the layout and cannot be restored onto it.
 function _maybe_regrid!(solver::Solver, Q, workspace::Workspace, save,
                         control::StepControl=solver.control,
-                        floors::Tuple{Float64,Float64}=(0.0, 0.0))
+                        floors::Tuple{Float64,Float64}=(0.0, 0.0), observer=nothing)
     _multipatch(solver) || return false
     spec = getfield(solver, :regrid)
     spec === nothing && return false
@@ -1251,9 +1251,9 @@ function _maybe_regrid!(solver::Solver, Q, workspace::Workspace, save,
     compiled0 = _counted_compile_ns(spec.costs)
     wait0 = solver.wall_wait
     # `regrid!` with the savepoint refresh after the sweep.
-    _tag_coefficients!(solver, states)
+    _tag_coefficients!(solver, states, observer)
     changed = _regrid_impl!(solver, states, workspace, save)
-    _regrid_prime!(solver, states, workspace, nothing, changed)
+    _regrid_prime!(solver, states, workspace, nothing, changed, observer)
     control.validity_interval > 0 &&
         validate_state!(solver, Q; control=control,
                         stage="the state after a regrid check", floors=floors)

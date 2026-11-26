@@ -1459,7 +1459,8 @@ end
     rline(A) = A[rows, 1 + o[2], 1 + o[3]]
     CL._tag_coefficients!(r, rstates.patches)
     @test rline(r.patches[1].D_art[1])[inside] == whole.D[inside]
-    CL._regrid_prime!(r, rstates, CL.Workspace(rstates), nothing, false)
+    CL._regrid_prime!(r, rstates.patches, CL._patch_workspace(CL.Workspace(rstates)),
+                      nothing, false)
     @test all(iszero, rline(r.patches[1].D_art[1])[inside])
 end
 
@@ -1567,7 +1568,7 @@ end
     end
     lev = solver.levels[2]
     @test lev.phases == (true, true, false)
-    CL._sync_level_records!(solver, states, lev)
+    CL._sync_level_records!(solver, states.patches, lev)
     # Tile order is lattice order: A (18,18), B (24,18), C (18,24), D (24,24),
     # each 19 fine nodes; the common corner is A(19,19), B(1,19), C(19,1),
     # D(1,1).
@@ -1586,7 +1587,7 @@ end
     @test at(2, 0, 10) == 1.0
     # Idempotent: a second pass changes nothing.
     snapshot = [copy(parent(Q)) for Q in states.patches]
-    CL._sync_level_records!(solver, states, lev)
+    CL._sync_level_records!(solver, states.patches, lev)
     @test all(parent(states.patches[i]) == snapshot[i] for i in eachindex(states.patches))
 end
 
@@ -2248,7 +2249,7 @@ end
     s.step += 1
     CL._maybe_regrid!(s, states, ws, nothing)
     @test level_regions(s, 1) == [r]
-    @test all(Q -> all(isfinite, parent(Q)), states)
+    @test all(Q -> all(isfinite, parent(Q)), states.patches)
     ps = PatchSolver(s, s.patches[2])
     @test all(abs(states.patches[2][padded_index(ps, i, 1, 1), 1] - 1) < 1e-12
               for i in 1:ps.decomp.n_local[1])
@@ -2468,19 +2469,9 @@ end
         ratio = v ./ v0
         @test maximum(abs.(ratio .- round.(ratio))) < 1e-14
         @test maximum(ratio) ≈ 1 + top && minimum(ratio) ≈ 1
-        @test_throws ArgumentError line_sample(s, states.patches[1], :rho)
-        @test_throws ArgumentError field_slice(s, states.patches[1], :rho)
         @test_throws ArgumentError line_sample(s, states, :rho; index=(1, N + 1))
         @test_throws ArgumentError field_slice(s, states, :rho; index=0)
     end
-    # One patch: the state-vector form is the single-state one.
-    s = flat_solver(n_global=(N, 12, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall, wall, (PeriodicBC(), PeriodicBC())))
-    Q = allocate_state(s)
-    initialize!(s, Q, lin)
-    @test line_sample(s, [Q], :divergence; dim=2, index=(5, 1)) ==
-          line_sample(s, Q, :divergence; dim=2, index=(5, 1))
-    @test field_slice(s, [Q], :rho) == field_slice(s, Q, :rho)
     # After regrids: the tiles have moved, and a marked state still reads the
     # finest level at every root node the level-1 tiles hold.
     per = (PeriodicBC(), PeriodicBC())
@@ -2654,7 +2645,7 @@ end
     workspace = CL.Workspace(states)
     getfield(s, :regrid).checks += 1
     @test CL.regrid!(s, states, workspace, nothing)
-    @test empty_level(s, states) && length(workspace.dQ) == 1
+    @test empty_level(s, states) && length(workspace.dQ.patches) == 1
     @test isempty(getfield(s, :regrid).created[1])
     run!(s, states; tfinal=1.0, nmax=s.step + 10)
     @test !isempty(level_regions(s, 1))
@@ -2877,7 +2868,7 @@ end
     # A callback writing the refined state every third step, and one spoiling
     # a root density once at step 5, which rolls back to step 4.
     bump = Callback(EveryStep(3), (s, q) -> (foreach(Q -> parent(Q) .*= 1 + 1e-6,
-                                                     q[2:end]); false))
+                                                     q.patches[2:end]); false))
     spoil(done) = Callback(EveryStep(), (s, q) -> (s.step == 5 && !done[] &&
         (done[] = true; q.patches[1][padded_index(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
         false))
@@ -3127,7 +3118,7 @@ const PLANE_LEVEL_TOL = 1e-10
         fine, image = PatchSolver(s, s.patches[2]), PatchSolver(r, r.patches[2])
         nl = fine.decomp.n_local
         e = maximum(abs(q.patches[2][padded_index(fine, i, j, 1), c] -
-                        rq[2][padded_index(image, 3m - 1 + i, 3m - 1 + j, 1), c])
+                        rq.patches[2][padded_index(image, 3m - 1 + i, 3m - 1 + j, 1), c])
                     for i in 1:nl[1], j in 1:nl[2], c in 1:4)
         root, rimage = PatchSolver(s, s.patches[1]), PatchSolver(r, r.patches[1])
         e = max(e, maximum(abs(q.patches[1][padded_index(root, i, j, 1), c] -
@@ -3255,9 +3246,9 @@ const RZ_LEVEL_TOL = 1e-6
         Prim(rho=1.0 + 0.1g, u=(0.0, 0.0, 0.2), p=1.0 + 0.1g)
     end)
     b0 = CL._conserved_budget(s, q)
-    CL._ledger_begin!(s, q)
-    run!(s, q; tfinal=0.4)
-    r = CL._ledger_end!(s, q)
+    ledger = CL._ledger_begin!(s, q)
+    run!(s, q; tfinal=0.4, observer=ledger)
+    r = CL._ledger_end!(ledger, s, q)
     b1 = CL._conserved_budget(s, q)
     drift = (b1.total_mass - b0.total_mass) / b0.total_mass
     @info "r-z composite mass drift" drift
@@ -3523,7 +3514,7 @@ const AXIS_FILTER_TOL = 2e-5
     end
     @test sf.step == n
     finef = PatchSolver(sf, sf.patches[2])
-    ef = maximum(abs(qf[2][padded_index(finef, i, 1, 1), c] -
+    ef = maximum(abs(qf.patches[2][padded_index(finef, i, 1, 1), c] -
                      fq[padded_index(pf, i, 1, 1), c])
                  for i in 1:finef.decomp.n_local[1], c in 1:5)
     @info "axis level under :filter against the uniform run" ef
@@ -3569,7 +3560,7 @@ const AXIS_FILTER_TOL = 2e-5
     rest, rq = corner(N; transport=ConstantTransport(mu0=1e-3), filter_interval=1,
                       art=ArtificialProperties(enabled=true, detector=:d8))
     initialize!(rest, rq, (r, θ, z) -> Prim(rho=1.3, u=(0.0, 0.0, 0.0), p=0.9))
-    q0 = [copy(parent(x)) for x in rq]
+    q0 = [copy(parent(x)) for x in rq.patches]
     run!(rest, rq; tfinal=1.0, nmax=10)
     drift = 0.0
     for (i, p) in enumerate(getfield(rest, :patches))
@@ -3604,9 +3595,9 @@ const AXIS_FILTER_TOL = 2e-5
     # telescope to the r-weighted drift of the mass.
     s, q = corner(N; art=ArtificialProperties(enabled=false))
     b0 = CL._conserved_budget(s, q)
-    CL._ledger_begin!(s, q)
-    run!(s, q; tfinal=0.2)
-    r = CL._ledger_end!(s, q)
+    ledger = CL._ledger_begin!(s, q)
+    run!(s, q; tfinal=0.2, observer=ledger)
+    r = CL._ledger_end!(ledger, s, q)
     b1 = CL._conserved_budget(s, q)
     drift = (b1.total_mass - b0.total_mass) / b0.total_mass
     @info "corner composite mass drift" drift
@@ -3690,7 +3681,7 @@ const PLACED_NSCBC_TOL = 5e-6
     # beyond the face, spans the interpolation order.
     cut[] = 0.99
     s10, q10 = placed(level_interpolation_order=10)
-    @test CL.tagged_region(s10, q10[1]) == BlockRegion((N - 6, 0, 0), (6, 1, 1))
+    @test CL.tagged_region(s10, q10.patches[1]) == BlockRegion((N - 6, 0, 0), (6, 1, 1))
     # A buffered end inside the margin band moves onto the face, where a
     # parent-fed face would have no room for its box.
     cut[], upper[] = 0.8, 0.93
@@ -4210,8 +4201,8 @@ const SEAM_REGRID_TOL = 5e-9
         initialize!(sv, q, wave(s, dims))
         return sv, q
     end
-    steps!(s, q, k0, k1, n, T) = for k in k0:k1
-        run!(s, q; tfinal=T * k / n)
+    steps!(s, q, k0, k1, n, T, observer=nothing) = for k in k0:k1
+        run!(s, q; tfinal=T * k / n, observer=observer)
     end
     # The largest difference between run `a` and run `b`, its translation by
     # `s` root nodes along every resolved dimension (or by `s[d]` along each):
@@ -4294,9 +4285,9 @@ const SEAM_REGRID_TOL = 5e-9
             local q = allocate_state(sv)
             initialize!(sv, q, step_ic(s))
             local m0 = volume_integral(sv, q, :rho)
-            CL._ledger_begin!(sv, q)
-            steps!(sv, q, 1, 30, 30, 0.3)
-            local led = CL._ledger_end!(sv, q)
+            local ledger = CL._ledger_begin!(sv, q)
+            steps!(sv, q, 1, 30, 30, 0.3, ledger)
+            local led = CL._ledger_end!(ledger, sv, q)
             (s=sv, q=q, drift=(volume_integral(sv, q, :rho) - m0) / m0,
              reflux=get(led.pieces, (:reflux, 0), [0.0])[1])
         end
@@ -4320,9 +4311,9 @@ const SEAM_REGRID_TOL = 5e-9
     # the seam.
     ledgers = map(((a, qa), (b, qb))) do (s, q)
         local b0 = CL._conserved_budget(s, q)
-        CL._ledger_begin!(s, q)
-        steps!(s, q, 1, 12, 12, 0.1)
-        local r = CL._ledger_end!(s, q)
+        local ledger = CL._ledger_begin!(s, q)
+        steps!(s, q, 1, 12, 12, 0.1, ledger)
+        local r = CL._ledger_end!(ledger, s, q)
         local b1 = CL._conserved_budget(s, q)
         (drift=(b1.total_mass - b0.total_mass) / b0.total_mass, r=r,
          mass=b0.total_mass)

@@ -55,8 +55,9 @@ function test_composite_budgets()
     # The budget ledger over the same three-level subcycled run: its hooks
     # sit inside the recursion that only each level's owners enter and do
     # not reduce, so the pieces must match the undecomposed run.
-    ledger(s, Q) = (CL._ledger_begin!(s, Q); run!(s, Q; tfinal=1.0, nmax=4);
-                    CL._ledger_end!(s, Q))
+    ledger(s, Q) = (L = CL._ledger_begin!(s, Q);
+                    run!(s, Q; tfinal=1.0, nmax=4, observer=L);
+                    CL._ledger_end!(L, s, Q))
     rref = ledger(deepref, Qdeepref)
     r = ledger(deep, Qdeep)
     z = zeros(length(r.initial))

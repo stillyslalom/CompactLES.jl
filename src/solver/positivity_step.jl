@@ -164,113 +164,25 @@ end
 
 # --- The limited step ------------------------------------------------------
 
-# `step!` with the stage limiter between each stage's right-hand side and its
-# low-storage update; with no face limited it makes the calls of `step!` in
-# the same order and the same arithmetic.
-function _limited_patch_step!(solver, Q, dQ, du, dt, prepared::Bool)
-    lim = only(getfield(solver, :positivity).limiters)
-    ps = sole_patch(solver)
-    decomp = ps.decomp
-    for stage in 1:5
-        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
-        first_prepared = prepared && stage == 1
-        if !first_prepared
-            _ledger_open!(solver, Q)
-            apply_bcs!(ps, Q)
-            _ledger!(solver, Q, :wall_enforce)
-        end
-        T = eltype(lim.eps_rho)
-        compute_rhs!(ps, Q, _LimiterRHS(dQ, lim, T(RKA[stage]), T(dt)),
-                     first_prepared)
-        _ledger_faces!(solver, 1)
-        _limit_stage!(lim, ps, Q, dQ, du, stage, dt)
-        _ledger_open!(solver, Q)
-        _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
-                    RKA[stage], RKB[stage], dt)
-        _ledger_update!(solver, Q, dQ, RKA[stage], RKB[stage], dt)
-    end
-    solver.tstage = solver.t + dt
-    _ledger_open!(solver, Q)
-    apply_bcs!(ps, Q)
-    _ledger!(solver, Q, :wall_enforce)
-    _validate_transport_state!(ps, Q)
-    return nothing
-end
+# The limiters a step of this rank's patches takes: a single-patch solver's
+# one, built with the solver, or those following a refined solver's patches.
+_step_limiters(solver) =
+    _multipatch(solver) ? _follow_patches!(solver, getfield(solver, :positivity)) :
+                          getfield(solver, :positivity).limiters
 
-# The multi-patch `step!`, with the stage limiter of every patch
-# (`_limit_level_stage!`) between the right-hand sides and the stage updates,
-# level by level as `step!` takes them; a subcycled solver takes
-# `subcycled_step!`'s schedule with the limiter (`_advance_level!`). A patch's
-# lines end at a same-level interface as at a wall, with the weights of the
-# interface rows or of an open end, and `_exchange_interface_theta!` has what
-# the two patches share there. A refined patch's lines end at a coarse-fine
-# face in the same way, and the end node there, which the parent's shell
-# overwrites after the stage, is left alone as a Dirichlet node is. Returns a
-# `SolverFailure` where the subcycled schedule rejects a substep, and
-# `nothing` otherwise.
-function _limited_run_step!(solver, state::SimulationState, workspace, dt,
-                            prepared::Bool, control)
-    dQs, dus = workspace.dQ.patches, workspace.du.patches
-    _multipatch(solver) ||
-        return _limited_patch_step!(solver, sole_state(state), dQs[1], dus[1], dt,
-                                    prepared)
-    states = state.patches
-    lims = _follow_patches!(solver, getfield(solver, :positivity))
-    getfield(solver, :subcycle) &&
-        return _limited_subcycled_step!(solver, states, dQs, dus, dt, prepared, control,
-                                        lims)
-    patches = getfield(solver, :patches)
-    levels = getfield(solver, :levels)
-    for stage in 1:5
-        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
-        first_prepared = prepared && stage == 1
-        limited = _limiter_stage_rhs(lims, dQs, stage, dt)
-        for lev in levels
-            status = _level_rhs!(solver, lev, states, limited, first_prepared)
-            _check_transport_status(solver, status)
-        end
-        for lev in levels
-            _limit_level_stage!(lims, solver, lev, states, dQs, dus, stage, dt)
-        end
-        for lev in levels
-            _ledger_open!(solver, states, lev)
-            _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
-            _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
-        end
-        _ledger_open!(solver, states)
-        sync_patches!(solver, states)
-        _ledger!(solver, states, :same_level)
-        if length(levels) > 1
-            prolong_level_ghosts!(solver, states)
-            _ledger!(solver, states, :shell)
-        end
-    end
-    solver.tstage = solver.t + dt
-    _ledger_open!(solver, states)
-    for (i, p) in enumerate(patches)
-        apply_bcs!(PatchSolver(solver, p), states[i])
-    end
-    _ledger!(solver, states, :wall_enforce)
-    _validate_transport_state!(solver, states)
-    return nothing
-end
-
-# `_subcycled_run_step!` with the stage limiter on every level's stages and the
-# filter limiter on every refined level's passes (`_advance_level!`).
-function _limited_subcycled_step!(solver, states, dQs, dus, dt, prepared::Bool,
-                                  control, lims)
-    status, guard = _subcycled_step_status!(solver, states, dQs, dus,
-                                             dt, prepared, control, lims)
-    status == 0 && return nothing
-    status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
-    status == SUBSTEP_INVALID && return _substep_invalid_failure(solver, guard, dt)
-    _check_transport_status(solver, status)
-    return nothing
-end
+# `run!`'s step under the limiter: the step engine (timestep_rk.jl) with the
+# `LimitedStepPolicy`. A patch's lines end at a same-level interface as at a
+# wall, with the weights of the interface rows or of an open end, and
+# `_exchange_interface_theta!` has what the two patches share there. A refined
+# patch's lines end at a coarse-fine face in the same way, and the end node
+# there, which the parent's shell overwrites after the stage, is left alone
+# as a Dirichlet node is.
+_limited_advance!(solver, observer, Q, workspace, dt, prepared::Bool, control) =
+    _advance!(solver, LimitedStepPolicy(_step_limiters(solver)), observer, Q,
+              workspace.dQ, workspace.du, dt, prepared, control)
 
 # The right-hand side arrays a limited stage hands `_level_rhs!`, one per
-# patch (`_LimiterRHS`); the plain arrays where the step is not limited.
-_limiter_stage_rhs(::Nothing, dQs, stage::Int, dt) = dQs
+# patch (`_LimiterRHS`).
 function _limiter_stage_rhs(lims::Vector{PositivityLimiter}, dQs, stage::Int, dt)
     T = eltype(first(lims).eps_rho)
     return [_LimiterRHS(dQs[i], lims[i], T(RKA[stage]), T(dt)) for i in eachindex(dQs)]
@@ -397,7 +309,6 @@ end
 # same-level interface shares its face values and θ with the other patches of
 # its extent (the workspace) and takes its corrections at once. The shared
 # planes are the level's records of the direction, in the level's communicator.
-_limit_level_stage!(::Nothing, solver, lev, states, dQs, dus, stage::Int, dt) = nothing
 function _limit_level_stage!(lims::Vector{PositivityLimiter}, solver, lev, states, dQs, dus,
                              stage::Int, dt)
     first(lims).active || return nothing
@@ -1442,29 +1353,9 @@ end
 # arithmetic. A fold's face takes its limit from node 1 alone: the filter's
 # face flux there vanishes for an even field and not for an odd one.
 
-# The multi-patch `filter_state!`, each patch's passes limited. The filter's
-# rows at a node two same-level patches share conserve, and the averaging that
-# follows takes the mean of the node's two limited updates
-# (`_limited_level_filter!`); the shell imposition overwrites a refined
-# patch's node at a coarse-fine face, where the filter's row is the identity.
-# A subcycled refined level filters inside `_advance_level!`
-# (`_limited_level_filter!`).
-function _limited_filter_state!(solver, state::SimulationState)
-    _multipatch(solver) ||
-        return _limited_filter_pass!(only(getfield(solver, :positivity).limiters),
-                                     sole_patch(solver), sole_state(state))
-    states = state.patches
-    lims = _follow_patches!(solver, getfield(solver, :positivity))
-    subcycle = getfield(solver, :subcycle)
-    for lev in getfield(solver, :levels)
-        subcycle && lev.index > 0 && continue
-        _limited_level_filter!(lims, solver, lev, states)
-    end
-    _ledger!(solver, states, :filter)
-    sync_patches!(solver, states)
-    _ledger!(solver, states, :same_level)
-    return states
-end
+# `run!`'s filter pass under the limiter (`_filter_step!`, timestep_rk.jl).
+_limited_filter_state!(solver, state::SimulationState, observer=nothing) =
+    _filter_step!(solver, LimitedStepPolicy(_step_limiters(solver)), observer, state)
 
 # `_level_filter!` with each patch's passes limited, and `_level_filter!`
 # itself where the step is not limited. Where the conservative rows close a
@@ -1472,8 +1363,6 @@ end
 # as the stage limiter's do (`_limit_level_stage!`): each patch's θ, the
 # exchange that gives the faces about a shared node one θ on both patches,
 # then the corrections.
-_limited_level_filter!(::Nothing, solver, lev, states) =
-    _level_filter!(solver, lev, states)
 function _limited_level_filter!(lims::Vector{PositivityLimiter}, solver, lev, states)
     patches = getfield(solver, :patches)
     if !any(i -> any(any, lims[i].conservative), lev.patches)

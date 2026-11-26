@@ -164,9 +164,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # `nothing` under the default low-storage integrator.
     implicit::Union{Nothing,ImexIntegrator{T}}
     # The positivity limiters (positivity_types.jl), one per patch this rank
-    # holds, or `nothing` without the limiter. Read by
-    # `run!` alone, which steps a limited solver through `_limited_run_step!`
-    # behind a function barrier, so the field is abstractly typed.
+    # holds, or `nothing` without the limiter. Read by `run!` alone, which
+    # steps a limited solver through `_limited_advance!` behind a function
+    # barrier, so the limiters' element type is abstract.
     positivity::Union{Nothing,PatchLimiters}
     # The `Problem` and `Numerics` that `setup` built this solver from, as
     # `(problem = ..., numerics = ...)`, or `nothing` for a solver built by

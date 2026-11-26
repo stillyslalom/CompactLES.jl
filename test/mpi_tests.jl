@@ -3641,7 +3641,7 @@ function test_tiled_level()
         for (li, ti) in zip(lev.patches, lev.tiles)
             fill!(parent(states.patches[li]), Float64(ti))
         end
-        CL._sync_level_records!(solver, states, lev)
+        CL._sync_level_records!(solver, states.patches, lev)
         # Tiles A (12,12), B (24,12), C (12,24), D (24,24) of 37 fine nodes,
         # tile ids 1..4 in lattice order, carrying 1..4.
         function owned(t, i, j)

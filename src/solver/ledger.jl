@@ -21,9 +21,14 @@
 # Everything a hook does is rank-local: no hook reduces, so a hook inside
 # the subcycled recursion, which only a level's owners enter, cannot strand
 # a rank, and a patch moving between ranks at a regrid is summed correctly
-# at the end. `_ledger_end!` is the one collective. The hooks cost a field
-# load and a branch when the ledger is off; `_ledger_mark!` is compiled once,
-# unspecialized, so it adds no per-solver-type code to the drivers.
+# at the end. `_ledger_end!` is the one collective.
+#
+# The ledger is the observer of a run: `_ledger_begin!` returns it,
+# `run!(...; observer = ledger)` hands it down through the step engine to
+# every hook, and `_ledger_end!` reads it. A run without one passes `nothing`,
+# for which every hook is an empty method, so the drivers compiled for it hold
+# no ledger code; `_ledger_mark!` is compiled once, unspecialized, so an
+# observed run adds no per-solver-type code beyond the calls.
 
 """The mechanisms a ledger piece is attributed to, in report order."""
 const LEDGER_PHASES = (:rhs, :wall_enforce, :filter, :same_level, :shell, :restrict,
@@ -56,39 +61,39 @@ BudgetLedger() = BudgetLedger(false, 0, 0, Int[], Vector{Float64}[], Float64[],
                               Dict{Tuple{Symbol,Int},Vector{Float64}}(),
                               Vector{Float64}[], Matrix{Float64}[], Matrix{Float64}[])
 
-const BUDGET_LEDGER = BudgetLedger()
+# The hooks, which take the run's observer first: `nothing`, for which each is
+# an empty inlined method and the drivers' compiled code carries no trace of
+# it, or the ledger. `scope` is a `Level` (its patches), a held patch index,
+# or `nothing` (every held patch).
+@inline _ledger!(::Nothing, solver, states, phase::Symbol, scope=nothing) = nothing
+@inline _ledger!(L::BudgetLedger, solver, states, phase::Symbol, scope=nothing) =
+    (_ledger_mark!(L, solver, states, phase, scope); nothing)
 
-# The hooks. `scope` is a `Level` (its patches), a held patch index, or
-# `nothing` (every held patch). The test is a Bool field of a concrete
-# constant, so the drivers' inferred code gains no non-concrete value and no
-# dispatch site.
-@inline function _ledger!(solver, states, phase::Symbol, scope=nothing)
-    BUDGET_LEDGER.on && _ledger_mark!(BUDGET_LEDGER, solver, states, phase, scope)
-    return nothing
-end
-
-@inline _ledger_open!(solver, states, scope=nothing) =
-    _ledger!(solver, states, :unattributed, scope)
+@inline _ledger_open!(observer, solver, states, scope=nothing) =
+    _ledger!(observer, solver, states, :unattributed, scope)
 
 # After the stage update of `scope`'s patches: the recurrence, then the mark.
-@inline function _ledger_update!(solver, states, dQs, A, B, dt, scope=nothing)
-    BUDGET_LEDGER.on &&
-        _ledger_stage!(BUDGET_LEDGER, solver, states, dQs, A, B, dt, scope)
-    return nothing
-end
+@inline _ledger_update!(::Nothing, solver, states, dQs, A, B, dt, scope=nothing) =
+    nothing
+@inline _ledger_update!(L::BudgetLedger, solver, states, dQs, A, B, dt, scope=nothing) =
+    (_ledger_stage!(L, solver, states, dQs, A, B, dt, scope); nothing)
 
 # After `compute_rhs!` of held patch `pi`, while the pooled flux is its own.
-@inline function _ledger_faces!(solver, pi::Int)
-    BUDGET_LEDGER.on && _ledger_capture!(BUDGET_LEDGER, solver, pi)
-    return nothing
-end
+@inline _ledger_faces!(::Nothing, solver, pi::Int) = nothing
+@inline _ledger_faces!(L::BudgetLedger, solver, pi::Int) =
+    (_ledger_capture!(L, solver, pi); nothing)
 
 # A regrid, a rollback or anything else that replaces the layout: every held
 # patch rebased, the change per level attributed to `phase`.
-@inline function _ledger_rebase!(solver, states, phase::Symbol)
-    BUDGET_LEDGER.on && _ledger_rebase_all!(BUDGET_LEDGER, solver, states, phase)
-    return nothing
-end
+@inline _ledger_rebase!(::Nothing, solver, states, phase::Symbol) = nothing
+@inline _ledger_rebase!(L::BudgetLedger, solver, states, phase::Symbol) =
+    (_ledger_rebase_all!(L, solver, states, phase); nothing)
+
+# Whether a tile phase carries the ledger among its arguments. Its hooks write
+# the rank's accumulators, so such a phase runs its tiles one after another
+# (`_foreach_tile`).
+@inline _observed() = false
+@inline _observed(a, rest...) = a isa BudgetLedger || _observed(rest...)
 
 _ledger_held(solver) = length(getfield(solver, :patches))
 _ledger_state(states::Vector, pi) = states[pi]
@@ -110,17 +115,18 @@ function _ledger_piece!(L::BudgetLedger, phase::Symbol, level::Int)
 end
 
 """
-    _ledger_begin!(solver, Q)
+    _ledger_begin!(solver, Q) -> BudgetLedger
 
-Start attributing the composite budget of the state `Q` to
-the mechanisms that change it, from this state. Rank-local; every rank of
-`solver.comm` calls it before the run and `_ledger_end!` after. Host storage
-only: the budget is a host sweep.
+Start attributing the composite budget of the state `Q` to the mechanisms
+that change it, from this state, and return the ledger, to be passed to
+`run!` as `observer`. Rank-local; every rank of `solver.comm` calls it before
+the run and `_ledger_end!` after. Host storage only: the budget is a host
+sweep.
 """
 function _ledger_begin!(solver::Solver, Q)
     _cpu_storage(_ledger_state(Q, 1)) ||
         error("the budget ledger is a host sweep; a DeviceBackend is not supported")
-    L = BUDGET_LEDGER
+    L = BudgetLedger()
     L.n = solver.equations.n_species + 4
     empty!(L.pieces)
     _ledger_reset!(L, solver, Q)
@@ -343,9 +349,9 @@ function _ledger_covered_faces!(J, ps, patch, r::BlockRegion, imposed, comps)
 end
 
 """
-    _ledger_end!(solver, Q) -> NamedTuple
+    _ledger_end!(ledger, solver, Q) -> NamedTuple
 
-Close the ledger on the state `Q` and reduce it over `solver.comm`: every
+Close `ledger` on the state `Q` and reduce it over `solver.comm`: every
 rank calls it. Returns `pieces`, a `Dict` from `(phase, level)` to the change
 of each budget channel (species masses, then the three momenta, then the
 energy) that phase made on that level; `initial` and `final`, the composite
@@ -353,8 +359,7 @@ budgets; and `residual`, the final less the initial less the sum of the
 `LEDGER_PHASES` pieces, the round-off of the telescoping sum.
 `close = false` reports the ledger so far and leaves it open.
 """
-function _ledger_end!(solver::Solver, Q; close::Bool=true)
-    L = BUDGET_LEDGER
+function _ledger_end!(L::BudgetLedger, solver::Solver, Q; close::Bool=true)
     L.on || error("_ledger_end!: no ledger is open")
     _ledger_mark!(L, solver, Q, :unattributed, nothing)
     L.on = !close

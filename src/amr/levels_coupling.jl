@@ -868,6 +868,7 @@ end
 # into the edge and corner ghosts. The trailing per-patch halo exchange is
 # the caller's, as for the root.
 function _sync_level_records!(solver, states, lev::Level)
+    states = _patch_states(states)
     any(lev.phases) || return states
     patches = getfield(solver, :patches)
     comm = lev.level_comm.comm
