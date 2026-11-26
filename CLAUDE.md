@@ -240,7 +240,7 @@ them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the intended ones, so *any* report elsewhere is a regression. The
 baseline is one site in `apply_bcs!` (`enforce!`), six in `compute_rhs!`,
-and 70 in `step!`: those seven and 63 inside `_build_reflux!`, which rebuilds
+and 73 in `step!`: those seven and 66 inside `_build_reflux!`, which rebuilds
 the coarse-fine captures after a layout change, not per step. It takes the
 solver `@nospecialize`, so it is compiled once for the abstract `Solver` and
 its calls on the solver's fields dispatch. From Julia 1.12 the call through
