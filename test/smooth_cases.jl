@@ -227,8 +227,9 @@ end
 function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
                         filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(),
                         precision=Float64, art=ArtificialProperties(enabled=false),
-                        kwargs...)
-    solver = _case_solver(n_global, ((0.0, L), (0.0, 1.0), (0.0, 1.0)), bcs; deriv, filt,
+                        origin=(0.0, 0.0, 0.0), kwargs...)
+    domain = ntuple(d -> (origin[d], origin[d] + (L, 1.0, 1.0)[d]), 3)
+    solver = _case_solver(n_global, domain, bcs; deriv, filt,
                           filter_interval, filter_cfl, cfl, precision,
                           transport=ConstantTransport{Float64}(mu0=mu, Pr=Pr), sources,
                           art, kwargs...)
