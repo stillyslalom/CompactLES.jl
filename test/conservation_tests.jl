@@ -176,7 +176,8 @@ end
                     eos=eos, ic=nothing),
             Numerics(n_global=(96, 1, 1),
                      amr=AMR(initial=BlockRegion((36, 0, 0), (24, 1, 1)), subcycle=subcycle,
-                             regrid_interval=6, tag_buffer=0)); tag_predicate=(p, I) -> 0.6 < xcoord(p, 1, interior_index(p, I)[1]) < 0.8)
+                             regrid_interval=6, tag_buffer=0));
+            tag_predicate=(p, I) -> 0.6 < xcoord(p, 1, interior_index(p, I)[1]) < 0.8)
         Q = allocate_state(s)
         initialize!(s, Q, wave)
         ledger = CL._ledger_begin!(s, Q)

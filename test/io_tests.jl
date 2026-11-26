@@ -311,7 +311,8 @@ end
     stem = joinpath(dir, "f32")
     mk32() = build_solver(
         Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))),
-                bcs=ntuple(_ -> io_per, 3), transport=ConstantTransport{T}(), ic=nothing),
+                bcs=ntuple(_ -> io_per, 3), transport=ConstantTransport{T}(),
+                eos=IdealSpecies(T, "gas"; R=1.0, gamma=1.4), ic=nothing),
         Numerics(n_global=(12, 12, 12), art=ArtificialProperties{T}(enabled=false),
                  deriv=lele_d1_6(T), filter=compact_filter(T(0.45), T)))
     s = mk32()

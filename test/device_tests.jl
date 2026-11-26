@@ -299,7 +299,7 @@ end
                     ic=nothing),
             Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
                      filter=StateFilter(interval=0), execution=Execution(storage=backend),
-                     amr=AMR(initial=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
+                     amr=AMR(; initial=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
                              subcycle, regrid_interval, tag_buffer,
                              level_interpolation_order)))
         states = allocate_state(solver)
@@ -473,7 +473,7 @@ end
                                                       divergence=interface_divergence,
                                                       conservative=false),
                      execution=Execution(storage=backend),
-                     amr=AMR(initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
+                     amr=AMR(; initial=BlockRegion((85, 0, 0), (31, 1, 1)), subcycle=true,
                              regrid_interval=5, tile=8, tag_sensor_threshold)))
         states = allocate_state(s)
         initialize!(s, states, ic)

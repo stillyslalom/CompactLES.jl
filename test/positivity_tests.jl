@@ -734,8 +734,8 @@ end
         # interpolant of the parent's endpoint states instead.
         for flux in (:closure, :ghost)
             s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-                                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                                     per3[3]),
+                                     bcs=((SlipWallBC(), SlipWallBC()),
+                                          (SlipWallBC(), SlipWallBC()), per3[3]),
                                      eos=POS_GAS, ic=nothing),
                              Numerics(n_global=(48, 48, 1),
                                       art=ArtificialProperties(enabled=true), cfl=0.4,

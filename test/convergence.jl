@@ -835,7 +835,7 @@ const STAGGERED_METRIC_CASES = (
      window=(r, θ, φ) -> r < 0.5),
     (name="staggered L, spherical poles", Ns=(16, 32, 64), expect=5.0, tol=0.5,
      recorded=5.33, dim=2,
-     build=N -> build_solver(Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + π), (0.0, 0.0 + 2π)),
+     build=N -> build_solver(Problem(domain=((0.5, 1.5), (0.0, π), (0.0, 2π)),
                                      metric=SphericalMetric(),
                                      bcs=((SlipWallBC(), SlipWallBC()), (PoleBC(), PoleBC()),
                                      per3[3]),

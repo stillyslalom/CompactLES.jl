@@ -303,8 +303,8 @@ function test_positivity_limiter()
                 (sub ? ", subcycled" : "") * ", :$flux")
         function refined(comm_here)
             s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-                                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                                     per3[3]),
+                                     bcs=((SlipWallBC(), SlipWallBC()),
+                                          (SlipWallBC(), SlipWallBC()), per3[3]),
                                      eos=gas, ic=nothing),
                              Numerics(n_global=(48, 48, 1),
                                       art=ArtificialProperties(enabled=true), cfl=0.4,
@@ -431,8 +431,8 @@ function test_positivity_limiter()
     section("shell fallback: a decomposed box against one rank")
     function boxed(comm_here)
         s = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-                                 bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                                 per3[3]),
+                                 bcs=((SlipWallBC(), SlipWallBC()),
+                                      (SlipWallBC(), SlipWallBC()), per3[3]),
                                  eos=gas, transport=ConstantTransport(mu0=0.0), ic=nothing),
                          Numerics(n_global=(48, 48, 1),
                                   art=ArtificialProperties(enabled=true), cfl=0.4,

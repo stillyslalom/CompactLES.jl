@@ -491,7 +491,8 @@ function _mpi_suite_workload(cpu)
                                                                        limited_ghost=true),
                                       execution=Execution(comm=world),
                                       amr=AMR(initial=BlockRegion((0, 0, 0), (17, 1, 17)),
-                                              regrid_interval=0, subcycle=sub, tile=8))), corner, 10)
+                                              regrid_interval=0, subcycle=sub, tile=8))),
+                corner, 10)
     end
     s = build_solver(
         Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(walls, walls, per),

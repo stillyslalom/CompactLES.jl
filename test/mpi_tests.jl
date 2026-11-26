@@ -543,8 +543,9 @@ function test_symmetry_plane()
                                                 IdealSpecies{T}("b", T(0.7), T(1.3))]),
                                    transport=ConstantTransport{T}(mu0=T(0.01)), ic=nothing),
                            Numerics(n_global=ng,
-                                    art=ArtificialProperties{T}(enabled=true, detector=detector,
-                                                           species_flux=channel),
+                                    art=ArtificialProperties{T}(enabled=true,
+                                                                detector=detector,
+                                                                species_flux=channel),
                                     deriv=lele_d1_6(T), cfl=T(0.4),
                                     filter=StateFilter(compact_filter(T(0.45), T),
                                                        interval=1, cfl=zero(T)),
@@ -2238,7 +2239,8 @@ function subdivision_carry()
         Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
         Numerics(n_global=(48, 48, 1),
                  amr=AMR(initial=BlockRegion((16, 16, 0), (17, 17, 1)), regrid_interval=1,
-                         tag_threshold=Inf, tag_buffer=0, tile=16, subdivide_lattice=false)); tag_predicate=inside)
+                         tag_threshold=Inf, tag_buffer=0, tile=16, subdivide_lattice=false));
+        tag_predicate=inside)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.3, 0.2, 0), p=1.0, rho=1.0 + 0.1 * sin(2π * x) * sin(2π * y)))
@@ -2441,7 +2443,8 @@ function test_lattice_nodes()
             Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3, ic=nothing),
             Numerics(n_global=(48, 48, 1),
                      amr=AMR(initial=BlockRegion((16, 16, 0), (17, 17, 1)),
-                             regrid_interval=1, tag_threshold=Inf, tag_buffer=0, tile=16)); tag_predicate=inside)
+                             regrid_interval=1, tag_threshold=Inf, tag_buffer=0, tile=16));
+            tag_predicate=inside)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(0.3, 0.2, 0), p=1.0, rho=1.0 + 0.1 * sin(2π * x) * sin(2π * y)))
@@ -2520,7 +2523,8 @@ function test_placed_levels()
                      filter=StateFilter(interval=1), execution=Execution(comm=comm_here),
                      amr=AMR(initial=BlockRegion((64, 0, 0), (17, 1, 1)), regrid_interval=3,
                              tag_threshold=Inf, tag_buffer=2, tile=tile,
-                             level_boundaries=true, subdivide_lattice=false)); tag_predicate=window)
+                             level_boundaries=true, subdivide_lattice=false));
+            tag_predicate=window)
         local q = allocate_state(s)
         initialize!(s, q, wave)
         return s, q
@@ -2591,7 +2595,8 @@ function test_seam_levels()
                              regrid_interval=regrid ? 3 : 0, tag_threshold=Inf,
                              tag_buffer=2, tile=tile, rebalance=rebalance,
                              rebalance_persist=rebalance_persist, level_boundaries=regrid,
-                             subdivide_lattice=false)); tag_predicate=regrid ? window : nothing)
+                             subdivide_lattice=false));
+            tag_predicate=regrid ? window : nothing)
         local q = allocate_state(s)
         initialize!(s, q, wave)
         return s, q
@@ -2868,7 +2873,8 @@ function test_state_validity()
     for ax in 1:3
         n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = build_solver(
-            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos, ic=nothing),
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos,
+                    ic=nothing),
             Numerics(n_global=n_global, art=ArtificialProperties(enabled=false),
                      execution=Execution(dims=splitdims(ax))))
         Q = allocate_state(solver)
@@ -2935,7 +2941,8 @@ function test_positivity_floor()
     for ax in 1:3
         n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = build_solver(
-            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos, ic=nothing),
+            Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3, eos=eos,
+                    ic=nothing),
             Numerics(n_global=n_global, art=ArtificialProperties(enabled=false),
                      execution=Execution(dims=splitdims(ax))))
         others = filter(d -> d != ax, 1:3)
@@ -3072,8 +3079,9 @@ function test_two_patch_layout()
                 transport=ConstantTransport(mu0=5e-3), ic=nothing),
         Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=false),
                  filter=StateFilter(interval=0),
-                 patch_interfaces=PatchInterfaces(flux=:closure, rhs=:onesided,
-                                                  divergence=lele_d1_6(closures=:brady_livescu)),
+                 patch_interfaces=PatchInterfaces(
+                     flux=:closure, rhs=:onesided,
+                     divergence=lele_d1_6(closures=:brady_livescu)),
                  execution=Execution(patch_grid=(2, 1, 1))))
     statesbl = allocate_state(solverbl)
     initialize!(solverbl, statesbl, (x, y, z) ->

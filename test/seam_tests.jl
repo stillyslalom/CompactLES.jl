@@ -56,10 +56,10 @@ end
     # derivatives of a constant for a uniform state at rest, and the sources
     # carry no pressure, so the right-hand side is at round-off without that
     # discrete value.
-    solver = build_solver(Problem(domain=((1.0, 1.0 + 1.0), (π/4, π/4 + (π/2)), (0.0, 0.0 + 2π)),
+    solver = build_solver(Problem(domain=((1.0, 2.0), (π/4, π/4 + π/2), (0.0, 2π)),
                                   metric=SphericalMetric(),
-                                  bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                                  per3[3]),
+                                  bcs=((SlipWallBC(), SlipWallBC()),
+                                       (SlipWallBC(), SlipWallBC()), per3[3]),
                                   ic=nothing),
                           Numerics(n_global=(16, 32, 12),
                                    art=ArtificialProperties(enabled=false)))
@@ -96,8 +96,8 @@ end
     # bitwise; the x sweep divided by the pivot where the y sweep multiplied by
     # its reciprocal, and the two differed in the last bit.
     solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 0.5)),
-                                  bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                                  per3[3]),
+                                  bcs=((SlipWallBC(), SlipWallBC()),
+                                       (SlipWallBC(), SlipWallBC()), per3[3]),
                                   ic=nothing),
                           Numerics(n_global=(24, 24, 12), deriv=lele_d1_10(),
                                    art=ArtificialProperties(enabled=false)))

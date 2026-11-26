@@ -285,7 +285,7 @@ function main(opt)
                      filter=StateFilter(interval=0),
                      patch_interfaces=PatchInterfaces(flux=interface_flux),
                      execution=Execution(storage=backend),
-                     amr=AMR(initial=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
+                     amr=AMR(; initial=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
                              subcycle, regrid_interval, tag_buffer)))
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->

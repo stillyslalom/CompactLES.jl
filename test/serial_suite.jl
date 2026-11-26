@@ -262,7 +262,8 @@ end
     for N in (12, 18, 24)
         solver = build_solver(
             Problem(domain=((0.0, T(2π)), (0.0, T(2π)), (0.0, T(2π))), bcs=per3,
-                    transport=ConstantTransport{T}(), ic=nothing),
+                    transport=ConstantTransport{T}(),
+                    eos=IdealSpecies(T, "gas"; R=1.0, gamma=1.4), ic=nothing),
             Numerics(n_global=(N, 12, 12), art=ArtificialProperties{T}(enabled=false),
                      deriv=lele_d1_6(T), filter=compact_filter(T(0.45), T)))
         f = CL.field(solver.decomp)
@@ -336,7 +337,8 @@ end
     T = Float32
     solver = build_solver(
         Problem(domain=((0.0, T(2π)), (0.0, one(T)), (0.0, one(T))), bcs=per3,
-                transport=ConstantTransport{T}(), ic=nothing),
+                transport=ConstantTransport{T}(), eos=IdealSpecies(T, "gas"; R=1.0, gamma=1.4),
+               ic=nothing),
         Numerics(n_global=(48, 1, 1), art=ArtificialProperties{T}(enabled=false),
                  deriv=lele_d1_6(T), cfl=T(0.2),
                  filter=StateFilter(compact_filter(T(0.45), T), interval=0),
@@ -437,6 +439,7 @@ end
     sf = build_solver(Problem(domain=((0.0, one(T)), (0.0, T(2π)), (0.0, one(T))),
                               metric=CylindricalMetric(),
                               bcs=((AxisBC(), SlipWallBC()), per, per), transport=transport,
+                              eos=IdealSpecies(T, "gas"; R=1.0, gamma=1.4),
                               ic=nothing),
                       Numerics(; n_global=(32, 16, 1), typed...))
     f = CL.field(sf.decomp)
@@ -451,7 +454,8 @@ end
     wall = (SlipWallBC(), SlipWallBC())
     sr = build_solver(
         Problem(domain=((0.0, one(T)), (0.0, one(T)), (0.0, one(T))), bcs=(wall, per, per),
-                transport=ConstantTransport{T}(), ic=nothing),
+                transport=ConstantTransport{T}(), eos=IdealSpecies(T, "gas"; R=1.0, gamma=1.4),
+               ic=nothing),
         Numerics(n_global=(96, 1, 1), cfl=T(0.1), art=ArtificialProperties{T}(),
                  deriv=lele_d1_6(T), filter=compact_filter(T(0.45), T),
                  amr=AMR(initial=BlockRegion((34, 0, 0), (28, 1, 1)), subcycle=true,
@@ -899,22 +903,19 @@ end
                     bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), ic=nothing),
             Numerics(n_global=(12, 12, 1), art=noart))),
         ("cylindrical θ", 2, true, build_solver(
-            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)),
+            Problem(domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
                     metric=CylindricalMetric(), bcs=(walls, per3[2], per3[3]), ic=nothing),
             Numerics(n_global=(12, 12, 1), art=noart))),
-        ("spherical origin", 1, true, build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
-                                                           metric=SphericalMetric(),
-                                                           bcs=((OriginBC(), SlipWallBC()),
-                                 (PoleBC(), PoleBC()), per3[3]),
-                                                           ic=nothing),
-                                                   Numerics(n_global=(12, 12, 12),
-                                                            art=noart))),
-        ("spherical poles", 2, false, build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
-                                                           metric=SphericalMetric(),
-                                                           bcs=((OriginBC(), SlipWallBC()),
-                                 (PoleBC(), PoleBC()), per3[3]),
-                                                           ic=nothing),
-                                                   Numerics(n_global=(12, 12, 12),
+        ("spherical origin", 1, true, build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+                    ic=nothing),
+            Numerics(n_global=(12, 12, 12), art=noart))),
+        ("spherical poles", 2, false, build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+                    ic=nothing),
+            Numerics(n_global=(12, 12, 12),
                                                             art=noart))),
     )
     for (label, d, symmetric, solver) in geometries
@@ -1014,11 +1015,10 @@ end
             Numerics(n_global=(N + 1, N + 1, 1), art=noart)),
          -1, true, 6.0, (x, y, z) -> sinpi(x) * sinpi(y) * (1 + 0.3cospi(x)),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
-        ("symmetry planes", N -> build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-                                                      bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), walls,
-                                                           per3[3]),
-                                                      ic=nothing),
-                                              Numerics(n_global=(N, N + 1, 1), art=noart)), 1, true, 6.0,
+        ("symmetry planes", N -> build_solver(
+            Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                    bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), walls, per3[3]), ic=nothing),
+            Numerics(n_global=(N, N + 1, 1), art=noart)), 1, true, 6.0,
          (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
         ("stretched walls", N -> build_solver(
@@ -1030,7 +1030,7 @@ end
          (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
          (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
         ("cylindrical shell", N -> build_solver(
-            Problem(domain=((0.5, 0.5 + 1.0), (0.0, 0.0 + 2π), (0.0, 0.0 + 1.0)),
+            Problem(domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
                     metric=CylindricalMetric(), bcs=(walls, per3[2], per3[3]), ic=nothing),
             Numerics(n_global=(N + 1, N, 1), art=noart)),
          1, true, 2.0, (r, θ, z) -> cospi(r - 0.5) * (1 + 0.3cos(θ)),
@@ -1913,11 +1913,9 @@ end
     @test_throws ErrorException build_solver(
         Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)), bcs=per3, ic=nothing),
         Numerics(n_global=(24, 32, 1), polar_truncation=1.0))
-    @test_throws ErrorException build_solver(Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)),
-                                                     metric=SphericalMetric(),
-                                                     bcs=((OriginBC(), SlipWallBC()),
-                                                     (PoleBC(), PoleBC()), per3[3]),
-                                                     ic=nothing),
+    @test_throws ErrorException build_solver(
+        Problem(domain=((0.0, 1.0), (0.0, π), (0.0, 2π)), metric=SphericalMetric(),
+                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]), ic=nothing),
                                              Numerics(n_global=(24, 32, 1),
                                                       polar_truncation=1.0))
 
@@ -2262,7 +2260,8 @@ end
         Problem(domain=((0.0, 2π), (0.0, 1.0), (0.0, 1.0)), bcs=(sym, per3[2], per3[3]),
                 ic=nothing),
         Numerics(n_global=(48, 1, 1), art=off, filter=StateFilter(interval=0),
-                 amr=AMR(initial=BlockRegion((20, 0, 0), (8, 1, 1)), regrid_interval=0))).patches) == 2
+                 amr=AMR(initial=BlockRegion((20, 0, 0), (8, 1, 1)),
+                         regrid_interval=0))).patches) == 2
 end
 
 @testset "rigid rotation in cylindrical: zero strain" begin
@@ -2428,9 +2427,9 @@ end
 end
 
 @testset "NSCBC outflow: matched uniform stream ⇒ no correction" begin
+    inflow = DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
     solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
-                                  bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
-                                        NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                                  bcs=((inflow, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                                   ic=nothing),
                           Numerics(n_global=(32, 12, 12),
                                    art=ArtificialProperties(enabled=false)))
@@ -2457,10 +2456,11 @@ end
                                  (CylindricalMetric(), (0.5, 0.0, 0.0), 1),
                                  (SphericalMetric(), (0.5, π / 2, 0.0), 2)),
         sigma in (0.0, 0.25, 4.0)
-        solver = build_solver(Problem(domain=((origin[1], origin[1] + 1.0), (origin[2], origin[2] + 1.0), (origin[3], origin[3] + 1.0)),
+        solver = build_solver(Problem(domain=ntuple(d -> (origin[d], origin[d] + 1.0), 3),
                                       metric=metric,
-                                      bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0, sigma=sigma)),
-                                      per3[2], per3[3]),
+                                      bcs=((SlipWallBC(),
+                                            NSCBCOutflowBC(pinf=1.0, sigma=sigma)),
+                                           per3[2], per3[3]),
                                       ic=nothing),
                               Numerics(n_global=(24, 1, 1),
                                        art=ArtificialProperties(enabled=false)))
@@ -2493,8 +2493,8 @@ end
 @testset "NoSlipWallBC: adiabatic zeroes velocity, isothermal sets T_ion" begin
     for Twall in (NaN, 2.5)
         solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
-                                      bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
-                                                per3[2], per3[3]),
+                                      bcs=((NoSlipWallBC(Twall=Twall),
+                                            NoSlipWallBC(Twall=Twall)), per3[2], per3[3]),
                                       ic=nothing),
                               Numerics(n_global=(24, 12, 12),
                                        art=ArtificialProperties(enabled=false)))
@@ -2545,8 +2545,8 @@ end
     # is never executed.
     uin = (0.3, 0.0, 0.0)
     solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 0.4), (0.0, 0.4)),
-                                  bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
-                                            per3[2], per3[3]),
+                                  bcs=((NSCBCInflowBC(u=uin, T_ion=1.0),
+                                        NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                                   eos=IdealSpecies("gas"; gamma=1.4, R=1.0), ic=nothing),
                           Numerics(n_global=(32, 12, 12),
                                    art=ArtificialProperties(enabled=false)))
@@ -4996,8 +4996,9 @@ end
 @testset "FieldWriter: numbered frames and a .pvd carrying physical time" begin
     dir = mktempdir()
     solver = build_solver(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-                                  bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
-                                  (PeriodicBC(), PeriodicBC())),
+                                  bcs=((SlipWallBC(), SlipWallBC()),
+                                       (PeriodicBC(), PeriodicBC()),
+                                       (PeriodicBC(), PeriodicBC())),
                                   ic=nothing),
                           Numerics(n_global=(16, 12, 12),
                                    art=ArtificialProperties(enabled=false), cfl=0.4))
@@ -5081,11 +5082,11 @@ end
     wall = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
     mk(; cfl=0.5, filter_interval=1, filter_cfl=0.35, L_domain=(1.0, 1.0, 1.0),
-         n_global=(16, 12, 1), transport=ConstantTransport(), art=ArtificialProperties()) = build_solver(
-        Problem(domain=((0.0, L_domain[1]), (0.0, L_domain[2]), (0.0, L_domain[3])),
-                bcs=(wall, per, per), transport=transport, ic=nothing),
-        Numerics(n_global=n_global, cfl=cfl, art=art,
-                 filter=StateFilter(interval=filter_interval, cfl=filter_cfl)))
+         n_global=(16, 12, 1), transport=ConstantTransport(), art=ArtificialProperties()) =
+        build_solver(Problem(domain=ntuple(d -> (0.0, L_domain[d]), 3), bcs=(wall, per, per),
+                             transport=transport, ic=nothing),
+                     Numerics(n_global=n_global, cfl=cfl, art=art,
+                              filter=StateFilter(interval=filter_interval, cfl=filter_cfl)))
     for (kw, name) in [((; predict=-1.0), "predict"), ((; max_growth=0.5), "max_growth"),
                        ((; dt_min=NaN), "dt_min"), ((; dt_min_ratio=1.0), "dt_min_ratio"),
                        ((; retries=-1), "retries"), ((; cfl_backoff=1.0), "cfl_backoff"),
@@ -5108,7 +5109,7 @@ end
     @test names(() -> mk(cfl=0.0), "cfl")
     @test names(() -> mk(filter_interval=-1), "filter_interval")
     @test names(() -> mk(filter_cfl=-0.1), "filter_cfl")
-    @test names(() -> mk(L_domain=(1.0, Inf, 1.0)), "L_domain")
+    @test names(() -> mk(L_domain=(1.0, Inf, 1.0)), "domain")
     @test names(() -> mk(n_global=(16, 0, 1)), "n_global")
     @test names(() -> mk(transport=ConstantTransport(mu0=NaN)), "mu0")
     @test names(() -> mk(transport=ConstantTransport(Pr=0.0)), "Pr")
@@ -5654,10 +5655,10 @@ end
     # expected message is asserted to ensure each case exercises its intended
     # check, not an earlier one.
     mk(; eos=IdealSpecies("gas"; R=1.0, gamma=1.4), L_domain=(2π, 2π, 2π),
-         origin=(0.0, 0.0, 0.0), bcs=per3, metric=CartesianMetric()) = build_solver(
-        Problem(domain=((origin[1], origin[1] + (L_domain[1])), (origin[2], origin[2] + (L_domain[2])), (origin[3], origin[3] + (L_domain[3]))),
-                eos=eos, bcs=bcs, metric=metric, ic=nothing),
-        Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
+         origin=(0.0, 0.0, 0.0), bcs=per3, metric=CartesianMetric()) =
+        build_solver(Problem(domain=ntuple(d -> (origin[d], origin[d] + L_domain[d]), 3),
+                             eos=eos, bcs=bcs, metric=metric, ic=nothing),
+                     Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
     eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                          IdealSpecies{Float64}("b", 2.0, 1.6)])
     base = mk(eos=eos2)

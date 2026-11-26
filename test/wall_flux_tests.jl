@@ -487,7 +487,7 @@ end
     for (metric, extent, origin, eos) in cases, bc in (NoSlipWallBC(), SlipWallBC())
         walls = (bc, bc)
         s = build_solver(
-            Problem(domain=((origin[1], origin[1] + (extent[1])), (origin[2], origin[2] + (extent[2])), (origin[3], origin[3] + (extent[3]))),
+            Problem(domain=ntuple(d -> (origin[d], origin[d] + extent[d]), 3),
                     bcs=(walls, _wf_per(), _wf_per()), metric=metric, eos=eos,
                     transport=ConstantTransport(mu0=0.01), ic=nothing),
             Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false)))
