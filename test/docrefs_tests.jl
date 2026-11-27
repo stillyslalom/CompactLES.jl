@@ -211,7 +211,7 @@ end
 
 # CompactLES and the submodules whose names it documents.
 const MODULES = (CompactLES, CompactLES.Regions, CompactLES.DiffusionData,
-                 CompactLES.Presets)
+                 CompactLES.Presets, CompactLES.EOSTables)
 
 # Raw docstring text of every documented binding of CompactLES and its
 # submodules, keyed by the binding's name, and the module each is documented

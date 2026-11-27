@@ -80,6 +80,15 @@ MuellerKlemmPair MUELLER_KLEMM_1970 MUELLER_KLEMM_TEMPERATURE MUELLER_KLEMM_PRES
 mueller_klemm_pair neutral_binary_sources neutral_binary_diffusion_residual
 """)))
 
+# The internal submodules, reached qualified and declared neither exported nor
+# `public` by CompactLES. `EOSTables` exports the names its documentation
+# renders, apart from the status flags; `Incompressible` exports nothing.
+const EXPECTED_EOS_TABLES = Set(Symbol.(split("""
+IonmixTable read_ionmix write_ionmix SesameTable SesameComponent SesameColdCurve
+read_sesame write_sesame table_value table_opacity table_state table_temperature_status
+table_temperature
+""")))
+
 const ADVANCED_QUALIFIED_API = (
     :Decomp, :exchange_halos!, :interior, :field,
     :DirPlan, :BandPlan, :DevicePlan, :device_plan, :apply_along!, :filter_field!,
@@ -147,6 +156,19 @@ exported_names(mod::Module) =
             @test name ∉ actual || name === :Cells
         end
     end
+
+    @test exported_names(CompactLES.EOSTables) == EXPECTED_EOS_TABLES
+    @test isempty(exported_names(CompactLES.Incompressible))
+    for mod in (:EOSTables, :Incompressible)
+        @test has_docstring(mod)
+        @test mod ∉ actual
+        @static if VERSION >= v"1.11.0-DEV.469"
+            @test !Base.ispublic(CompactLES, mod)
+        end
+    end
+    @test isempty(EXPECTED_EOS_TABLES ∩ actual)
+    @test !isdefined(CompactLES, :IonmixTable)
+    @test !isdefined(CompactLES, :IncompressibleSolver)
 end
 
 @testset "thermodynamics API" begin

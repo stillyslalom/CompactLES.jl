@@ -5268,9 +5268,10 @@ function test_incompressible()
               (2π, 2π, π), :slip, nothing, u3))
     for (label, n, periodic, lengths, walls, dims, u) in cases
         s, ref = map(((comm, dims), (MPI.COMM_SELF, nothing))) do (c, g)
-            sv = CL.IncompressibleSolver(n; lengths=lengths, periodic=periodic,
-                                         nu=0.01, walls=walls, dims=g, comm=c)
-            CL.set_velocity!(sv, u)
+            sv = CL.Incompressible.IncompressibleSolver(n; lengths=lengths,
+                                                        periodic=periodic, nu=0.01,
+                                                        walls=walls, dims=g, comm=c)
+            CL.Incompressible.set_velocity!(sv, u)
             for _ in 1:4
                 CL.step!(sv, 0.02)
             end
@@ -5284,7 +5285,7 @@ function test_incompressible()
             scale = max(scale, abs(ref.U[i][I+shift]))
         end
         check("against undivided, $label", gmax(e) / gmax(scale), 1e-10)
-        check("divergence, $label", CL.max_divergence(s), 1e-10)
+        check("divergence, $label", CL.Incompressible.max_divergence(s), 1e-10)
     end
 end
 

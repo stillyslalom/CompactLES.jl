@@ -66,6 +66,24 @@
 # implicit stage's is.
 
 """
+    CompactLES.Incompressible
+
+The constant-density incompressible solver, `IncompressibleSolver`, on the
+staggered compact operators and the pressure solve of the implicit stage. It
+shares the compressible solver's decomposition and line solves and none of its
+`Problem`, `Numerics`, state or I/O, so it is kept apart from them and its
+names are reached qualified. `step!`, `run!` and `compute_dt` are CompactLES's own
+functions, extended here.
+"""
+module Incompressible
+
+using MPI
+using ..CompactLES: Decomp, DiffusionStage, StaggeredPlan, plan_staggered, field,
+                    interior, at_hi_edge, apply_along!, exchange_dim!, solve_stage!,
+                    RKA, RKB, RKC
+import ..CompactLES: step!, compute_dt, run!
+
+"""
     IncompressibleSolver(n_global; lengths, periodic, nu=0, walls=:slip,
                          convection=:skew, forcing=nothing, rtol=1e-12,
                          maxiter=200, T=Float64, dims=nothing, comm=MPI.COMM_WORLD)
@@ -484,3 +502,5 @@ to the nodes, into the interior of `out`. Collective along dimension `i`.
 """
 node_velocity!(out, s::IncompressibleSolver, i::Int) =
     _along!(out, s, :interpolate_to_node, i, -1, s.U[i])
+
+end # module Incompressible

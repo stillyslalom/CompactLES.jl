@@ -123,20 +123,21 @@ so that they satisfy the thermodynamic consistency relation between nodes. No
 SESAME table is distributed with the package.
 
 ```@docs
-CompactLES.IonmixTable
-CompactLES.read_ionmix
-CompactLES.write_ionmix
-CompactLES.SesameTable
-CompactLES.SesameComponent
-CompactLES.SesameColdCurve
-CompactLES.read_sesame
-CompactLES.write_sesame
-CompactLES.table_value
-CompactLES.table_opacity
-CompactLES.table_state
-CompactLES.table_temperature_status
-CompactLES.table_temperature
-CompactLES.TABLE_OK
+CompactLES.EOSTables
+CompactLES.EOSTables.IonmixTable
+CompactLES.EOSTables.read_ionmix
+CompactLES.EOSTables.write_ionmix
+CompactLES.EOSTables.SesameTable
+CompactLES.EOSTables.SesameComponent
+CompactLES.EOSTables.SesameColdCurve
+CompactLES.EOSTables.read_sesame
+CompactLES.EOSTables.write_sesame
+CompactLES.EOSTables.table_value
+CompactLES.EOSTables.table_opacity
+CompactLES.EOSTables.table_state
+CompactLES.EOSTables.table_temperature_status
+CompactLES.EOSTables.table_temperature
+CompactLES.EOSTables.TABLE_OK
 ```
 
 ## Condensed-material approximation
