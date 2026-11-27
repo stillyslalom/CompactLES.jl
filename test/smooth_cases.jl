@@ -97,7 +97,7 @@ end
 
 rho = 1 + 0.2 sin(k(x − u0 t) + phase) at constant u0 and p = 1, an exact
 Euler solution on the periodic [0, 2π), the same wave as `test/patch_tests.jl`
-and `test/level_tests.jl`; `k = 3, phase = 0.37` avoids the one favorable
+and `test/level_coupling_tests.jl`; `k = 3, phase = 0.37` avoids the one favorable
 phase of the k = 1 wave and keeps the high-order errors above roundoff.
 """
 entropy_profile(k, phase; u0=0.5, t=0.0) =

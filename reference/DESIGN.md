@@ -1155,7 +1155,7 @@ round-off, omit nothing.
 The sources weight the remaining parts of Π_φφ and Π_φθ by the analytic cotθ/r,
 the array `metric_correct_gradients!` reads for the curvature terms of ∇u:
 they are pointwise products and balance no discrete divergence. The freestream
-testsets of `test/serial_suite.jl` (every metric and fold, the stretched
+testsets of `test/serial/rhs_boundaries.jl` (every metric and fold, the stretched
 annulus, and r collapsed on both curvilinear metrics), `test/seam_tests.jl`
 (a θ-resolved shell closed by walls, θ collapsed on the equator, and the
 rejection off it),
@@ -1875,7 +1875,7 @@ components.
   sources of the normal equations stay in the right-hand side as computed,
   like the viscous terms. The LODI derivation of each relaxation form and of each transverse
   term is spelled out in the source so the signs can be audited, and
-  `test/serial_suite.jl` checks at both faces that the incoming characteristic
+  `test/serial/rhs_boundaries.jl` checks at both faces that the incoming characteristic
   variables follow their targets, the transverse velocity after the
   −(1 − M)∇_t p/ρ the pressure weight leaves.
   The weights are measured in `reference/CALIBRATION_APPENDIX.md`.

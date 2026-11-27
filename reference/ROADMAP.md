@@ -716,7 +716,7 @@ promotion.
        runs with them masked, and the failure needs neither the drive nor
        the capsule: a dense layer at rest under a level loses the light gas
        beside it on the parent's uncovered nodes, which a test now holds
-       (`test/level_tests.jl`). The default stays masked until plain
+       (`test/level_mask_tests.jl`). The default stays masked until plain
        gradients pass that test.
      - Where a shock passes out of a level, the mass the coupling's
        correction leaves is larger with the mask than before it, within a

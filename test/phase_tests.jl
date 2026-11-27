@@ -135,7 +135,7 @@ end
 end
 
 @testset "phase change: a tiled, regridded, subcycled hierarchy" begin
-    # The tube of the unrefined-start regrid test in level_tests.jl: an
+    # The tube of the unrefined-start regrid test in level_regrid_tests.jl: an
     # inflow fires a shock, whose tiles exist by step 50. There the high wall
     # opens to an outflow; the phase change and the checkpoint restart then
     # regrid, subcycle and rebalance alike to step 80.

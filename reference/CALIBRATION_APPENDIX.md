@@ -6580,7 +6580,7 @@ Mach 0.3 a pulse leaving through the face carries in the least vorticity
 under it. Under it the incoming characteristic variables also follow their
 targets through a transverse flow at the face, the transverse velocity up to
 the rate −(1 − M)∇_t p/ρ that an acoustic wave leaving obliquely gives it
-there; `test/serial_suite.jl` asserts this at both faces. The weight M on the
+there; `test/serial/rhs_boundaries.jl` asserts this at both faces. The weight M on the
 pressure part leaves exactly that rate. Under the full weight on it, u_t is held
 against an obliquely leaving acoustic wave at the face and a vorticity wave enters
 the domain, as where a pressure pulse converging on the axis crosses the top face
@@ -8700,7 +8700,7 @@ default ghost fluxes and the viscous rows are the testsets' output at
 `743fdb4b` under Julia 1.13.3, and the drift is at `b4388f9`. The two rows reading "the same under
 `:closure`" are the closure-row figures the test file records and no longer
 runs (the C6 entropy orders are the `gflux` table's), and the row of the
-ninth-degree polynomial is `test/serial_suite.jl`'s.
+ninth-degree polynomial is `test/serial/operators.jl`'s.
 
 Settled: under the default ghost fluxes the inviscid orders through the
 interface are the interior's (C6) or the time integrator's (C10), and

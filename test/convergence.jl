@@ -1051,7 +1051,7 @@ evolution_study("two levels at a symmetry plane, C6", LEVEL_PLANE_NS,
 # The same under the :filter restriction, whose filter folds at the plane:
 # the attenuation it writes into the covered nodes at every step sets the
 # order, as it does away from a plane (the two-level entropy wave of
-# test/level_tests.jl), and the plane adds nothing to it.
+# test/level_coupling_tests.jl), and the plane adds nothing to it.
 evolution_study("two levels at a symmetry plane, :filter", LEVEL_PLANE_NS,
                 N -> plane_level_case(N; level_restriction=:filter),
                 plane_level_reference;

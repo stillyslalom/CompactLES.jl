@@ -362,7 +362,7 @@ pressure_subtract_along!(dQ, c::Int, solver::PatchSolver, d::Int) =
 # times smaller plain. The default stays masked: plain, a layer thousands of
 # times denser than the gas around it, at rest under a level, moves that gas
 # on the parent's uncovered nodes by tens of percent within thirty steps
-# (test/level_tests.jl), which fails a capsule's shell under a refined band
+# (test/level_mask_tests.jl), which fails a capsule's shell under a refined band
 # before its drive acts.
 
 # `MASK_CHILD_SENSORS`: `true`, the default, drops the sensors of a parent

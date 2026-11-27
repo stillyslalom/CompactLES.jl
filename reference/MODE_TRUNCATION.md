@@ -182,7 +182,7 @@ Each is structural or follows from a repo convention; none is a preference.
 ## Stage 1 — serial cylindrical
 
 Delivered. Setup also rejects a stretched r, several patches or levels, and a
-device backend, and the testset is in `test/serial_suite.jl`.
+device backend, and the testset is in `test/serial/geometry.jl`.
 
 Deliverables:
 

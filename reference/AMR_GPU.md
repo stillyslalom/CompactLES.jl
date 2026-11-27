@@ -626,7 +626,7 @@ the component's parity (`plan_transfer`'s `lo_fold` / `hi_fold`), then
 subsamples one node past the lead: the filter there is the interior
 stencil on the even or odd continuation, so a corner tile between two
 planes reproduces its periodic image, a level across both seams of the
-doubled domain, to round-off (`test/level_tests.jl`).
+doubled domain, to round-off (`test/level_boundary_tests.jl`).
 
 On the device backend the box mirror fills the host box before its upload
 (`_fill_stage0_dev!`, `_upload_hermite!`), so the device chain and the
@@ -953,7 +953,7 @@ despite a reader outside the RHS: `scalar_field(solver, :strain_mag)` and
 `:sensor` take a `Solver` and read through the single-patch property
 forwarding, so they are reachable only where the pool is one patch's own
 set, and a multi-patch output path will have to take storage of its own.
-The sharing is guarded directly in `test/level_tests.jl`, since no other
+The sharing is guarded directly in `test/level_coupling_tests.jl`, since no other
 figure in the gate moves if the pooling silently stops. On a device
 backend the pool does not reach a tiled level: its tiles' workspaces are
 views of the spanning patch's stacked set ([Launch policy](#launch-policy)),
