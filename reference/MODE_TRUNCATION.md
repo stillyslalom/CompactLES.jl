@@ -122,7 +122,7 @@ Each is structural or follows from a repo convention; none is a preference.
    strain carries at O(r); the vortex of `bench/archive/axisvortex.jl` loses
    positivity under the artificial properties with both, and its density
    error at the axis is far above the untruncated run's with either
-   ([measurements](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
+   ([measurements](appendix/cost.md#azimuthal-mode-truncation)).
    Any floor of at least 1 keeps the invariants. The
    m = 0 coefficient is untouched, so ring sums of every conserved
    component, and hence mass and energy, are conserved exactly (uniform θ

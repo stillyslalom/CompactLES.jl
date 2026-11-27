@@ -37,7 +37,7 @@
 # The banded sweep carries the same dependency and compiled correctly by
 # chance. On a GPU backend `@Const` only marks loads read-only, a hint
 # these kernels can do without.
-# reference/bugreports/julia_aliasscope_bug_report.md has the reproducer.
+# The reproducer is in JuliaLang/julia#63129.
 
 """
     DeviceBackend(ka)

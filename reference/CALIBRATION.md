@@ -24,32 +24,32 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 
 | Setting | Default | Status | Basis |
 |---|---|---|---|
-| `C_beta` | 1.0 | keep | Accuracy optimum near 0.4; 1.0 maximizes the spherical-origin CFL ceiling and is the one value viable under both detectors ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `C_mu` | 0.002 | open (N4) | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green at Re = 1600 fits best at 0 at 64³ and 128³ and selects no positive value; the evidence for 0.002 is decaying turbulence under a different filter ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green), [where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)). |
-| `C_D` | 1.0 | keep | The lowest value of a decade sweep that removes the lump of heavy gas behind a shocked interface, on the air/SF6 case and on the He/CO2 tube; the ringing changes little from 1 to 3 on both and at density ratio 100, while the width and the smooth deposit keep growing. It is the default under every detector; the `:delta4` measurements used 0.1. Under `:fickian` the interface pressure error grows with it ([C_D](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity), [species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
-| `C_Y` | 100 | keep | At the default `C_D` the bound takes a third off a shocked 2h interface's worst excursion and more than half at Mach 3, for a fraction of a percent more steps; at Cook's `C_D = 0.01` it is what holds the interface inside the species band. Larger values hold it tighter at a few more steps ([C_Y](CALIBRATION_APPENDIX.md#c_y-the-mass-fraction-bound)). |
-| `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.5 to 0.4 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs no more per right-hand side than `:fickian`, against `:bulk`'s 14% more ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)). |
-| `cfl` | 0.5 | keep | A converging shock at a spherical origin completes at 0.5; keep `StepControl(retries = 4)` for a singular start or a strong blast through the origin, whose ceilings are 0.15 and 0.2; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
-| `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#bencharchivesubstepratesjl-refreshed-refined-level-rates)). |
-| `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
-| `StepControl.species_band` | 0.05 | keep | A grid-scale species interface carries about 1% outside [0, 1] at every resolution under the mass-fraction bound and 5 to 7% at its worst without it; the band sits between the two, is also the threshold of the failsafe's composition clip, and is separate from the bound's dead band `Y_tolerance` ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
-| `interface_flux` | `:ghost` | keep | Leads the closure rows on every smooth interface row, inviscid and viscous, keeps the shock minima and conserves as they do, at 17 to 53% on the step. `:closure` remains for shock-dominated and Float32 runs, where the interface order does not show, and is required on a stretched grid, a cylindrical grid with θ resolved and a spherical grid, under `interface_rhs = :onesided` and for a user EOS at a viscous refined level ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)). |
-| `level_interpolation_order` | `deriv`'s interior order + 2, at most 10; the interior order under `:closure` | keep | Under the closure rows the interface divergence binds before the shell, so C6 runs are unchanged and C8 and C10 read the same at 6, 8 and 10; the ghost path reads the shell at p − 1 and p − 2 and wants the two orders more ([interpolation order](CALIBRATION_APPENDIX.md#bencharchiveleveltransferjl-the-live-interpolation-order), [transfer order](CALIBRATION_APPENDIX.md#level-transfer-order)). |
-| `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](CALIBRATION_APPENDIX.md#closure-certificates)). |
-| `compact_filter` α | 0.47 | keep | Between 0.49, which fits Taylor-Green at 128³ and 256³, and 0.45, under which a shock through a refinement boundary carries 40 times less precursor noise; the stability edge is α = 0.49875 at full strength ([filter strength](CALIBRATION_APPENDIX.md#the-filter-strength-on-the-battery), [Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
-| `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order; the one-sided rows return the wall to the derivative closure's order and take 10 to 18 points off the planar Noh wall deficit, at two to three times the error on a reflection resolved over fewer than ten cells ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)). |
-| `filter_interval` | 1 | keep | Redundant with α: the dissipation per unit time depends on the two only through (1 − 2α) / `filter_interval` ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
-| `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, to landing steps, to retries and to subcycling for steps at or below this CFL, a pass above it being at full strength, as on an acoustic-limited step at the default `cfl`; clears the battery at its production CFL numbers ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
-| `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17 times less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)). |
-| `NSCBCInflowBC` `beta_t` | 1 | keep | The full transverse share, with the transverse pressure gradient at min(β_t, M), admits an entering vortex with a third of the LODI error from η = 64 up, carries in a tenth of the LODI vorticity from a pulse leaving through the face, and is the only weight under which the imposed state follows its target through a transverse flow, the transverse velocity up to an outgoing acoustic wave's own rate; it reflects an oblique pulse at 0.093 of the incident amplitude against 0.047 at the outflow's Mach-number weight ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
-| `NSCBCOutflowBC` `beta_t` | −1 (local Mach) | keep | Least pulse reflection near the Mach number at Mach 0.1 and 0.3 (the LODI form reflects less at 0.5); a vortex leaves most cleanly at 1 − M at Mach 0.3 and 0.5 and at the Mach number at 0.1 ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
-| `C_sharpen` | 0 (off) | opt-in | The interface sharpening flux thins a shocked interface at density ratio 100 at a cost in ringing and steps, improves nothing at 1000, and its gate opens on the plateau extrema of a smooth slab, so it stays off until the localization is fixed ([sharpening flux](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux)). |
-| `ImplicitConduction` `step_rule`, `tolerance`, `rtol` | `:error`, 1e-3, 1e-8 | opt-in | The embedded estimate and Riot's fractional temperature change reach the same pulse error at the same Krylov work, so the rule without a per-field target is the default; the pair itself stays opt-in, single-patch and host-only ([additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)). |
+| `C_beta` | 1.0 | keep | Accuracy optimum near 0.4; 1.0 maximizes the spherical-origin CFL ceiling and is the one value viable under both detectors ([battery](appendix/shocks.md#the-shock-battery)). |
+| `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](appendix/shocks.md#the-shock-battery)). |
+| `C_mu` | 0.002 | open (N4) | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green at Re = 1600 fits best at 0 at 64³ and 128³ and selects no positive value; the evidence for 0.002 is decaying turbulence under a different filter ([Taylor-Green](appendix/filter.md#taylor-green), [where 0.002 comes from](appendix/filter.md#c_mu-the-shear-viscosity)). |
+| `C_D` | 1.0 | keep | The lowest value of a decade sweep that removes the lump of heavy gas behind a shocked interface, on the air/SF6 case and on the He/CO2 tube; the ringing changes little from 1 to 3 on both and at density ratio 100, while the width and the smooth deposit keep growing. It is the default under every detector; the `:delta4` measurements used 0.1. Under `:fickian` the interface pressure error grows with it ([C_D](appendix/shocks.md#c_d-the-species-diffusivity), [species-only split](appendix/shocks.md#the-species-only-split), [channels](appendix/shocks.md#the-partial-density-species-channel)). |
+| `C_Y` | 100 | keep | At the default `C_D` the bound takes a third off a shocked 2h interface's worst excursion and more than half at Mach 3, for a fraction of a percent more steps; at Cook's `C_D = 0.01` it is what holds the interface inside the species band. Larger values hold it tighter at a few more steps ([C_Y](appendix/shocks.md#c_y-the-mass-fraction-bound)). |
+| `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](appendix/shocks.md#the-shock-battery)). |
+| `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](appendix/shocks.md#the-shock-battery)). |
+| `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](appendix/shocks.md#the-shock-battery)). |
+| `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](appendix/shocks.md#the-species-only-split), [interface width](appendix/shocks.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.5 to 0.4 ([battery](appendix/shocks.md#the-shock-battery)). |
+| `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs no more per right-hand side than `:fickian`, against `:bulk`'s 14% more ([channels](appendix/shocks.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](appendix/transport.md#the-contact-with-a-temperature-jump)). |
+| `cfl` | 0.5 | keep | A converging shock at a spherical origin completes at 0.5; keep `StepControl(retries = 4)` for a singular start or a strong blast through the origin, whose ceilings are 0.15 and 0.2; walls and axes carry none ([CFL](appendix/shocks.md#the-cfl-restriction-and-the-symmetry-cell)). |
+| `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](appendix/amr.md#bencharchivesubstepratesjl-refreshed-refined-level-rates)). |
+| `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](appendix/transport.md#the-species-validity-band)). |
+| `StepControl.species_band` | 0.05 | keep | A grid-scale species interface carries about 1% outside [0, 1] at every resolution under the mass-fraction bound and 5 to 7% at its worst without it; the band sits between the two, is also the threshold of the failsafe's composition clip, and is separate from the bound's dead band `Y_tolerance` ([species band](appendix/transport.md#the-species-validity-band)). |
+| `interface_flux` | `:ghost` | keep | Leads the closure rows on every smooth interface row, inviscid and viscous, keeps the shock minima and conserves as they do, at 17 to 53% on the step. `:closure` remains for shock-dominated and Float32 runs, where the interface order does not show, and is required on a stretched grid, a cylindrical grid with θ resolved and a spherical grid, under `interface_rhs = :onesided` and for a user EOS at a viscous refined level ([ghost fluxes](appendix/amr.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)). |
+| `level_interpolation_order` | `deriv`'s interior order + 2, at most 10; the interior order under `:closure` | keep | Under the closure rows the interface divergence binds before the shell, so C6 runs are unchanged and C8 and C10 read the same at 6, 8 and 10; the ghost path reads the shell at p − 1 and p − 2 and wants the two orders more ([interpolation order](appendix/amr.md#bencharchiveleveltransferjl-the-live-interpolation-order), [transfer order](appendix/walls.md#level-transfer-order)). |
+| `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](appendix/walls.md#closure-certificates)). |
+| `compact_filter` α | 0.47 | keep | Between 0.49, which fits Taylor-Green at 128³ and 256³, and 0.45, under which a shock through a refinement boundary carries 40 times less precursor noise; the stability edge is α = 0.49875 at full strength ([filter strength](appendix/shocks.md#the-filter-strength-on-the-battery), [Taylor-Green](appendix/filter.md#taylor-green)). |
+| `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order; the one-sided rows return the wall to the derivative closure's order and take 10 to 18 points off the planar Noh wall deficit, at two to three times the error on a reflection resolved over fewer than ten cells ([filter wall rows](appendix/walls.md#the-filters-wall-rows)). |
+| `filter_interval` | 1 | keep | Redundant with α: the dissipation per unit time depends on the two only through (1 − 2α) / `filter_interval` ([filter dissipation](appendix/filter.md#the-filters-dissipation)). |
+| `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, to landing steps, to retries and to subcycling for steps at or below this CFL, a pass above it being at full strength, as on an acoustic-limited step at the default `cfl`; clears the battery at its production CFL numbers ([filter dissipation](appendix/filter.md#the-filters-dissipation)). |
+| `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17 times less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([non-uniform volumes](appendix/filter.md#filtering-on-non-uniform-volumes)). |
+| `NSCBCInflowBC` `beta_t` | 1 | keep | The full transverse share, with the transverse pressure gradient at min(β_t, M), admits an entering vortex with a third of the LODI error from η = 64 up, carries in a tenth of the LODI vorticity from a pulse leaving through the face, and is the only weight under which the imposed state follows its target through a transverse flow, the transverse velocity up to an outgoing acoustic wave's own rate; it reflects an oblique pulse at 0.093 of the incident amplitude against 0.047 at the outflow's Mach-number weight ([inflow transverse terms](appendix/walls.md#the-inflow-transverse-terms)). |
+| `NSCBCOutflowBC` `beta_t` | −1 (local Mach) | keep | Least pulse reflection near the Mach number at Mach 0.1 and 0.3 (the LODI form reflects less at 0.5); a vortex leaves most cleanly at 1 − M at Mach 0.3 and 0.5 and at the Mach number at 0.1 ([inflow transverse terms](appendix/walls.md#the-inflow-transverse-terms)). |
+| `C_sharpen` | 0 (off) | opt-in | The interface sharpening flux thins a shocked interface at density ratio 100 at a cost in ringing and steps, improves nothing at 1000, and its gate opens on the plateau extrema of a smooth slab, so it stays off until the localization is fixed ([sharpening flux](appendix/transport.md#the-interface-sharpening-flux)). |
+| `ImplicitConduction` `step_rule`, `tolerance`, `rtol` | `:error`, 1e-3, 1e-8 | opt-in | The embedded estimate and Riot's fractional temperature change reach the same pulse error at the same Krylov work, so the rule without a per-field target is the default; the pair itself stays opt-in, single-patch and host-only ([additive pair](appendix/implicit.md#the-additive-pair-on-the-conduction)). |
 
 Every constant above was fitted under `compact_filter(0.45)` applied at full
 strength every step, and the four that could depend on it have been re-swept at
@@ -67,31 +67,31 @@ cost. The link is to the section holding the evidence.
   origin does not, and `StepControl(retries = 4)`, which `setup` takes for a
   problem with an `OriginBC` when the deck gives no `control`, recovers both.
   Do not lower `C_beta` below 0.5 for the origin
-  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell),
-  [fold limits](CALIBRATION_APPENDIX.md#fold-order-and-geometry-limits)).
+  ([CFL](appendix/shocks.md#the-cfl-restriction-and-the-symmetry-cell),
+  [fold limits](appendix/walls.md#fold-order-and-geometry-limits)).
 - **A resolved or smooth solution is over-dissipated.** Weaken the filter with
   `compact_filter(0.49)`, which fits at 128³ and at 256³. The filter is the
   sink, 37% of the Taylor-Green dissipation at 128³, and raising `C_mu` does not
-  help ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
+  help ([Taylor-Green](appendix/filter.md#taylor-green)).
 - **Noise runs ahead of a shock through a refinement boundary.** Strengthen the
   filter with `compact_filter(0.45)`, which carries 40 times less precursor
   noise than the default there
-  ([filter strength](CALIBRATION_APPENDIX.md#the-filter-strength-on-the-battery)).
+  ([filter strength](appendix/shocks.md#the-filter-strength-on-the-battery)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu-Osher amplitude and an 18% narrower contact than the default, at the
   cost of half the spherical origin's timestep; `detector = :d8` keeps 1.1% more
-  amplitude ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  amplitude ([battery](appendix/shocks.md#the-shock-battery)).
 - **Lowering the CFL or writing output more often changes the solution.** Keep
   the default `filter_cfl = 0.35`, under which the filter's dissipation per unit
   time is invariant to the step. At `filter_cfl = 0` each pass dissipates a
   fixed amount, so more steps mean more dissipation
-  ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)).
+  ([filter dissipation](appendix/filter.md#the-filters-dissipation)).
 - **A grid of high aspect ratio takes many small steps.** The scalar bulk
   viscosity sets the step from the finest direction. One coefficient per
   direction removes that penalty and makes vorticity in cold pre-shock gas, so
   it was measured and not adopted; the relaxed filter's weight is directional
   and carries no such penalty
-  ([directional β\*](CALIBRATION_APPENDIX.md#directional-bulk-viscosity)).
+  ([directional β\*](appendix/shocks.md#directional-bulk-viscosity)).
 - **Mass fractions leave [0, 1] at a shocked interface.** The default `C_D`
   and `C_Y` hold a shocked interface two cells wide to half a percent outside
   the unit interval.
@@ -100,7 +100,7 @@ cost. The link is to the section holding the evidence.
   detector, sensor field and CFL each move the excursion by a third at most,
   and a stronger filter raises it. Do not lower `C_D` toward Cook's 0.01
   without the bound
-  ([C_Y](CALIBRATION_APPENDIX.md#c_y-the-mass-fraction-bound)).
+  ([C_Y](appendix/shocks.md#c_y-the-mass-fraction-bound)).
 - **Mass fractions ring inside [0, 1] behind a shocked interface.** The
   bound is zero there, so `C_D` is the damping. Below the default `C_D = 1`
   a lump of the heavy gas separates from the light side of the interface;
@@ -108,37 +108,37 @@ cost. The link is to the section holding the evidence.
   at three more cells of shocked width. Raise `C_D` before widening the
   initial interface, under the default channel or `:bulk`, not under
   `:fickian`, whose pressure error grows with it
-  ([C_D](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity),
-  [species-only split](CALIBRATION_APPENDIX.md#the-species-only-split)).
+  ([C_D](appendix/shocks.md#c_d-the-species-diffusivity),
+  [species-only split](appendix/shocks.md#the-species-only-split)).
 - **A shocked species interface at a large density ratio rings, or an advected
   one drifts in pressure.** The pressure drift is the `:fickian` channel;
   the default and `:bulk` hold it to round-off. At a density ratio of 100 in
   one dimension the Fickian channel fails, and the default completes and
   rings no more than `:bulk`, whose ringing there depends on the filter
   strength
-  ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel),
-  [battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel),
-  [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
+  ([channels](appendix/shocks.md#the-partial-density-species-channel),
+  [battery](appendix/shocks.md#the-bulk-species-channel),
+  [three dimensions](appendix/transport.md#the-bulk-species-channel-in-three-dimensions)).
 - **A passive interface broadens faster than the species diffusivity explains.**
   The filter is the broadening: a passive interface more than doubles in width
   with D\* off, and the default `C_D` adds 2% to that width. Weaken the
-  filter rather than `C_D` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  filter rather than `C_D` ([battery](appendix/shocks.md#the-shock-battery)).
 - **Wall heating at a stagnation wall.** Keep the default filter closure rows,
   which took the planar Noh deficit down to 50% at N = 400; `detector = :d8`
   lowers it further at high CFL. Raising `C_kappa` does not reduce it under the
   default smoother, and the deficit does not converge away with resolution
-  ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)).
+  ([filter wall rows](appendix/walls.md#the-filters-wall-rows)).
 - **A long inviscid run between slip walls or symmetry planes grows a
   wall-normal velocity from nothing.** The run is on the `:cascade3` rows, which
   carry the slip-wall mode. Use the default `:neutral3` rows, which are neutral
   there, or `compact_filter(closures = :cascade)`, which damps the mode at a
   second-order wall defect
-  ([the mode](CALIBRATION_APPENDIX.md#constant-annihilation)).
+  ([the mode](appendix/walls.md#constant-annihilation)).
 - **A slip wall limits the accuracy of a smooth run.** Replace `SlipWallBC()`
   with `SymmetryPlaneBC()` in a single unrefined, unstretched patch. The wall
   then carries no closure row and reads the interior order; the end node moves
   half a cell inside the plane
-  ([symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
+  ([symmetry plane](appendix/walls.md#the-face-centred-symmetry-plane)).
 - **A run with same-level patches fails within its first steps.** The initial
   data has a discontinuity within one node of a shared patch plane, which the
   default ghost fluxes survive only with the artificial properties on, and
@@ -146,124 +146,124 @@ cost. The link is to the section holding the evidence.
   the interior crosses the plane without incident. Move the plane, resolve the
   discontinuity over a few cells, keep the artificial properties on, or set
   `interface_rhs = :onesided` with `interface_divergence = nothing` under the
-  closure rows; a divergence source defeats the one-sided workaround ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
-  [interface divergence rows](CALIBRATION_APPENDIX.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
-  [interface sensors](CALIBRATION_APPENDIX.md#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+  closure rows; a divergence source defeats the one-sided workaround ([ghost fluxes](appendix/amr.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
+  [interface divergence rows](appendix/amr.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
+  [interface sensors](appendix/amr.md#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 - **A smooth patched or refined run is limited by its interfaces.** The
   closure rows hold an interface end to third or fourth order whatever the
   interior. Set `interface_flux = :ghost`: the inviscid and molecular fluxes
   then cross the interface through the interior stencil, and the level
   interpolation order rises by two with it
-  ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
+  ([ghost fluxes](appendix/amr.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
 - **A deep nest develops species undershoot under global stepping.** Use
   subcycling, the demonstrated workaround. Level-aware filter trials trade
   improved layer behavior for larger smooth errors and remain benchmark-only;
   the production filter policy is unchanged
-  ([level-aware filtering](CALIBRATION_APPENDIX.md#bencharchivelevelfilterjl-level-aware-filtering-under-global-stepping)).
+  ([level-aware filtering](appendix/amr.md#bencharchivelevelfilterjl-level-aware-filtering-under-global-stepping)).
 - **A patched, refined or switching face needs a reflecting condition.**
   `SymmetryPlaneBC` is unavailable there; use `SlipWallBC()`, which carries the
   same flux contract at the cost of a closure row
-  ([symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
+  ([symmetry plane](appendix/walls.md#the-face-centred-symmetry-plane)).
 - **A run on `:cascade4` derivative rows destabilizes at an inviscid wall.**
   Those rows need the F2 row the default filter closure removes, so pair them
   with `compact_filter(closures = :cascade)`. `:cascade3` and `:brady_livescu`
   take the default filter rows
-  ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
+  ([wall closures](appendix/walls.md#wall-closures-in-production)).
 - **A wall that must carry more than third order, on a face that cannot be a
   symmetry plane.** Use C6 `:brady_livescu` under the default filter rows, which
   raises the smooth wall order from 3.17 to 5.88 and takes the singular planar
   Noh start at that case's CFL number, under a lower CFL ceiling than the
   default rows carry there. C8 `:brady_livescu` is not supported at a wall
-  ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
+  ([wall closures](appendix/walls.md#wall-closures-in-production)).
 - **A wall solution loses its closure order once the artificial properties are
   on.** The detector reads a closed edge from the node-centred mirror of the
   interior, so a viscous or shear wall keeps its order. An inviscid slip wall is
   held at fourth order by the strain sensor's cusp, which
   `beta_sensor = :dilatation` removes
-  ([sensor operators](CALIBRATION_APPENDIX.md#the-sensor-operators-at-walls)).
+  ([sensor operators](appendix/walls.md#the-sensor-operators-at-walls)).
 - **The wall order of a filtered smooth evolution is lower than the derivative
   closure's.** The filter's closure rows set it: the default one-sided rows read
   3.8 next to the wall where the cascade rows read 1.8, whatever the derivative
   closure
-  ([evolution accuracy](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix)).
+  ([evolution accuracy](appendix/walls.md#the-smooth-evolution-accuracy-matrix)).
 - **A converging case fails below a CFL number rather than above one.** That is
   the filter, not a CFL restriction: under `filter_cfl = 0` a smaller step
   applies more passes per unit time. The default relaxation removes it
-  ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)).
+  ([filter dissipation](appendix/filter.md#the-filters-dissipation)).
 - **The geometry ahead is unknown and a converging shock is possible.**
   `detector = :d8` improves most of the battery and both Cartesian ceilings;
   δ⁴ stays on the non-species sensors of the default only because the
   guidance for converging shocks rests on the spherical case
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  ([battery](appendix/shocks.md#the-shock-battery)).
 - **The sensor phase is a large share of the step.** `compute_artificial!` is a
   quarter of the multicomponent right-hand side under the default `:gaussian`
   smoother, most of it the line solves that smooth one sensor per species.
   Cutting it means choosing a shared sensor over a per-species one, which is a
-  numerics decision ([step cost](CALIBRATION_APPENDIX.md#operator-and-step-cost)).
+  numerics decision ([step cost](appendix/cost.md#operator-and-step-cost)).
 - **The run ends on a state the EOS rejects.** A shock converging into a cold
   or near-vacuum ambient carries six to eight cells of negative internal energy
   for the whole run and still reaches the exact plateau; repairing those cells
   terminates the run. Use
   `validity = :permissive` with the default `floor_scope = :representable`, and
   bound the count in a guard
-  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
+  ([CFL](appendix/shocks.md#the-cfl-restriction-and-the-symmetry-cell)).
 - **A multicomponent run is rejected for negative species.** A mass fraction
   beyond `species_band` means the interface is no longer bounded:
   check that `C_Y` is on and that an interface meant to be resolved spans
   seven or more cells. Widening the band admits the failure rather than
-  repairing it ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)).
+  repairing it ([species band](appendix/transport.md#the-species-validity-band)).
 - **A smooth run is suspected of an artificial-property error.**
   `ArtificialProperties(enabled = false)` skips the sensors and the coefficient
   calculation entirely. Taylor-Green at 128³ completes without them, which it
   does not without the filter
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
+  ([Taylor-Green](appendix/filter.md#taylor-green)).
 - **A published Cook-family parameter set is preferred to these constants.**
   `bench/artcal.jl brill2025` runs the set of Brill, Olson and Bokman, converted
   by the detector's factor of 240, through the battery; it completes every Noh
   geometry and its C_beta of 16.8 over-damps the converging plateaus
-  ([battery](CALIBRATION_APPENDIX.md#the-brill-2025-parameter-set)).
+  ([battery](appendix/shocks.md#the-brill-2025-parameter-set)).
 - **The ambient is cold.** κ\* is written as ρc/T_ion and is not singular in
   practice: the sound speed vanishes with the temperature at a floored cell.
   A cold ambient changes the count of cells the EOS calls inadmissible,
   since the precursor's negative internal energy is a fixed absolute amplitude
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  ([battery](appendix/shocks.md#the-shock-battery)).
 - **Results differ across process grids.** Stay on `beta_sensor = :strain`. The
   switched forms carry a discontinuous compression switch and reproduce across
   decompositions eight orders less well than the strain sensor
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  ([battery](appendix/shocks.md#the-shock-battery)).
 - **A run at a curved coordinate singularity does not conserve under the
   filter.** Keep `filter_weighting = :none`. Neither form conserves on a closed
   line; the volume-weighted one is 17 times less conservative at an axis or a
   pole
-  ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)).
+  ([non-uniform volumes](appendix/filter.md#filtering-on-non-uniform-volumes)).
 - **Float32 or device runs.** Keep the default closure rows. In Float32 the
   Brady-Livescu rows floor one derivative at 1e-3, an order of magnitude above
   the cascade, although a wall evolution floors at the same level under either
   closure
-  ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
+  ([wall closures](appendix/walls.md#wall-closures-in-production)).
 - **A three-dimensional CFL number looks small next to the literature.**
   `max_rate` takes the acoustic rate as the Euclidean bound `c · sqrt(Σ 1/h_d²)`,
   the linear limit on an isotropic grid, where
   [Pyranda](https://github.com/LLNL/pyranda) counts the sound speed once and
   reads √3 times this one
-  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
+  ([CFL](appendix/shocks.md#the-cfl-restriction-and-the-symmetry-cell)).
 
 ## Known limitations of the calibration
 
 - The compact filter holds the solver together, and every constant above is
   conditional on it; its α was fitted on Taylor-Green at `C_mu = 0.002`, so
   the two fits are joint
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
+  ([Taylor-Green](appendix/filter.md#taylor-green)).
 - `C_mu` is active but not fitted: Taylor-Green selects no positive value, and
   a fit needs a case with an unresolved cascade under the default filter
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)); the decision is
+  ([Taylor-Green](appendix/filter.md#taylor-green)); the decision is
   roadmap N4.
 - At two species the per-species sensor machinery is a measurable no-op, and
   the species constants earn their cost only at three or more
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  ([battery](appendix/shocks.md#the-shock-battery)).
 - A converging strong shock at the spherical origin is limited to `cfl` 0.3, at
   every resolution, by an excursion of the origin cell
-  ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
+  ([CFL](appendix/shocks.md#the-cfl-restriction-and-the-symmetry-cell)).
 - `filter_state!` is not conservative on non-Cartesian metrics under either
   weighting
-  ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)).
+  ([non-uniform volumes](appendix/filter.md#filtering-on-non-uniform-volumes)).

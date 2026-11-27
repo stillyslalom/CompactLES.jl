@@ -4,7 +4,7 @@ This document is the design of the incompressible solver, roadmap item I1,
 and of the stages that take it from the delivered prototype to the
 production configuration. The prototype is `src/solver/incompressible.jl`; its
 measurements are in the appendix under
-[the incompressible prototype](CALIBRATION_APPENDIX.md#the-incompressible-prototype).
+[the incompressible prototype](appendix/implicit.md#the-incompressible-prototype).
 
 ## Contents
 

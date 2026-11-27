@@ -133,7 +133,7 @@ same callback list together cost a small fraction of the run's wall:
 
 The transfer-mode note at the
 top of `ext/CompactLESHDF5Ext.jl` records the decision, and
-[the shared-file write](CALIBRATION_APPENDIX.md#the-shared-file-write) the
+[the shared-file write](appendix/cost.md#the-shared-file-write) the
 measurement behind it.
 
 ### Parallel HDF5 on a workstation

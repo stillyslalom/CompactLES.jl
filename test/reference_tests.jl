@@ -1,5 +1,6 @@
 # Reference-layout guard. The files under reference/ hold one kind of
-# information each: measurements in CALIBRATION_APPENDIX.md, the defaults and
+# information each: measurements in the appendix (CALIBRATION_APPENDIX.md
+# and the topic files of reference/appendix/ it indexes), the defaults and
 # the symptom list in CALIBRATION.md, the mechanism in DESIGN.md, the open
 # work in ROADMAP.md, the history in the git log. Between September 2026
 # reviews the appendix grew fivefold and every closed item was recorded in
@@ -12,8 +13,8 @@
 #      one-digit mantissa (`1e-3`) is not matched, since in the prose files
 #      that form is mostly an order of magnitude, a tolerance or a default;
 #   2. CALIBRATION.md over the line cap its header states;
-#   3. a closed ROADMAP entry (`- [x]`) longer than five lines: one sentence
-#      and a commit hash is the record, the commit message is the account;
+#   3. a closed ROADMAP entry (`- [x]`): a closed item is deleted, and the
+#      commit that closes it is the record;
 #   4. the word "supersede" in the appendix, the mark of a number annotated
 #      instead of deleted;
 #   5. a relative link in a reference file, CLAUDE.md, README.md or a bench/
@@ -35,9 +36,13 @@ module ReferenceLayout
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 const REFERENCE = joinpath(ROOT, "reference")
 const APPENDIX = joinpath(REFERENCE, "CALIBRATION_APPENDIX.md")
+const APPENDIX_DIR = joinpath(REFERENCE, "appendix")
 const CALIBRATION = joinpath(REFERENCE, "CALIBRATION.md")
 const ROADMAP = joinpath(REFERENCE, "ROADMAP.md")
-const CLOSED_ENTRY_LINES = 5
+
+# The appendix: its index and the topic files the index lists.
+appendix_files() =
+    [APPENDIX; sort(filter(f -> endswith(f, ".md"), readdir(APPENDIX_DIR; join=true)))]
 
 rel(path) = replace(relpath(path, ROOT), '\\' => '/')
 
@@ -116,40 +121,19 @@ function calibration_cap()
     return cap, length(lines)
 end
 
-# Closed ROADMAP entries: a `- [x]` list item runs to the next list item at
-# its indent or shallower, a blank line, or a header.
-function long_closed_entries()
-    lines = readlines(ROADMAP)
+# Closed ROADMAP entries, which are deleted rather than kept.
+function closed_entries()
     out = String[]
-    i = 1
-    while i <= length(lines)
-        m = match(r"^(\s*)- \[x\]", lines[i])
-        if m === nothing
-            i += 1
-            continue
-        end
-        indent = length(m.captures[1])
-        j = i + 1
-        while j <= length(lines)
-            s = lines[j]
-            isempty(strip(s)) && break
-            startswith(s, '#') && break
-            item = match(r"^(\s*)- ", s)
-            item !== nothing && length(item.captures[1]) <= indent && break
-            j += 1
-        end
-        n = j - i
-        n > CLOSED_ENTRY_LINES &&
-            push!(out, "$(rel(ROADMAP)):$i: closed entry spans $n lines")
-        i = j
+    for (i, line) in enumerate(eachline(ROADMAP))
+        occursin(r"^\s*- \[x\]", line) && push!(out, "$(rel(ROADMAP)):$i")
     end
     return out
 end
 
 function supersede_lines()
     out = String[]
-    for (i, line) in enumerate(eachline(APPENDIX))
-        occursin(r"supersede"i, line) && push!(out, "$(rel(APPENDIX)):$i")
+    for f in appendix_files(), (i, line) in enumerate(eachline(f))
+        occursin(r"supersede"i, line) && push!(out, "$(rel(f)):$i")
     end
     return out
 end
@@ -315,7 +299,7 @@ end
 
 function numeral_sentences()
     out = String[]
-    for f in readdir(REFERENCE; join=true)
+    for f in [readdir(REFERENCE; join=true); appendix_files()[2:end]]
         name = basename(f)
         endswith(name, ".md") && !(name in NUMERAL_LOCAL) || continue
         append!(out, numeral_sentences(f))
@@ -340,11 +324,11 @@ end # module ReferenceLayout
         @warn "CALIBRATION.md is $n lines against its cap of $cap"
     @test cap === nothing || n <= cap
 
-    long = RL.long_closed_entries()
-    for line in long
-        @warn "closed ROADMAP entry over $(RL.CLOSED_ENTRY_LINES) lines: $line"
+    closed = RL.closed_entries()
+    for line in closed
+        @warn "closed ROADMAP entry kept: $line"
     end
-    @test isempty(long)
+    @test isempty(closed)
 
     superseded = RL.supersede_lines()
     for line in superseded

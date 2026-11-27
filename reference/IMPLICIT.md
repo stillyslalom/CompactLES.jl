@@ -4,7 +4,7 @@ This document is the design for roadmap items H1 (implicit diffusion
 infrastructure) and H2 (compatible IMEX time integration). The operator and
 integrator choices below rest on the
 1-D model studies of `bench/archive/stiffdiffusion.jl`, whose tables are in the
-appendix under [stiff diffusion](CALIBRATION_APPENDIX.md#stiff-diffusion).
+appendix under [stiff diffusion](appendix/implicit.md#stiff-diffusion).
 The material, closure and energy contracts that H3–H6 bring to the implicit
 system are specified in [DESIGN.md](DESIGN.md#material-and-physics-interfaces);
 this document covers the numerical machinery they share.
@@ -110,7 +110,7 @@ truncation but make the operator nonsymmetric and leave a conservation
 defect, which rules out conjugate gradients; the mirror is exact to the
 interior order on data of its parity and first order at the wall node on
 data that are not. The measurements are in the appendix under
-[stiff diffusion](CALIBRATION_APPENDIX.md#wall-treatment-of-the-staggered-operator).
+[stiff diffusion](appendix/implicit.md#wall-treatment-of-the-staggered-operator).
 
 A symmetry plane or a coordinate singularity lies half a cell beyond the end
 node, so a midpoint lies on the plane. The mirror is taken about that
@@ -129,14 +129,14 @@ plane while `D_s T` is odd, so the smooth continuation, which the explicit
 divergence also takes, is not the mirror adjoint to `D_s`: `J W L` is
 symmetric there only up to a defect confined to the rows near the fold and
 falling with h, and conserves to second order
-([appendix](CALIBRATION_APPENDIX.md#the-staggered-operator-at-an-odd-area-fold)).
+([appendix](appendix/implicit.md#the-staggered-operator-at-an-odd-area-fold)).
 The adjoint mirror would
 continue the flux as `|r| K T'`, which is inconsistent at the first node.
 The spherical origin's area is even and keeps both. At the axis and the
 poles no closure symmetric in a diagonal node norm keeps the order: the
 first node reaches order four on data even across the fold and three on
 odd data, at errors far above the smooth continuation's
-([appendix](CALIBRATION_APPENDIX.md#symmetric-closures-at-an-odd-area-fold)).
+([appendix](appendix/implicit.md#symmetric-closures-at-an-odd-area-fold)).
 
 The staggered form enters only the implicit part. The explicit molecular
 fluxes keep `D κ D`, so no current baseline moves. A conduction channel moved
@@ -196,7 +196,7 @@ RK45 stays the default: a run with no implicit term never allocates the ARK
 workspace, as DESIGN.md's analytic execution contract requires. The explicit
 half's stability region differs from RK45's; its acoustic limit is slightly
 higher, so a `cfl` chosen for RK45 is stable under the pair
-([the additive pair](CALIBRATION_APPENDIX.md#the-additive-pair-on-the-conduction)).
+([the additive pair](appendix/implicit.md#the-additive-pair-on-the-conduction)).
 
 The stage equations share one right-hand side, so components contribute to
 one residual and are not updated in sequence, as H2 requires.
@@ -245,7 +245,7 @@ one residual and are not updated in sequence, as H2 requires.
    geometry and on three-dimensional Cartesian and cylindrical grids, a
    uniform right-hand side returned without iterating, and the decomposed
    solve against the undivided one in the MPI suite
-   ([the implicit stage](CALIBRATION_APPENDIX.md#the-implicit-stage)).
+   ([the implicit stage](appendix/implicit.md#the-implicit-stage)).
    Remaining: the smoother on a spherical grid with its origin, where the
    two angular directions dominate the radial one and the count grows with
    the grid (plane relaxation is the candidate), and agglomeration of the
@@ -276,11 +276,11 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
   smoothly continued operator, or a defect correction whose inner solve
   applies conjugate gradients to the symmetric adjoint mirror, under which
   the correction contracts at every step size
-  ([appendix](CALIBRATION_APPENDIX.md#symmetric-closures-at-an-odd-area-fold)).
+  ([appendix](appendix/implicit.md#symmetric-closures-at-an-odd-area-fold)).
   The choice rests on the measured cost of each. Stage 2 delivers GMRES,
   which reaches 1e-10 in as many preconditioned iterations as conjugate
   gradients on the symmetric geometries
-  ([appendix](CALIBRATION_APPENDIX.md#the-implicit-stage)). A correction
+  ([appendix](appendix/implicit.md#the-implicit-stage)). A correction
   contracting by 0.14 per outer step needs about twelve outer steps to the
   same tolerance, each an inner solve, and competes only if loose inner
   solves keep that contraction.

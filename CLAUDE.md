@@ -10,8 +10,8 @@ the place to record a result.
 | `reference/DESIGN.md` | the numerics — source map, compact solve, folds, freestream preservation, NSCBC |
 | `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
 | `reference/CALIBRATION.md` | the calibrated defaults and which setting to change for an instability or an over-dissipated solution |
-| `reference/CALIBRATION_APPENDIX.md` | every measurement, one section per instrument: the sweeps, dead ends and null results behind the defaults |
-| `reference/ROADMAP.md` | positioning, comparisons, open work items; a closed item is one line naming its commit |
+| `reference/CALIBRATION_APPENDIX.md` | the index of every measurement, one section per instrument in the topic files of `reference/appendix/`: the sweeps, dead ends and null results behind the defaults |
+| `reference/ROADMAP.md` | positioning, comparisons, open work items; a closed item is deleted, its commit the record |
 | `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
@@ -722,8 +722,8 @@ argument makes KernelAbstractions wrap the body in `@aliasscope`, which Julia
 1.13.0 miscompiles for a loop that stores an element the next iteration loads
 (the Thomas sweep) once bounds checks are elided; 1.11 and 1.12 have a related
 form (KernelAbstractions.jl#652). `--check-bounds=yes` hides it, so the serial
-CI job passes while the MPI leg fails. Filed as JuliaLang/julia#63129;
-`reference/bugreports/julia_aliasscope_bug_report.md` has the reproducer.
+CI job passes while the MPI leg fails. The reproducer is in
+[JuliaLang/julia#63129](https://github.com/JuliaLang/julia/issues/63129).
 
 **No short-circuit condition choosing between two uniform values in a device
 body.** `x = (a || b) ? p : q`, with `p` and `q` kernel arguments and `b`
@@ -827,11 +827,8 @@ be revisited.
   agent habit of opening a branch per change is noise here; do not create one
   unless asked. Commit only when asked, and first complete the applicable checks
   under "The gate."
-- **A roadmap closure rides the next commit; it does not get one of its own.**
-  After a commit lands, fill its hash into the `ROADMAP.md` line it closes, but
-  leave that edit uncommitted rather than pushing a standalone "close N_" commit.
-  Fold it into whichever substantial commit comes next, silently: that commit's
-  message describes only its own work, not the bookkeeping it carries along.
+- **A roadmap item is deleted by the commit that closes it.** `ROADMAP.md` lists
+  open work only; the closing commit's message is the record.
 
 ## Known limitations
 

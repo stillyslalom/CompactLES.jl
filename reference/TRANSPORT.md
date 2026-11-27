@@ -369,7 +369,7 @@ inversion checks, not a qualified CD model.
    subcycled fine-level failures to parent ranks before throwing; it never
    extrapolates, clamps, or retries a source-domain rejection. The binary
    Loschmidt convergence, conservation, species-permutation and direct-binary
-   gates are recorded in the [neutral transport checks](CALIBRATION_APPENDIX.md#neutral-polynomial-transport).
+   gates are recorded in the [neutral transport checks](appendix/transport.md#neutral-polynomial-transport).
    Thermal diffusion is deliberately absent.
 6. **Plasma cross-model verification, offline.** Implement Paquette or an
    independently formulated effective-potential evaluator as a second

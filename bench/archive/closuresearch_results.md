@@ -3,7 +3,7 @@
 This is an archive of the search and the solver measurements taken at the time.
 The slip-wall flux contract changed afterwards; the current-solver smooth-wall
 and shock remeasurement, cold-Noh failures included, is recorded in
-[the fifth-order closure search](../../reference/CALIBRATION_APPENDIX.md#the-fifth-order-closure-search).
+[the fifth-order closure search](../../reference/appendix/walls.md#the-fifth-order-closure-search).
 
 Instrument: `bench/archive/closuresearch.jl`. All rows are exact on monomials of
 degree 0:5 by construction. Growth rates below are from the reduced injected

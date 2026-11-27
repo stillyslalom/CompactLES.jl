@@ -3,7 +3,7 @@
 The design of the patch-based adaptive mesh refinement (AMR) and the device
 backend: the constraints that bound it, the mechanisms, and the lessons the
 measurements left. The measurements themselves are in the appendix's AMR
-section ([measurements](CALIBRATION_APPENDIX.md#amr)); the open work is in
+section ([measurements](appendix/amr.md#amr)); the open work is in
 [ROADMAP.md](ROADMAP.md) and the delivery history in the git log.
 Prerequisite reading: `DESIGN.md` for the compact operators, the distributed
 line solve, and the coordinate folds.
@@ -172,7 +172,7 @@ numbering.
    symbol. The root grows with the band, so a C10 interface pollutes
    further than a C6 one and the same buffer holds two orders where it held
    five; the level buffers were remeasured at C10 with the same outcome
-   ([measurements](CALIBRATION_APPENDIX.md#amr)).
+   ([measurements](appendix/amr.md#amr)).
 
 ## Transfer operators
 
@@ -227,7 +227,7 @@ measured as well. The pair round-trips to round-off, restriction is a left
 inverse of prolongation for arbitrary data, fine → coarse → fine converges at the
 interpolation order, and a constant survives both directions; within 6
 points of a closed end the round-trip converges at the closure order
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 **Conditioning.** Prolongation is deconvolution of a Gaussian, benign while
 the coarse field carries no content above its Nyquist, and the measured gain
@@ -256,7 +256,7 @@ on periodic passive-species shear through uniform, same-level, two-level,
 three-level and regridded layouts, global-step and subcycled, and compares
 each layout's drift from its own initial integral against budgets declared
 before the measurement
-([measurements](CALIBRATION_APPENDIX.md#benchinterfaceconservationjl-composite-conservation-budgets)).
+([measurements](appendix/amr.md#benchinterfaceconservationjl-composite-conservation-budgets)).
 The drift over time is the budgeted quantity: a difference between two layouts
 at one instant mixes solution error with quadrature error, since the node
 quadrature of a moving smooth field changes on a nonuniform composite grid
@@ -296,7 +296,7 @@ node because a correction on the node the shell copies to the child fed back
 on itself, and a positivity guard holds back the part of a correction that
 would take a node below half its density or internal energy, for a later
 step
-([measurements](CALIBRATION_APPENDIX.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
+([measurements](appendix/amr.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
 It runs on host storage and not under the positivity limiter.
 
 ## Patches and same-level interfaces
@@ -344,7 +344,7 @@ interface, the reflected amplitude of an acoustic pulse, the conservation
 drift over a long periodic run, and a viscous wave. Under the default ghost
 fluxes, which take `:extended` only, the inviscid and viscous rows converge
 at the interior's order through the interface
-([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
+([ghost fluxes](appendix/amr.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
 Under `:closure` the divergence's one-sided rows bind the inviscid orders, so
 the inviscid gates cannot tell `:extended` from `:onesided`; the viscous
 gate, run under the closure rows, reaches the interface rows through the
@@ -352,7 +352,7 @@ gradients, and there the extended-data rows are worth about two orders over
 the one-sided ones. Rank partitioning reproduces the serial
 two-patch answer bitwise at one rank per patch, and to round-off with
 identical step counts once a patch itself decomposes
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 ### Banded schemes at interfaces
 
@@ -407,7 +407,7 @@ LEVEL_BUFFER       4, 6
 
 C10 tracks C6 at every setting, nothing calls
 for wider buffers, and the constants stay where they are
-([measurements](CALIBRATION_APPENDIX.md#amr)). The amplifying loop that
+([measurements](appendix/amr.md#amr)). The amplifying loop that
 `RESTRICT_MARGIN` breaks belongs to `level_restriction = :filter`: restricting
 up to the face, the filtered coupling fails within twenty steps at either
 scheme, while under injection no margin shows a loop.
@@ -447,7 +447,7 @@ both are O(h²) against the solution, and the manufactured-solution gate
 confirms it. The default coupling is therefore order-6 Lagrange
 interpolation up (`interpolate!`) and coincident-node injection down (a
 sampled `gather_region!`), which converges at better than third order with
-errors three decades lower ([measurements](CALIBRATION_APPENDIX.md#amr)).
+errors three decades lower ([measurements](appendix/amr.md#amr)).
 `level_restriction = :filter` keeps the
 anti-aliasing pair selectable, and regridding initializes *new* fine cells
 by interpolation for the same reason.
@@ -464,10 +464,10 @@ to the boundary closes an amplifying loop through the fine solution's imposed
 shell into the filter's closure rows, whose output feeds the next shell, and
 the run fails within twenty steps. Under injection no margin shows a loop,
 and the margin of 2 is kept for the Sod crossing's mass drift, which a
-smaller margin raises ([measurements](CALIBRATION_APPENDIX.md#amr)). Restricting before
+smaller margin raises ([measurements](appendix/amr.md#amr)). Restricting before
 every stage of the global step removes a coupling term first order in the step but not a
 measurable error, so the write-back stays once per step
-([measurements](CALIBRATION_APPENDIX.md#bencharchiverestrictcostjl-restriction-before-every-stage)).
+([measurements](appendix/amr.md#bencharchiverestrictcostjl-restriction-before-every-stage)).
 
 **The parent's operators on restricted data.** A feature the child resolves
 is a jump on the parent's spacing, and the parent's compact solves spread its
@@ -479,14 +479,14 @@ removes a converging shock's precursor and is the default
 composite conservation, and the coupling's gate tests only the parent's
 uncovered nodes, since a correction for the restricted shock at the covered
 ones put the parent's error ahead of the front
-([measurements](CALIBRATION_APPENDIX.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
+([measurements](appendix/amr.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
 The parent's artificial coefficients read the same jump at full strength, so
 its sensors are set to zero before smoothing at the nodes the restriction
 overwrites (`MASK_CHILD_SENSORS`). The coefficients sensed there had bounded
 the parent's step and reached the nodes beside the face that the parent
 keeps; a regrid check's sensor criterion tags from coefficients that keep
 every sensor
-([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
+([measurements](appendix/amr.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
 
 **Distribution of the coupling.** Data moves point to point and work
 divides over a tile's own ranks (`LevelCoupling`, `src/amr/levels_coupling.jl`). A
@@ -501,7 +501,7 @@ the parent's subset, with every tile's chain held on every rank, makes the
 per-rank level memory and the coupling wall grow with the rank count on a
 weak-scaled slab of tiles; point to point, both follow the tiles a rank
 holds
-([measurements](CALIBRATION_APPENDIX.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
+([measurements](appendix/amr.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
 The data moved are copies applied in tile order, so the result does not
 depend on the rank count beyond the decomposition's own round-off. Work
 divides over a tile's ranks: a
@@ -511,7 +511,7 @@ the chain only for components c ≡ r (mod np) and shares the thin shell ring
 through one Allgatherv over the tile's ranks, which moves the same values
 instead of recomputing them, serial results bit-identical, and brought the
 composite back to about half the uniform-fine wall
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 Every rank writes only the nodes it owns; tagging reduces its
 bounds globally; a fine patch picks its process grid through `_amr_dims`
 over the rank range it is assigned
@@ -760,7 +760,7 @@ layers included, and the composite quadrature, which weights every node by
 1/`inv_J`, weights it by r. The transfers move the conserved variables:
 interpolating r·Q and dividing by r at the fine nodes moved neither the
 coarse-fine error nor the composite mass drift
-([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)),
+([measurements](appendix/amr.md#testlevel_testsjl-the-level-hierarchy)),
 and the plain form stays valid where r vanishes. The ghost fluxes carry the
 area factor and the Jacobian (`_ghost_geometry`), and the molecular flux
 evaluated from the gradient ring adds the curvature terms of the velocity
@@ -807,7 +807,7 @@ Unfiltered, the grid-scale waves a coarse-fine face emits reach the axis,
 where the cylindrical divergence does not hold the π mode of the radial
 momentum in its null space and the tile departs from the uniform run; the
 axis rows are filtered, as a production run is
-([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+([measurements](appendix/amr.md#testlevel_testsjl-the-level-hierarchy)).
 Cylindrical Noh with a static tile on the axis is a `test/validation.jl`
 row: while the tile holds the shock, the axis layer, plateau, front and mass
 are the uniform run's at the level's spacing, in the same number of steps. A
@@ -830,7 +830,7 @@ at its own step cadence, which is dt-consistent whenever `filter_cfl > 0`.
 Subcycling leaves the entropy-wave orders unchanged at a third of the steps,
 and the subcycled Sod gate improves on the global-dt one in both
 ahead-of-shock noise and mass drift
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 The step driver is recursive (`_advance_level!`): one step of level ℓ, the
 extra RHS that saves the Hermite endpoint for its children, three substeps
@@ -900,7 +900,7 @@ ranges, with the per-patch halo exchange between phases. Two things depend
 on that. A node shared by four tiles (eight in 3-D) reaches the mean of all
 its copies only that way, since one flat pairwise pass reads values an
 earlier pair has changed and ends away from the mean
-([measurements](CALIBRATION_APPENDIX.md#amr)); and the edge and corner
+([measurements](appendix/amr.md#amr)); and the edge and corner
 ghosts of an interior tile,
 which no shell writes and no face strip covers, are reached by the later
 phases' strips through the earlier phases' ghosts, the argument `halo.jl`
@@ -967,7 +967,7 @@ runs reproduce serial to round-off, and the tiled regrid tracks the Sod
 shock through lattice cells that stay contiguous. On an annular tag set in
 2-D (`bench/archive/amr_tiles.jl`) the lattice covers well under half the bounding
 box, which is the implosion argument for tiles
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 ### Tagging and regridding
 
@@ -1070,7 +1070,7 @@ The moving-region gates are Sod and Shu–Osher against uniform-fine
 references: the composite is an order of magnitude or more closer to the
 fine answer than the uniform-coarse run, at a fraction of the fine run's
 step count, and the tiled regrid reproduces the Sod gate
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 ### Regridding several levels
 
@@ -1117,7 +1117,7 @@ The gate is a shock driven through a contact into heavy gas in one
 dimension, with three levels built from the initial state's tags. The
 finest level holds the leading shock at every sampled time, and the
 composite is an order of magnitude closer than the root alone to a uniform
-run at the finest spacing ([measurements](CALIBRATION_APPENDIX.md#amr)).
+run at the finest spacing ([measurements](appendix/amr.md#amr)).
 Decomposed runs on two, four and eight ranks reproduce the serial tile sets
 and density to round-off, and a checkpoint taken with the second level
 present continues bit for bit.
@@ -1176,7 +1176,7 @@ MPI suites). A level on a wall leaves the two walls' half cells at different
 spacings, an error of f'(H² − h²)/8. On a refined Taylor–Green the
 masked composite energy history tracks the single-level history to the fine
 sampling's own quadrature difference, where the unmasked sum sits nearly two
-orders above it ([measurements](CALIBRATION_APPENDIX.md#amr)); the same check
+orders above it ([measurements](appendix/amr.md#amr)); the same check
 runs in `bench/tgv_energy.jl` with `refine=`. The mixing-layer cost case's
 ∫Y(1−Y)dV (`bench/archive/amr_cost.jl`) is this quadrature.
 
@@ -1214,7 +1214,7 @@ On
 ∫Y(1−Y)dV the composite lands several times closer to the fine answer than
 the coarse run, at a third to a half of the fine wall and a quarter of its
 memory, under the δ⁴ρ tag and under the sensor tag alone
-([measurements](CALIBRATION_APPENDIX.md#amr)). Pointwise in-region error is
+([measurements](appendix/amr.md#amr)). Pointwise in-region error is
 the wrong metric: coarse and composite sit at the same maximum against fine
 there, the sub-cell displacement of a near-discontinuous interface.
 
@@ -1554,7 +1554,7 @@ of it, so it reproduces the every-rank answer to round-off rather than
 bitwise, the tier the MPI suite applies to decomposed patches; a whole tile
 is the serial tile, and the tiled wave and Sod regrid cases hold the serial
 answer on two, four and eight ranks with the subdivision off
-([measurements](CALIBRATION_APPENDIX.md#amr)). With it on, the layout and
+([measurements](appendix/amr.md#amr)). With it on, the layout and
 the solution to within the truncation error follow the rank count. A rank
 outside a subset
 follows the same step sequence and trigger firing as one inside it, which
@@ -1632,7 +1632,7 @@ slot, tag history included, serially and on two, four and eight ranks; a
 twelve-tile
 wave written on half the ranks and restored on all of them, rebuilt from a
 six-tile initial region, continues to the round-off tier
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 ### Phase change
 
@@ -1678,7 +1678,7 @@ launched through `pointwise!`: `Array` storage takes the `@threaded` loop,
 any other storage a KernelAbstractions kernel. The CPU keeps `@threaded`
 because KA-CPU is several times to tens of times slower on it, a per-launch
 task-spawn cost with no work threshold
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 Kernel-argument adaptation is the central design concern. A `Vector{A}` or
 `Matrix{A}` kernel argument **hangs** in adaptation rather than erroring,
@@ -1690,7 +1690,7 @@ table flattened into one tuple at the host table's padded width. Bodies take no 
 which costs an order of magnitude in silent per-point dispatch on both
 paths, and a splatted kernel-argument tuple longer than 32 elements is an
 `InvalidIRError` on device; `test/device_tests.jl` asserts the budget for
-every body ([measurements](CALIBRATION_APPENDIX.md#amr)).
+every body ([measurements](appendix/amr.md#amr)).
 
 ### Line solves
 
@@ -1764,7 +1764,7 @@ algorithm requires, before the host reads the packed interface values of
 the reduced solve, once per `apply_along!`. `DEVICE_SYNC[] = true` restores
 synchronize-per-launch and is the correctness fallback. Removing the
 per-launch synchronize took roughly a third off the device step
-([measurements](CALIBRATION_APPENDIX.md#amr)). Per-patch streams
+([measurements](appendix/amr.md#amr)). Per-patch streams
 are not implemented: a rank's patches advance in sequence, and the
 remaining gap to CPU is bound by the per-apply reduced-solve fence, which
 a second stream cannot remove. A tiled level of small tiles instead
@@ -1807,7 +1807,7 @@ extent differs from the lattice cell's, form stacks of their own.
 
 The measurements on the workstation GPU (`bench/device_solver.jl`, an
 RX 6800 XT, an indicator of structure and not a target number) are in the
-appendix ([measurements](CALIBRATION_APPENDIX.md#amr)).
+appendix ([measurements](appendix/amr.md#amr)).
 
 ### Precision
 
@@ -1822,7 +1822,7 @@ of magnitude above the Float64 one, which is why it is not the default. On
 device Float32 runs only a little faster than Float64, because the step is
 bounded
 by launch submission and fences rather than arithmetic
-([measurements](CALIBRATION_APPENDIX.md#amr)). A mixed-precision policy
+([measurements](appendix/amr.md#amr)). A mixed-precision policy
 waits for a memory-capacity-bound case on the target machine, where FP64
 runs at full rate and the question is traffic, not FLOPs.
 
@@ -1891,7 +1891,7 @@ twelve tiles is the first tiled configuration on which the device leads.
 The residual floor is the work that stays per tile: the shell impositions
 (the box upload, the chain and the ring per tile), the interface records, and
 `max_rate`'s two reductions per tile
-([measurements](CALIBRATION_APPENDIX.md#amr)).
+([measurements](appendix/amr.md#amr)).
 
 On rzadams the device floors, the line solves and the 64³ and 256³ TGV
 rates are recorded with the same instrument. The open issue there is an
@@ -2022,7 +2022,7 @@ Configurations rejected at setup, and the reason:
   coarse-fine one. The smoother keeps closed-edge rows at every interface
   face, since its input has no ghosts. The measured cost of each, and of
   the filter's interface rows, is in the appendix
-  ([interface sensors](CALIBRATION_APPENDIX.md#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+  ([interface sensors](appendix/amr.md#bencharchiveinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 
 ## Open work
 
@@ -2056,7 +2056,7 @@ leaves each tile on a few ranks.
 
 **Dense output.** Retain cubic Hermite reconstruction: the measured parent
 endpoint RHS share does not justify replacing it on the tested three- and
-four-level nests ([substep study](CALIBRATION_APPENDIX.md#bencharchivesubstepratesjl-refreshed-refined-level-rates)).
+four-level nests ([substep study](appendix/amr.md#bencharchivesubstepratesjl-refreshed-refined-level-rates)).
 The estimate excludes the box exchanges and does not qualify distributed or
 device layouts, whose endpoint costs should be measured if they become
 limiting.

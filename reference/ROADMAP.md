@@ -1,9 +1,9 @@
 # CompactLES task roadmap
 
 Open work for compressible, variable-density mixing and implosion, grouped by
-track and ordered within each track. Closed items are listed at the end, one
-line each with the commit that delivered them; the measurements behind them are
-in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
+track and ordered within each track. A closed item is deleted, and the commit
+that closes it is its record; the measurements behind it are in
+[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) and the methods in
 [DESIGN.md](DESIGN.md).
 
 ## Found by the examples
@@ -16,7 +16,7 @@ example they block is held until the item closes.
   converging on an r-z quadrant, the mean undivided fourth difference of ρ
   in the shell behind the shock is, against the uniform run on the level's
   nodes, 1.00 times for one box and 1.19 times for fixed and for regridded
-  tiles ([measurements](CALIBRATION_APPENDIX.md#bencharchivelevelpatternjl-the-grid-scale-pattern-of-a-refined-level)).
+  tiles ([measurements](appendix/amr.md#bencharchivelevelpatternjl-the-grid-scale-pattern-of-a-refined-level)).
   The regridded excess was A18's mechanism, removed by commit `04d3cff`;
   the sharpening flux's filtered gradients are smoothed over the level
   (commit `ef5a52d`). The tiled remainder is the explicit face rows of the
@@ -32,10 +32,10 @@ example they block is held until the item closes.
 - [Order of work](#order-of-work) gives the sequence across tracks; within a
   track the items are listed in the order they should be taken.
 - A measurement task is complete when its result and the resulting decision,
-  including a decision to retain the current method, are recorded: one line
-  under [Closed](#closed) naming the commit, its table in
-  [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), and its default in
-  [CALIBRATION.md](CALIBRATION.md) if a default moved.
+  including a decision to retain the current method, are recorded: its table
+  in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), its default in
+  [CALIBRATION.md](CALIBRATION.md) if a default moved, and the item deleted
+  in the commit that closes it.
 - Close implementation tasks with the stated regression checks and the applicable
   repository validation gate. A numerical change requires an explained baseline
   update, not a relaxed test tolerance.
@@ -130,13 +130,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   misfit, Taylor–Green at Re = 1600 fits best at `C_mu = 0` on both grids
   measured and under both the default and the near-off filter. On the finer
   grid, 128³, a fifth of the physical dissipation lies off the grid
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green); commits `c3f4f82`,
+  ([Taylor-Green](appendix/filter.md#taylor-green); commits `c3f4f82`,
   `7e37a04`). One-dimensional shocks cannot determine the shear channel, so no
   case in the repository supports a positive value. Cook's value of 0.002 was
   never fitted. Its evidence is decaying turbulence at Re_λ ≈ 720 on 192³
   (Kang et al.), under two-thirds-rule dealiasing or the sharp
   `pyranda_filter()`, not the default filter
-  ([where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)).
+  ([where 0.002 comes from](appendix/filter.md#c_mu-the-shear-viscosity)).
   Either set the default to zero once the one-dimensional battery and a
   shocked three-dimensional case clear it, or rerun that decaying-turbulence
   case under the default `compact_filter` and `pyranda_filter()`, which tells
@@ -149,13 +149,13 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 - [ ] **N18 — Finish qualifying the species channel's transport consistency.**
   The three channels are compared on the one-dimensional battery and the
   shocked He/CO2 tube under one sensor, one operator set and one step
-  ([the channel](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)),
+  ([the channel](appendix/shocks.md#the-partial-density-species-channel)),
   and the default's uniform (u, p, T) invariance and entropy inequality are
   derived and measured ([DESIGN.md](DESIGN.md#the-species-channel); commit
   `64b8e14`). The invariance argument is for a uniform temperature. At a
   temperature jump each channel's drift is its own continuous model's volume
   source, the discrete flux identities hold as products, and no split form is
-  needed ([the thermal contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump),
+  needed ([the thermal contact](appendix/transport.md#the-contact-with-a-temperature-jump),
   commit `5281eac`). On the shocked tube the energy change is attributed per
   term with a closed budget, and the three layer widths are grid-set while the
   channels differ in the jumps across them (commit `5d529cb`). Remaining: a
@@ -172,7 +172,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   only with a core of about three cells, and it leaves a tail of the heavy gas
   on the light side that the mass-fraction width reads as 10 cells at density
   ratio 100
-  ([interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)).
+  ([interface width](appendix/shocks.md#interface-width-against-brill-olson-and-bokman)).
   Brill, Olson and Bokman (J. Comput. Phys. 542, 114366, 2025; eq. 68 of
   arXiv:2503.12680v2) pair the same partial-density channel with a
   sharpening flux whose equilibrium profile is V = 1/(1 + e^(−x/ε)), ε = Δ by
@@ -197,7 +197,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   `max_rate`, and the default path bit-identical. It thins the interface at
   density ratio 100 at a cost in ringing and steps, improves nothing at 1000,
   and acts on the plateaus of a smooth slab, so the flux is off by default
-  ([the sharpening flux](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux)).
+  ([the sharpening flux](appendix/transport.md#the-interface-sharpening-flux)).
   Remaining: fix the localization on the smooth slab, then qualify at
   density ratio 1000; the discretization, normal
   regularization and step-limit questions to the authors; the He/CO2 tube
@@ -214,7 +214,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   The area form of a fold's pressure term differs from the gradient at the
   grid scale, and the fold's one-step map grows at a rate per step
   independent of N
-  ([grid-scale growth at the r-z axis](CALIBRATION_APPENDIX.md#grid-scale-growth-at-the-r-z-axis)).
+  ([grid-scale growth at the r-z axis](appendix/walls.md#grid-scale-growth-at-the-r-z-axis)).
   Delivered: the gradient form on θ-collapsed r-z (commit `17b0e44`) and on
   the spherical radial and polar momenta (commit `da0c733`); the axis runaway,
   the αf dependence of Noh's axis deficit and the origin's resolution
@@ -233,7 +233,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 
 - [ ] **N26 — Keep the internal energy positive ahead of a strong shock.**
   Measured (`bench/archive/shockfoot.jl`, commit `105f787`;
-  [negative internal energy ahead of a shock](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)):
+  [negative internal energy ahead of a shock](appendix/shocks.md#negative-internal-energy-ahead-of-a-shock)):
   on Woodward–Colella, Noh and Sedov the inadmissible cells are the compact
   scheme's odd-even undershoot ahead of a captured shock, whose depth is set
   by the jump and not by the ambient state, so an ambient internal energy
@@ -246,7 +246,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   difference of face fluxes under node weights, so a blend toward a
   first-order flux (Hu, Adams and Shu 2013) applies as a correction at the
   faces it limits. In one dimension (`bench/archive/positivity.jl`;
-  [the face-flux limiter](CALIBRATION_APPENDIX.md#the-face-flux-limiter)) the
+  [the face-flux limiter](appendix/shocks.md#the-face-flux-limiter)) the
   limit on each Runge–Kutta stage's increment, which needs a face register
   per direction under the low-storage integrator, together with the limit on
   each filter pass leaves no inadmissible point on Woodward–Colella and planar
@@ -312,7 +312,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   patches and boxes run bitwise against the host on device storage; on the
   cylindrical Noh the limited tiles drift half as far as under `:closure`
   and ten times as far as unlimited `:ghost` tiles
-  ([tile drift](CALIBRATION_APPENDIX.md#the-face-flux-limiter)). A node
+  ([tile drift](appendix/shocks.md#the-face-flux-limiter)). A node
   the fill of a new tile or box leaves inadmissible takes the multilinear
   state of its parent nodes, as a shell node does (commit `8ff3b5a`): ahead of
   a strong shock in cold gas moving fast, ρe is a small difference of large
@@ -370,7 +370,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
   are a running sum of a divergence the mask does not conserve: registers
   holding the masked divergence, or restoring its dropped source at the
   masked nodes, broke the refined Noh and Woodward–Colella rows
-  ([measurements](CALIBRATION_APPENDIX.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
+  ([measurements](appendix/amr.md#bencharchivemovingleveljl-disturbances-a-moving-level-carries)).
   **Depends on:** N26's stage in `src/`.
   **Gate:** per configuration, no inadmissible point on its strong-shock
   validation cases (Sedov and Noh ν = 2, 3 for the folds; the Noh level rows
@@ -508,7 +508,7 @@ magnetized target; I2–I5 for a low-Mach mixing case.
 - [ ] **V3 — Close gaps in automated verification.**
   In place: the temporal-order studies (commit `d8ea472`), with the
   once-per-step level restriction retained (commits `9370da5`, `e7dc4ca`;
-  [temporal order](CALIBRATION_APPENDIX.md#temporal-order)); the R1–R4
+  [temporal order](appendix/walls.md#temporal-order)); the R1–R4
   regressions and the skip accounting of the serial suite (commit `26ae691`);
   the Makie checks in CI's documentation job; the scheduled validation
   battery (`.github/workflows/validation.yml`); and the script reference
@@ -534,7 +534,7 @@ compact interface closures, and where the parent does not resolve the flow at
 a coarse-fine face the step's junction fluxes are reconciled (A14); smooth
 flow keeps the N10 budgets uncorrected. The measured interface orders
 are in the appendix's smooth-evolution
-[accuracy matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix);
+[accuracy matrix](appendix/walls.md#the-smooth-evolution-accuracy-matrix);
 the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md). The
 instruments for a new interface or boundary closure are the N6 matrix
 (`bench/boundaryorder.jl`, gated in `test/convergence.jl`),
@@ -551,7 +551,7 @@ promotion.
      (`LevelCoupling`), a transfer's chains and boxes exist on its tile's ranks
      only, interface tags number the messages of one rank pair, and owner
      sizing starts at the count a tile admits; `bench/archive/amr_scaling.jl` measures
-     the weak scaling ([table](CALIBRATION_APPENDIX.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
+     the weak scaling ([table](appendix/amr.md#bencharchiveamr_scalingjl-weak-scaling-of-the-level-coupling)).
   2. A nested hierarchy at scale, which needs S8's deep-regrid items: the
      measured rebalance and the device backend on the levels below the first
      refined level, which has both (commits `603af33`, `602002c`). A moved
@@ -631,7 +631,7 @@ promotion.
   two grids' tangential quadratures differ at order H³ per line and
   corrected everywhere they took a 2-D entropy wave from sixth order to
   second
-  ([measurements](CALIBRATION_APPENDIX.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
+  ([measurements](appendix/amr.md#bencharchiverefluxjl-the-conservative-coarse-fine-coupling)).
   Remaining: device kernels for the captures, the fold and the application,
   and a stacked level's per-stack captures; the limiter's stage and filter
   registers at a junction; and, for exact conservation of smooth flow, a
@@ -659,7 +659,7 @@ promotion.
   any tested cadence removes it; the closure rows are stable at lower order;
   interpolation order and a wider restriction margin do not help
   (`bench/archive/couplingspectrum.jl`,
-  [the level tests](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+  [the level tests](appendix/amr.md#testlevel_testsjl-the-level-hierarchy)).
   Candidates: a dissipative band at coarse-fine faces active without the
   global filter, or a restriction window blended at its edge instead of
   injected up to a hard cutoff; each needs a stability argument checked on
@@ -686,7 +686,7 @@ promotion.
   step count, the level's step count over the fine run's, and the cost per
   point-step over the fine run's, with a phase profile and an account of what
   sized each root step
-  ([measurements](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
+  ([measurements](appendix/amr.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid)).
   The remaining work:
   1. The level's step count. A parent's sensors are set to zero, before
      smoothing, at the nodes its child's restriction overwrites
@@ -800,7 +800,7 @@ promotion.
   Sod tube, the blob case and the 3-D case: the level's step count at the
   uniform fine run's, which every level but the last case's box takes, and the cost per
   point-step against the fine run's below the ratio recorded in
-  [the table](CALIBRATION_APPENDIX.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid);
+  [the table](appendix/amr.md#benchamrwinjl-time-to-solution-against-the-uniform-fine-grid);
   the refined wall below the uniform fine wall, at one rank and at eight,
   required only of runs whose level holds a small fraction of the fine
   grid's points (the table's level points column), as on the Sod tube and
@@ -874,7 +874,7 @@ promotion.
   leaves. With the fitted rate the shell peaks below 380–400 km/s and
   stagnates after bang, and the measured planar HDC rates (Olson 2011)
   over-ablate it
-  ([runs](CALIBRATION_APPENDIX.md#the-ablation-rate-of-the-briareus-driven-capsule)).
+  ([runs](appendix/shocks.md#the-ablation-rate-of-the-briareus-driven-capsule)).
   Remaining:
   1. The ablation pressure tied to ṁ by the rocket relation (P/ṁ), not
      calibrated separately as P₀ (145 Mbar).
@@ -1381,7 +1381,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
   per point and per Runge–Kutta stage, which makes the recovery several times
   as costly as under `IdealMixture` and the CPU step a third dearer
-  ([NASA-9 on the device](CALIBRATION_APPENDIX.md#bencharchivedevice_nasa9jl-nasa-9-on-the-device)).
+  ([NASA-9 on the device](appendix/amr.md#bencharchivedevice_nasa9jl-nasa-9-on-the-device)).
   The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
   `9e0f126`, `405037f`, measured with `bench/archive/nasa9_inversion.jl`). The
@@ -1431,7 +1431,7 @@ under [the refinement track](#refinement-for-the-production-geometry).
   number of truncated steps. At κ = 1 the density error comes within a
   factor 1.33 of the untruncated run's. At κ = 2, with the second ring
   truncated as well, it stays near 45 times the untruncated run's
-  ([the measurement](CALIBRATION_APPENDIX.md#azimuthal-mode-truncation)).
+  ([the measurement](appendix/cost.md#azimuthal-mode-truncation)).
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.
@@ -1502,258 +1502,3 @@ and the production configuration they lead to are in
 - **Design commitments:** compact structured operators, patch-based refinement,
   explicit geometry/collective contracts, and measurable accuracy for mixing and
   implosion. Revisit a restriction through a concrete case and a documented design.
-
-## Closed
-
-### Runtime and boundary correctness
-
-- [x] **R1** — Diagnostics and field output no longer disturb the artificial
-  coefficients the next timestep check reads (commit `4be4ac0`).
-- [x] **R2** — Endpoint conversion and progress checks turn an unrepresentable
-  advancing step into a diagnosed failure instead of a stalled clock
-  (commit `4be4ac0`).
-- [x] **R3** — An EOS-aware validity policy checks accepted and returned states
-  under `:strict`, `:permissive` or `:repair` (commit `4be4ac0`).
-- [x] **R4** — The NASA-9 inversion reports convergence and extrapolation status
-  instead of returning an unchecked estimate (commit `4be4ac0`).
-- [x] **R5** — `correct_flux!` imposes the adiabatic impermeable no-slip wall's
-  species and energy flux contract on the assembled flux before divergence
-  (commit `51d7b2a`).
-- [x] **N28** — `NSCBCOutflowBC` carries the first-order Bayliss–Turkel
-  curvature term at an outer radial face, and the oscillating-sphere dipole
-  reflects about a twentieth of what the plane form reflects (commit `6c97f4f`).
-- [x] **N29** — The inflow face's transverse terms carry the u_r/r of the
-  collapsed θ, so the r-z face beside the axis no longer grows vorticity
-  after a shock leaves through it (commit `f74b76f`).
-- [x] **N31** — The vorticity burst at the inflow face beside the axis was a
-  pressure pulse crossing the face while the face held u_r against its
-  radial gradient; the transverse pressure gradient of the inflow's
-  transverse terms now takes the weight min(β_t, M) (commit `7187b27`).
-- [x] **N33** — The r-z axis face carries −h² ρ u_r′(0)/12, a twelfth of the
-  first node's mass rate and the rate of change of the midpoint rule's own
-  error at the axis. The scheme is unchanged, and with an (h²/24) q₁ end
-  correction the r-z mass is conserved to fourth order (commit `3742897`).
-- [x] **N30** — The outflow's transverse terms carry a collapsed transverse
-  dimension's curvature row, as the inflow's do; the default dipole
-  reflection is unchanged at four figures (commit `d5fd609`).
-
-### Filtering, regularization, boundaries and species
-
-- [x] **N1** — The compact filter default is `filter_cfl = 0.35`, with the
-  relaxed formulation measured invariant to the step (commit `dbe2899`); α is
-  0.47 since commit `ccb7e81`.
-- [x] **N2** — Volume-weighted filtering on non-uniform metrics was measured
-  against the unweighted default and the current method retained (commit `811d382`).
-- [x] **N3** — `run!` primes the artificial coefficients, which removed the wall
-  and axis CFL ceilings; the spherical origin keeps its own (commit `c407e0b`).
-- [x] **N5** — Directional bulk viscosity was measured on anisotropic Noh cases
-  and rejected; the scalar form is retained (commit `7dd161f`).
-- [x] **N5a** — `filter_weight` reads each direction's own hyperbolic rate rather
-  than the rate that sized the step (commit `d1de5cc`).
-- [x] **N6** — The wall and interface accuracy probes became the smooth-evolution
-  matrix of `bench/boundaryorder.jl`, with its orders gated in
-  `test/convergence.jl` (commit `a1d7660`).
-- [x] **N6a** — `compact_filter` defaults to `closures = :onesided`, which cuts
-  the planar Noh wall deficit at the cost of a sharper reflection
-  (commit `d611bae`).
-- [x] **N6b** — C6 `:brady_livescu` is a supported wall configuration within
-  measured limits, C8 is not, and the default is unchanged (commit `a619a6e`).
-- [x] **N6c** — The constant-annihilation audit closed with no change and found
-  the slip-wall mode of the cascade closures (commit `02c34eb`).
-- [x] **N6d** — The `:neutral3` rows, spectrally neutral at an inviscid slip
-  wall, became the C6 default, with the cascade rows kept at interfaces
-  (commit `1e76f50`).
-- [x] **N6e** — The `:delta4` detector reads past a reflecting wall from the
-  node-centred mirror of the interior instead of clamping the index
-  (commit `60da34b`).
-- [x] **N6f** — The detector takes the half-offset mirror at a coordinate fold
-  for an even field as well as an odd one (commit `abe3d8d`).
-- [x] **N6g** — `wall_closures` gives the `:gaussian` smoother and the `:d8`
-  detector wall rows folded from their own interior stencils (commit `ae574ca`).
-- [x] **N6h** — `SlipWallBC` imposes the symmetry plane's flux contract on the
-  assembled wall-plane flux (commit `e2a6c4f`).
-- [x] **N6i** — The aligned Noh transverse mode is a shock interaction rather
-  than an autonomous wall mode, and its guard is retained (commit `f81b1c6`).
-- [x] **N6j** — The fifth-order closure candidates were re-measured under
-  `beta_sensor = :dilatation` and the production choices retained
-  (commit `de30ccc`).
-- [x] **N6k** — The neutral rows carry a measured pseudospectral certificate and
-  are the `:neutral3` defaults of C8 and C10 as well (commit `de30ccc`).
-- [x] **N6l** — `SymmetryPlaneBC` folds a slip wall on a face-centred mirror and
-  reads the interior order, for a single unrefined patch (commit `8a5bdfe`).
-- [x] **N6m** — C6 `:brady_livescu` takes every start of the planar Noh
-  ladder on the current solver, the singular one included, and its remaining
-  failures are CFL ceilings that no initial-data measure orders, so the
-  resolved-start requirement is lifted by measurement and no initial-data
-  check is added; C8 `:brady_livescu` stays unsupported at a wall (commit `4faed86`).
-- [x] **N7** — `NSCBCInflowBC` carries the Yoo–Im transverse terms on every
-  incoming wave, at the full share by default, measured on an oblique pulse
-  and an entering vortex at three Mach numbers (commit `d3d3f30`).
-- [x] **N8** — Dispatchable CEA transport supplies temperature-dependent mixture
-  viscosity and conductivity, with unity-Lewis diffusion or mixture-averaged
-  diffusivities from supplied binary data (commit `6594afd`).
-- [x] **N8a** — Validated, species-labelled neutral pair fits feed the
-  mixture-averaged solver closure with strict collective domain rejection,
-  including subcycled AMR, with the sources kept distinct (commit `711cecf`).
-- [x] **N9** — The bulk species channel was measured in three dimensions
-  against the Fickian one, its constants confirmed, and its entropy inequality
-  restated as a continuous-model property; `:fickian` stayed the default
-  (commit `7a86a2c`).
-- [x] **N9a** — `:partial_density`, the partial-density channel of Brill, Olson
-  and Bokman with its consistency fluxes on momentum and energy, is the
-  default; `:bulk` remains for density ratios of 100 or more and `:fickian`
-  reproduces Cook's form (commit `a2afda2`).
-- [x] **N19** — False activation on smooth fields was measured, and the
-  species fields are sensed with `:d8` at `C_D = 1` by default, every other
-  sensor keeping δ⁴ (commits `ee1087b`, `0a64d6f`, `7a45c8c`, `072d184`).
-  Reduced filtering waits until the discretization is shown stable without it.
-- [x] **N20** — The boundedness mechanisms are written down, the sweep sees
-  regridded and subcycled states, an acoustic pulse meets the interface
-  impedances, and the composite budgets are attributed per mechanism with the
-  boundary-flux closure verified; the coarse–fine drift converges and needs
-  no conservative correction (commits `5dbb5ff`, `2a5ece9`, `a889b61`).
-- [x] **N21** — The composition clip of the repair acts only outside
-  `StepControl.species_band`, which now bounds both sides through a test shared
-  with the validation sweep (commit `0293798`).
-- [x] **N25** — The annulus slip wall's second order was the data's: the
-  standing wave breaks the curved wall's second compatibility condition, and
-  a compatible pulse converges at the Cartesian wall's order (commit
-  `6fa4131`).
-
-### AMR numerics
-
-- [x] **N23** — Refined levels reach the r-z axis, the axis/z = 0 corner, a
-  symmetry plane, walls and NSCBC faces, regrid and nest there under
-  `level_boundaries` (on by default), restrict through either `:inject` or
-  `:filter`, and run on stacked device tiles (commits `c2e7a39`, `56993d0`,
-  `ec9361f`, `2306e87`).
-- [x] **N10** — Composite conservation budgets were measured on long
-  passive-species mixing and moving-refinement runs across rank counts,
-  refinement depths and subcycling, and every layout is inside its
-  declared budget, so no surface-flux correction is enabled (commit
-  `74895a4`).
-- [x] **N11** — The δ⁴ detector reads the ghost layers at patch and
-  coarse-fine faces for every field recovered over the padded extent, and
-  the sensors, the filter rows and the closure candidates were measured at
-  imposed shells on shock crossings, with the step-on-a-plane failure and
-  the three-level global-step undershoot recorded (commit `b4fe9d6`).
-- [x] **N12** — Regrid checks refresh coefficients, opt-in refined-stage CFL
-  violations use collective rollback, and three-/four-level rate and cost
-  measurements retain Hermite output; the global-step undershoot depends on
-  the filter application schedule (commit `e7bb381`).
-- [x] **N12a** — Level-aware filter trials remove the fixed-layer
-  undershoot within composite budgets; smooth-error and moving-refinement
-  tradeoffs retain the production default and subcycling (commit `fbb3ad3`).
-- [x] **N13** — Mass fractions are validated against a measured
-  `StepControl.species_band` of 0.05, so every species case and both examples
-  run under the retained `:strict` default; only cold-ambient converging shocks
-  opt out, with bounded counts (commit `c9d41f4`).
-- [x] **N14** — `interface_divergence` selects the flux divergence's closure rows at
-  interface ends; the default stays, `:cascade4` is rejected and the Brady–Livescu
-  rows stay an experimental Float64 option (commit `6928fe5`).
-- [x] **N15** — `interface_flux = :ghost` differences the inviscid flux through
-  interface ends from ghost fluxes; it leads at same-level faces, and at
-  coarse–fine faces under `level_interpolation_order = 8`, and stays
-  experimental (commit `b42e819`).
-- [x] **N15a** — Under `interface_flux = :ghost` the molecular flux is
-  differenced through interface ends from ghost fluxes, a same-level face's taken
-  from the neighbour's flux records and a coarse-fine face's from the shell's
-  gradient ring; the viscous interface rows reach the interior order, and
-  promotion moves to N15b (commit `decf45a`).
-- [x] **N15b** — `interface_flux = :ghost` is the default at patch and level
-  interfaces and inert without one; `:closure` remains for shock-dominated and
-  Float32 runs, and a configuration `:ghost` does not support raises an
-  `ArgumentError` naming it (commit `e9a91ed`).
-- [x] **N16** — `level_interpolation_order` sets the live transfer order to
-  second, fourth, sixth or eighth; sixth stays the default, which the default
-  interface rows saturate, and eighth is the opt-in for viscous, filtered,
-  multidimensional or `interface_divergence` runs (commit `c7d26e3`).
-- [x] **N17** — `level_interpolation_order` defaults to the derivative
-  operator's interior order, two more under `interface_flux = :ghost` up to 10.
-  Order 10 is exact to degree 9 behind the four-node buffer, and a C6 run under
-  the closure rows is unchanged (commit `decf45a`).
-- [x] **V5** — A tile takes only the rank counts its process grid admits,
-  which is not monotone in the count, so the full MPI suite passes at eight
-  ranks (commit `c4bbd8e`).
-
-### API, state ownership, and reproducibility
-
-- [x] **A1** — `precision` on `Numerics` and `Solver` converts every typed
-  component, mixed types are rejected at setup, and `bench/audit.jl` checks
-  Float32 point bodies for promotion (commit `5bd9b46`).
-- [x] **A2** — Field ownership and freshness are documented in `patches.jl`,
-  a scratch read names the patch that wrote it, and a `:repair` before the
-  step renews the prepared state (commit `57b4ed2`).
-- [x] **A3** — Construction lives in `construction.jl` and the `Solver` container
-  in `solver.jl`, moved verbatim with byte-identical inference and allocation
-  audits; `rhs.jl` holds only the right-hand side (commit `f123739`).
-- [x] **A4** — Parameter ranges fail early with named errors, `run!`'s absolute
-  `tfinal`/`nmax` are enforced, and a rollback restores switches, triggers and
-  writer frames (commit `99be93c`).
-- [x] **A5** — Checkpoints carry a versioned configuration record compared
-  at load: thermodynamics and layout strictly, the other groups under `allow`
-  (commit `77b3adb`).
-- [x] **A6** — The supported-combinations page lists what setup accepts and
-  the error of each rejection, held to the code by `test/capability_tests.jl`
-  (commit `fb3b242`).
-- [x] **A9** — `line_sample`, `field_slice` and the Makie recipes take the
-  state of a refined run and sample root nodes from the finest level
-  holding them (commit `e5d521d`).
-- [x] **A11** — A tiled, regridded level may hold no tiles, so a run starts
-  unrefined, refines when tags appear and empties when they vanish; the box
-  keeps its region (commit `1a97ab4`).
-- [x] **A12** — A tiled hierarchy regrids every level up to `max_levels`, each
-  tagged on its parent; a three-level shock–contact run lands an order of
-  magnitude closer to the uniform-fine reference than the root (commit
-  `737550c`).
-- [x] **A14** — Coarse-fine junction lines holding an unresolved feature
-  take the step's difference of the two grids' face fluxes, less a high-order
-  quadrature correction's change, on the parent; a Noh tile passing its shock
-  out conserves mass to 4e-7 against 1e-3 (commit `3e35ff3`).
-- [x] **A18** — The parent's derivatives drop the source of a restricted
-  feature they cannot resolve, by default, and the coupling's gate tests the
-  parent's uncovered nodes alone; a level ahead of a converging shock carries
-  1.05 times the uniform fine grid's disturbance, and the two-level Sod
-  crossings conserve mass to 1e-5 (commit `8dac5a8`).
-- [x] **A23** — `Hydrostatic` sets the pressure of an initial condition in
-  discrete balance with the run's derivative operator, and an unfiltered
-  two-fluid column stays at rest to round-off (commit `acfe5cb`).
-- [x] **A24** — `CompositeBC` divides a face among member conditions by a
-  coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
-  on it (commit `9574aea`).
-- [x] **A25** — VTK files, HDF5 frames and snapshots record the species, the
-  gas constants, the metric, each face's type, the domain bounds, the time
-  and the node count with the stride; `field_snapshot` takes a window, and
-  `boundary_conditions` and `domain_bounds` are exported (commits `f8342da`,
-  `88abf8a`, `ab7a9aa`, `f8d3551`).
-
-### Scale, devices and I/O
-
-- [x] **S5** — `Nasa9Mixture` runs on device storage through an isbits mirror
-  carrying the flattened interval table (commit `b78acd4`).
-- [x] **S6** — `test/hdf5_tests.jl` passes on a parallel libhdf5 at one, two
-  and four ranks under both transfer modes, and the collective mode, measured
-  faster on a local disk, is the default (commit `c8df974`).
-- [x] **S14** — The decomposed `pyranda_filter` solve's departure from serial is
-  the round-off floor of its ill-conditioned left-hand side, the same fraction
-  of cond(A)·eps as every other operator's, and is recorded as such
-  ([the measurement](CALIBRATION_APPENDIX.md#the-decomposed-line-solve-against-serial))
-  (commit `1723ea3`).
-- [x] **S16** — Mode truncation keeps one more mode in the radial and
-  azimuthal momenta than in the scalars, with a floor of 2 and the θ cap at
-  the momenta's mode, and is stable under the artificial properties (commit
-  `f1171de`).
-
-### HED physics
-- [x] **H2** — `ImplicitConduction` integrates the molecular conduction in
-  the implicit half of `ARK4(3)6L[2]SA` on one host-storage patch, decomposed
-  or not, with collective rollback of a failed stage; a `cfl` chosen for the
-  default integrator carries over (commits `9fd6365`, `9c2edd8`).
-
-### Incompressible flow
-
-- [x] **I1** — A constant-density incompressible solver on the staggered
-  compact operators, projected exactly through the implicit stage's pressure
-  solve with a skew-symmetric convective term, runs on one host-storage patch,
-  decomposed or not, with periodic, slip-wall and first-order no-slip
-  dimensions (commit `593f673`).

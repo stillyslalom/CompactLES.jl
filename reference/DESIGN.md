@@ -321,7 +321,7 @@ Presets:
   `compact_filter(closures = :cascade)`. In Float32 the Brady–Livescu wall
   error of one derivative floors near 1e-3, above the cascade's from N = 48
   up, while a wall evolution floors at the same level under either closure
-  ([round-off floor](CALIBRATION_APPENDIX.md#the-round-off-floor)). C6
+  ([round-off floor](appendix/walls.md#the-round-off-floor)). C6
   `:brady_livescu` under the default filter rows is the supported
   high-order wall configuration, within the limits measured in September
   2026: the CFL numbers the default closure takes on a resolved start and
@@ -338,9 +338,9 @@ Presets:
   rows only halve; Dirichlet ends, viscous no-slip walls and unfiltered
   C6 `:brady_livescu` are neutral. The `:neutral3` rows, the default
   since roadmap N6d, carry no such mode. The runs are in the appendix
-  under [the filter's wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows),
-  [wall closures in production](CALIBRATION_APPENDIX.md#wall-closures-in-production)
-  and [constant annihilation](CALIBRATION_APPENDIX.md#constant-annihilation).
+  under [the filter's wall rows](appendix/walls.md#the-filters-wall-rows),
+  [wall closures in production](appendix/walls.md#wall-closures-in-production)
+  and [constant annihilation](appendix/walls.md#constant-annihilation).
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.
@@ -362,7 +362,7 @@ Presets:
   one-sided rows cut the wall density deficit by 10–18 points under the
   relaxed filter and by more unrelaxed, with the shock position unchanged
   and the plateau slightly lower
-  ([the battery](CALIBRATION_APPENDIX.md#the-battery-under-both-row-sets)).
+  ([the battery](appendix/walls.md#the-battery-under-both-row-sets)).
   Between two walls they cut the mass and energy the passes create by two
   orders, and under them the Brady–Livescu rows run at a shocked wall. Their
   cost is a reflection resolved over fewer than about ten cells, where they
@@ -787,7 +787,7 @@ coefficient per grid direction in that direction's normal stress with a
 per-direction diffusive step limit, was measured in September 2026 on an
 anisotropic Noh case and not adopted: the bulk force then ceases to be the
 gradient of a scalar and generates vorticity in a cold pre-shock flow
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#directional-bulk-viscosity)).
+([CALIBRATION_APPENDIX.md](appendix/shocks.md#directional-bulk-viscosity)).
 
 ### The species channel
 
@@ -835,7 +835,7 @@ properties follow from the form alone.
    air/SF6 interface with the filter and the artificial properties on, u, p
    and T stay at round-off while ρ relaxes, where the Fickian channel drifts
    u to 2e-4
-   ([the bulk species channel](CALIBRATION_APPENDIX.md#the-bulk-species-channel)).
+   ([the bulk species channel](appendix/shocks.md#the-bulk-species-channel)).
 3. The continuous model satisfies every entropy inequality. For any convex
    entropy pair (η, ψ) of the hyperbolic system, multiplying by η'(q) gives,
    pointwise for D_b ≥ 0,
@@ -926,7 +926,7 @@ is absent at uniform T and at equal constant γ, where p is linear in
 capacities. At uniform u every split form of a product reduces to u D q, so no
 split form removes it. `bench/archive/thermalcontact.jl` evaluates the continuous
 rates beside the discrete ones and measures the drift
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)).
+([CALIBRATION_APPENDIX.md](appendix/transport.md#the-contact-with-a-temperature-jump)).
 
 The consistency fluxes are formed pointwise as the exact products (Σ_k J_k) u
 and (Σ_k J_k)|u|²/2 + Σ_k e_k J_k of the discrete species fluxes, so the
@@ -1065,7 +1065,7 @@ The raw and the smoothed
 gradients of N − 1 fractions, and then the flux, are held in the four
 columns of `grad_Q` past the partial densities, which caps it at three
 species. Measurements are in
-[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-interface-sharpening-flux).
+[CALIBRATION_APPENDIX.md](appendix/transport.md#the-interface-sharpening-flux).
 
 ## Curvilinear metrics and freestream preservation
 
@@ -1583,7 +1583,7 @@ captured species interface is a few cells wide at any resolution and lies about
 1% outside the unit interval under the artificial mass-fraction bound and
 several times further without it, so the band separates a bounded interface
 from an unbounded one
-([the species validity band](CALIBRATION_APPENDIX.md#the-species-validity-band)). It
+([the species validity band](appendix/transport.md#the-species-validity-band)). It
 is a separate threshold from the bound's own dead band `Y_tolerance`
 ([below](#boundedness-of-the-composition)).
 
@@ -1656,7 +1656,7 @@ channel](#the-species-channel)). The flux it drives is a divergence, so it
 moves composition without creating species mass. It is a restoring
 diffusivity proportional to the excursion, not a projection, and a shocked
 interface still ends about 1% outside the unit interval at every resolution
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-species-validity-band)).
+([CALIBRATION_APPENDIX.md](appendix/transport.md#the-species-validity-band)).
 The dead band exists because the Runge–Kutta stages overshoot a smooth profile
 that touches a bound by O(h²) where the completed step does not; a bound acting
 on that transient costs 1.5 orders of accuracy on such a profile.
@@ -1741,7 +1741,7 @@ channel's argument fails at the points the bound exists to act on. The
 discrete update inherits neither inequality: the compact derivative is not
 summation-by-parts against the trapezoid quadrature, and the filter pass and
 the Runge–Kutta step on an interface outside [0, 1] both lower ∫ρs
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
+([CALIBRATION_APPENDIX.md](appendix/transport.md#the-bulk-species-channel-in-three-dimensions)).
 
 The positivity-preserving results for ENO, WENO and WCNS schemes and for
 finite-volume and discontinuous Galerkin schemes do not transfer. They write
@@ -1758,7 +1758,7 @@ difference of face fluxes and a first-order flux beside it; neither exists in
 the code. Woodward–Colella, planar Noh and Sedov carry points of negative
 internal energy ahead of every strong front, and each floor or limit on them
 that was measured fails at least one validation guard
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#negative-internal-energy-ahead-of-a-shock)),
+([CALIBRATION_APPENDIX.md](appendix/shocks.md#negative-internal-energy-ahead-of-a-shock)),
 so such a flux is the repair that remains.
 
 ### Attributing the conserved budgets
@@ -1805,7 +1805,7 @@ nodes' point fluxes, which do not partition this quadrature. Every hook is rank-
 reduction is taken once at the end, so a hook inside a level only its owners
 enter strands no rank. Off, a hook is a field load and a branch. The
 measurements are in
-[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#benchinterfaceconservationjl-composite-conservation-budgets).
+[CALIBRATION_APPENDIX.md](appendix/amr.md#benchinterfaceconservationjl-composite-conservation-budgets).
 
 ## Characteristic boundary conditions
 
@@ -1856,7 +1856,7 @@ components.
 
   The derivation is in the header of
   `nscbc.jl` and the measurement in
-  [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-outflow-face-on-a-radial-grid).
+  [CALIBRATION_APPENDIX.md](appendix/walls.md#the-outflow-face-on-a-radial-grid).
 - **Inflow** (`NSCBCInflowBC(u=..., T_ion=..., Y=...)`) replaces every incoming wave
   (acoustic, entropy, transverse, species) with a relaxation toward the targets
   while keeping the single outgoing acoustic wave as computed. Targets may be
