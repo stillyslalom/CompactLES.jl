@@ -175,7 +175,7 @@ Each is structural or follows from a repo convention; none is a preference.
    Setup validates it is only meaningful for a cylindrical or spherical
    metric with the relevant angular dimension resolved, and errors otherwise,
    following `validate_bc`'s fail-at-setup convention. Proposed names, per
-   the vocabulary in `CLAUDE.md`: `polar_truncation` (the keyword),
+   the naming rule in `CLAUDE.md`: `polar_truncation` (the keyword),
    `mode_limit` (the per-ring integer table), `truncate_modes!` (the per-step
    entry point).
 
